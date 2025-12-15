@@ -1,0 +1,30 @@
+{
+  "name": "desktop",
+  "version": "0.1.0",
+  "description": "Calimero Desktop Application",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build",
+    "clean": "rm -rf dist src-tauri/target"
+  },
+  "dependencies": {
+    "@calimero-network/mero-js": "workspace:*",
+    "@tauri-apps/api": "^1.5.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^1.5.0",
+    "@types/react": "^19.2.2",
+    "@types/react-dom": "^19.2.2",
+    "@vitejs/plugin-react": "^3.1.0",
+    "typescript": "^5.8.3",
+    "vite": "^4.1.0"
+  }
+}
+

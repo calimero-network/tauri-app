@@ -1,0 +1,23 @@
+{
+  "name": "calimero-desktop-platforms",
+  "version": "0.1.0",
+  "description": "Monorepo for Calimero desktop applications",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev:desktop": "pnpm --filter desktop tauri:dev",
+    "build:desktop": "pnpm --filter desktop build",
+    "tauri:desktop": "pnpm --filter desktop tauri",
+    "build:mero-js": "pnpm --filter @calimero-network/mero-js build",
+    "dev": "pnpm dev:desktop",
+    "build": "pnpm build:mero-js && pnpm build:desktop",
+    "clean": "pnpm -r clean && rm -rf node_modules"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "pnpm": ">=8.0.0"
+  }
+}

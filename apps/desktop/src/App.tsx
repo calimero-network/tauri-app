@@ -1,12 +1,10 @@
-import { useState, useEffect } from "react";
-import { MeroJs, type MeroJsConfig } from "@calimero-network/mero-js";
+import { useState, useEffect, useCallback } from "react";
+import { createClient, apiClient, LoginView } from "@calimero-network/mero-react";
 import { getSettings, getAuthUrl } from "./utils/settings";
 import Settings from "./pages/Settings";
 import "./App.css";
 
 function App() {
-  const [adminMeroJs, setAdminMeroJs] = useState<MeroJs | null>(null);
-  const [authMeroJs, setAuthMeroJs] = useState<MeroJs | null>(null);
   const [connected, setConnected] = useState(false);
   const [authConnected, setAuthConnected] = useState(false);
   const [nodeInfo, setNodeInfo] = useState<any>(null);
@@ -14,8 +12,36 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [showLogin, setShowLogin] = useState(false);
   const [adminApiUrl, setAdminApiUrl] = useState("");
   const [authApiUrl, setAuthApiUrl] = useState("");
+  const [contexts, setContexts] = useState<any[]>([]);
+
+  // Load contexts for main page
+  const loadContexts = useCallback(async () => {
+    try {
+      const contextsResponse = await apiClient.node.getContexts();
+      if (contextsResponse.error) {
+        // If 401, show login
+        if (contextsResponse.error.code === '401') {
+          setShowLogin(true);
+          return;
+        }
+        console.error('❌ Contexts error:', contextsResponse.error.message);
+        return;
+      }
+      if (contextsResponse.data) {
+        setContexts(contextsResponse.data);
+      }
+    } catch (err: any) {
+      // Check for 401 in error object
+      if (err?.status === 401) {
+        setShowLogin(true);
+        return;
+      }
+      console.error('Failed to load contexts:', err);
+    }
+  }, []);
 
   useEffect(() => {
     // Load settings on startup
@@ -28,72 +54,56 @@ function App() {
     setAdminApiUrl(adminApiUrl);
     setAuthApiUrl(authApiUrl);
 
-    // Create admin MeroJs client
-    const adminConfig: MeroJsConfig = {
+    // Initialize mero-react client
+    createClient({
       baseUrl: adminApiUrl,
-      requestCredentials: 'omit', // Required for Tauri
-    };
-    const adminClient = new MeroJs(adminConfig);
-    setAdminMeroJs(adminClient);
+      authBaseUrl: authBaseUrl,
+      requestCredentials: 'omit',
+    });
 
-    // Create auth MeroJs client (if different URL)
-    if (authBaseUrl !== settings.nodeUrl.replace(/\/$/, '')) {
-      const authConfig: MeroJsConfig = {
-        baseUrl: authBaseUrl,
-        requestCredentials: 'omit',
-      };
-      const authClient = new MeroJs(authConfig);
-      setAuthMeroJs(authClient);
-    } else {
-      // Use same client for auth (but with node base URL, not admin-api)
-      const authConfig: MeroJsConfig = {
-        baseUrl: settings.nodeUrl.replace(/\/$/, ''),
-        requestCredentials: 'omit',
-      };
-      const authClient = new MeroJs(authConfig);
-      setAuthMeroJs(authClient);
-    }
-  }, []);
+    // Try to load contexts on startup
+    loadContexts();
+  }, [loadContexts]);
 
   const checkConnection = async () => {
-    if (!adminMeroJs) return;
-
     try {
       setError(null);
       
-      // Check admin health
-      const health = await adminMeroJs.admin.healthCheck();
-      setConnected(health.status === "ok" || health.status === "healthy" || health.status === "alive");
-      
-      if (health.status === "ok" || health.status === "healthy" || health.status === "alive") {
-        try {
-          const apps = await adminMeroJs.admin.listApplications();
-          const contexts = await adminMeroJs.admin.getContexts();
-          setNodeInfo({
-            health,
-            applications: apps,
-            contexts: contexts,
-          });
-        } catch (infoErr) {
-          // If we can't get additional info, just show health
-          setNodeInfo({ health });
+      // Check health endpoint (admin API)
+      const healthResponse = await apiClient.node.healthCheck();
+      if (healthResponse.error) {
+        // If 401, show login
+        if (healthResponse.error.code === '401') {
+          setShowLogin(true);
+          setConnected(false);
+          return;
         }
+        setError(healthResponse.error.message);
+        setConnected(false);
+        return;
+      }
+      
+      if (healthResponse.data) {
+        setConnected(healthResponse.data.status === "ok" || 
+                    healthResponse.data.status === "healthy" || 
+                    healthResponse.data.status === "alive");
+        setNodeInfo({ health: healthResponse.data });
       }
 
       // Check auth health
-      if (authMeroJs) {
-        try {
-          setAuthError(null);
-          const authHealth = await authMeroJs.auth.getHealth();
-          setAuthConnected(authHealth.status === "healthy");
-          setAuthInfo({ health: authHealth });
-        } catch (authErr) {
-          setAuthConnected(false);
-          setAuthInfo(null);
-          const errorMessage = authErr instanceof Error ? authErr.message : String(authErr);
-          setAuthError(errorMessage);
-          console.error("Auth health check error:", authErr);
-        }
+      const providersResponse = await apiClient.auth.getProviders();
+      if (providersResponse.error) {
+        console.error('❌ Providers error:', providersResponse.error.message);
+        setAuthError(providersResponse.error.message);
+        setAuthConnected(false);
+      } else {
+        setAuthConnected(true);
+        setAuthInfo({ providers: providersResponse.data });
+      }
+
+      // Load contexts after successful connection
+      if (connected) {
+        await loadContexts();
       }
     } catch (err) {
       setConnected(false);
@@ -115,31 +125,12 @@ function App() {
     setAdminApiUrl(adminApiUrl);
     setAuthApiUrl(authApiUrl);
 
-    // Create admin client
-    const adminConfig: MeroJsConfig = {
+    // Reinitialize mero-react client
+    createClient({
       baseUrl: adminApiUrl,
+      authBaseUrl: authBaseUrl,
       requestCredentials: 'omit',
-    };
-    const adminClient = new MeroJs(adminConfig);
-    setAdminMeroJs(adminClient);
-
-    // Create auth client
-    if (authBaseUrl !== settings.nodeUrl.replace(/\/$/, '')) {
-      const authConfig: MeroJsConfig = {
-        baseUrl: authBaseUrl,
-        requestCredentials: 'omit',
-      };
-      const authClient = new MeroJs(authConfig);
-      setAuthMeroJs(authClient);
-    } else {
-      // Use same base URL as node (not admin-api)
-      const authConfig: MeroJsConfig = {
-        baseUrl: settings.nodeUrl.replace(/\/$/, ''),
-        requestCredentials: 'omit',
-      };
-      const authClient = new MeroJs(authConfig);
-      setAuthMeroJs(authClient);
-    }
+    });
 
     setConnected(false);
     setAuthConnected(false);
@@ -150,13 +141,18 @@ function App() {
   };
 
   const checkAuthHealth = async () => {
-    if (!authMeroJs) return;
-
     try {
       setAuthError(null);
-      const authHealth = await authMeroJs.auth.getHealth();
-      setAuthConnected(authHealth.status === "healthy");
-      setAuthInfo({ health: authHealth });
+      
+      // Test auth API
+      const providersResponse = await apiClient.auth.getProviders();
+      if (providersResponse.error) {
+        setAuthError(providersResponse.error.message);
+        setAuthConnected(false);
+      } else {
+        setAuthConnected(true);
+        setAuthInfo({ providers: providersResponse.data });
+      }
     } catch (authErr) {
       setAuthConnected(false);
       setAuthInfo(null);
@@ -165,6 +161,24 @@ function App() {
       console.error("Auth health check error:", authErr);
     }
   };
+
+  // Show login if needed
+  if (showLogin) {
+    return (
+      <LoginView
+        onSuccess={() => {
+          console.log('✅ Login successful');
+          setShowLogin(false);
+          // Reload contexts after login
+          loadContexts();
+          checkConnection();
+        }}
+        onError={(error) => {
+          console.error('❌ Login failed:', error);
+        }}
+      />
+    );
+  }
 
   if (showSettings) {
     return <Settings onBack={() => { setShowSettings(false); reloadClient(); }} />;
@@ -199,6 +213,13 @@ function App() {
             <div className="node-info">
               <h3>Node Information</h3>
               <pre>{JSON.stringify(nodeInfo, null, 2)}</pre>
+            </div>
+          )}
+
+          {contexts.length > 0 && (
+            <div className="node-info">
+              <h3>Contexts ({contexts.length})</h3>
+              <pre>{JSON.stringify(contexts, null, 2)}</pre>
             </div>
           )}
         </div>

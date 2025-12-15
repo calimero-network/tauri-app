@@ -1,5 +1,6 @@
 export interface AppSettings {
   nodeUrl: string;
+  authUrl?: string; // Optional, defaults to nodeUrl if not set
 }
 
 const SETTINGS_KEY = 'calimero-desktop-settings';
@@ -12,6 +13,7 @@ export function getSettings(): AppSettings {
       const parsed = JSON.parse(stored);
       return {
         nodeUrl: parsed.nodeUrl || DEFAULT_NODE_URL,
+        authUrl: parsed.authUrl,
       };
     }
   } catch (error) {
@@ -21,6 +23,10 @@ export function getSettings(): AppSettings {
   return {
     nodeUrl: DEFAULT_NODE_URL,
   };
+}
+
+export function getAuthUrl(settings: AppSettings): string {
+  return settings.authUrl || settings.nodeUrl;
 }
 
 export function saveSettings(settings: AppSettings): void {

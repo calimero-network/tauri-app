@@ -8,16 +8,21 @@ interface SettingsProps {
 
 export default function Settings({ onBack }: SettingsProps) {
   const [nodeUrl, setNodeUrl] = useState("");
+  const [authUrl, setAuthUrl] = useState("");
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {
     const settings = getSettings();
     setNodeUrl(settings.nodeUrl);
+    setAuthUrl(settings.authUrl || "");
   }, []);
 
   const handleSave = () => {
     try {
-      saveSettings({ nodeUrl });
+      saveSettings({ 
+        nodeUrl,
+        authUrl: authUrl.trim() || undefined,
+      });
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (error) {
@@ -55,6 +60,21 @@ export default function Settings({ onBack }: SettingsProps) {
             <p className="field-hint">
               Base URL for your merod node. Admin API will be accessed at:{" "}
               <code>{nodeUrl ? `${nodeUrl.replace(/\/$/, '')}/admin-api` : ''}</code>
+            </p>
+          </div>
+
+          <div className="settings-field">
+            <label htmlFor="auth-url">Auth URL (optional)</label>
+            <input
+              id="auth-url"
+              type="text"
+              value={authUrl}
+              onChange={(e) => setAuthUrl(e.target.value)}
+              placeholder="Leave empty to use Node URL"
+            />
+            <p className="field-hint">
+              Base URL for authentication service. If empty, uses Node URL. Auth API will be accessed at:{" "}
+              <code>{(authUrl || nodeUrl) ? `${(authUrl || nodeUrl).replace(/\/$/, '')}/auth` : ''}</code>
             </p>
           </div>
 

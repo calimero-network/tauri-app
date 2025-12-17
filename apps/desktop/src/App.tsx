@@ -6,6 +6,8 @@ import Settings from "./pages/Settings";
 import Onboarding from "./pages/Onboarding";
 import Marketplace from "./pages/Marketplace";
 import InstalledApps from "./pages/InstalledApps";
+import Contexts from "./pages/Contexts";
+import ConfirmAction from "./pages/ConfirmAction";
 import "./App.css";
 
 function App() {
@@ -18,13 +20,21 @@ function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [showLogin, setShowLogin] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
-  const [currentPage, setCurrentPage] = useState<'home' | 'marketplace' | 'installed'>('home');
+  const [currentPage, setCurrentPage] = useState<'home' | 'marketplace' | 'installed' | 'contexts' | 'confirm'>('home');
   const [onboardingState, setOnboardingState] = useState<OnboardingState | null>(null);
   const [checkingOnboarding, setCheckingOnboarding] = useState(true);
   const [needsNodeConfig, setNeedsNodeConfig] = useState(false);
   const [adminApiUrl, setAdminApiUrl] = useState("");
   const [authApiUrl, setAuthApiUrl] = useState("");
   const [contexts, setContexts] = useState<any[]>([]);
+  const [confirmAction, setConfirmAction] = useState<{
+    title: string;
+    message: string;
+    itemName: string;
+    actionLabel: string;
+    onConfirm: () => void;
+    breadcrumbs: Array<{ label: string; onClick?: () => void }>;
+  } | null>(null);
 
   // Load contexts for main page
   const loadContexts = useCallback(async () => {
@@ -361,7 +371,94 @@ function App() {
             ⚙️ Settings
           </button>
         </header>
-        <InstalledApps />
+        <InstalledApps 
+          onAuthRequired={() => setShowLogin(true)}
+          onConfirmUninstall={(_appId, appName, onConfirm) => {
+            setConfirmAction({
+              title: "Uninstall Application",
+              message: "Are you sure you want to uninstall this application? This action cannot be undone.",
+              itemName: appName,
+              actionLabel: "Uninstall",
+              onConfirm: async () => {
+                await onConfirm();
+                setCurrentPage('installed');
+                setConfirmAction(null);
+              },
+              breadcrumbs: [
+                { label: "Home", onClick: () => setCurrentPage('home') },
+                { label: "Installed Apps", onClick: () => setCurrentPage('installed') },
+                { label: "Uninstall Application" },
+              ],
+            });
+            setCurrentPage('confirm');
+          }}
+        />
+      </div>
+    );
+  }
+
+  // Show Contexts if selected
+  if (currentPage === 'contexts') {
+    return (
+      <div className="app">
+        <header className="header">
+          <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+            <button onClick={() => setCurrentPage('home')} className="button" style={{ background: '#f0f0f0' }}>
+              ← Home
+            </button>
+            <h1>Contexts</h1>
+          </div>
+          <button onClick={() => setShowSettings(true)} className="settings-button">
+            ⚙️ Settings
+          </button>
+        </header>
+        <Contexts 
+          onAuthRequired={() => setShowLogin(true)}
+          onConfirmDelete={(_contextId, contextName, onConfirm) => {
+            setConfirmAction({
+              title: "Delete Context",
+              message: "Are you sure you want to delete this context? This action cannot be undone.",
+              itemName: contextName,
+              actionLabel: "Delete",
+              onConfirm: async () => {
+                await onConfirm();
+                setCurrentPage('contexts');
+                setConfirmAction(null);
+              },
+              breadcrumbs: [
+                { label: "Home", onClick: () => setCurrentPage('home') },
+                { label: "Contexts", onClick: () => setCurrentPage('contexts') },
+                { label: "Delete Context" },
+              ],
+            });
+            setCurrentPage('confirm');
+          }}
+        />
+      </div>
+    );
+  }
+
+  // Show confirmation page
+  if (currentPage === 'confirm' && confirmAction) {
+    return (
+      <div className="app">
+        <ConfirmAction
+          title={confirmAction.title}
+          message={confirmAction.message}
+          itemName={confirmAction.itemName}
+          actionLabel={confirmAction.actionLabel}
+          onConfirm={confirmAction.onConfirm}
+          onCancel={() => {
+            // Go back to the previous page (contexts or installed)
+            if (confirmAction.breadcrumbs[1]?.onClick) {
+              confirmAction.breadcrumbs[1].onClick();
+            } else {
+              setCurrentPage('home');
+            }
+            setConfirmAction(null);
+          }}
+          breadcrumbs={confirmAction.breadcrumbs}
+        />
       </div>
     );
   }
@@ -371,6 +468,9 @@ function App() {
       <header className="header">
         <h1>Calimero Desktop</h1>
         <div style={{ display: 'flex', gap: '12px' }}>
+          <button onClick={() => setCurrentPage('contexts')} className="button" style={{ background: '#6f42c1', color: 'white' }}>
+            🔗 Contexts
+          </button>
           <button onClick={() => setCurrentPage('installed')} className="button" style={{ background: '#28a745', color: 'white' }}>
             📦 Installed Apps
           </button>

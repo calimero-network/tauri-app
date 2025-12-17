@@ -16,7 +16,7 @@ export interface AdminAuthStatus {
 export interface InstallApplicationRequest {
   url: string;
   hash?: string;
-  metadata: string; // base64 encoded
+  metadata: number[]; // Array of bytes (Vec<u8> in Rust)
 }
 
 export interface InstallDevApplicationRequest {

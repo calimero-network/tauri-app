@@ -301,6 +301,53 @@ class NodeApi {
       };
     }
   }
+
+  async listApplications(): Promise<ApiResponse<any[]>> {
+    try {
+      const appsResponse = await this.meroJs.admin.listApplications();
+      const apps = (appsResponse as any).apps || [];
+      return { data: apps };
+    } catch (error: any) {
+      if (error?.status === 401) {
+        return {
+          error: {
+            message: 'Unauthorized',
+            code: '401',
+          },
+        };
+      }
+      return {
+        error: {
+          message: error instanceof Error ? error.message : 'Failed to list applications',
+        },
+      };
+    }
+  }
+
+  async installApplication(request: {
+    url: string;
+    hash?: string;
+    metadata: string;
+  }): Promise<ApiResponse<{ applicationId: string }>> {
+    try {
+      const response = await this.meroJs.admin.installApplication(request);
+      return { data: response };
+    } catch (error: any) {
+      if (error?.status === 401) {
+        return {
+          error: {
+            message: 'Unauthorized',
+            code: '401',
+          },
+        };
+      }
+      return {
+        error: {
+          message: error instanceof Error ? error.message : 'Failed to install application',
+        },
+      };
+    }
+  }
 }
 
 // Main client class matching calimero-client pattern

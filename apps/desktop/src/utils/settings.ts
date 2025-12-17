@@ -1,6 +1,7 @@
 export interface AppSettings {
   nodeUrl: string;
   authUrl?: string; // Optional, defaults to nodeUrl if not set
+  registries?: string[]; // Array of registry URLs
 }
 
 const SETTINGS_KEY = 'calimero-desktop-settings';
@@ -14,6 +15,7 @@ export function getSettings(): AppSettings {
       return {
         nodeUrl: parsed.nodeUrl || DEFAULT_NODE_URL,
         authUrl: parsed.authUrl,
+        registries: parsed.registries || [],
       };
     }
   } catch (error) {
@@ -22,6 +24,7 @@ export function getSettings(): AppSettings {
   
   return {
     nodeUrl: DEFAULT_NODE_URL,
+    registries: [],
   };
 }
 

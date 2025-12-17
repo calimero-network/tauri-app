@@ -72,7 +72,7 @@ export class AdminApiClient {
     request: InstallApplicationRequest,
   ): Promise<InstallApplicationResponse> {
     return this.httpClient.post<InstallApplicationResponse>(
-      '/applications',
+      '/install-application',
       request,
     );
   }
@@ -81,7 +81,7 @@ export class AdminApiClient {
     request: InstallDevApplicationRequest,
   ): Promise<InstallApplicationResponse> {
     return this.httpClient.post<InstallApplicationResponse>(
-      '/applications/dev',
+      '/install-dev-application',
       request,
     );
   }

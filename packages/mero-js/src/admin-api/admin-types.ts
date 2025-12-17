@@ -40,7 +40,9 @@ export interface Application {
 }
 
 export interface ListApplicationsResponse {
-  apps: Application[];
+  data: {
+    apps: Application[];
+  };
 }
 
 export interface GetApplicationResponse {

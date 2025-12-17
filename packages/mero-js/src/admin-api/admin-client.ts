@@ -95,7 +95,9 @@ export class AdminApiClient {
   }
 
   async listApplications(): Promise<ListApplicationsResponse> {
-    return this.httpClient.get<ListApplicationsResponse>('/applications');
+    const response = await this.httpClient.get<ListApplicationsResponse>('/applications');
+    console.log("🔍 mero-js admin.listApplications() HTTP response:", JSON.stringify(response, null, 2));
+    return response;
   }
 
   async getApplication(appId: string): Promise<GetApplicationResponse> {

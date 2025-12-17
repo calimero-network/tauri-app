@@ -16,6 +16,25 @@ class AuthApi {
     private config: ClientConfig,
   ) {}
 
+  async getHealth(): Promise<ApiResponse<{ status: string; storage?: boolean; uptimeSeconds?: number }>> {
+    try {
+      const response = await this.authMeroJs.auth.getHealth();
+      return {
+        data: {
+          status: response.status,
+          storage: response.storage,
+          uptimeSeconds: response.uptimeSeconds,
+        },
+      };
+    } catch (error) {
+      return {
+        error: {
+          message: error instanceof Error ? error.message : 'Failed to get auth health',
+        },
+      };
+    }
+  }
+
   async getProviders(): Promise<ApiResponse<{ providers: Provider[]; count: number }>> {
     try {
       const response = await this.authMeroJs.auth.getProviders();

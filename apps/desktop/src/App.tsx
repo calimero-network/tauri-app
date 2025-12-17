@@ -1,7 +1,9 @@
 import { useState, useEffect, useCallback } from "react";
-import { createClient, apiClient, LoginView } from "@calimero-network/mero-react";
+import { createClient, apiClient, LoginView, getAccessToken } from "@calimero-network/mero-react";
 import { getSettings, getAuthUrl } from "./utils/settings";
+import { checkOnboardingState, type OnboardingState } from "./utils/onboarding";
 import Settings from "./pages/Settings";
+import Onboarding from "./pages/Onboarding";
 import "./App.css";
 
 function App() {
@@ -13,6 +15,10 @@ function App() {
   const [authError, setAuthError] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [showLogin, setShowLogin] = useState(false);
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  const [onboardingState, setOnboardingState] = useState<OnboardingState | null>(null);
+  const [checkingOnboarding, setCheckingOnboarding] = useState(true);
+  const [needsNodeConfig, setNeedsNodeConfig] = useState(false);
   const [adminApiUrl, setAdminApiUrl] = useState("");
   const [authApiUrl, setAuthApiUrl] = useState("");
   const [contexts, setContexts] = useState<any[]>([]);
@@ -44,25 +50,81 @@ function App() {
   }, []);
 
   useEffect(() => {
-    // Load settings on startup
-    const settings = getSettings();
-    const adminApiUrl = `${settings.nodeUrl.replace(/\/$/, '')}/admin-api`;
-    const authUrl = getAuthUrl(settings);
-    const authBaseUrl = authUrl.replace(/\/$/, '');
-    const authApiUrl = `${authBaseUrl}/auth`;
-    
-    setAdminApiUrl(adminApiUrl);
-    setAuthApiUrl(authApiUrl);
+    async function initializeApp() {
+      // Load settings on startup
+      const settings = getSettings();
+      
+      // Check if settings need to be configured (first time)
+      const hasCustomSettings = localStorage.getItem('calimero-desktop-settings') !== null;
+      if (!hasCustomSettings) {
+        // First time - show settings first to configure node
+        console.log('📋 First time setup - showing settings');
+        setNeedsNodeConfig(true);
+        setShowSettings(true);
+        return;
+      }
+      
+      const adminApiUrl = `${settings.nodeUrl.replace(/\/$/, '')}/admin-api`;
+      const authUrl = getAuthUrl(settings);
+      const authBaseUrl = authUrl.replace(/\/$/, '');
+      const authApiUrl = `${authBaseUrl}/auth`;
+      
+      setAdminApiUrl(adminApiUrl);
+      setAuthApiUrl(authApiUrl);
 
-    // Initialize mero-react client
-    createClient({
-      baseUrl: adminApiUrl,
-      authBaseUrl: authBaseUrl,
-      requestCredentials: 'omit',
-    });
+      // Initialize mero-react client
+      createClient({
+        baseUrl: adminApiUrl,
+        authBaseUrl: authBaseUrl,
+        requestCredentials: 'omit',
+      });
 
-    // Try to load contexts on startup
-    loadContexts();
+      // Check onboarding state
+      setCheckingOnboarding(true);
+      const state = await checkOnboardingState();
+      setOnboardingState(state);
+      setCheckingOnboarding(false);
+
+      // Debug logging
+      console.log('🔍 Onboarding State:', {
+        isFirstTime: state.isFirstTime,
+        authAvailable: state.authAvailable,
+        providersAvailable: state.providersAvailable,
+        hasConfiguredProviders: state.hasConfiguredProviders,
+        error: state.error,
+      });
+
+      // Flow logic:
+      // 1. If auth is NOT configured (no users) → Onboarding (first time, create account)
+      // 2. If auth IS configured (has users) → Check if logged in
+      //    - Not logged in → Login screen
+      //    - Logged in → Main app
+      // 3. If auth service unavailable → Show error in onboarding
+      
+      if (!state.authAvailable) {
+        // Auth service not available - show onboarding with error
+        console.log('⚠️ Auth service not available, showing onboarding with error');
+        setShowOnboarding(true);
+      } else if (!state.hasConfiguredProviders) {
+        // Auth available but no users configured - show onboarding (first time)
+        console.log('📋 No users configured, showing onboarding screen');
+        setShowOnboarding(true);
+      } else {
+        // Auth is configured (has users) - check if user is logged in
+        const hasToken = getAccessToken();
+        console.log('🔑 Token check:', hasToken ? 'EXISTS' : 'NONE');
+        if (!hasToken) {
+          console.log('🔐 Showing login screen');
+          setShowLogin(true);
+        } else {
+          // User has token, try to load contexts
+          console.log('✅ User logged in, loading contexts');
+          loadContexts();
+        }
+      }
+    }
+
+    initializeApp();
   }, [loadContexts]);
 
   const checkConnection = async () => {
@@ -162,6 +224,34 @@ function App() {
     }
   };
 
+  // Show onboarding if needed
+  if (checkingOnboarding) {
+    return (
+      <div className="app">
+        <div style={{ textAlign: 'center', padding: '40px' }}>
+          <p>Checking configuration...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (showOnboarding && onboardingState) {
+    return (
+      <Onboarding
+        onComplete={() => {
+          setShowOnboarding(false);
+          // After onboarding, try to load contexts
+          loadContexts();
+          checkConnection();
+        }}
+        onSettings={() => {
+          setShowOnboarding(false);
+          setShowSettings(true);
+        }}
+      />
+    );
+  }
+
   // Show login if needed
   if (showLogin) {
     return (
@@ -181,7 +271,56 @@ function App() {
   }
 
   if (showSettings) {
-    return <Settings onBack={() => { setShowSettings(false); reloadClient(); }} />;
+    return (
+      <Settings
+        onBack={async () => {
+          setShowSettings(false);
+          if (needsNodeConfig) {
+            // After first-time settings, continue with app initialization
+            setNeedsNodeConfig(false);
+            
+            // Reload settings and initialize
+            const settings = getSettings();
+            const adminApiUrl = `${settings.nodeUrl.replace(/\/$/, '')}/admin-api`;
+            const authUrl = getAuthUrl(settings);
+            const authBaseUrl = authUrl.replace(/\/$/, '');
+            const authApiUrl = `${authBaseUrl}/auth`;
+            
+            setAdminApiUrl(adminApiUrl);
+            setAuthApiUrl(authApiUrl);
+
+            // Initialize mero-react client
+            createClient({
+              baseUrl: adminApiUrl,
+              authBaseUrl: authBaseUrl,
+              requestCredentials: 'omit',
+            });
+
+            // Check onboarding state
+            setCheckingOnboarding(true);
+            const state = await checkOnboardingState();
+            setOnboardingState(state);
+            setCheckingOnboarding(false);
+
+            // Determine what to show
+            if (!state.authAvailable) {
+              setShowOnboarding(true);
+            } else if (!state.hasConfiguredProviders) {
+              setShowOnboarding(true);
+            } else {
+              const hasToken = getAccessToken();
+              if (!hasToken) {
+                setShowLogin(true);
+              } else {
+                loadContexts();
+              }
+            }
+          } else {
+            reloadClient();
+          }
+        }}
+      />
+    );
   }
 
   return (

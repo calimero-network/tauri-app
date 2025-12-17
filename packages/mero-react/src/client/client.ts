@@ -305,9 +305,39 @@ class NodeApi {
   async listApplications(): Promise<ApiResponse<any[]>> {
     try {
       const appsResponse = await this.meroJs.admin.listApplications();
-      const apps = (appsResponse as any).apps || [];
+      console.log("🔍 meroJs.admin.listApplications() raw response:", JSON.stringify(appsResponse, null, 2));
+      console.log("🔍 appsResponse type:", typeof appsResponse);
+      console.log("🔍 appsResponse is object:", typeof appsResponse === 'object');
+      
+      // Server returns: { data: { apps: [...] } }
+      // mero-js HTTP client returns the raw JSON: { data: { apps: [...] } }
+      // So appsResponse should be: { data: { apps: [...] } }
+      let apps: any[] = [];
+      
+      if (appsResponse && typeof appsResponse === 'object') {
+        const response = appsResponse as any;
+        
+        // Try all possible extraction paths
+        if (response.data?.apps && Array.isArray(response.data.apps)) {
+          // Structure: { data: { apps: [...] } }
+          apps = response.data.apps;
+        } else if (response.apps && Array.isArray(response.apps)) {
+          // Structure: { apps: [...] }
+          apps = response.apps;
+        } else if (Array.isArray(response.data)) {
+          // Structure: { data: [...] }
+          apps = response.data;
+        } else if (Array.isArray(response)) {
+          // Structure: [...] (direct array)
+          apps = response;
+        }
+      }
+      
+      console.log("🔍 Final extracted apps:", apps);
+      console.log("🔍 Final apps count:", apps.length);
       return { data: apps };
     } catch (error: any) {
+      console.error("🔍 Error in listApplications:", error);
       if (error?.status === 401) {
         return {
           error: {
@@ -327,7 +357,7 @@ class NodeApi {
   async installApplication(request: {
     url: string;
     hash?: string;
-    metadata: string;
+    metadata: number[]; // Array of bytes (Vec<u8> in Rust)
   }): Promise<ApiResponse<{ applicationId: string }>> {
     try {
       const response = await this.meroJs.admin.installApplication(request);
@@ -344,6 +374,27 @@ class NodeApi {
       return {
         error: {
           message: error instanceof Error ? error.message : 'Failed to install application',
+        },
+      };
+    }
+  }
+
+  async uninstallApplication(applicationId: string): Promise<ApiResponse<{ applicationId: string }>> {
+    try {
+      const response = await this.meroJs.admin.uninstallApplication(applicationId);
+      return { data: response };
+    } catch (error: any) {
+      if (error?.status === 401) {
+        return {
+          error: {
+            message: 'Unauthorized',
+            code: '401',
+          },
+        };
+      }
+      return {
+        error: {
+          message: error instanceof Error ? error.message : 'Failed to uninstall application',
         },
       };
     }

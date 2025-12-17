@@ -5,6 +5,7 @@ import { checkOnboardingState, type OnboardingState } from "./utils/onboarding";
 import Settings from "./pages/Settings";
 import Onboarding from "./pages/Onboarding";
 import Marketplace from "./pages/Marketplace";
+import InstalledApps from "./pages/InstalledApps";
 import "./App.css";
 
 function App() {
@@ -17,7 +18,7 @@ function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [showLogin, setShowLogin] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
-  const [currentPage, setCurrentPage] = useState<'home' | 'marketplace'>('home');
+  const [currentPage, setCurrentPage] = useState<'home' | 'marketplace' | 'installed'>('home');
   const [onboardingState, setOnboardingState] = useState<OnboardingState | null>(null);
   const [checkingOnboarding, setCheckingOnboarding] = useState(true);
   const [needsNodeConfig, setNeedsNodeConfig] = useState(false);
@@ -345,11 +346,34 @@ function App() {
     );
   }
 
+  // Show Installed Apps if selected
+  if (currentPage === 'installed') {
+    return (
+      <div className="app">
+        <header className="header">
+          <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+            <button onClick={() => setCurrentPage('home')} className="button" style={{ background: '#f0f0f0' }}>
+              ← Home
+            </button>
+            <h1>Installed Applications</h1>
+          </div>
+          <button onClick={() => setShowSettings(true)} className="settings-button">
+            ⚙️ Settings
+          </button>
+        </header>
+        <InstalledApps />
+      </div>
+    );
+  }
+
   return (
     <div className="app">
       <header className="header">
         <h1>Calimero Desktop</h1>
         <div style={{ display: 'flex', gap: '12px' }}>
+          <button onClick={() => setCurrentPage('installed')} className="button" style={{ background: '#28a745', color: 'white' }}>
+            📦 Installed Apps
+          </button>
           <button onClick={() => setCurrentPage('marketplace')} className="button" style={{ background: '#007bff', color: 'white' }}>
             🛒 Marketplace
           </button>

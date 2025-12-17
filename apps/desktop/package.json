@@ -12,13 +12,14 @@
     "tauri:build": "tauri build",
     "clean": "rm -rf dist src-tauri/target"
   },
-      "dependencies": {
-        "@calimero-network/mero-js": "workspace:*",
-        "@calimero-network/mero-react": "workspace:*",
-        "@tauri-apps/api": "^1.5.0",
-        "react": "^19.2.0",
-        "react-dom": "^19.2.0"
-      },
+  "dependencies": {
+    "@calimero-network/mero-js": "workspace:*",
+    "@calimero-network/mero-react": "workspace:*",
+    "@tauri-apps/api": "^1.5.0",
+    "bs58": "^6.0.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
   "devDependencies": {
     "@tauri-apps/cli": "^1.5.0",
     "@types/react": "^19.2.2",
@@ -28,4 +29,3 @@
     "vite": "^4.1.0"
   }
 }
-

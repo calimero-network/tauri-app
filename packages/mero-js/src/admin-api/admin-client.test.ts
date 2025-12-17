@@ -404,7 +404,7 @@ describe('AdminApiClient', () => {
       const mockResponse: InstallApplicationResponse = {
         applicationId: 'app-123',
       };
-      mockHttpClient.setMockResponse('POST', '/applications', mockResponse);
+      mockHttpClient.setMockResponse('POST', '/install-application', mockResponse);
 
       const result = await client.installApplication(mockRequest);
       expect(result).toEqual(mockResponse);
@@ -418,7 +418,7 @@ describe('AdminApiClient', () => {
       const mockResponse: InstallApplicationResponse = {
         applicationId: 'app-123-dev',
       };
-      mockHttpClient.setMockResponse('POST', '/applications/dev', mockResponse);
+      mockHttpClient.setMockResponse('POST', '/install-dev-application', mockResponse);
 
       const result = await client.installDevApplication(mockRequest);
       expect(result).toEqual(mockResponse);

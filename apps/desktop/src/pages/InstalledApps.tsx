@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import { apiClient } from "@calimero-network/mero-react";
 import "./InstalledApps.css";
 
@@ -15,7 +15,12 @@ interface InstalledApplication {
   source?: string;
 }
 
-export default function InstalledApps() {
+export interface InstalledAppsProps {
+  onAuthRequired?: () => void;
+  onConfirmUninstall?: (appId: string, appName: string, onConfirm: () => Promise<void>) => void;
+}
+
+const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirmUninstall }) => {
   const [apps, setApps] = useState<InstalledApplication[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -33,6 +38,12 @@ export default function InstalledApps() {
       console.log("📦 listApplications response:", JSON.stringify(response, null, 2));
       
       if (response.error) {
+        // If 401, trigger login redirect
+        if (response.error.code === '401') {
+          console.warn("📦 InstalledApps: 401 Unauthorized - token may be expired");
+          onAuthRequired?.();
+          return;
+        }
         setError(response.error.message);
         setApps([]);
         return;
@@ -49,7 +60,13 @@ export default function InstalledApps() {
         console.warn("📦 No data in response");
         setApps([]);
       }
-    } catch (err) {
+    } catch (err: any) {
+      // Check for 401 in error object
+      if (err?.status === 401 || err?.code === '401') {
+        console.warn("📦 InstalledApps: 401 Unauthorized - triggering login");
+        onAuthRequired?.();
+        return;
+      }
       setError(err instanceof Error ? err.message : "Failed to load installed applications");
       console.error("Failed to load installed apps:", err);
       setApps([]);
@@ -59,23 +76,38 @@ export default function InstalledApps() {
   };
 
   const handleUninstall = async (appId: string, appName: string) => {
-    if (!confirm(`Are you sure you want to uninstall "${appName}"?`)) {
-      return;
-    }
+    if (onConfirmUninstall) {
+      onConfirmUninstall(appId, appName, async () => {
+        try {
+          const response = await apiClient.node.uninstallApplication(appId);
+          if (response.error) {
+            alert(`Failed to uninstall: ${response.error.message}`);
+            return;
+          }
 
-    try {
-      const response = await apiClient.node.uninstallApplication(appId);
-      if (response.error) {
-        alert(`Failed to uninstall: ${response.error.message}`);
-        return;
+          alert(`Application "${appName}" uninstalled successfully`);
+          // Reload the list
+          await loadInstalledApps();
+        } catch (err) {
+          alert(`Failed to uninstall application: ${err instanceof Error ? err.message : "Unknown error"}`);
+          console.error("Uninstall error:", err);
+        }
+      });
+    } else {
+      // Fallback if onConfirmUninstall is not provided
+      try {
+        const response = await apiClient.node.uninstallApplication(appId);
+        if (response.error) {
+          alert(`Failed to uninstall: ${response.error.message}`);
+          return;
+        }
+
+        alert(`Application "${appName}" uninstalled successfully`);
+        await loadInstalledApps();
+      } catch (err) {
+        alert(`Failed to uninstall application: ${err instanceof Error ? err.message : "Unknown error"}`);
+        console.error("Uninstall error:", err);
       }
-
-      alert(`Application "${appName}" uninstalled successfully`);
-      // Reload the list
-      await loadInstalledApps();
-    } catch (err) {
-      alert(`Failed to uninstall application: ${err instanceof Error ? err.message : "Unknown error"}`);
-      console.error("Uninstall error:", err);
     }
   };
 
@@ -172,5 +204,7 @@ export default function InstalledApps() {
       </main>
     </div>
   );
-}
+};
+
+export default InstalledApps;
 

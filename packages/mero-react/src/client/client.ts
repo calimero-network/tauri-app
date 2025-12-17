@@ -238,9 +238,27 @@ class NodeApi {
   async getContexts(): Promise<ApiResponse<any[]>> {
     try {
       const contextsResponse = await this.meroJs.admin.getContexts();
-      // mero-js returns ListContextsResponse which has a contexts array
-      const contextsArray = (contextsResponse as any).contexts || [];
-      return { data: contextsArray };
+      // Server returns: { data: { contexts: [...] } } or { contexts: [...] }
+      // mero-js HTTP client returns the raw JSON
+      let contexts: any[] = [];
+      
+      if (contextsResponse && typeof contextsResponse === 'object') {
+        const response = contextsResponse as any;
+        // Check for { data: { contexts: [...] } }
+        if (response.data?.contexts && Array.isArray(response.data.contexts)) {
+          contexts = response.data.contexts;
+        }
+        // Check for { contexts: [...] }
+        else if (response.contexts && Array.isArray(response.contexts)) {
+          contexts = response.contexts;
+        }
+        // Check if data is directly the array
+        else if (Array.isArray(response.data)) {
+          contexts = response.data;
+        }
+      }
+      
+      return { data: contexts };
     } catch (error: any) {
       // Check if it's a 401 error (HTTPError with status 401)
       if (error?.status === 401 || (error instanceof Error && error.message.includes('401'))) {
@@ -254,6 +272,60 @@ class NodeApi {
       return {
         error: {
           message: error instanceof Error ? error.message : 'Failed to get contexts',
+        },
+      };
+    }
+  }
+
+  async createContext(request: {
+    protocol: string;
+    applicationId: string;
+    contextSeed?: string;
+    initializationParams: number[];
+  }): Promise<ApiResponse<{ contextId: string; memberPublicKey: string }>> {
+    try {
+      const response = await this.meroJs.admin.createContext(request);
+      // Server returns: { data: { contextId: string, memberPublicKey: string } }
+      const data = (response as any).data || response;
+      const contextId = data?.contextId || '';
+      const memberPublicKey = data?.memberPublicKey || '';
+      return { data: { contextId, memberPublicKey } };
+    } catch (error: any) {
+      if (error?.status === 401) {
+        return {
+          error: {
+            message: 'Unauthorized',
+            code: '401',
+          },
+        };
+      }
+      return {
+        error: {
+          message: error instanceof Error ? error.message : 'Failed to create context',
+        },
+      };
+    }
+  }
+
+  async deleteContext(contextId: string): Promise<ApiResponse<{ contextId: string }>> {
+    try {
+      const response = await this.meroJs.admin.deleteContext(contextId);
+      // Server returns: { contextId: string }
+      const data = (response as any).data || response;
+      const deletedContextId = data?.contextId || contextId;
+      return { data: { contextId: deletedContextId } };
+    } catch (error: any) {
+      if (error?.status === 401) {
+        return {
+          error: {
+            message: 'Unauthorized',
+            code: '401',
+          },
+        };
+      }
+      return {
+        error: {
+          message: error instanceof Error ? error.message : 'Failed to delete context',
         },
       };
     }

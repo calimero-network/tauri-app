@@ -1,0 +1,270 @@
+.contexts-page {
+  padding: 20px;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.contexts-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 24px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid #e0e0e0;
+}
+
+.contexts-header h1 {
+  margin: 0;
+  font-size: 24px;
+  color: #333;
+}
+
+.contexts-main {
+  min-height: 400px;
+}
+
+.error-message {
+  background-color: #fee;
+  color: #c33;
+  padding: 12px 16px;
+  border-radius: 4px;
+  margin-bottom: 16px;
+  border: 1px solid #fcc;
+}
+
+.loading {
+  text-align: center;
+  padding: 40px;
+  color: #666;
+}
+
+.empty-state {
+  text-align: center;
+  padding: 60px 20px;
+  color: #666;
+}
+
+.empty-state p {
+  margin: 8px 0;
+}
+
+.create-context-form {
+  background: white;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  padding: 24px;
+  margin-bottom: 24px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.create-context-form h2 {
+  margin: 0 0 20px 0;
+  font-size: 20px;
+  color: #333;
+}
+
+.form-group {
+  margin-bottom: 16px;
+}
+
+.form-group label {
+  display: block;
+  margin-bottom: 6px;
+  font-weight: 500;
+  color: #555;
+}
+
+.form-group input,
+.form-group textarea,
+.form-group select {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 14px;
+  font-family: inherit;
+}
+
+.form-group input:focus,
+.form-group textarea:focus {
+  outline: none;
+  border-color: #007bff;
+  box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.1);
+}
+
+.form-group input:disabled,
+.form-group textarea:disabled {
+  background-color: #f5f5f5;
+  cursor: not-allowed;
+}
+
+.form-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 20px;
+}
+
+.contexts-grouped {
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+}
+
+.context-group {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.context-group-header {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding-bottom: 8px;
+  border-bottom: 2px solid #e0e0e0;
+}
+
+.context-group-header h2 {
+  margin: 0;
+  font-size: 20px;
+  color: #333;
+  font-weight: 600;
+}
+
+.context-count {
+  font-size: 14px;
+  color: #666;
+  font-weight: normal;
+}
+
+.contexts-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 20px;
+}
+
+.context-card {
+  background: white;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  padding: 20px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  display: flex;
+  flex-direction: column;
+}
+
+.context-card-header {
+  margin-bottom: 12px;
+}
+
+.context-card-header h3 {
+  margin: 0;
+  font-size: 18px;
+  color: #333;
+}
+
+.context-card-body {
+  flex: 1;
+  margin-bottom: 16px;
+}
+
+.context-id {
+  font-family: monospace;
+  font-size: 12px;
+  color: #666;
+  margin: 4px 0;
+  word-break: break-all;
+}
+
+.context-root-hash {
+  font-family: monospace;
+  font-size: 12px;
+  color: #666;
+  margin: 4px 0;
+  word-break: break-all;
+  overflow-wrap: break-word;
+}
+
+.context-description {
+  color: #555;
+  margin: 8px 0;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.context-date {
+  color: #666;
+  margin: 4px 0;
+  font-size: 12px;
+}
+
+.context-metadata {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #f0f0f0;
+}
+
+.context-metadata strong {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 12px;
+  color: #666;
+}
+
+.context-metadata pre {
+  background: #f5f5f5;
+  padding: 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  overflow-x: auto;
+  margin: 0;
+}
+
+.context-card-actions {
+  display: flex;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid #f0f0f0;
+}
+
+.button {
+  padding: 8px 16px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  background: white;
+  cursor: pointer;
+  font-size: 14px;
+  transition: all 0.2s;
+}
+
+.button:hover:not(:disabled) {
+  background: #f5f5f5;
+}
+
+.button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.button-primary {
+  background: #007bff;
+  color: white;
+  border-color: #007bff;
+}
+
+.button-primary:hover:not(:disabled) {
+  background: #0056b3;
+  border-color: #0056b3;
+}
+
+.button-danger {
+  background: #dc3545;
+  color: white;
+  border-color: #dc3545;
+}
+
+.button-danger:hover:not(:disabled) {
+  background: #c82333;
+  border-color: #bd2130;
+}
+

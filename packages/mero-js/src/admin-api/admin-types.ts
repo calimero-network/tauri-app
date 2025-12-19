@@ -51,13 +51,17 @@ export interface GetApplicationResponse {
 
 // Context Types
 export interface CreateContextRequest {
-  name: string;
-  description?: string;
-  metadata?: Record<string, any>;
+  protocol: string;
+  applicationId: string;
+  contextSeed?: string;
+  initializationParams: number[]; // Array of bytes (Vec<u8> in Rust)
 }
 
 export interface CreateContextResponse {
-  contextId: string;
+  data: {
+    contextId: string;
+    memberPublicKey: string;
+  };
 }
 
 export interface DeleteContextResponse {

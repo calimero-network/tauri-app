@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { apiClient } from "@calimero-network/mero-react";
+import { open } from "@tauri-apps/api/shell";
 import "./InstalledApps.css";
 
 interface InstalledApplication {
@@ -130,6 +131,15 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
     }
   };
 
+  const handleOpenFrontend = async (frontendUrl: string) => {
+    try {
+      await open(frontendUrl);
+    } catch (error) {
+      console.error("Failed to open frontend:", error);
+      alert(`Failed to open frontend: ${error instanceof Error ? error.message : "Unknown error"}`);
+    }
+  };
+
   return (
     <div className="installed-apps-page">
       <header className="installed-apps-header">
@@ -159,6 +169,7 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
               const metadata = decodeMetadata(app.metadata);
               const appName = metadata?.name || app.name || app.id;
               const appVersion = metadata?.version || app.version || "Unknown";
+              const frontendUrl = metadata?.links?.frontend;
               
               return (
                 <div key={app.id} className="app-card">
@@ -189,6 +200,15 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
                     )}
                   </div>
                   <div className="app-card-actions">
+                    {frontendUrl && (
+                      <button
+                        onClick={() => handleOpenFrontend(frontendUrl)}
+                        className="button button-primary"
+                        title={`Open ${appName} frontend`}
+                      >
+                        Open Frontend
+                      </button>
+                    )}
                     <button
                       onClick={() => handleUninstall(app.id, appName)}
                       className="button button-danger"

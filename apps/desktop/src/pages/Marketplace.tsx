@@ -30,13 +30,31 @@ export default function Marketplace() {
   const loadInstalledApps = async () => {
     try {
       const response = await apiClient.node.listApplications();
+      if (response.error) {
+        // If 401, trigger login redirect
+        if (response.error.code === '401') {
+          console.warn("📦 Marketplace: 401 Unauthorized - token may be expired");
+          window.location.reload();
+          return;
+        }
+        console.error("Failed to load installed apps:", response.error.message);
+        return;
+      }
+      
       if (response.data) {
+        const apps = Array.isArray(response.data) ? response.data : [];
         const installed = new Set<string>(
-          (response.data as any).apps?.map((app: any) => app.id as string) || []
+          apps.map((app: any) => app.id as string)
         );
         setInstalledAppIds(installed);
       }
-    } catch (err) {
+    } catch (err: any) {
+      // Check for 401 in error object
+      if (err?.status === 401 || err?.code === '401') {
+        console.warn("📦 Marketplace: 401 Unauthorized - reloading to trigger login");
+        window.location.reload();
+        return;
+      }
       console.error("Failed to load installed apps:", err);
     }
   };
@@ -83,10 +101,13 @@ export default function Marketplace() {
   };
 
   const handleInstall = async (app: MarketplaceApp) => {
+    console.log("📦 Marketplace: Install button clicked for app:", app);
     try {
       // Fetch the manifest to get the WASM artifact URL
       const { fetchAppManifest } = await import("../utils/registry");
       const manifest = await fetchAppManifest(app.registry, app.id, app.latest_version);
+      
+      console.log("📦 Marketplace: Fetched manifest:", manifest);
       
       // Handle both v1 format (artifact) and v2 format (artifacts array)
       let wasmUrl: string;
@@ -94,20 +115,31 @@ export default function Marketplace() {
       
       if (manifest.artifact) {
         // V1 format: single artifact object
+        console.log("📦 Marketplace: Using v1 format");
         wasmUrl = manifest.artifact.uri;
         // Extract hash from digest (format: "sha256:...")
         wasmHashHex = manifest.artifact.digest?.replace('sha256:', '') || null;
       } else if (manifest.artifacts && manifest.artifacts.length > 0) {
         // V2 format: artifacts array
+        console.log("📦 Marketplace: Using v2 format, artifacts:", manifest.artifacts);
         const wasmArtifact = manifest.artifacts.find(a => a.type === 'wasm');
         if (!wasmArtifact) {
+          console.error("📦 Marketplace: No WASM artifact found in:", manifest.artifacts);
           alert("No WASM artifact found in application manifest");
           return;
         }
+        console.log("📦 Marketplace: Found WASM artifact:", wasmArtifact);
         wasmUrl = wasmArtifact.mirrors?.[0] || `https://ipfs.io/ipfs/${wasmArtifact.cid}`;
-        // For v2, hash might be in sha256 field
+        // For v2, hash might be in sha256 field (could be hex or already base58)
+        // sha256 field is hex without prefix, or we can use cid if it's a hash
         wasmHashHex = wasmArtifact.sha256?.replace('sha256:', '') || null;
+        // If no sha256, try using cid if it looks like a hex hash (64 chars)
+        if (!wasmHashHex && wasmArtifact.cid && /^[0-9a-f]{64}$/i.test(wasmArtifact.cid)) {
+          wasmHashHex = wasmArtifact.cid;
+        }
+        console.log("📦 Marketplace: WASM URL:", wasmUrl, "Hash (hex):", wasmHashHex);
       } else {
+        console.error("📦 Marketplace: No artifacts found in manifest:", manifest);
         alert("No WASM artifact found in application manifest");
         return;
       }
@@ -127,9 +159,9 @@ export default function Marketplace() {
         }
       }
       
-      // Create metadata (simplified - you may need to encode more info)
+      // Create metadata without alias
       const metadata = {
-        name: app.alias || app.name,
+        name: app.name,
         description: manifest.metadata?.description || "",
         version: app.latest_version,
         developer: app.developer_pubkey,
@@ -149,13 +181,19 @@ export default function Marketplace() {
         request.hash = wasmHashBase58;
       }
       
+      console.log("📦 Marketplace: Installing with request:", { ...request, metadata: `[${metadataBytes.length} bytes]` });
+      
       const response = await apiClient.node.installApplication(request);
+      
+      console.log("📦 Marketplace: Install response:", response);
 
       if (response.error) {
+        console.error("📦 Marketplace: Install error:", response.error);
         alert(`Failed to install: ${response.error.message}`);
         return;
       }
 
+      console.log("📦 Marketplace: Installation successful:", response.data);
       alert(`Application installed successfully! ID: ${response.data?.applicationId || 'unknown'}`);
 
       // Reload installed apps
@@ -169,8 +207,8 @@ export default function Marketplace() {
         )
       );
     } catch (err) {
-      alert(`Failed to install application: ${err instanceof Error ? err.message : "Unknown error"}`);
-      console.error("Install error:", err);
+      console.error("📦 Marketplace: Install exception:", err);
+      alert(`Failed to install: ${err instanceof Error ? err.message : "Unknown error"}`);
     }
   };
 

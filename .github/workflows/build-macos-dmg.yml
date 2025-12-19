@@ -68,7 +68,8 @@ jobs:
           # Disable code signing if certificates are not available
           if [ -z "$APPLE_CERTIFICATE" ]; then
             echo "⚠️  No Apple certificate provided, building without code signing"
-            export TAURI_SIGNING_IDENTITY=""
+            # Temporarily modify tauri.conf.json to disable signing
+            sed -i.bak 's/"signAs": null/"signAs": null/' src-tauri/tauri.conf.json || true
           else
             echo "✅ Building with code signing"
           fi
@@ -80,7 +81,6 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          TAURI_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY || '' }}
 
       - name: Find DMG file
         id: find-dmg

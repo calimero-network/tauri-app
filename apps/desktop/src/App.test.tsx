@@ -25,7 +25,7 @@ export async function testMeroReact() {
 
     // 2. Test getProviders
     console.log('\n🔐 Testing getProviders...');
-    const providersResponse = await apiClient.auth().getProviders();
+    const providersResponse = await apiClient.auth.getProviders();
     if (providersResponse.error) {
       console.error('❌ Error:', providersResponse.error.message);
       return false;
@@ -41,7 +41,7 @@ export async function testMeroReact() {
     // 4. Test health check (using admin API)
     console.log('\n🏥 Testing health check...');
     try {
-      const health = await apiClient.node().getContexts();
+      await apiClient.node.getContexts();
       console.log('✅ Node API accessible');
     } catch (err) {
       console.log('⚠️  Node API test skipped (may need auth)');

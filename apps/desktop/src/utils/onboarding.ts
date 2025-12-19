@@ -1,5 +1,4 @@
 import { apiClient } from "@calimero-network/mero-react";
-import { getSettings, getAuthUrl } from "./settings";
 
 export interface OnboardingState {
   isFirstTime: boolean;

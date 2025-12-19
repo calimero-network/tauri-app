@@ -68,7 +68,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
         <div className="onboarding-page">
           <div className="onboarding-content">
             <LoginView
-              onSuccess={(accessToken, refreshToken) => {
+              onSuccess={() => {
                 console.log("✅ Onboarding login successful");
                 onComplete();
               }}
@@ -122,7 +122,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
     <div className="onboarding-page">
       <div className="onboarding-content">
         <LoginView
-          onSuccess={(accessToken, refreshToken) => {
+          onSuccess={() => {
             console.log("✅ Login successful");
             onComplete();
           }}

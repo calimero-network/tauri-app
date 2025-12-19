@@ -87,19 +87,17 @@ jobs:
       - name: Find DMG file
         id: find-dmg
         run: |
-          cd apps/desktop
-          DMG_FILE=$(find src-tauri/target/release/bundle/dmg -name "*.dmg" | head -1)
+          # Find DMG file relative to repo root
+          DMG_FILE=$(find apps/desktop/src-tauri/target/release/bundle/dmg -name "*.dmg" 2>/dev/null | head -1)
           if [ -z "$DMG_FILE" ]; then
             echo "❌ DMG file not found!"
             echo "Contents of bundle directory:"
-            find src-tauri/target/release/bundle -type f || true
+            find apps/desktop/src-tauri/target/release/bundle -type f 2>/dev/null || true
             exit 1
           fi
-          # Convert to path relative to repo root
-          DMG_REL="apps/desktop/$DMG_FILE"
-          echo "DMG_FILE=$DMG_REL" >> $GITHUB_OUTPUT
-          echo "✅ Found DMG: $DMG_REL"
-          ls -lh "$DMG_REL"
+          echo "DMG_FILE=$DMG_FILE" >> $GITHUB_OUTPUT
+          echo "✅ Found DMG: $DMG_FILE"
+          ls -lh "$DMG_FILE"
 
       - name: Upload DMG as artifact
         uses: actions/upload-artifact@v4

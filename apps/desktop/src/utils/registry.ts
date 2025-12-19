@@ -22,7 +22,7 @@ export interface AppManifest {
   // V1 format fields
   id?: string;
   name?: string;
-  version?: string;
+  version?: string | { semver: string }; // V1 (string) or V2 ({ semver: string })
   chains?: string[];
   artifact?: {
     type: string;
@@ -36,9 +36,6 @@ export interface AppManifest {
     developer_pubkey: string;
     id: string;
     alias?: string;
-  };
-  version?: {
-    semver: string;
   };
   supported_chains?: string[];
   permissions?: Array<{

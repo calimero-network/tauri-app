@@ -30,7 +30,10 @@
       "active": true,
       "targets": "all",
       "identifier": "network.calimero.desktop",
-      "icon": []
+      "icon": [],
+      "macOS": {
+        "signAs": null
+      }
     },
     "security": {
       "csp": "default-src 'self' 'unsafe-inline' 'unsafe-eval' http://localhost:* http://127.0.0.1:*; connect-src 'self' http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:*;"

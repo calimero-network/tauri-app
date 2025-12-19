@@ -65,13 +65,13 @@ jobs:
       - name: Build Tauri app for macOS
         working-directory: apps/desktop
         run: |
-          # Disable code signing if certificates are not available
-          if [ -z "$APPLE_CERTIFICATE" ]; then
-            echo "⚠️  No Apple certificate provided, building without code signing"
-            # Temporarily modify tauri.conf.json to disable signing
-            sed -i.bak 's/"signAs": null/"signAs": null/' src-tauri/tauri.conf.json || true
+          # Code signing is disabled in tauri.conf.json (signAs: null)
+          # If certificates are provided, they can be used by setting signAs in the config
+          if [ -n "$APPLE_CERTIFICATE" ]; then
+            echo "✅ Apple certificate provided, but signing is disabled in config"
+            echo "   To enable signing, update tauri.conf.json to set signAs to your identity"
           else
-            echo "✅ Building with code signing"
+            echo "⚠️  Building without code signing (no certificate provided)"
           fi
           pnpm tauri:build
         env:

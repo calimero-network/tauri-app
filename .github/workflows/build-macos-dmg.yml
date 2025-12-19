@@ -87,16 +87,18 @@ jobs:
       - name: Find DMG file
         id: find-dmg
         run: |
-          # Find DMG file relative to repo root
-          DMG_FILE=$(find apps/desktop/src-tauri/target/release/bundle/dmg -name "*.dmg" 2>/dev/null | head -1)
+          # Find DMG file relative to repo root (using absolute path from GITHUB_WORKSPACE)
+          DMG_FILE=$(find "$GITHUB_WORKSPACE/apps/desktop/src-tauri/target/release/bundle/dmg" -name "*.dmg" 2>/dev/null | head -1)
           if [ -z "$DMG_FILE" ]; then
             echo "❌ DMG file not found!"
             echo "Contents of bundle directory:"
-            find apps/desktop/src-tauri/target/release/bundle -type f 2>/dev/null || true
+            find "$GITHUB_WORKSPACE/apps/desktop/src-tauri/target/release/bundle" -type f 2>/dev/null || true
             exit 1
           fi
-          echo "DMG_FILE=$DMG_FILE" >> $GITHUB_OUTPUT
-          echo "✅ Found DMG: $DMG_FILE"
+          # Convert to path relative to workspace root
+          DMG_REL=${DMG_FILE#$GITHUB_WORKSPACE/}
+          echo "DMG_FILE=$DMG_REL" >> $GITHUB_OUTPUT
+          echo "✅ Found DMG: $DMG_REL"
           ls -lh "$DMG_FILE"
 
       - name: Upload DMG as artifact

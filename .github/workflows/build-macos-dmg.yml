@@ -184,21 +184,26 @@ jobs:
           fi
           
           echo "📤 Submitting DMG for notarization..."
-          NOTARIZATION_ID=$(xcrun notarytool submit "$DMG_FILE" \
+          echo "   DMG: $DMG_FILE"
+          echo "   Apple ID: $APPLE_ID"
+          echo "   Team ID: $APPLE_TEAM_ID"
+          
+          # Submit for notarization and wait for completion
+          xcrun notarytool submit "$DMG_FILE" \
             --apple-id "$APPLE_ID" \
             --password "$APPLE_APP_SPECIFIC_PASSWORD" \
             --team-id "$APPLE_TEAM_ID" \
             --wait \
-            --timeout 30m \
-            --output-format json | jq -r '.id' || echo "")
+            --timeout 30m
           
-          if [ -z "$NOTARIZATION_ID" ]; then
-            echo "❌ Failed to submit for notarization"
+          NOTARIZATION_EXIT_CODE=$?
+          
+          if [ $NOTARIZATION_EXIT_CODE -eq 0 ]; then
+            echo "✅ Notarization completed successfully"
+          else
+            echo "❌ Notarization failed with exit code: $NOTARIZATION_EXIT_CODE"
             exit 1
           fi
-          
-          echo "✅ Notarization completed successfully"
-          echo "   Notarization ID: $NOTARIZATION_ID"
 
       - name: Staple notarization ticket to DMG
         if: env.IS_SIGNED == 'true'

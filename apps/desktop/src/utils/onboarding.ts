@@ -24,8 +24,13 @@ export async function checkOnboardingState(): Promise<OnboardingState> {
 
   try {
     console.log('🔍 Checking auth health...');
-    // Check if auth service is available
-    const healthResponse = await apiClient.auth.getHealth();
+    // Check if auth service is available with timeout
+    const healthResponse = await Promise.race([
+      apiClient.auth.getHealth(),
+      new Promise<{ error: { message: string; code?: string } }>((resolve) =>
+        setTimeout(() => resolve({ error: { message: 'Connection timeout - is the node running?' } }), 5000)
+      ),
+    ]);
     console.log('🏥 Auth health response:', healthResponse);
     if (healthResponse.error) {
       console.error('❌ Auth health error:', healthResponse.error);
@@ -36,9 +41,14 @@ export async function checkOnboardingState(): Promise<OnboardingState> {
     state.authAvailable = healthResponse.data?.status === "healthy";
     console.log('✅ Auth available:', state.authAvailable);
 
-    // Check providers
+    // Check providers with timeout
     console.log('🔍 Checking providers...');
-    const providersResponse = await apiClient.auth.getProviders();
+    const providersResponse = await Promise.race([
+      apiClient.auth.getProviders(),
+      new Promise<{ error: { message: string; code?: string } }>((resolve) =>
+        setTimeout(() => resolve({ error: { message: 'Connection timeout - is the node running?' } }), 5000)
+      ),
+    ]);
     console.log('👥 Providers response:', providersResponse);
     if (providersResponse.error) {
       // If providers endpoint fails, auth might not be fully configured

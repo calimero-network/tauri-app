@@ -99,18 +99,24 @@ jobs:
             echo "✅ Building with code signing"
             echo "   Signing identity: $APPLE_SIGNING_IDENTITY"
             echo "   Team ID: $APPLE_TEAM_ID"
+            IS_SIGNED=true
           else
             echo "⚠️  Building without code signing (no signing identity provided)"
+            IS_SIGNED=false
           fi
           
           pnpm tauri:build
           
-          # Remove quarantine attribute from app bundle (even if signed, helps with distribution)
-          APP_BUNDLE=$(find src-tauri/target/release/bundle/macos -name "*.app" -type d | head -1)
-          if [ -n "$APP_BUNDLE" ] && [ -d "$APP_BUNDLE" ]; then
-            echo "Removing quarantine attribute from app bundle..."
-            xattr -dr com.apple.quarantine "$APP_BUNDLE" 2>/dev/null || echo "⚠️  Could not remove quarantine (may not be needed)"
-            echo "✅ App bundle prepared"
+          # Only remove quarantine for unsigned apps (signed apps don't need this)
+          if [ "$IS_SIGNED" = "false" ]; then
+            APP_BUNDLE=$(find src-tauri/target/release/bundle/macos -name "*.app" -type d | head -1)
+            if [ -n "$APP_BUNDLE" ] && [ -d "$APP_BUNDLE" ]; then
+              echo "Removing quarantine attribute from unsigned app bundle..."
+              xattr -dr com.apple.quarantine "$APP_BUNDLE" 2>/dev/null || echo "⚠️  Could not remove quarantine"
+              echo "✅ Unsigned app bundle prepared (quarantine removed)"
+            fi
+          else
+            echo "✅ Signed app bundle - no quarantine removal needed"
           fi
         env:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
@@ -144,19 +150,23 @@ jobs:
             exit 1
           fi
 
-      - name: Remove quarantine attribute from DMG
+      - name: Remove quarantine attribute from DMG (unsigned only)
         run: |
-          # Remove quarantine attribute so macOS doesn't block the unsigned app
-          # Users can also right-click and select "Open" to bypass Gatekeeper
+          # Only remove quarantine for unsigned apps
+          # Signed apps are trusted by Gatekeeper automatically
           DMG_FILE="${{ steps.find-dmg.outputs.DMG_FILE }}"
           if [ -f "$DMG_FILE" ]; then
-            echo "Removing quarantine attribute from DMG..."
-            xattr -d com.apple.quarantine "$DMG_FILE" 2>/dev/null || echo "⚠️  Could not remove quarantine (may not be needed)"
-            echo "✅ DMG ready for distribution"
-            echo ""
-            echo "Note: Since the app is not code signed, users may need to:"
-            echo "  1. Right-click the DMG and select 'Open'"
-            echo "  2. Or run: xattr -d com.apple.quarantine <path-to-dmg>"
+            if [ -z "${{ secrets.APPLE_SIGNING_IDENTITY }}" ]; then
+              echo "Removing quarantine attribute from unsigned DMG..."
+              xattr -d com.apple.quarantine "$DMG_FILE" 2>/dev/null || echo "⚠️  Could not remove quarantine"
+              echo "✅ Unsigned DMG ready for distribution"
+              echo ""
+              echo "Note: Since the app is not code signed, users may need to:"
+              echo "  1. Right-click the DMG and select 'Open'"
+              echo "  2. Or run: xattr -d com.apple.quarantine <path-to-dmg>"
+            else
+              echo "✅ Signed DMG - no quarantine removal needed (Gatekeeper will trust it)"
+            fi
           fi
 
       - name: Upload DMG as artifact

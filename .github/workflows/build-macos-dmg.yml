@@ -99,16 +99,16 @@ jobs:
             echo "✅ Building with code signing"
             echo "   Signing identity: $APPLE_SIGNING_IDENTITY"
             echo "   Team ID: $APPLE_TEAM_ID"
-            IS_SIGNED=true
+            echo "IS_SIGNED=true" >> $GITHUB_ENV
           else
             echo "⚠️  Building without code signing (no signing identity provided)"
-            IS_SIGNED=false
+            echo "IS_SIGNED=false" >> $GITHUB_ENV
           fi
           
           pnpm tauri:build
           
           # Only remove quarantine for unsigned apps (signed apps don't need this)
-          if [ "$IS_SIGNED" = "false" ]; then
+          if [ "${{ env.IS_SIGNED }}" = "false" ]; then
             APP_BUNDLE=$(find src-tauri/target/release/bundle/macos -name "*.app" -type d | head -1)
             if [ -n "$APP_BUNDLE" ] && [ -d "$APP_BUNDLE" ]; then
               echo "Removing quarantine attribute from unsigned app bundle..."
@@ -167,6 +167,58 @@ jobs:
             else
               echo "✅ Signed DMG - no quarantine removal needed (Gatekeeper will trust it)"
             fi
+          fi
+
+      - name: Notarize DMG
+        if: env.IS_SIGNED == 'true'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          DMG_FILE="${{ steps.find-dmg.outputs.DMG_FILE }}"
+          
+          if [ -z "$APPLE_ID" ] || [ -z "$APPLE_APP_SPECIFIC_PASSWORD" ]; then
+            echo "⚠️  Apple ID or app-specific password not provided, skipping notarization"
+            exit 0
+          fi
+          
+          echo "📤 Submitting DMG for notarization..."
+          NOTARIZATION_ID=$(xcrun notarytool submit "$DMG_FILE" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait \
+            --timeout 30m \
+            --output-format json | jq -r '.id' || echo "")
+          
+          if [ -z "$NOTARIZATION_ID" ]; then
+            echo "❌ Failed to submit for notarization"
+            exit 1
+          fi
+          
+          echo "✅ Notarization completed successfully"
+          echo "   Notarization ID: $NOTARIZATION_ID"
+
+      - name: Staple notarization ticket to DMG
+        if: env.IS_SIGNED == 'true'
+        run: |
+          DMG_FILE="${{ steps.find-dmg.outputs.DMG_FILE }}"
+          
+          if [ -z "$APPLE_ID" ] || [ -z "$APPLE_APP_SPECIFIC_PASSWORD" ]; then
+            echo "⚠️  Skipping stapling (notarization was skipped)"
+            exit 0
+          fi
+          
+          echo "📎 Stapling notarization ticket to DMG..."
+          xcrun stapler staple "$DMG_FILE"
+          
+          if [ $? -eq 0 ]; then
+            echo "✅ Notarization ticket stapled successfully"
+            echo "   DMG is now ready for distribution without Gatekeeper warnings"
+          else
+            echo "❌ Failed to staple notarization ticket"
+            exit 1
           fi
 
       - name: Upload DMG as artifact

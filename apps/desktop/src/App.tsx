@@ -92,11 +92,38 @@ function App() {
         requestCredentials: 'omit',
       });
 
-      // Check onboarding state
+      // Check onboarding state with timeout
       setCheckingOnboarding(true);
-      const state = await checkOnboardingState();
-      setOnboardingState(state);
-      setCheckingOnboarding(false);
+      try {
+        const state = await Promise.race([
+          checkOnboardingState(),
+          new Promise<OnboardingState>((resolve) =>
+            setTimeout(() => {
+              resolve({
+                isFirstTime: false,
+                authAvailable: false,
+                providersAvailable: false,
+                providersConfigured: false,
+                hasConfiguredProviders: false,
+                error: 'Connection timeout. Please check if the node is running at ' + settings.nodeUrl,
+              });
+            }, 10000)
+          ),
+        ]);
+        setOnboardingState(state);
+      } catch (err) {
+        console.error('Failed to check onboarding state:', err);
+        setOnboardingState({
+          isFirstTime: false,
+          authAvailable: false,
+          providersAvailable: false,
+          providersConfigured: false,
+          hasConfiguredProviders: false,
+          error: err instanceof Error ? err.message : 'Failed to check configuration',
+        });
+      } finally {
+        setCheckingOnboarding(false);
+      }
 
       // Debug logging
       console.log('🔍 Onboarding State:', {

@@ -74,6 +74,7 @@ function App() {
         console.log('📋 First time setup - showing settings');
         setNeedsNodeConfig(true);
         setShowSettings(true);
+        setCheckingOnboarding(false);
         return;
       }
       
@@ -92,9 +93,30 @@ function App() {
         requestCredentials: 'omit',
       });
 
-      // Check onboarding state with timeout
+      // First, quickly check if the node is running at the configured URL
       setCheckingOnboarding(true);
+      console.log('🔍 Checking if node is running at:', settings.nodeUrl);
+      
       try {
+        // Quick health check with short timeout (3 seconds)
+        const healthCheck = await Promise.race([
+          apiClient.node.healthCheck(),
+          new Promise<{ error: { message: string; code?: string } }>((resolve) =>
+            setTimeout(() => resolve({ error: { message: 'Node not responding' } }), 3000)
+          ),
+        ]);
+
+        if (healthCheck.error) {
+          // Node is not running - show settings to configure
+          console.log('⚠️ Node not running or not accessible, showing settings');
+          setCheckingOnboarding(false);
+          setNeedsNodeConfig(true);
+          setShowSettings(true);
+          return;
+        }
+
+        // Node is running - proceed with onboarding/auth checks
+        console.log('✅ Node is running, checking onboarding state...');
         const state = await Promise.race([
           checkOnboardingState(),
           new Promise<OnboardingState>((resolve) =>
@@ -112,15 +134,12 @@ function App() {
         ]);
         setOnboardingState(state);
       } catch (err) {
-        console.error('Failed to check onboarding state:', err);
-        setOnboardingState({
-          isFirstTime: false,
-          authAvailable: false,
-          providersAvailable: false,
-          providersConfigured: false,
-          hasConfiguredProviders: false,
-          error: err instanceof Error ? err.message : 'Failed to check configuration',
-        });
+        console.error('Failed to check node connection:', err);
+        // On error, show settings to allow configuration
+        setCheckingOnboarding(false);
+        setNeedsNodeConfig(true);
+        setShowSettings(true);
+        return;
       } finally {
         setCheckingOnboarding(false);
       }

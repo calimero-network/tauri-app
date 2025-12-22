@@ -107,6 +107,21 @@ jobs:
             exit 1
           fi
 
+      - name: Remove quarantine attribute from DMG
+        run: |
+          # Remove quarantine attribute so macOS doesn't block the unsigned app
+          # Users can also right-click and select "Open" to bypass Gatekeeper
+          DMG_FILE="${{ steps.find-dmg.outputs.DMG_FILE }}"
+          if [ -f "$DMG_FILE" ]; then
+            echo "Removing quarantine attribute from DMG..."
+            xattr -d com.apple.quarantine "$DMG_FILE" 2>/dev/null || echo "⚠️  Could not remove quarantine (may not be needed)"
+            echo "✅ DMG ready for distribution"
+            echo ""
+            echo "Note: Since the app is not code signed, users may need to:"
+            echo "  1. Right-click the DMG and select 'Open'"
+            echo "  2. Or run: xattr -d com.apple.quarantine <path-to-dmg>"
+          fi
+
       - name: Upload DMG as artifact
         uses: actions/upload-artifact@v4
         with:

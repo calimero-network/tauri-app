@@ -117,7 +117,7 @@ function App() {
 
         // Node is running - proceed with onboarding/auth checks
         console.log('✅ Node is running, checking onboarding state...');
-        const state = await Promise.race([
+        const onboardingState = await Promise.race([
           checkOnboardingState(),
           new Promise<OnboardingState>((resolve) =>
             setTimeout(() => {
@@ -132,7 +132,45 @@ function App() {
             }, 10000)
           ),
         ]);
-        setOnboardingState(state);
+        setOnboardingState(onboardingState);
+
+        // Debug logging
+        console.log('🔍 Onboarding State:', {
+          isFirstTime: onboardingState.isFirstTime,
+          authAvailable: onboardingState.authAvailable,
+          providersAvailable: onboardingState.providersAvailable,
+          hasConfiguredProviders: onboardingState.hasConfiguredProviders,
+          error: onboardingState.error,
+        });
+
+        // Flow logic:
+        // 1. If auth is NOT configured (no users) → Onboarding (first time, create account)
+        // 2. If auth IS configured (has users) → Check if logged in
+        //    - Not logged in → Login screen
+        //    - Logged in → Main app
+        // 3. If auth service unavailable → Show error in onboarding
+        
+        if (!onboardingState.authAvailable) {
+          // Auth service not available - show onboarding with error
+          console.log('⚠️ Auth service not available, showing onboarding with error');
+          setShowOnboarding(true);
+        } else if (!onboardingState.hasConfiguredProviders) {
+          // Auth available but no users configured - show onboarding (first time)
+          console.log('📋 No users configured, showing onboarding screen');
+          setShowOnboarding(true);
+        } else {
+          // Auth is configured (has users) - check if user is logged in
+          const hasToken = getAccessToken();
+          console.log('🔑 Token check:', hasToken ? 'EXISTS' : 'NONE');
+          if (!hasToken) {
+            console.log('🔐 Showing login screen');
+            setShowLogin(true);
+          } else {
+            // User has token, try to load contexts
+            console.log('✅ User logged in, loading contexts');
+            loadContexts();
+          }
+        }
       } catch (err) {
         console.error('Failed to check node connection:', err);
         // On error, show settings to allow configuration
@@ -142,44 +180,6 @@ function App() {
         return;
       } finally {
         setCheckingOnboarding(false);
-      }
-
-      // Debug logging
-      console.log('🔍 Onboarding State:', {
-        isFirstTime: state.isFirstTime,
-        authAvailable: state.authAvailable,
-        providersAvailable: state.providersAvailable,
-        hasConfiguredProviders: state.hasConfiguredProviders,
-        error: state.error,
-      });
-
-      // Flow logic:
-      // 1. If auth is NOT configured (no users) → Onboarding (first time, create account)
-      // 2. If auth IS configured (has users) → Check if logged in
-      //    - Not logged in → Login screen
-      //    - Logged in → Main app
-      // 3. If auth service unavailable → Show error in onboarding
-      
-      if (!state.authAvailable) {
-        // Auth service not available - show onboarding with error
-        console.log('⚠️ Auth service not available, showing onboarding with error');
-        setShowOnboarding(true);
-      } else if (!state.hasConfiguredProviders) {
-        // Auth available but no users configured - show onboarding (first time)
-        console.log('📋 No users configured, showing onboarding screen');
-        setShowOnboarding(true);
-      } else {
-        // Auth is configured (has users) - check if user is logged in
-        const hasToken = getAccessToken();
-        console.log('🔑 Token check:', hasToken ? 'EXISTS' : 'NONE');
-        if (!hasToken) {
-          console.log('🔐 Showing login screen');
-          setShowLogin(true);
-        } else {
-          // User has token, try to load contexts
-          console.log('✅ User logged in, loading contexts');
-          loadContexts();
-        }
       }
     }
 

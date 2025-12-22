@@ -66,18 +66,19 @@ export interface AppManifest {
 
 /**
  * Fetch applications from a registry
+ * Uses V2 Bundle API
  */
 export async function fetchAppsFromRegistry(
   registryUrl: string,
   filters?: { dev?: string; name?: string }
 ): Promise<AppSummary[]> {
   try {
-    const url = new URL('/api/v1/apps', registryUrl);
+    const url = new URL('/api/v2/bundles', registryUrl);
     if (filters?.dev) {
-      url.searchParams.set('dev', filters.dev);
+      url.searchParams.set('developer', filters.dev);
     }
     if (filters?.name) {
-      url.searchParams.set('name', filters.name);
+      url.searchParams.set('package', filters.name);
     }
 
     const response = await fetch(url.toString(), {
@@ -91,9 +92,18 @@ export async function fetchAppsFromRegistry(
       throw new Error(`Registry request failed: ${response.status} ${response.statusText}`);
     }
 
-    const data = await response.json();
-    // Handle both array and object with apps property
-    return Array.isArray(data) ? data : (data.apps || []);
+    const bundles = await response.json();
+    const bundlesArray = Array.isArray(bundles) ? bundles : [];
+
+    // Transform V2 BundleManifest to AppSummary format
+    return bundlesArray.map((bundle: any) => ({
+      id: bundle.package,
+      name: bundle.metadata?.name || bundle.package,
+      developer_pubkey: bundle.signature?.pubkey || 'unknown',
+      latest_version: bundle.appVersion,
+      latest_cid: bundle.wasm?.hash || bundle.wasm?.path || '',
+      alias: bundle.metadata?.name,
+    }));
   } catch (error) {
     console.error(`Failed to fetch apps from registry ${registryUrl}:`, error);
     throw error;
@@ -102,13 +112,17 @@ export async function fetchAppsFromRegistry(
 
 /**
  * Fetch all versions of an application from a registry
+ * Uses V2 Bundle API
  */
 export async function fetchAppVersions(
   registryUrl: string,
   appId: string
 ): Promise<VersionInfo[]> {
   try {
-    const url = new URL(`/api/v1/apps/${appId}`, registryUrl);
+    // Use V2 Bundle API - get all bundles for this package
+    const url = new URL('/api/v2/bundles', registryUrl);
+    url.searchParams.set('package', appId);
+
     const response = await fetch(url.toString(), {
       method: 'GET',
       headers: {
@@ -120,12 +134,19 @@ export async function fetchAppVersions(
       throw new Error(`Failed to fetch versions: ${response.status} ${response.statusText}`);
     }
 
-    const data = await response.json();
-    // Backend returns { id, versions: VersionInfo[] }
-    if (data.versions && Array.isArray(data.versions)) {
-      return data.versions;
-    }
-    return [];
+    const bundles = await response.json();
+    const bundlesArray = Array.isArray(bundles) ? bundles : [];
+
+    // Transform V2 bundles to VersionInfo format
+    return bundlesArray.map((bundle: any) => {
+      // Get artifact URL (convention: /artifacts/:package/:version/:package-:version.mpk)
+      const artifactUrl = `/artifacts/${bundle.package}/${bundle.appVersion}/${bundle.package}-${bundle.appVersion}.mpk`;
+      return {
+        semver: bundle.appVersion,
+        cid: artifactUrl,
+        yanked: false,
+      };
+    });
   } catch (error) {
     console.error(`Failed to fetch app versions from registry ${registryUrl}:`, error);
     throw error;
@@ -134,6 +155,7 @@ export async function fetchAppVersions(
 
 /**
  * Fetch application manifest from a registry
+ * Uses V2 Bundle API and transforms to AppManifest format
  */
 export async function fetchAppManifest(
   registryUrl: string,
@@ -141,7 +163,8 @@ export async function fetchAppManifest(
   version: string
 ): Promise<AppManifest> {
   try {
-    const url = new URL(`/api/v1/apps/${appId}/${version}`, registryUrl);
+    // Use V2 Bundle API
+    const url = new URL(`/api/v2/bundles/${appId}/${version}`, registryUrl);
     
     const response = await fetch(url.toString(), {
       method: 'GET',
@@ -154,7 +177,66 @@ export async function fetchAppManifest(
       throw new Error(`Failed to fetch manifest: ${response.status} ${response.statusText}`);
     }
 
-    return await response.json();
+    const bundle = await response.json();
+
+    // Transform V2 BundleManifest to AppManifest format
+    // V2 bundles use MPK (Mero Package Kit) files, not raw WASM
+    // Construct MPK URL: /artifacts/{package}/{version}/{package}-{version}.mpk
+    const mpkUrl = `/artifacts/${bundle.package}/${bundle.appVersion}/${bundle.package}-${bundle.appVersion}.mpk`;
+    // For absolute URL, we need to prepend the registry base URL
+    const registryBase = new URL(registryUrl).origin;
+    const mpkAbsoluteUrl = `${registryBase}${mpkUrl}`;
+    const mpkHash = bundle.wasm?.hash || '';
+
+    return {
+      manifest_version: bundle.version || '2.0',
+      app: {
+        name: bundle.metadata?.name || bundle.package,
+        developer_pubkey: bundle.signature?.pubkey || 'unknown',
+        id: bundle.package,
+        alias: bundle.metadata?.name,
+      },
+      version: {
+        semver: bundle.appVersion,
+      },
+      supported_chains: [], // V2 bundles don't have chains in manifest
+      permissions: [
+        {
+          cap: 'basic',
+          bytes: bundle.wasm?.size || 0,
+        },
+      ],
+      artifacts: [
+        {
+          type: 'mpk', // V2 bundles use MPK files
+          target: 'node',
+          cid: mpkHash, // Use hash as CID for compatibility
+          size: bundle.wasm?.size || 0,
+          mirrors: [mpkAbsoluteUrl], // MPK URL for download
+          sha256: mpkHash, // Hash in hex format (without sha256: prefix)
+        },
+      ],
+      metadata: {
+        provides: bundle.interfaces?.exports || [],
+        requires: bundle.interfaces?.uses || [],
+        description: bundle.metadata?.description,
+        tags: bundle.metadata?.tags,
+        license: bundle.metadata?.license,
+        links: bundle.links,
+      },
+      distribution: 'registry',
+      signature: bundle.signature
+        ? {
+            alg: bundle.signature.alg,
+            sig: bundle.signature.sig,
+            signed_at: bundle.signature.signedAt,
+          }
+        : {
+            alg: 'ed25519',
+            sig: 'unsigned',
+            signed_at: new Date().toISOString(),
+          },
+    };
   } catch (error) {
     console.error(`Failed to fetch app manifest from registry ${registryUrl}:`, error);
     throw error;

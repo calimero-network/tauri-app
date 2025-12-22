@@ -122,22 +122,35 @@ export default function Marketplace() {
       } else if (manifest.artifacts && manifest.artifacts.length > 0) {
         // V2 format: artifacts array
         console.log("📦 Marketplace: Using v2 format, artifacts:", manifest.artifacts);
+        // V2 bundles use MPK files, but also check for WASM for backward compatibility
+        const mpkArtifact = manifest.artifacts.find(a => a.type === 'mpk');
         const wasmArtifact = manifest.artifacts.find(a => a.type === 'wasm');
-        if (!wasmArtifact) {
-          console.error("📦 Marketplace: No WASM artifact found in:", manifest.artifacts);
-          alert("No WASM artifact found in application manifest");
+        
+        if (mpkArtifact) {
+          // V2 bundle: MPK file
+          console.log("📦 Marketplace: Found MPK artifact:", mpkArtifact);
+          wasmUrl = mpkArtifact.mirrors?.[0] || `https://ipfs.io/ipfs/${mpkArtifact.cid}`;
+          wasmHashHex = mpkArtifact.sha256?.replace('sha256:', '') || null;
+          // If no sha256, try using cid if it looks like a hex hash (64 chars)
+          if (!wasmHashHex && mpkArtifact.cid && /^[0-9a-f]{64}$/i.test(mpkArtifact.cid)) {
+            wasmHashHex = mpkArtifact.cid;
+          }
+          console.log("📦 Marketplace: MPK URL:", wasmUrl, "Hash (hex):", wasmHashHex);
+        } else if (wasmArtifact) {
+          // Fallback: WASM artifact (v1 or legacy v2)
+          console.log("📦 Marketplace: Found WASM artifact:", wasmArtifact);
+          wasmUrl = wasmArtifact.mirrors?.[0] || `https://ipfs.io/ipfs/${wasmArtifact.cid}`;
+          wasmHashHex = wasmArtifact.sha256?.replace('sha256:', '') || null;
+          // If no sha256, try using cid if it looks like a hex hash (64 chars)
+          if (!wasmHashHex && wasmArtifact.cid && /^[0-9a-f]{64}$/i.test(wasmArtifact.cid)) {
+            wasmHashHex = wasmArtifact.cid;
+          }
+          console.log("📦 Marketplace: WASM URL:", wasmUrl, "Hash (hex):", wasmHashHex);
+        } else {
+          console.error("📦 Marketplace: No MPK or WASM artifact found in:", manifest.artifacts);
+          alert("No MPK or WASM artifact found in application manifest");
           return;
         }
-        console.log("📦 Marketplace: Found WASM artifact:", wasmArtifact);
-        wasmUrl = wasmArtifact.mirrors?.[0] || `https://ipfs.io/ipfs/${wasmArtifact.cid}`;
-        // For v2, hash might be in sha256 field (could be hex or already base58)
-        // sha256 field is hex without prefix, or we can use cid if it's a hash
-        wasmHashHex = wasmArtifact.sha256?.replace('sha256:', '') || null;
-        // If no sha256, try using cid if it looks like a hex hash (64 chars)
-        if (!wasmHashHex && wasmArtifact.cid && /^[0-9a-f]{64}$/i.test(wasmArtifact.cid)) {
-          wasmHashHex = wasmArtifact.cid;
-        }
-        console.log("📦 Marketplace: WASM URL:", wasmUrl, "Hash (hex):", wasmHashHex);
       } else {
         console.error("📦 Marketplace: No artifacts found in manifest:", manifest);
         alert("No WASM artifact found in application manifest");
@@ -174,12 +187,19 @@ export default function Marketplace() {
       // Install the application
       const request: any = {
         url: wasmUrl,
-        metadata: metadataBytes,
+        // For MPK bundles, use empty metadata (backend will use bundle manifest metadata)
+        // For WASM files, include metadata
+        metadata: wasmUrl.endsWith('.mpk') ? [] : metadataBytes,
       };
       // Include hash in base58 format if we have it
-      if (wasmHashBase58) {
+      // Note: For MPK files, we should use the MPK file's hash, not the WASM hash
+      // For now, only include hash if we're sure it matches the file being downloaded
+      // (i.e., for WASM files, not MPK files until we have actual MPK hashes)
+      if (wasmHashBase58 && !wasmUrl.endsWith('.mpk')) {
         request.hash = wasmHashBase58;
       }
+      // For MPK files, don't provide hash until we have the actual MPK file hash
+      // The node will compute it during download
       
       console.log("📦 Marketplace: Installing with request:", { ...request, metadata: `[${metadataBytes.length} bytes]` });
       

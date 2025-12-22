@@ -31,6 +31,7 @@ const Contexts: React.FC<ContextsProps> = ({ onAuthRequired, onConfirmDelete }) 
   const [contexts, setContexts] = useState<Context[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [createProtocol, setCreateProtocol] = useState("near");
   const [createApplicationId, setCreateApplicationId] = useState("");
@@ -133,11 +134,13 @@ const Contexts: React.FC<ContextsProps> = ({ onAuthRequired, onConfirmDelete }) 
     e.preventDefault();
     
     if (!createApplicationId.trim()) {
-      alert("Application ID is required");
+      setError("Application ID is required");
       return;
     }
 
     setCreating(true);
+    setError(null);
+    setSuccessMessage(null);
     try {
       // Convert initialization params from JSON string to byte array
       let initParams: number[] = [];
@@ -147,7 +150,7 @@ const Contexts: React.FC<ContextsProps> = ({ onAuthRequired, onConfirmDelete }) 
           const jsonString = JSON.stringify(jsonParams);
           initParams = Array.from(new TextEncoder().encode(jsonString));
         } catch (parseErr) {
-          alert("Invalid JSON in initialization params");
+          setError("Invalid JSON in initialization params");
           setCreating(false);
           return;
         }
@@ -160,18 +163,21 @@ const Contexts: React.FC<ContextsProps> = ({ onAuthRequired, onConfirmDelete }) 
       });
 
       if (response.error) {
-        alert(`Failed to create context: ${response.error.message}`);
+        setError(`Failed to create context: ${response.error.message}`);
         return;
       }
 
-      alert(`Context created successfully! ID: ${response.data?.contextId || 'N/A'}`);
+      setSuccessMessage(`Context created successfully! ID: ${response.data?.contextId || 'N/A'}`);
       setCreateProtocol("near");
       setCreateApplicationId("");
       setCreateInitializationParams("");
       setShowCreateForm(false);
       await loadContexts();
+      
+      // Clear success message after 3 seconds
+      setTimeout(() => setSuccessMessage(null), 3000);
     } catch (err) {
-      alert(`Failed to create context: ${err instanceof Error ? err.message : "Unknown error"}`);
+      setError(`Failed to create context: ${err instanceof Error ? err.message : "Unknown error"}`);
       console.error("Create context error:", err);
     } finally {
       setCreating(false);
@@ -186,17 +192,19 @@ const Contexts: React.FC<ContextsProps> = ({ onAuthRequired, onConfirmDelete }) 
           const response = await apiClient.node.deleteContext(contextId);
           
           if (response.error) {
-            alert(`Failed to delete context: ${response.error.message}`);
+            setError(`Failed to delete context: ${response.error.message}`);
             return;
           }
 
           console.log(`✅ Context deleted successfully: ${response.data?.contextId || contextId}`);
-          alert(`Context "${contextName}" deleted successfully`);
+          setSuccessMessage(`Context "${contextName}" deleted successfully`);
           // Reload the list
           await loadContexts();
+          // Clear success message after 3 seconds
+          setTimeout(() => setSuccessMessage(null), 3000);
         } catch (err) {
           console.error("Delete context error:", err);
-          alert(`Failed to delete context: ${err instanceof Error ? err.message : "Unknown error"}`);
+          setError(`Failed to delete context: ${err instanceof Error ? err.message : "Unknown error"}`);
         }
       });
     } else {
@@ -206,16 +214,18 @@ const Contexts: React.FC<ContextsProps> = ({ onAuthRequired, onConfirmDelete }) 
         const response = await apiClient.node.deleteContext(contextId);
         
         if (response.error) {
-          alert(`Failed to delete context: ${response.error.message}`);
+          setError(`Failed to delete context: ${response.error.message}`);
           return;
         }
 
         console.log(`✅ Context deleted successfully: ${response.data?.contextId || contextId}`);
-        alert(`Context "${contextName}" deleted successfully`);
+        setSuccessMessage(`Context "${contextName}" deleted successfully`);
         await loadContexts();
+        // Clear success message after 3 seconds
+        setTimeout(() => setSuccessMessage(null), 3000);
       } catch (err) {
         console.error("Delete context error:", err);
-        alert(`Failed to delete context: ${err instanceof Error ? err.message : "Unknown error"}`);
+        setError(`Failed to delete context: ${err instanceof Error ? err.message : "Unknown error"}`);
       }
     }
   };
@@ -239,8 +249,34 @@ const Contexts: React.FC<ContextsProps> = ({ onAuthRequired, onConfirmDelete }) 
 
       <main className="contexts-main">
         {error && (
-          <div className="error-message">
+          <div className="error-message" style={{ marginBottom: '16px' }}>
             {error}
+            <button 
+              onClick={() => setError(null)} 
+              style={{ marginLeft: '12px', padding: '4px 8px', fontSize: '12px' }}
+            >
+              ✕
+            </button>
+          </div>
+        )}
+        {successMessage && (
+          <div className="success-message" style={{ 
+            marginBottom: '16px', 
+            padding: '12px', 
+            backgroundColor: '#d4edda', 
+            color: '#155724', 
+            borderRadius: '4px',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center'
+          }}>
+            {successMessage}
+            <button 
+              onClick={() => setSuccessMessage(null)} 
+              style={{ padding: '4px 8px', fontSize: '12px', background: 'transparent', border: 'none', cursor: 'pointer' }}
+            >
+              ✕
+            </button>
           </div>
         )}
 
@@ -278,15 +314,25 @@ const Contexts: React.FC<ContextsProps> = ({ onAuthRequired, onConfirmDelete }) 
                       
                       if (app.metadata) {
                         try {
-                          const metadata = typeof app.metadata === 'string' 
-                            ? JSON.parse(atob(app.metadata))
-                            : Array.isArray(app.metadata)
-                            ? JSON.parse(String.fromCharCode(...app.metadata))
-                            : app.metadata;
-                          appName = metadata.name || metadata.alias || app.id;
-                          appVersion = metadata.version || '';
+                          // Handle empty metadata (bundles use empty metadata)
+                          if (Array.isArray(app.metadata) && app.metadata.length === 0) {
+                            // Empty metadata for bundles - use app.id as name
+                            appName = app.id;
+                            appVersion = '';
+                          } else {
+                            const metadata = typeof app.metadata === 'string' 
+                              ? JSON.parse(atob(app.metadata))
+                              : Array.isArray(app.metadata)
+                              ? JSON.parse(String.fromCharCode(...app.metadata))
+                              : app.metadata;
+                            appName = metadata.name || metadata.alias || app.id;
+                            appVersion = metadata.version || '';
+                          }
                         } catch (e) {
                           console.warn("Failed to decode app metadata:", e);
+                          // Fallback to app.id if parsing fails
+                          appName = app.id;
+                          appVersion = '';
                         }
                       }
                       

@@ -6,6 +6,7 @@ export interface AppSettings {
 
 const SETTINGS_KEY = 'calimero-desktop-settings';
 const DEFAULT_NODE_URL = 'http://localhost:2528';
+const DEFAULT_REGISTRY_URL = 'http://localhost:8080';
 
 export function getSettings(): AppSettings {
   try {
@@ -15,7 +16,9 @@ export function getSettings(): AppSettings {
       return {
         nodeUrl: parsed.nodeUrl || DEFAULT_NODE_URL,
         authUrl: parsed.authUrl,
-        registries: parsed.registries || [],
+        registries: parsed.registries && parsed.registries.length > 0 
+          ? parsed.registries 
+          : [DEFAULT_REGISTRY_URL], // Default to local registry if empty
       };
     }
   } catch (error) {
@@ -24,7 +27,7 @@ export function getSettings(): AppSettings {
   
   return {
     nodeUrl: DEFAULT_NODE_URL,
-    registries: [],
+    registries: [DEFAULT_REGISTRY_URL], // Default to local registry for development
   };
 }
 

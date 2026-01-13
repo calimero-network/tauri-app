@@ -331,9 +331,18 @@ jobs:
         run: |
           # Move artifacts to expected location
           mkdir -p release-assets
-          cp artifacts/*.dmg release-assets/ 2>/dev/null || true
-          cp artifacts/*.app.tar.gz release-assets/ 2>/dev/null || true
-          cp artifacts/*.json release-assets/ 2>/dev/null || true
+
+          # Copy DMG files (find handles nested paths)
+          find artifacts/ -name "*.dmg" -exec cp {} release-assets/ \; 2>/dev/null || true
+
+          # Copy .app.tar.gz files (find handles nested paths)
+          find artifacts/ -name "*.app.tar.gz" -exec cp {} release-assets/ \; 2>/dev/null || true
+
+          # Copy latest.json (find handles nested paths, copy to root as latest.json)
+          LATEST_JSON=$(find artifacts/ -name "latest.json" | head -1)
+          if [ -n "$LATEST_JSON" ]; then
+            cp "$LATEST_JSON" release-assets/latest.json
+          fi
 
           # Run semantic-release (it will create the release)
           npx semantic-release
@@ -344,9 +353,10 @@ jobs:
         run: |
           VERSION="${{ needs.prepare.outputs.version }}"
 
-          # Upload latest.json to the release
-          if [ -f "artifacts/latest.json" ]; then
-            gh release upload "v$VERSION" artifacts/latest.json --clobber || true
+          # Upload latest.json to the release (find handles nested paths)
+          LATEST_JSON=$(find artifacts/ -name "latest.json" | head -1)
+          if [ -n "$LATEST_JSON" ]; then
+            gh release upload "v$VERSION" "$LATEST_JSON" --clobber || true
           fi
 
           # Upload .app.tar.gz for Tauri updater

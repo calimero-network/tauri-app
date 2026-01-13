@@ -5,6 +5,10 @@ on:
     branches:
       - main
       - master
+  pull_request:
+    branches:
+      - main
+      - master
   workflow_dispatch:
     inputs:
       dry_run:
@@ -45,13 +49,19 @@ jobs:
       - name: Install semantic-release
         run: npm install -g semantic-release @semantic-release/changelog @semantic-release/git @semantic-release/github @semantic-release/exec
 
-      - name: Run semantic-release (dry-run to get version)
+      - name: Run semantic-release validation
         id: semantic
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if [ "${{ inputs.dry_run }}" = "true" ]; then
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "Validating release workflow..."
             npx semantic-release --dry-run
+            echo "new_release_published=false" >> $GITHUB_OUTPUT
+            echo "Release workflow validation passed"
+          elif [ "${{ inputs.dry_run }}" = "true" ]; then
+            npx semantic-release --dry-run
+            echo "new_release_published=false" >> $GITHUB_OUTPUT
           else
             npx semantic-release --dry-run 2>&1 | tee semantic-output.txt
             
@@ -73,7 +83,10 @@ jobs:
   build-macos:
     name: Build macOS
     needs: prepare
-    if: needs.prepare.outputs.should_release == 'true' || github.event_name == 'workflow_dispatch'
+    if: |
+      needs.prepare.outputs.should_release == 'true' || 
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'pull_request'
     runs-on: macos-latest
     outputs:
       dmg_name: ${{ steps.find-dmg.outputs.DMG_NAME }}
@@ -297,7 +310,9 @@ jobs:
   release:
     name: Create Release
     needs: [prepare, build-macos]
-    if: needs.prepare.outputs.should_release == 'true'
+    if: |
+      needs.prepare.outputs.should_release == 'true' &&
+      github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       contents: write

@@ -8,6 +8,7 @@ import Marketplace from "./pages/Marketplace";
 import InstalledApps from "./pages/InstalledApps";
 import Contexts from "./pages/Contexts";
 import ConfirmAction from "./pages/ConfirmAction";
+import UpdateNotification from "./components/UpdateNotification";
 import "./App.css";
 
 function App() {
@@ -511,6 +512,9 @@ function App() {
 
   return (
     <div className="app">
+      {/* Auto-update notification */}
+      <UpdateNotification checkOnMount={true} checkInterval={3600000} />
+
       <header className="header">
         <h1>Calimero Desktop</h1>
         <div style={{ display: 'flex', gap: '12px' }}>

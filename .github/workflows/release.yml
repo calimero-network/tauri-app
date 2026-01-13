@@ -1,0 +1,340 @@
+name: Release
+
+on:
+    push:
+        branches:
+            - main
+            - master
+    workflow_dispatch:
+        inputs:
+            dry_run:
+                description: "Run semantic-release in dry-run mode"
+                required: false
+                default: false
+                type: boolean
+
+# Prevent concurrent releases
+concurrency:
+    group: release-${{ github.ref }}
+    cancel-in-progress: false
+
+env:
+    CARGO_TERM_COLOR: always
+
+jobs:
+    # First job: determine if a release should happen
+    prepare:
+        name: Prepare Release
+        runs-on: ubuntu-latest
+        outputs:
+            should_release: ${{ steps.semantic.outputs.new_release_published }}
+            version: ${{ steps.semantic.outputs.new_release_version }}
+            release_notes: ${{ steps.semantic.outputs.new_release_notes }}
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v4
+              with:
+                  fetch-depth: 0
+                  persist-credentials: false
+
+            - name: Setup Node.js
+              uses: actions/setup-node@v4
+              with:
+                  node-version: "20"
+
+            - name: Install semantic-release
+              run: npm install -g semantic-release @semantic-release/changelog @semantic-release/git @semantic-release/github @semantic-release/exec
+
+            - name: Run semantic-release (dry-run to get version)
+              id: semantic
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              run: |
+                  if [ "${{ inputs.dry_run }}" = "true" ]; then
+                    npx semantic-release --dry-run
+                  else
+                    npx semantic-release --dry-run 2>&1 | tee semantic-output.txt
+                    
+                    # Parse output to check if release will happen
+                    if grep -q "Published release" semantic-output.txt || grep -q "The next release version is" semantic-output.txt; then
+                      VERSION=$(grep -oP "The next release version is \K[0-9]+\.[0-9]+\.[0-9]+" semantic-output.txt || echo "")
+                      if [ -n "$VERSION" ]; then
+                        echo "new_release_published=true" >> $GITHUB_OUTPUT
+                        echo "new_release_version=$VERSION" >> $GITHUB_OUTPUT
+                      else
+                        echo "new_release_published=false" >> $GITHUB_OUTPUT
+                      fi
+                    else
+                      echo "new_release_published=false" >> $GITHUB_OUTPUT
+                    fi
+                  fi
+
+    # Build macOS DMG
+    build-macos:
+        name: Build macOS
+        needs: prepare
+        if: needs.prepare.outputs.should_release == 'true' || github.event_name == 'workflow_dispatch'
+        runs-on: macos-latest
+        outputs:
+            dmg_name: ${{ steps.find-dmg.outputs.DMG_NAME }}
+            app_version: ${{ steps.version.outputs.version }}
+
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v4
+              with:
+                  fetch-depth: 0
+
+            - name: Set version
+              id: version
+              run: |
+                  if [ -n "${{ needs.prepare.outputs.version }}" ]; then
+                    echo "version=${{ needs.prepare.outputs.version }}" >> $GITHUB_OUTPUT
+                  else
+                    # Fallback to package.json version for manual runs
+                    VERSION=$(node -p "require('./apps/desktop/src-tauri/tauri.conf.json').package.version")
+                    echo "version=$VERSION" >> $GITHUB_OUTPUT
+                  fi
+
+            - name: Setup pnpm
+              uses: pnpm/action-setup@v4
+              with:
+                  version: 9
+
+            - name: Setup Node.js
+              uses: actions/setup-node@v4
+              with:
+                  node-version: "20"
+                  cache: "pnpm"
+
+            - name: Get pnpm store directory
+              shell: bash
+              run: |
+                  echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
+
+            - name: Setup pnpm cache
+              uses: actions/cache@v4
+              with:
+                  path: ${{ env.STORE_PATH }}
+                  key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
+                  restore-keys: |
+                      ${{ runner.os }}-pnpm-store-
+
+            - name: Setup Rust
+              uses: dtolnay/rust-toolchain@stable
+              with:
+                  targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+            - name: Cache Rust dependencies
+              uses: Swatinem/rust-cache@v2
+              with:
+                  workspaces: apps/desktop/src-tauri
+
+            - name: Install dependencies
+              run: pnpm install --frozen-lockfile
+
+            - name: Build workspace packages
+              run: |
+                  pnpm build:mero-js
+                  pnpm build:mero-react
+
+            - name: Update version in tauri.conf.json
+              run: |
+                  VERSION="${{ steps.version.outputs.version }}"
+                  if [ -n "$VERSION" ]; then
+                    cd apps/desktop/src-tauri
+                    # Update version using node
+                    node -e "
+                      const fs = require('fs');
+                      const config = JSON.parse(fs.readFileSync('tauri.conf.json', 'utf8'));
+                      config.package.version = '$VERSION';
+                      fs.writeFileSync('tauri.conf.json', JSON.stringify(config, null, 2));
+                    "
+                  fi
+
+            - name: Import Apple codesign cert
+              env:
+                  APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+                  APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+              run: |
+                  if [ -z "$APPLE_CERTIFICATE" ]; then
+                    exit 0
+                  fi
+
+                  echo "$APPLE_CERTIFICATE" | base64 --decode > certificate.p12
+
+                  security create-keychain -p "" build.keychain
+                  security set-keychain-settings -t 3600 -u build.keychain
+                  security unlock-keychain -p "" build.keychain
+                  security default-keychain -s build.keychain
+
+                  security import certificate.p12 \
+                    -k build.keychain \
+                    -P "$APPLE_CERTIFICATE_PASSWORD" \
+                    -T /usr/bin/codesign \
+                    -T /usr/bin/security \
+                    -T /usr/bin/productbuild
+
+                  security set-key-partition-list -S apple-tool:,apple: -s -k "" build.keychain
+
+                  rm -f certificate.p12
+
+            - name: Build Tauri app for macOS (Universal)
+              working-directory: apps/desktop
+              env:
+                  APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+                  APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+                  TAURI_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+                  TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+                  TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+              run: |
+                  if [ -n "$APPLE_SIGNING_IDENTITY" ]; then
+                    echo "IS_SIGNED=true" >> $GITHUB_ENV
+                  else
+                    echo "IS_SIGNED=false" >> $GITHUB_ENV
+                  fi
+
+                  # Build universal binary
+                  pnpm tauri build --target universal-apple-darwin
+
+            - name: Cleanup keychain
+              if: always()
+              run: security delete-keychain build.keychain 2>/dev/null || true
+
+            - name: Find DMG file
+              id: find-dmg
+              run: |
+                  DMG_FILE=$(find apps/desktop/src-tauri/target -name "*.dmg" 2>/dev/null | head -1)
+                  if [ -z "$DMG_FILE" ]; then
+                    find apps/desktop/src-tauri/target -type f -name "*.dmg" 2>/dev/null || true
+                    exit 1
+                  fi
+                  DMG_NAME=$(basename "$DMG_FILE")
+                  echo "DMG_FILE=$DMG_FILE" >> $GITHUB_OUTPUT
+                  echo "DMG_NAME=$DMG_NAME" >> $GITHUB_OUTPUT
+
+            - name: Notarize DMG
+              if: env.IS_SIGNED == 'true'
+              env:
+                  APPLE_ID: ${{ secrets.APPLE_ID }}
+                  APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+                  APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+              run: |
+                  DMG_FILE="${{ steps.find-dmg.outputs.DMG_FILE }}"
+
+                  if [ -z "$APPLE_ID" ] || [ -z "$APPLE_APP_SPECIFIC_PASSWORD" ]; then
+                    exit 0
+                  fi
+
+                  xcrun notarytool submit "$DMG_FILE" \
+                    --apple-id "$APPLE_ID" \
+                    --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+                    --team-id "$APPLE_TEAM_ID" \
+                    --wait \
+                    --timeout 30m
+
+                  xcrun stapler staple "$DMG_FILE"
+
+            - name: Generate update manifest (latest.json)
+              env:
+                  TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+                  TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+              run: |
+                  VERSION="${{ steps.version.outputs.version }}"
+                  DMG_NAME="${{ steps.find-dmg.outputs.DMG_NAME }}"
+                  REPO="${{ github.repository }}"
+
+                  # Generate signature if private key is available
+                  if [ -n "$TAURI_PRIVATE_KEY" ]; then
+                    TAR_FILE=$(find apps/desktop/src-tauri/target -name "*.app.tar.gz" 2>/dev/null | head -1)
+                  fi
+
+                  # Create latest.json for Tauri updater
+                  cat > apps/desktop/src-tauri/target/latest.json << EOF
+                  {
+                    "version": "v$VERSION",
+                    "notes": "Release v$VERSION",
+                    "pub_date": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+                    "platforms": {
+                      "darwin-universal": {
+                        "url": "https://github.com/$REPO/releases/download/v$VERSION/$DMG_NAME"
+                      },
+                      "darwin-x86_64": {
+                        "url": "https://github.com/$REPO/releases/download/v$VERSION/$DMG_NAME"
+                      },
+                      "darwin-aarch64": {
+                        "url": "https://github.com/$REPO/releases/download/v$VERSION/$DMG_NAME"
+                      }
+                    }
+                  }
+                  EOF
+
+            - name: Upload artifacts
+              uses: actions/upload-artifact@v4
+              with:
+                  name: macos-dmg
+                  path: |
+                      ${{ steps.find-dmg.outputs.DMG_FILE }}
+                      apps/desktop/src-tauri/target/latest.json
+                  retention-days: 7
+
+    # Create GitHub Release
+    release:
+        name: Create Release
+        needs: [prepare, build-macos]
+        if: needs.prepare.outputs.should_release == 'true'
+        runs-on: ubuntu-latest
+        permissions:
+            contents: write
+
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v4
+              with:
+                  fetch-depth: 0
+
+            - name: Download macOS artifacts
+              uses: actions/download-artifact@v4
+              with:
+                  name: macos-dmg
+                  path: artifacts/
+
+            - name: Setup Node.js
+              uses: actions/setup-node@v4
+              with:
+                  node-version: "20"
+
+            - name: Install semantic-release
+              run: npm install -g semantic-release @semantic-release/changelog @semantic-release/git @semantic-release/github @semantic-release/exec
+
+            - name: List artifacts
+              run: find artifacts/ -type f -ls
+
+            - name: Create Release with semantic-release
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              run: |
+                  # Move artifacts to expected location
+                  mkdir -p release-assets
+                  cp artifacts/*.dmg release-assets/ 2>/dev/null || true
+                  cp artifacts/*.json release-assets/ 2>/dev/null || true
+
+                  # Run semantic-release (it will create the release)
+                  npx semantic-release
+
+            - name: Upload additional assets to release
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              run: |
+                  VERSION="${{ needs.prepare.outputs.version }}"
+
+                  # Upload latest.json to the release
+                  if [ -f "artifacts/latest.json" ]; then
+                    gh release upload "v$VERSION" artifacts/latest.json --clobber || true
+                  fi
+
+                  # Upload DMG if not already uploaded by semantic-release
+                  DMG_FILE=$(find artifacts/ -name "*.dmg" | head -1)
+                  if [ -n "$DMG_FILE" ]; then
+                    gh release upload "v$VERSION" "$DMG_FILE" --clobber || true
+                  fi

@@ -114,6 +114,10 @@
             "label": "Calimero Desktop (macOS)"
           },
           {
+            "path": "release-assets/*.app.tar.gz",
+            "label": "Calimero Desktop (macOS - Auto-Update)"
+          },
+          {
             "path": "release-assets/latest.json",
             "label": "Update Manifest"
           }

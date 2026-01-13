@@ -4,7 +4,7 @@ Monorepo for Calimero desktop applications built with Tauri.
 
 ## Download
 
-**[Download Calimero Desktop for macOS](https://github.com/calimero-network/calimero-desktop/releases/latest)**
+**[Download Calimero Desktop for macOS](https://github.com/calimero-network/tauri-app/releases/latest)**
 
 ## Structure
 

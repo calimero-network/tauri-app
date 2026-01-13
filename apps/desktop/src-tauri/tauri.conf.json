@@ -54,7 +54,7 @@
       "endpoints": [
         "https://github.com/calimero-network/tauri-app/releases/latest/download/latest.json"
       ],
-      "pubkey": "REPLACE_WITH_TAURI_UPDATER_PUBKEY"
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQ0RTI2QkEzQkExNjU3ClJXUlhGcnFqYStKRUFKV1ZkREpiSk5GcmQ1eWo2UjdtcXBpUWxZaEpvYnRDc2ZOZCtqbm90VklDCg"
     },
     "windows": [
       {

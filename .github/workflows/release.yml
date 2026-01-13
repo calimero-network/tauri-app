@@ -67,7 +67,8 @@ jobs:
             
             # Parse output to check if release will happen
             if grep -q "Published release" semantic-output.txt || grep -q "The next release version is" semantic-output.txt; then
-              VERSION=$(grep -oP "The next release version is \K[0-9]+\.[0-9]+\.[0-9]+" semantic-output.txt || echo "")
+              # Match full semantic version including prerelease suffixes (e.g., 1.0.0-beta.1, 1.0.0-alpha.1)
+              VERSION=$(grep -oP "The next release version is \K[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.-]+)?" semantic-output.txt || echo "")
               if [ -n "$VERSION" ]; then
                 echo "new_release_published=true" >> $GITHUB_OUTPUT
                 echo "new_release_version=$VERSION" >> $GITHUB_OUTPUT
@@ -251,7 +252,7 @@ jobs:
 
           xcrun stapler staple "$DMG_FILE"
 
-      - name: Find app.tar.gz file
+      - name: Find app.tar.gz file and signature
         id: find-tar
         run: |
           TAR_FILE=$(find apps/desktop/src-tauri/target/universal-apple-darwin/release/bundle -name "*.app.tar.gz" 2>/dev/null | head -1)
@@ -263,9 +264,22 @@ jobs:
             exit 1
           fi
           TAR_NAME=$(basename "$TAR_FILE")
+
+          # Find corresponding .sig file
+          SIG_FILE="${TAR_FILE}.sig"
+          if [ ! -f "$SIG_FILE" ]; then
+            echo "Warning: .sig file not found at $SIG_FILE"
+            echo "Searching for .sig files:"
+            find apps/desktop/src-tauri/target/universal-apple-darwin/release/bundle -name "*.sig" 2>/dev/null || true
+          fi
+
           echo "TAR_FILE=$TAR_FILE" >> $GITHUB_OUTPUT
           echo "TAR_NAME=$TAR_NAME" >> $GITHUB_OUTPUT
+          echo "SIG_FILE=$SIG_FILE" >> $GITHUB_OUTPUT
           echo "Found .app.tar.gz: $TAR_FILE"
+          if [ -f "$SIG_FILE" ]; then
+            echo "Found .sig file: $SIG_FILE"
+          fi
 
       - name: Generate update manifest (latest.json)
         env:
@@ -274,10 +288,44 @@ jobs:
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           TAR_NAME="${{ steps.find-tar.outputs.TAR_NAME }}"
+          SIG_FILE="${{ steps.find-tar.outputs.SIG_FILE }}"
           REPO="${{ github.repository }}"
 
-          # Create latest.json for Tauri updater
-          cat > apps/desktop/src-tauri/target/latest.json << EOF
+          # Read signature from .sig file if it exists
+          if [ -f "$SIG_FILE" ]; then
+            # The .sig file contains the base64-encoded signature
+            SIGNATURE=$(cat "$SIG_FILE" | tr -d '\n' | tr -d ' ')
+          else
+            echo "Warning: Signature file not found, latest.json will not include signature field"
+            SIGNATURE=""
+          fi
+
+          # Create latest.json for Tauri updater with signature
+          if [ -n "$SIGNATURE" ]; then
+            cat > apps/desktop/src-tauri/target/latest.json << EOF
+          {
+            "version": "v$VERSION",
+            "notes": "Release v$VERSION",
+            "pub_date": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+            "platforms": {
+              "darwin-universal": {
+                "url": "https://github.com/$REPO/releases/download/v$VERSION/$TAR_NAME",
+                "signature": "$SIGNATURE"
+              },
+              "darwin-x86_64": {
+                "url": "https://github.com/$REPO/releases/download/v$VERSION/$TAR_NAME",
+                "signature": "$SIGNATURE"
+              },
+              "darwin-aarch64": {
+                "url": "https://github.com/$REPO/releases/download/v$VERSION/$TAR_NAME",
+                "signature": "$SIGNATURE"
+              }
+            }
+          }
+          EOF
+          else
+            # Fallback without signature (should not happen if TAURI_PRIVATE_KEY is set)
+            cat > apps/desktop/src-tauri/target/latest.json << EOF
           {
             "version": "v$VERSION",
             "notes": "Release v$VERSION",
@@ -295,6 +343,7 @@ jobs:
             }
           }
           EOF
+          fi
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -303,6 +352,7 @@ jobs:
           path: |
             ${{ steps.find-dmg.outputs.DMG_FILE }}
             ${{ steps.find-tar.outputs.TAR_FILE }}
+            ${{ steps.find-tar.outputs.SIG_FILE }}
             apps/desktop/src-tauri/target/latest.json
           retention-days: 7
 
@@ -353,6 +403,9 @@ jobs:
           # Copy .app.tar.gz files (find handles nested paths)
           find artifacts/ -name "*.app.tar.gz" -exec cp {} release-assets/ \; 2>/dev/null || true
 
+          # Copy .sig signature files (find handles nested paths)
+          find artifacts/ -name "*.sig" -exec cp {} release-assets/ \; 2>/dev/null || true
+
           # Copy latest.json (find handles nested paths, copy to root as latest.json)
           LATEST_JSON=$(find artifacts/ -name "latest.json" | head -1)
           if [ -n "$LATEST_JSON" ]; then
@@ -378,6 +431,12 @@ jobs:
           TAR_FILE=$(find artifacts/ -name "*.app.tar.gz" | head -1)
           if [ -n "$TAR_FILE" ]; then
             gh release upload "v$VERSION" "$TAR_FILE" --clobber || true
+          fi
+
+          # Upload .sig signature file for Tauri updater
+          SIG_FILE=$(find artifacts/ -name "*.sig" | head -1)
+          if [ -n "$SIG_FILE" ]; then
+            gh release upload "v$VERSION" "$SIG_FILE" --clobber || true
           fi
 
           # Upload DMG if not already uploaded by semantic-release

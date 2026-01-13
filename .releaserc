@@ -118,6 +118,10 @@
             "label": "Calimero Desktop (macOS - Auto-Update)"
           },
           {
+            "path": "release-assets/*.sig",
+            "label": "Update Signature"
+          },
+          {
             "path": "release-assets/latest.json",
             "label": "Update Manifest"
           }

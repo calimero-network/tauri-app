@@ -75,21 +75,8 @@ export default function Settings({ onBack }: SettingsProps) {
             <p className="field-hint">
               Base URL for your merod node. Admin API will be accessed at:{" "}
               <code>{nodeUrl ? `${nodeUrl.replace(/\/$/, '')}/admin-api` : ''}</code>
-            </p>
-          </div>
-
-          <div className="settings-field">
-            <label htmlFor="auth-url">Auth URL (optional)</label>
-            <input
-              id="auth-url"
-              type="text"
-              value={authUrl}
-              onChange={(e) => setAuthUrl(e.target.value)}
-              placeholder="Leave empty to use Node URL"
-            />
-            <p className="field-hint">
-              Base URL for authentication service. If empty, uses Node URL. Auth API will be accessed at:{" "}
-              <code>{(authUrl || nodeUrl) ? `${(authUrl || nodeUrl).replace(/\/$/, '')}/auth` : ''}</code>
+              <br />
+              <strong>HTTP Interception:</strong> When apps are opened in Tauri windows, requests to this URL will be automatically intercepted and proxied through Tauri to bypass mixed content restrictions (for non-HTTPS node URLs).
             </p>
           </div>
 

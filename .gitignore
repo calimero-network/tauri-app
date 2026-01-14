@@ -13,11 +13,11 @@ node_modules
 .pnpm-debug.log
 
 # Build outputs
-dist
-dist-ssr
+dist/
+dist-ssr/
 *.local
-build
-target
+build/
+target/
 *.tsbuildinfo
 
 # Editor directories and files
@@ -37,6 +37,7 @@ target
 # Tauri
 **/src-tauri/target
 **/src-tauri/Cargo.lock
+**/src-tauri/gen
 
 # Environment variables
 .env

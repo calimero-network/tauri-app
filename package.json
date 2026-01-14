@@ -6,6 +6,8 @@
   "type": "module",
   "scripts": {
     "dev:desktop": "pnpm --filter desktop tauri:dev",
+    "dev:desktop:devtools": "pnpm --filter desktop tauri:dev:devtools",
+    "dev:desktop:no-devtools": "pnpm --filter desktop tauri:dev:no-devtools",
     "build:desktop": "pnpm --filter desktop tauri:build",
     "tauri:desktop": "pnpm --filter desktop tauri",
     "dev:download-site": "pnpm --filter download-site dev",

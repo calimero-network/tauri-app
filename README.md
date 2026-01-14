@@ -40,12 +40,28 @@ pnpm build:mero-react
 # Start development server
 pnpm dev:desktop
 
-# Build for production
+# Start with DevTools forced ON
+pnpm dev:desktop:devtools
+
+# Start with DevTools forced OFF
+pnpm dev:desktop:no-devtools
+
+# Build for production (builds mero-js first)
 pnpm build:desktop
 
 # Run Tauri commands
 pnpm tauri:desktop [command]
 ```
+
+#### DevTools Control
+
+DevTools can be controlled via environment variables:
+
+- **Default** (`pnpm dev:desktop`): DevTools opens automatically in debug builds
+- **Force ON** (`pnpm dev:desktop:devtools`): DevTools always opens
+- **Force OFF** (`pnpm dev:desktop:no-devtools`): DevTools never opens
+
+**Important:** Release builds (`.dmg`, `.exe`, etc.) **never** have DevTools enabled, regardless of environment variables. This is enforced at compile time for security.
 
 ### Download Site
 
@@ -95,5 +111,3 @@ See [RELEASES.md](./RELEASES.md) for detailed release process documentation.
 ## Documentation
 
 - [Releases](./RELEASES.md) - Release process and CI/CD documentation
-- [Testing](./TESTING.md) - Testing guide and scenarios
-- [UI Navigation](./UI_NAVIGATION.md) - App flow and navigation guide

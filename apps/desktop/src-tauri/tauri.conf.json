@@ -17,14 +17,47 @@
         "all": false,
         "open": true
       },
+      "window": {
+        "all": true,
+        "create": true,
+        "center": true,
+        "requestUserAttention": true,
+        "setResizable": true,
+        "setTitle": true,
+        "maximize": true,
+        "unmaximize": true,
+        "minimize": true,
+        "unminimize": true,
+        "show": true,
+        "hide": true,
+        "close": true,
+        "setDecorations": true,
+        "setAlwaysOnTop": true,
+        "setContentProtected": true,
+        "setSize": true,
+        "setMinSize": true,
+        "setMaxSize": true,
+        "setPosition": true,
+        "setFullscreen": true,
+        "setFocus": true,
+        "setIcon": true,
+        "setSkipTaskbar": true,
+        "setCursorGrab": true,
+        "setCursorVisible": true,
+        "setCursorIcon": true,
+        "setCursorPosition": true,
+        "setIgnoreCursorEvents": true,
+        "startDragging": true,
+        "print": true
+      },
       "http": {
-        "all": false,
+        "all": true,
         "request": true,
         "scope": [
-          "http://localhost:2528/**",
-          "http://127.0.0.1:2528/**",
-          "https://api.github.com/**",
-          "https://github.com/**"
+          "http://**",
+          "https://**",
+          "ws://**",
+          "wss://**"
         ]
       },
       "process": {
@@ -46,7 +79,40 @@
       }
     },
     "security": {
-      "csp": "default-src 'self' 'unsafe-inline' 'unsafe-eval' http://localhost:* http://127.0.0.1:* https://api.github.com; connect-src 'self' http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:* https://api.github.com https://github.com;"
+      "csp": "default-src 'self' 'unsafe-inline' 'unsafe-eval' http://localhost:* http://127.0.0.1:* https://api.github.com; connect-src 'self' https://apps.calimero.network https://*.calimero.network http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:* wss://* https: http: ws: wss: https://api.github.com https://github.com; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: http:; font-src 'self' data:; frame-src 'self' https: http:;",
+      "dangerousRemoteDomainIpcAccess": [
+        {
+          "domain": "kv-store-alpha.vercel.app",
+          "windows": ["*"],
+          "plugins": [],
+          "enableTauriAPI": true
+        },
+        {
+          "domain": "apps.calimero.network",
+          "windows": ["*"],
+          "plugins": [],
+          "enableTauriAPI": true
+        },
+        {
+          "domain": "*.calimero.network",
+          "windows": ["*"],
+          "plugins": [],
+          "enableTauriAPI": true
+        },
+        {
+          "domain": "localhost",
+          "windows": ["*"],
+          "plugins": [],
+          "enableTauriAPI": true
+        },
+        {
+          "domain": "127.0.0.1",
+          "windows": ["*"],
+          "plugins": [],
+          "enableTauriAPI": true
+        }
+      ],
+      "dangerousDisableAssetCspModification": true
     },
     "updater": {
       "active": true,

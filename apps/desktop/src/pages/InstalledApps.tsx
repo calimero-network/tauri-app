@@ -133,6 +133,10 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
 
   const handleOpenFrontend = async (frontendUrl: string, appName?: string) => {
     try {
+      // Get configured node URL from settings for HTTP interception
+      const { getSettings } = await import('../utils/settings');
+      const settings = getSettings();
+      
       // Always open in a new Tauri window
       // Use unique window label based on domain + timestamp to avoid conflicts
       // IPC scope uses wildcard pattern (app-*) so any label matching app-* will work
@@ -143,6 +147,7 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
         windowLabel,
         url: frontendUrl,
         title: appName || 'Application',
+        nodeUrl: settings.nodeUrl,
       });
       console.log('Opened in new Tauri window:', frontendUrl, 'with label:', windowLabel);
     } catch (error) {
@@ -180,8 +185,8 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
               const metadata = decodeMetadata(app.metadata);
               const appName = metadata?.name || app.name || app.id;
               const appVersion = metadata?.version || app.version || "Unknown";
-              // TODO: Use metadata?.links?.frontend when available
-              const frontendUrl = 'https://kv-store-alpha.vercel.app/'; // metadata?.links?.frontend;
+              // Get frontend URL from bundle metadata (no fallback - must be in metadata)
+              const frontendUrl = metadata?.links?.frontend;
               
               return (
                 <div key={app.id} className="app-card">

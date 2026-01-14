@@ -2,6 +2,14 @@
     if (window.__TAURI_FETCH_PROXY_INJECTED__) return;
     window.__TAURI_FETCH_PROXY_INJECTED__ = true;
     
+    // Get configured node URL (injected by Rust backend)
+    // This is replaced at runtime by Rust when creating the window
+    const configuredNodeUrl = '__CONFIGURED_NODE_URL__';
+    const defaultNodeUrl = 'http://localhost:2528';
+    const nodeUrl = configuredNodeUrl !== '__CONFIGURED_NODE_URL__' ? configuredNodeUrl : defaultNodeUrl;
+    
+    console.log('[Tauri Proxy] Configured node URL for interception:', nodeUrl);
+    
     // Helper function to proxy HTTP requests through Tauri
     async function proxyRequest(url, method, headers, body) {
         // Get Tauri invoke function - check at call time, not script load time
@@ -22,7 +30,8 @@
                 method: method || 'GET',
                 headers: headers && Object.keys(headers).length > 0 ? headers : null,
                 body: body
-            }
+            },
+            configured_node_url: nodeUrl
         });
         
         return response;
@@ -38,12 +47,9 @@
         // Debug: log all fetch calls to see what's happening
         console.log('[Tauri Proxy] Fetch called:', urlStr);
         
-        // Proxy requests to:
-        // 1. http://localhost:2528 (the Calimero node - bypasses mixed content)
-        // 2. https://apps.calimero.network (the registry - bypasses CSP restrictions)
-        const shouldProxy = urlStr.startsWith('http://localhost:2528') 
-            || urlStr.startsWith('http://127.0.0.1:2528')
-            || urlStr.startsWith('https://apps.calimero.network/');
+        // Only proxy requests to the configured local node URL (HTTP localhost)
+        // HTTPS registries don't need proxying (no mixed content issues)
+        const shouldProxy = urlStr.startsWith(nodeUrl);
         console.log('[Tauri Proxy] Should proxy?', shouldProxy, 'for URL:', urlStr);
         if (shouldProxy) {
             try {

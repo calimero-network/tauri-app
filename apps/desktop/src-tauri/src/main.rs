@@ -23,14 +23,14 @@ struct HttpResponse {
 /// Validates that a URL is allowed for proxying
 /// 
 /// Allowed URLs:
-/// - http://localhost:2528/* (Calimero node - port must be explicitly 2528)
-/// - http://127.0.0.1:2528/* (Calimero node - port must be explicitly 2528)
-/// - https://apps.calimero.network/* (official registry - port defaults to 443)
+/// - Configured node URL (from settings, typically http://localhost:2528 or custom HTTP localhost)
+/// 
+/// Only HTTP localhost URLs are proxied. HTTPS registries don't need proxying (no mixed content issues).
 /// 
 /// This function prevents hostname spoofing attacks like:
 /// - http://localhost:2528.evil.com (invalid hostname)
 /// - http://localhost:2528@evil.com (invalid URL structure)
-pub(crate) fn validate_allowed_url(url: &str) -> Result<(), String> {
+pub(crate) fn validate_allowed_url(url: &str, configured_node_url: Option<&str>) -> Result<(), String> {
     let parsed = url::Url::parse(url)
         .map_err(|e| format!("Invalid URL format: {}. Please check that the URL is properly formatted.", e))?;
     
@@ -66,14 +66,41 @@ pub(crate) fn validate_allowed_url(url: &str) -> Result<(), String> {
         }
     });
     
-    // Validate allowed combinations with strict hostname matching
+    // Check if URL matches configured node URL
+    if let Some(node_url) = configured_node_url {
+        if let Ok(node_parsed) = url::Url::parse(node_url) {
+            let node_host = node_parsed.host_str().map(|h| h.to_lowercase());
+            let node_port = node_parsed.port().or_else(|| {
+                match node_parsed.scheme() {
+                    "http" => Some(80),
+                    "https" => Some(443),
+                    _ => None,
+                }
+            });
+            
+            // Check if the request URL matches the configured node URL
+            if node_host.as_ref().map(|h| h == &host_lower).unwrap_or(false) 
+                && node_port.map(|p| p == port).unwrap_or(false)
+                && node_parsed.scheme() == scheme {
+                return Ok(());
+            }
+        }
+    }
+    
+    // If a node URL is configured, only allow that URL (no fallback to defaults)
+    if configured_node_url.is_some() {
+        return Err(format!(
+            "URL not allowed: {}://{}:{}. Only the configured node URL is allowed for proxying.",
+            scheme, host, port
+        ));
+    }
+    
+    // Validate allowed combinations with strict hostname matching (fallback defaults)
     match (scheme, host_lower.as_str(), port) {
-        // HTTP localhost on port 2528 (must be explicit)
+        // HTTP localhost on port 2528 (default fallback for backwards compatibility)
         ("http", "localhost", 2528) => Ok(()),
         ("http", "127.0.0.1", 2528) => Ok(()),
-        // HTTPS apps.calimero.network on port 443 (default or explicit)
-        ("https", "apps.calimero.network", 443) => Ok(()),
-        // Reject everything else
+        // Reject everything else (including HTTPS - no proxying needed)
         _ => {
             // Provide helpful error message based on what's wrong
             let mut suggestions = Vec::new();
@@ -87,22 +114,24 @@ pub(crate) fn validate_allowed_url(url: &str) -> Result<(), String> {
                     suggestions.push("For localhost access, use http://localhost:2528 or http://127.0.0.1:2528".to_string());
                 }
             } else if scheme == "https" {
-                if host_lower.contains("calimero.network") {
-                    if port != 443 {
-                        suggestions.push("For apps.calimero.network, use port 443 (default) or https://apps.calimero.network".to_string());
-                    } else if host_lower != "apps.calimero.network" {
-                        suggestions.push("Use exactly 'apps.calimero.network' (not subdomains)".to_string());
-                    }
-                } else {
-                    suggestions.push("For Calimero registry access, use https://apps.calimero.network".to_string());
-                }
+                suggestions.push("HTTPS URLs don't need proxying. Only HTTP localhost node URLs are proxied.".to_string());
             }
             
-            let suggestion_text = if suggestions.is_empty() {
-                "Allowed URLs: http://localhost:2528, http://127.0.0.1:2528, or https://apps.calimero.network".to_string()
+            let mut suggestion_text = if suggestions.is_empty() {
+                if let Some(node_url) = configured_node_url {
+                    format!("Allowed URLs: {} (configured node URL)", node_url)
+                } else {
+                    "Allowed URLs: http://localhost:2528 or http://127.0.0.1:2528".to_string()
+                }
             } else {
                 suggestions.join(". ")
             };
+            
+            if configured_node_url.is_some() && !suggestion_text.contains("configured node URL") {
+                if let Some(node_url) = configured_node_url {
+                    suggestion_text = format!("{}. Or use your configured node URL: {}", suggestion_text, node_url);
+                }
+            }
             
             Err(format!(
                 "URL not allowed: {}://{}:{}. {}",
@@ -113,11 +142,11 @@ pub(crate) fn validate_allowed_url(url: &str) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn proxy_http_request(request: HttpRequest) -> Result<HttpResponse, String> {
+async fn proxy_http_request(request: HttpRequest, configured_node_url: Option<String>) -> Result<HttpResponse, String> {
     use reqwest;
     
-    // Validate URL before processing
-    validate_allowed_url(&request.url)?;
+    // Validate URL before processing (pass configured node URL if available)
+    validate_allowed_url(&request.url, configured_node_url.as_deref())?;
     
     // Parse URL to determine what Host header to use
     let parsed_original = url::Url::parse(&request.url)
@@ -265,6 +294,7 @@ async fn create_app_window(
     url: String,
     title: String,
     open_devtools: Option<bool>,
+    node_url: Option<String>,
 ) -> Result<(), String> {
     use tauri::{WindowBuilder, Manager};
     
@@ -274,11 +304,17 @@ async fn create_app_window(
     let domain = parsed_url.host_str()
         .ok_or_else(|| format!("Invalid URL '{}': missing hostname. Please provide a URL with a valid hostname.", url))?;
     
-    // Inject fetch interceptor to proxy localhost:2528 requests through Tauri
+    // Inject fetch interceptor to proxy node requests through Tauri
     // Since calimero-client-js now uses fetch instead of Axios, we only need fetch interception
     // CRITICAL: Intercept IMMEDIATELY before React makes any fetch calls
-    // Load proxy script from external file for better maintainability
-    let proxy_script = include_str!("proxy_script.js");
+    // Load proxy script from external file and inject configured node URL
+    let mut proxy_script = include_str!("proxy_script.js").to_string();
+    
+    // Inject configured node URL into the proxy script
+    // Default to http://localhost:2528 for backwards compatibility
+    let node_url_to_use = node_url.as_deref().unwrap_or("http://localhost:2528");
+    // Replace placeholder in script with actual node URL
+    proxy_script = proxy_script.replace("__CONFIGURED_NODE_URL__", node_url_to_use);
     
     // Create window with proxy script injected BEFORE page loads
     let window = WindowBuilder::new(
@@ -291,7 +327,7 @@ async fn create_app_window(
     .min_inner_size(600.0, 400.0)
     .resizable(true)
     .center()
-    .initialization_script(proxy_script) // Inject script (delays interception until DOM ready)
+    .initialization_script(&proxy_script) // Inject script with configured node URL
     .build()
     .map_err(|e| format!("Failed to create window '{}' for URL '{}': {}. Please check that the window label is unique and try again.", title, url, e))?;
     
@@ -410,91 +446,94 @@ mod tests {
 
     #[test]
     fn test_allowed_localhost_urls() {
-        // Valid localhost URLs
-        assert!(validate_allowed_url("http://localhost:2528/").is_ok());
-        assert!(validate_allowed_url("http://localhost:2528/api/test").is_ok());
-        assert!(validate_allowed_url("http://localhost:2528").is_ok());
-        assert!(validate_allowed_url("http://127.0.0.1:2528/").is_ok());
-        assert!(validate_allowed_url("http://127.0.0.1:2528/api/test").is_ok());
-        assert!(validate_allowed_url("http://127.0.0.1:2528").is_ok());
+        // Valid localhost URLs (backwards compatibility - no configured URL)
+        assert!(validate_allowed_url("http://localhost:2528/", None).is_ok());
+        assert!(validate_allowed_url("http://localhost:2528/api/test", None).is_ok());
+        assert!(validate_allowed_url("http://localhost:2528", None).is_ok());
+        assert!(validate_allowed_url("http://127.0.0.1:2528/", None).is_ok());
+        assert!(validate_allowed_url("http://127.0.0.1:2528/api/test", None).is_ok());
+        assert!(validate_allowed_url("http://127.0.0.1:2528", None).is_ok());
     }
 
     #[test]
-    fn test_allowed_calimero_network_urls() {
-        // Valid apps.calimero.network URLs
-        assert!(validate_allowed_url("https://apps.calimero.network/").is_ok());
-        assert!(validate_allowed_url("https://apps.calimero.network/api/test").is_ok());
-        assert!(validate_allowed_url("https://apps.calimero.network:443/").is_ok());
-        assert!(validate_allowed_url("https://apps.calimero.network:443/api/test").is_ok());
+    fn test_reject_https_urls() {
+        // HTTPS URLs should not be proxied (no mixed content issues)
+        assert!(validate_allowed_url("https://apps.calimero.network/", None).is_err());
+        assert!(validate_allowed_url("https://apps.calimero.network/api/test", None).is_err());
+        assert!(validate_allowed_url("https://localhost:2528/", None).is_err());
+    }
+
+    #[test]
+    fn test_configured_node_url() {
+        // Test with configured node URL
+        assert!(validate_allowed_url("http://localhost:8080/", Some("http://localhost:8080")).is_ok());
+        assert!(validate_allowed_url("http://192.168.1.100:2528/", Some("http://192.168.1.100:2528")).is_ok());
+        assert!(validate_allowed_url("http://node.example.com:2528/", Some("http://node.example.com:2528")).is_ok());
+        // Should still reject wrong URLs even with configured node URL
+        assert!(validate_allowed_url("http://localhost:2528/", Some("http://localhost:8080")).is_err());
     }
 
     #[test]
     fn test_reject_wrong_ports() {
         // Wrong ports for localhost
-        assert!(validate_allowed_url("http://localhost:80/").is_err());
-        assert!(validate_allowed_url("http://localhost:8080/").is_err());
-        assert!(validate_allowed_url("http://127.0.0.1:80/").is_err());
-        assert!(validate_allowed_url("http://127.0.0.1:8080/").is_err());
+        assert!(validate_allowed_url("http://localhost:80/", None).is_err());
+        assert!(validate_allowed_url("http://localhost:8080/", None).is_err());
+        assert!(validate_allowed_url("http://127.0.0.1:80/", None).is_err());
+        assert!(validate_allowed_url("http://127.0.0.1:8080/", None).is_err());
         
-        // Wrong ports for apps.calimero.network
-        assert!(validate_allowed_url("https://apps.calimero.network:2528/").is_err());
-        assert!(validate_allowed_url("https://apps.calimero.network:8080/").is_err());
     }
 
     #[test]
     fn test_reject_wrong_hostnames() {
         // Hostname spoofing attempts
-        assert!(validate_allowed_url("http://localhost:2528.evil.com/").is_err());
-        assert!(validate_allowed_url("http://127.0.0.1:2528.evil.com/").is_err());
-        assert!(validate_allowed_url("http://evil.com:2528/").is_err());
-        assert!(validate_allowed_url("http://localhost.evil.com:2528/").is_err());
-        assert!(validate_allowed_url("https://evil.calimero.network/").is_err());
-        assert!(validate_allowed_url("https://apps.calimero.network.evil.com/").is_err());
+        assert!(validate_allowed_url("http://localhost:2528.evil.com/", None).is_err());
+        assert!(validate_allowed_url("http://127.0.0.1:2528.evil.com/", None).is_err());
+        assert!(validate_allowed_url("http://evil.com:2528/", None).is_err());
+        assert!(validate_allowed_url("http://localhost.evil.com:2528/", None).is_err());
     }
 
     #[test]
     fn test_reject_wrong_schemes() {
         // Wrong schemes
-        assert!(validate_allowed_url("ftp://localhost:2528/").is_err());
-        assert!(validate_allowed_url("file://localhost:2528/").is_err());
-        assert!(validate_allowed_url("ws://localhost:2528/").is_err());
+        assert!(validate_allowed_url("ftp://localhost:2528/", None).is_err());
+        assert!(validate_allowed_url("file://localhost:2528/", None).is_err());
+        assert!(validate_allowed_url("ws://localhost:2528/", None).is_err());
     }
 
     #[test]
     fn test_reject_malformed_urls() {
         // Malformed URLs
-        assert!(validate_allowed_url("not-a-url").is_err());
-        assert!(validate_allowed_url("http://").is_err());
-        assert!(validate_allowed_url("http://localhost").is_err()); // Missing port
-        assert!(validate_allowed_url("http://:2528/").is_err()); // Missing hostname
+        assert!(validate_allowed_url("not-a-url", None).is_err());
+        assert!(validate_allowed_url("http://", None).is_err());
+        assert!(validate_allowed_url("http://localhost", None).is_err()); // Missing port
+        assert!(validate_allowed_url("http://:2528/", None).is_err()); // Missing hostname
     }
 
     #[test]
     fn test_reject_case_variations() {
         // Case variations should be handled (hostname is lowercased)
-        assert!(validate_allowed_url("http://LOCALHOST:2528/").is_ok());
-        assert!(validate_allowed_url("http://LocalHost:2528/").is_ok());
-        assert!(validate_allowed_url("HTTPS://APPS.CALIMERO.NETWORK/").is_ok());
+        assert!(validate_allowed_url("http://LOCALHOST:2528/", None).is_ok());
+        assert!(validate_allowed_url("http://LocalHost:2528/", None).is_ok());
     }
 
     #[test]
     fn test_reject_subdomain_attacks() {
         // Subdomain attacks
-        assert!(validate_allowed_url("http://subdomain.localhost:2528/").is_err());
-        assert!(validate_allowed_url("http://subdomain.127.0.0.1:2528/").is_err());
+        assert!(validate_allowed_url("http://subdomain.localhost:2528/", None).is_err());
+        assert!(validate_allowed_url("http://subdomain.127.0.0.1:2528/", None).is_err());
     }
 
     #[test]
     fn test_reject_url_encoding_attacks() {
         // URL encoding attacks
-        assert!(validate_allowed_url("http://localhost%3A2528/").is_err());
-        assert!(validate_allowed_url("http://localhost:2528%2Fevil.com/").is_err());
+        assert!(validate_allowed_url("http://localhost%3A2528/", None).is_err());
+        assert!(validate_allowed_url("http://localhost:2528%2Fevil.com/", None).is_err());
     }
 
     #[test]
     fn test_reject_userinfo_attacks() {
         // Userinfo attacks
-        assert!(validate_allowed_url("http://user@localhost:2528/").is_err());
-        assert!(validate_allowed_url("http://localhost:2528@evil.com/").is_err());
+        assert!(validate_allowed_url("http://user@localhost:2528/", None).is_err());
+        assert!(validate_allowed_url("http://localhost:2528@evil.com/", None).is_err());
     }
 }

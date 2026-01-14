@@ -1,0 +1,35 @@
+/* Download Page Styles - Minimal custom styles */
+.download-page {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Header - Sticky positioning and backdrop */
+.header {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  backdrop-filter: blur(12px);
+}
+
+/* Main Content - Flex layout */
+.main {
+  flex: 1;
+  width: 100%;
+}
+
+/* Footer - Auto margin for sticky footer */
+.footer {
+  margin-top: auto;
+}
+
+/* Link hover effects */
+.header a:hover .text,
+.header a:hover text {
+  color: var(--color-brand-600) !important;
+}
+
+.footer a:hover {
+  color: var(--color-brand-600);
+}

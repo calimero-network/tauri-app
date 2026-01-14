@@ -145,7 +145,7 @@ function App() {
   const [release, setRelease] = useState<DownloadInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [platform] = useState(detectPlatform);
+  const [platform] = useState(() => detectPlatform());
 
   useEffect(() => {
     fetchLatestRelease()

@@ -6,18 +6,18 @@ This document describes the release process for Calimero Desktop, including auto
 
 Calimero Desktop uses a fully automated release pipeline:
 
-1. **Semantic Versioning**: Versions are determined automatically from commit messages using [Conventional Commits](https://www.conventionalcommits.org/)
-2. **Automated Builds**: GitHub Actions builds signed macOS DMGs
-3. **Code Signing & Notarization**: Apps are signed with Apple Developer ID and notarized
-4. **Auto-Updates**: The installed app checks for and installs updates automatically
-5. **Download Page**: A static landing page always shows the latest release
+1. **Tag-Based Releases**: Versions are controlled by git tags (e.g., `v0.0.3`)
+2. **Automated Builds**: GitHub Actions builds the macOS bundles
+3. **Code Signing & Notarization**: Apps can be signed and notarized when Apple secrets are configured
+4. **Auto-Updates**: The installed app checks for and installs updates automatically via Tauri updater
+5. **Download Page**: A static landing page shows the latest release
 
 ## Architecture
 
 ```
 ┌─────────────────┐     ┌──────────────────┐     ┌─────────────────────┐
-│  Commit to main │ ──▶ │  GitHub Actions  │ ──▶ │   GitHub Release    │
-│  (conventional) │     │  semantic-release│     │   + DMG + manifest  │
+│   Push a tag    │ ──▶ │  GitHub Actions  │ ──▶ │   GitHub Release    │
+│    (vX.Y.Z)     │     │   release.yml    │     │ + bundles + manifest│
 └─────────────────┘     └──────────────────┘     └──────────┬──────────┘
                                                            │
                         ┌──────────────────────────────────┼───────────────┐
@@ -29,36 +29,40 @@ Calimero Desktop uses a fully automated release pipeline:
                 └───────────────┘                 └───────────────┘ └─────────────┘
 ```
 
-## Commit Message Convention
-
-We use [Conventional Commits](https://www.conventionalcommits.org/) to determine version bumps:
-
-| Commit Type | Version Bump | Example |
-|-------------|--------------|---------|
-| `feat:` | Minor (0.x.0) | `feat: add context export feature` |
-| `fix:` | Patch (0.0.x) | `fix: resolve login timeout issue` |
-| `perf:` | Patch | `perf: optimize context loading` |
-| `refactor:` | Patch | `refactor: simplify auth flow` |
-| `BREAKING CHANGE:` | Major (x.0.0) | `feat!: redesign API` |
-
-### Examples
+## Creating a Release (Recommended: Tags)
 
 ```bash
-# Feature (minor bump: 1.0.0 → 1.1.0)
-git commit -m "feat: add application marketplace"
+# Make sure your local master is up to date
+git checkout master
+git pull origin master
 
-# Bug fix (patch bump: 1.1.0 → 1.1.1)
-git commit -m "fix: resolve node connection timeout"
-
-# Breaking change (major bump: 1.1.1 → 2.0.0)
-git commit -m "feat!: redesign authentication system
-
-BREAKING CHANGE: The auth token format has changed."
-
-# No release (docs, chore without deps scope)
-git commit -m "docs: update README"
-git commit -m "chore: update linting rules"
+# Create and push a release tag
+git tag v0.0.3
+git push origin v0.0.3
 ```
+
+This triggers the GitHub Actions workflow in `.github/workflows/release.yml` which:
+
+- Builds the Tauri app for macOS (universal)
+- Produces:
+  - `.dmg` (installer)
+  - `.app.tar.gz` (Tauri auto-updater bundle)
+  - `.app.tar.gz.sig` (signature)
+  - `latest.json` (Tauri updater manifest)
+- Creates a GitHub Release for `vX.Y.Z` and uploads the assets
+
+### Manual Release (workflow_dispatch)
+
+You can also trigger a release manually:
+
+1. Go to **Actions → Release → Run workflow**
+2. Provide `version` (e.g., `0.0.3`)
+
+## Version Source of Truth
+
+- **Release version**: the pushed tag `vX.Y.Z`
+- **Build-time app version**: the workflow updates `apps/desktop/src-tauri/tauri.conf.json` to match the tag before building.
+- **Local builds**: use whatever version is in `tauri.conf.json` unless you update it.
 
 ## Required Secrets
 
@@ -129,11 +133,7 @@ Update `apps/desktop/src-tauri/tauri.conf.json`:
 
 ## Manual Release
 
-To trigger a release manually:
-
-1. Go to Actions → Release workflow
-2. Click "Run workflow"
-3. Optionally enable "dry run" to preview without releasing
+See **Manual Release (workflow_dispatch)** above.
 
 ## Release Artifacts
 
@@ -142,16 +142,17 @@ Each release includes:
 | Artifact | Description |
 |----------|-------------|
 | `Calimero Desktop_x.x.x_universal.dmg` | Universal macOS installer (Intel + Apple Silicon) |
-| `latest.json` | Update manifest for Tauri updater |
-| `CHANGELOG.md` | Auto-generated changelog |
+| `Calimero*.app.tar.gz` | macOS updater bundle (required for Tauri auto-update) |
+| `Calimero*.app.tar.gz.sig` | Signature for the updater bundle |
+| `latest.json` | Update manifest for the Tauri updater |
 
 ## Auto-Update Flow
 
 1. App checks `latest.json` on startup and every hour
 2. If new version found, shows notification banner
 3. User clicks "Update Now"
-4. App downloads new DMG, verifies signature
-5. App restarts with new version
+4. App downloads `.app.tar.gz`, verifies signature, installs
+5. App relaunches to apply the update (may require manual restart in some environments)
 
 ## Download Page
 
@@ -183,8 +184,8 @@ The download site deploys automatically via `.github/workflows/deploy-download-s
 - Check Apple Developer account is in good standing
 
 **"No release created"**
-- Ensure commits follow conventional commit format
-- Check that commits include releasable types (feat, fix, perf)
+- Ensure you pushed a tag matching `v*` (e.g., `v0.0.3`)
+- Check Actions logs for the `Release` workflow run
 
 ### Update Issues
 

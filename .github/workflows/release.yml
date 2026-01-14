@@ -15,298 +15,210 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
-env:
-  CARGO_TERM_COLOR: always
-
 jobs:
-  build-macos:
-    name: Build macOS
-    runs-on: macos-latest
+  # Extract version for downstream jobs
+  prepare:
+    name: Prepare Release
+    runs-on: ubuntu-latest
     outputs:
-      dmg_name: ${{ steps.find-dmg.outputs.DMG_NAME }}
-      app_version: ${{ steps.version.outputs.version }}
-
+      version: ${{ steps.version.outputs.version }}
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
       - name: Get version from tag or input
         id: version
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             VERSION="${{ inputs.version }}"
           else
-            # Extract version from tag (remove 'v' prefix)
             VERSION="${GITHUB_REF_NAME#v}"
           fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "Building version: $VERSION"
+          echo "Release version: $VERSION"
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 9
+  # Build for each platform using reusable workflows
+  build-macos:
+    name: Build macOS
+    needs: prepare
+    uses: ./.github/workflows/build-macos.yml
+    with:
+      version: ${{ needs.prepare.outputs.version }}
+    secrets:
+      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+      TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+      TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+      TAURI_PUBLIC_KEY: ${{ secrets.TAURI_PUBLIC_KEY }}
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: "pnpm"
+  build-windows:
+    name: Build Windows
+    needs: prepare
+    uses: ./.github/workflows/build-windows.yml
+    with:
+      version: ${{ needs.prepare.outputs.version }}
+    secrets:
+      TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+      TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+      TAURI_PUBLIC_KEY: ${{ secrets.TAURI_PUBLIC_KEY }}
+      WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+      WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
 
-      - name: Get pnpm store directory
-        id: get-pnpm-store
-        shell: bash
-        run: |
-          STORE_PATH=$(pnpm store path --silent || echo "$HOME/.pnpm-store")
-          echo "path=$STORE_PATH" >> $GITHUB_OUTPUT
+  build-linux:
+    name: Build Linux
+    needs: prepare
+    uses: ./.github/workflows/build-linux.yml
+    with:
+      version: ${{ needs.prepare.outputs.version }}
+    secrets:
+      TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+      TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+      TAURI_PUBLIC_KEY: ${{ secrets.TAURI_PUBLIC_KEY }}
 
-      - name: Setup pnpm cache
-        uses: actions/cache@v4
-        with:
-          path: ${{ steps.get-pnpm-store.outputs.path }}
-          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pnpm-store-
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
-
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: apps/desktop/src-tauri
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Build workspace packages
-        run: |
-          pnpm build:mero-js
-          pnpm build:mero-react
-
-      - name: Update version in tauri.conf.json
-        run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          cd apps/desktop/src-tauri
-          node -e "
-            const fs = require('fs');
-            const config = JSON.parse(fs.readFileSync('tauri.conf.json', 'utf8'));
-            config.package.version = '$VERSION';
-            fs.writeFileSync('tauri.conf.json', JSON.stringify(config, null, 2));
-          "
-
-      - name: Import Apple codesign cert
-        env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-        run: |
-          if [ -z "$APPLE_CERTIFICATE" ]; then
-            echo "No certificate provided, skipping code signing setup"
-            exit 0
-          fi
-
-          echo "$APPLE_CERTIFICATE" | base64 --decode > certificate.p12
-
-          security create-keychain -p "" build.keychain
-          security set-keychain-settings -t 3600 -u build.keychain
-          security unlock-keychain -p "" build.keychain
-          security default-keychain -s build.keychain
-
-          security import certificate.p12 \
-            -k build.keychain \
-            -P "$APPLE_CERTIFICATE_PASSWORD" \
-            -T /usr/bin/codesign \
-            -T /usr/bin/security \
-            -T /usr/bin/productbuild
-
-          security set-key-partition-list -S apple-tool:,apple: -s -k "" build.keychain
-
-          rm -f certificate.p12
-
-      - name: Build Tauri app for macOS (Universal)
-        working-directory: apps/desktop
-        env:
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
-          TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
-        id: build-app
-        run: |
-          if [ -n "$APPLE_SIGNING_IDENTITY" ]; then
-            echo "is_signed=true" >> $GITHUB_OUTPUT
-          else
-            echo "is_signed=false" >> $GITHUB_OUTPUT
-          fi
-
-          pnpm tauri build --target universal-apple-darwin
-
-      - name: Cleanup keychain
-        if: always()
-        run: security delete-keychain build.keychain 2>/dev/null || true
-
-      - name: Find DMG file
-        id: find-dmg
-        run: |
-          DMG_FILE=$(find apps/desktop/src-tauri/target -name "*.dmg" 2>/dev/null | head -1)
-          if [ -z "$DMG_FILE" ]; then
-            echo "Error: DMG file not found"
-            find apps/desktop/src-tauri/target -type f -name "*.dmg" 2>/dev/null || true
-            exit 1
-          fi
-          DMG_NAME=$(basename "$DMG_FILE")
-          echo "DMG_FILE=$DMG_FILE" >> $GITHUB_OUTPUT
-          echo "DMG_NAME=$DMG_NAME" >> $GITHUB_OUTPUT
-          echo "Found DMG: $DMG_FILE"
-
-      - name: Notarize DMG
-        if: steps.build-app.outputs.is_signed == 'true'
-        env:
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: |
-          DMG_FILE="${{ steps.find-dmg.outputs.DMG_FILE }}"
-
-          if [ -z "$APPLE_ID" ] || [ -z "$APPLE_APP_SPECIFIC_PASSWORD" ]; then
-            echo "Notarization credentials not provided, skipping"
-            exit 0
-          fi
-
-          xcrun notarytool submit "$DMG_FILE" \
-            --apple-id "$APPLE_ID" \
-            --password "$APPLE_APP_SPECIFIC_PASSWORD" \
-            --team-id "$APPLE_TEAM_ID" \
-            --wait \
-            --timeout 30m
-
-          xcrun stapler staple "$DMG_FILE"
-
-      - name: Find app.tar.gz and signature
-        id: find-tar
-        run: |
-          TAR_FILE=$(find apps/desktop/src-tauri/target/universal-apple-darwin/release/bundle -name "*.app.tar.gz" 2>/dev/null | head -1)
-          if [ -z "$TAR_FILE" ]; then
-            echo "Warning: .app.tar.gz not found"
-            find apps/desktop/src-tauri/target -name "*.app.tar.gz" 2>/dev/null || true
-            exit 1
-          fi
-          TAR_NAME=$(basename "$TAR_FILE")
-          SIG_FILE="${TAR_FILE}.sig"
-
-          echo "TAR_FILE=$TAR_FILE" >> $GITHUB_OUTPUT
-          echo "TAR_NAME=$TAR_NAME" >> $GITHUB_OUTPUT
-          echo "SIG_FILE=$SIG_FILE" >> $GITHUB_OUTPUT
-          echo "Found tar.gz: $TAR_FILE"
-
-      - name: Generate latest.json
-        run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          TAR_NAME="${{ steps.find-tar.outputs.TAR_NAME }}"
-          SIG_FILE="${{ steps.find-tar.outputs.SIG_FILE }}"
-          REPO="${{ github.repository }}"
-
-          # GitHub Actions replaces spaces with dots in artifact names
-          # Use the sanitized name (spaces -> dots) for the URL
-          SANITIZED_TAR_NAME=$(echo "$TAR_NAME" | tr ' ' '.')
-
-          SIGNATURE=""
-          if [ -f "$SIG_FILE" ]; then
-            SIGNATURE=$(cat "$SIG_FILE" | tr -d '\n')
-          fi
-
-          node -e "
-            const fs = require('fs');
-            const manifest = {
-              version: 'v$VERSION',
-              notes: 'Release v$VERSION',
-              pub_date: new Date().toISOString(),
-              platforms: {
-                'darwin-universal': {
-                  url: 'https://github.com/$REPO/releases/download/v$VERSION/$SANITIZED_TAR_NAME',
-                  signature: '$SIGNATURE'
-                },
-                'darwin-x86_64': {
-                  url: 'https://github.com/$REPO/releases/download/v$VERSION/$SANITIZED_TAR_NAME',
-                  signature: '$SIGNATURE'
-                },
-                'darwin-aarch64': {
-                  url: 'https://github.com/$REPO/releases/download/v$VERSION/$SANITIZED_TAR_NAME',
-                  signature: '$SIGNATURE'
-                }
-              }
-            };
-            fs.writeFileSync('apps/desktop/src-tauri/target/latest.json', JSON.stringify(manifest, null, 2));
-          "
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-release
-          path: |
-            ${{ steps.find-dmg.outputs.DMG_FILE }}
-            ${{ steps.find-tar.outputs.TAR_FILE }}
-            ${{ steps.find-tar.outputs.SIG_FILE }}
-            apps/desktop/src-tauri/target/latest.json
-          retention-days: 7
-
-  release:
-    name: Create Release
-    needs: build-macos
+  # Publish release with all platform artifacts
+  publish:
+    name: Publish Release
+    needs: [prepare, build-macos, build-windows, build-linux]
+    # Continue even if some platforms fail (partial release)
+    if: always() && needs.prepare.result == 'success' && (needs.build-macos.result == 'success' || needs.build-windows.result == 'success' || needs.build-linux.result == 'success')
     runs-on: ubuntu-latest
     permissions:
       contents: write
 
     steps:
-      - name: Download artifacts
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download macOS artifacts
+        if: needs.build-macos.result == 'success'
         uses: actions/download-artifact@v4
         with:
-          name: macos-release
-          path: artifacts/
+          name: macos-build
+          path: release-assets/
 
-      - name: List artifacts
-        run: find artifacts/ -type f -ls
+      - name: Download Windows artifacts
+        if: needs.build-windows.result == 'success'
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-build
+          path: release-assets/
 
-      - name: Get version
-        id: version
+      - name: Download Linux artifacts
+        if: needs.build-linux.result == 'success'
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-build
+          path: release-assets/
+
+      - name: List collected assets
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            VERSION="${{ inputs.version }}"
-          else
-            VERSION="${GITHUB_REF_NAME#v}"
+          echo "Release assets:"
+          find release-assets/ -type f -ls
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Generate latest.json (Tauri updater manifest)
+        run: |
+          node scripts/release/generate-latest-json.js \
+            --version "${{ needs.prepare.outputs.version }}" \
+            --repo "${{ github.repository }}" \
+            --assets release-assets/ \
+            --output release-assets/latest.json
+
+      - name: Generate release.json (download site metadata)
+        run: |
+          node scripts/release/generate-release-json.js \
+            --version "${{ needs.prepare.outputs.version }}" \
+            --repo "${{ github.repository }}" \
+            --assets release-assets/ \
+            --output release-assets/release.json
+
+      - name: Validate release artifacts
+        run: |
+          node scripts/release/validate-release.js \
+            --version "${{ needs.prepare.outputs.version }}" \
+            --repo "${{ github.repository }}" \
+            --assets release-assets/
+
+      - name: Build release notes
+        id: notes
+        run: |
+          VERSION="${{ needs.prepare.outputs.version }}"
+          
+          # Check which platforms succeeded
+          PLATFORMS=""
+          if [ "${{ needs.build-macos.result }}" = "success" ]; then
+            PLATFORMS="$PLATFORMS\n- **macOS** (Universal): Download the DMG file"
           fi
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          if [ "${{ needs.build-windows.result }}" = "success" ]; then
+            PLATFORMS="$PLATFORMS\n- **Windows** (64-bit): Download the installer"
+          fi
+          if [ "${{ needs.build-linux.result }}" = "success" ]; then
+            PLATFORMS="$PLATFORMS\n- **Linux** (64-bit): Download AppImage, deb, or rpm"
+          fi
+          
+          cat > release-notes.md << EOF
+          ## Calimero Desktop v${VERSION}
+          
+          ### Downloads
+          ${PLATFORMS}
+          
+          ### Auto-Updates
+          Existing installations will automatically update to this version.
+          
+          ### Checksums
+          See \`release.json\` for file sizes and download URLs.
+          EOF
+          
+          echo "notes_file=release-notes.md" >> $GITHUB_OUTPUT
 
       - name: Create GitHub Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          VERSION="${{ steps.version.outputs.version }}"
-
-          # Find files
-          DMG_FILE=$(find artifacts/ -name "*.dmg" | head -1)
-          TAR_FILE=$(find artifacts/ -name "*.app.tar.gz" | head -1)
-          SIG_FILE=$(find artifacts/ -name "*.sig" | head -1)
-          LATEST_JSON=$(find artifacts/ -name "latest.json" | head -1)
+          VERSION="${{ needs.prepare.outputs.version }}"
 
           echo "Creating release v$VERSION"
-          echo "DMG: $DMG_FILE"
-          echo "TAR: $TAR_FILE"
-          echo "SIG: $SIG_FILE"
-          echo "JSON: $LATEST_JSON"
-
-          # Create release
+          
+          # Create release with notes
           gh release create "v$VERSION" \
             --repo "${{ github.repository }}" \
             --title "v$VERSION" \
-            --notes "## Calimero Desktop v$VERSION"$'\n\n'"### Downloads"$'\n'"- **macOS (Universal)**: Download the DMG file below"$'\n\n'"### Auto-Updates"$'\n'"Existing installations will automatically update to this version." \
+            --notes-file release-notes.md \
             --latest
 
-          # Upload assets
-          [ -n "$DMG_FILE" ] && gh release upload "v$VERSION" "$DMG_FILE" --repo "${{ github.repository }}"
-          [ -n "$TAR_FILE" ] && gh release upload "v$VERSION" "$TAR_FILE" --repo "${{ github.repository }}"
-          [ -n "$SIG_FILE" ] && gh release upload "v$VERSION" "$SIG_FILE" --repo "${{ github.repository }}"
-          [ -n "$LATEST_JSON" ] && gh release upload "v$VERSION" "$LATEST_JSON" --repo "${{ github.repository }}"
+          # Upload all assets from release-assets/
+          for file in release-assets/*; do
+            if [ -f "$file" ]; then
+              filename=$(basename "$file")
+              # Skip manifest files (internal use)
+              if [[ "$filename" != manifest-*.json ]]; then
+                echo "Uploading: $filename"
+                gh release upload "v$VERSION" "$file" --repo "${{ github.repository }}"
+              fi
+            fi
+          done
+
+      - name: Summary
+        run: |
+          VERSION="${{ needs.prepare.outputs.version }}"
+          echo "## Release v$VERSION Published" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Artifacts" >> $GITHUB_STEP_SUMMARY
+          for file in release-assets/*; do
+            if [ -f "$file" ]; then
+              filename=$(basename "$file")
+              if [[ "$filename" != manifest-*.json ]]; then
+                size=$(ls -lh "$file" | awk '{print $5}')
+                echo "- \`$filename\` ($size)" >> $GITHUB_STEP_SUMMARY
+              fi
+            fi
+          done
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Links" >> $GITHUB_STEP_SUMMARY
+          echo "- [Release Page](https://github.com/${{ github.repository }}/releases/tag/v$VERSION)" >> $GITHUB_STEP_SUMMARY
+          echo "- [Download Page](https://${{ github.repository_owner }}.github.io/tauri-app/)" >> $GITHUB_STEP_SUMMARY

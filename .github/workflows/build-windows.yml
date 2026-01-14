@@ -1,0 +1,204 @@
+name: Build Windows
+
+on:
+    workflow_call:
+        inputs:
+            version:
+                description: "Version number (e.g., 1.0.0)"
+                required: true
+                type: string
+        secrets:
+            TAURI_PRIVATE_KEY:
+                required: false
+            TAURI_KEY_PASSWORD:
+                required: false
+            TAURI_PUBLIC_KEY:
+                required: false
+            WINDOWS_CERTIFICATE:
+                required: false
+            WINDOWS_CERTIFICATE_PASSWORD:
+                required: false
+        outputs:
+            artifact-name:
+                description: "Name of the uploaded artifact"
+                value: ${{ jobs.build.outputs.artifact-name }}
+    pull_request:
+        branches:
+            - master
+            - main
+
+env:
+    CARGO_TERM_COLOR: always
+
+jobs:
+    build:
+        name: Build Windows x64
+        runs-on: windows-latest
+        outputs:
+            artifact-name: windows-build
+
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v4
+              with:
+                  fetch-depth: 0
+
+            - name: Determine build mode
+              id: build-mode
+              shell: bash
+              run: |
+                  if [ "${{ github.event_name }}" = "pull_request" ]; then
+                    echo "mode=validation" >> $GITHUB_OUTPUT
+                    echo "version=0.0.0-dev" >> $GITHUB_OUTPUT
+                  else
+                    echo "mode=release" >> $GITHUB_OUTPUT
+                    echo "version=${{ inputs.version }}" >> $GITHUB_OUTPUT
+                  fi
+
+            - name: Setup pnpm
+              uses: pnpm/action-setup@v4
+              with:
+                  version: 9
+
+            - name: Setup Node.js
+              uses: actions/setup-node@v4
+              with:
+                  node-version: "20"
+                  cache: "pnpm"
+
+            - name: Get pnpm store directory
+              id: get-pnpm-store
+              shell: bash
+              run: |
+                  STORE_PATH=$(pnpm store path --silent || echo "$HOME/.pnpm-store")
+                  echo "path=$STORE_PATH" >> $GITHUB_OUTPUT
+
+            - name: Setup pnpm cache
+              uses: actions/cache@v4
+              with:
+                  path: ${{ steps.get-pnpm-store.outputs.path }}
+                  key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
+                  restore-keys: |
+                      ${{ runner.os }}-pnpm-store-
+
+            - name: Setup Rust
+              uses: dtolnay/rust-toolchain@stable
+
+            - name: Cache Rust dependencies
+              uses: Swatinem/rust-cache@v2
+              with:
+                  workspaces: apps/desktop/src-tauri
+
+            - name: Install dependencies
+              run: pnpm install --frozen-lockfile
+
+            - name: Build workspace packages
+              run: |
+                  pnpm build:mero-js
+                  pnpm build:mero-react
+
+            - name: Update version in tauri.conf.json
+              if: steps.build-mode.outputs.mode == 'release'
+              shell: bash
+              run: |
+                  VERSION="${{ steps.build-mode.outputs.version }}"
+                  cd apps/desktop/src-tauri
+                  node -e "
+                    const fs = require('fs');
+                    const config = JSON.parse(fs.readFileSync('tauri.conf.json', 'utf8'));
+                    config.package.version = '$VERSION';
+                    fs.writeFileSync('tauri.conf.json', JSON.stringify(config, null, 2));
+                  "
+
+            - name: Inject updater pubkey from secret
+              if: steps.build-mode.outputs.mode == 'release'
+              shell: bash
+              env:
+                  TAURI_PUBLIC_KEY: ${{ secrets.TAURI_PUBLIC_KEY }}
+              run: |
+                  if [ -n "$TAURI_PUBLIC_KEY" ]; then
+                    cd apps/desktop/src-tauri
+                    node -e "
+                      const fs = require('fs');
+                      const config = JSON.parse(fs.readFileSync('tauri.conf.json', 'utf8'));
+                      config.tauri.updater.pubkey = process.env.TAURI_PUBLIC_KEY;
+                      fs.writeFileSync('tauri.conf.json', JSON.stringify(config, null, 2));
+                    "
+                    echo "Injected TAURI_PUBLIC_KEY into tauri.conf.json"
+                  else
+                    echo "No TAURI_PUBLIC_KEY provided, using default pubkey"
+                  fi
+
+            - name: Build Tauri app for Windows
+              working-directory: apps/desktop
+              env:
+                  TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+                  TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+              run: pnpm tauri build
+
+            - name: Sign Windows installer (optional)
+              if: steps.build-mode.outputs.mode == 'release'
+              shell: pwsh
+              env:
+                  WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+                  WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+              run: |
+                  if (-not $env:WINDOWS_CERTIFICATE) {
+                    Write-Host "No Windows certificate provided, skipping signing"
+                    exit 0
+                  }
+
+                  # Decode certificate
+                  $certBytes = [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE)
+                  [IO.File]::WriteAllBytes("certificate.pfx", $certBytes)
+
+                  # Find installers
+                  $exeFiles = Get-ChildItem -Path "apps/desktop/src-tauri/target/release/bundle/nsis" -Filter "*.exe" -Recurse
+                  $msiFiles = Get-ChildItem -Path "apps/desktop/src-tauri/target/release/bundle/msi" -Filter "*.msi" -Recurse -ErrorAction SilentlyContinue
+
+                  foreach ($file in $exeFiles + $msiFiles) {
+                    Write-Host "Signing: $($file.FullName)"
+                    & signtool sign /f certificate.pfx /p $env:WINDOWS_CERTIFICATE_PASSWORD /fd sha256 /tr http://timestamp.digicert.com /td sha256 $file.FullName
+                  }
+
+                  Remove-Item "certificate.pfx" -Force
+
+            - name: Verify build outputs
+              if: steps.build-mode.outputs.mode == 'validation'
+              shell: bash
+              run: |
+                  echo "Checking for expected build outputs..."
+
+                  EXE_FILE=$(find apps/desktop/src-tauri/target/release/bundle/nsis -name "*.exe" 2>/dev/null | head -1)
+                  ZIP_FILE=$(find apps/desktop/src-tauri/target/release/bundle -name "*.zip" 2>/dev/null | head -1)
+
+                  if [ -z "$EXE_FILE" ]; then
+                    echo "Error: Windows installer (.exe) not found"
+                    exit 1
+                  fi
+                  echo "Installer: $EXE_FILE"
+
+                  if [ -z "$ZIP_FILE" ]; then
+                    echo "Warning: Updater bundle (.zip) not found (may be optional)"
+                  else
+                    echo "Updater: $ZIP_FILE"
+                  fi
+
+                  echo "Build validation passed"
+
+            - name: Collect and normalize assets
+              if: steps.build-mode.outputs.mode == 'release'
+              shell: bash
+              run: |
+                  node scripts/release/collect-assets.js \
+                    --version "${{ steps.build-mode.outputs.version }}" \
+                    --platform windows \
+                    --output release-assets/
+
+            - name: Upload artifacts
+              if: steps.build-mode.outputs.mode == 'release'
+              uses: actions/upload-artifact@v4
+              with:
+                  name: windows-build
+                  path: release-assets/
+                  retention-days: 7

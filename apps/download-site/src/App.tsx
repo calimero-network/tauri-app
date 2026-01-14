@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import {
   Button,
   Card,
@@ -23,154 +23,157 @@ import {
   Refresh,
   ExternalLink,
 } from "@calimero-network/mero-icons";
+import {
+  fetchRelease,
+  getDownloadsForPlatform,
+  getAvailablePlatforms,
+  getGitHubRepoUrl,
+  formatDate,
+  detectPlatform,
+  getPlatformLabel,
+  type ReleaseManifest,
+  type OS,
+  type DownloadAsset,
+} from "./release";
 import "./App.css";
 
-// GitHub repository configuration
-const GITHUB_REPO = "calimero-network/tauri-app";
-const GITHUB_API_URL = `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`;
+// Platform tab configuration
+const PLATFORM_ORDER: OS[] = ["macos", "windows", "linux"];
 
-interface ReleaseAsset {
-  name: string;
-  browser_download_url: string;
-  size: number;
+interface PlatformTabProps {
+  platform: OS;
+  isActive: boolean;
+  isAvailable: boolean;
+  onClick: () => void;
 }
 
-interface ReleaseInfo {
-  tag_name: string;
-  name: string;
-  published_at: string;
-  html_url: string;
-  body: string;
-  assets: ReleaseAsset[];
+function PlatformTab({
+  platform,
+  isActive,
+  isAvailable,
+  onClick,
+}: PlatformTabProps) {
+  const label = getPlatformLabel(platform);
+  return (
+    <button
+      onClick={onClick}
+      className={`platform-tab ${isActive ? "active" : ""} ${!isAvailable ? "disabled" : ""}`}
+      disabled={!isAvailable}
+      style={{
+        padding: "0.75rem 1.5rem",
+        border: "none",
+        background: isActive ? "var(--color-brand-600)" : "transparent",
+        color: isActive
+          ? "var(--color-background-primary)"
+          : isAvailable
+            ? "var(--color-text-primary)"
+            : "var(--color-text-muted)",
+        borderRadius: "0.5rem",
+        cursor: isAvailable ? "pointer" : "not-allowed",
+        fontWeight: isActive ? 600 : 400,
+        fontSize: "0.875rem",
+        transition: "all 0.15s ease",
+        opacity: isAvailable ? 1 : 0.5,
+      }}
+    >
+      {label}
+      {!isAvailable && " (Coming Soon)"}
+    </button>
+  );
 }
 
-interface DownloadInfo {
-  version: string;
-  releaseDate: string;
-  releaseUrl: string;
-  releaseNotes: string;
-  macosUrl: string | null;
-  macosSize: string | null;
+interface DownloadButtonProps {
+  asset: DownloadAsset;
+  isPrimary?: boolean;
 }
 
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return "0 Bytes";
-  const k = 1024;
-  const sizes = ["Bytes", "KB", "MB", "GB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + " " + sizes[i];
-}
+function DownloadButton({ asset, isPrimary = false }: DownloadButtonProps) {
+  const handleDownload = () => {
+    window.location.href = asset.url;
+  };
 
-function formatDate(dateString: string): string {
-  const date = new Date(dateString);
-  return date.toLocaleDateString("en-US", {
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-  });
-}
-
-function detectPlatform(): "macos" | "windows" | "linux" | "unknown" {
-  const userAgent = navigator.userAgent.toLowerCase();
-  const platform = navigator.platform.toLowerCase();
-
-  // Check for iPhone/iPod
-  if (userAgent.includes("iphone") || userAgent.includes("ipod")) {
-    return "unknown";
-  }
-
-  // Check for iPad - iPadOS 13+ may report as MacIntel, so check touch capability
-  if (
-    userAgent.includes("ipad") ||
-    (platform.includes("mac") && navigator.maxTouchPoints > 1)
-  ) {
-    return "unknown";
-  }
-
-  // Check for macOS - Macintosh in user agent and no touch capability
-  if (userAgent.includes("macintosh") && navigator.maxTouchPoints <= 1) {
-    return "macos";
-  }
-  if (userAgent.includes("win")) return "windows";
-  if (userAgent.includes("linux")) return "linux";
-  return "unknown";
-}
-
-async function fetchLatestRelease(): Promise<DownloadInfo | null> {
-  try {
-    const response = await fetch(GITHUB_API_URL, {
-      headers: {
-        Accept: "application/vnd.github.v3+json",
-      },
-    });
-
-    if (!response.ok) {
-      throw new Error(`GitHub API error: ${response.status}`);
-    }
-
-    const release: ReleaseInfo = await response.json();
-
-    // Find macOS DMG asset
-    const macosAsset = release.assets.find(
-      (asset) =>
-        asset.name.endsWith(".dmg") ||
-        (asset.name.includes("macos") && asset.name.endsWith(".dmg"))
+  if (isPrimary) {
+    return (
+      <Button
+        variant="primary"
+        size="xl"
+        onClick={handleDownload}
+        style={{ width: "100%", maxWidth: "20rem" }}
+      >
+        <Stack spacing="xs" align="start">
+          <Text weight="semibold" size="md" style={{ color: "#1a1a1a" }}>
+            Download for {getPlatformLabel(asset.os)}
+          </Text>
+          <Text size="sm" style={{ color: "#4a4a4a" }}>
+            {asset.format.toUpperCase()} • {asset.sizeFormatted}
+          </Text>
+        </Stack>
+      </Button>
     );
-
-    return {
-      version: release.tag_name.replace(/^v/, ""),
-      releaseDate: formatDate(release.published_at),
-      releaseUrl: release.html_url,
-      releaseNotes: release.body || "",
-      macosUrl: macosAsset?.browser_download_url || null,
-      macosSize: macosAsset ? formatBytes(macosAsset.size) : null,
-    };
-  } catch (error) {
-    console.error("Failed to fetch release info:", error);
-    return null;
   }
-}
 
-// Fallback release info when API is unavailable
-const FALLBACK_RELEASE: DownloadInfo = {
-  version: "0.1.0",
-  releaseDate: "Coming Soon",
-  releaseUrl: `https://github.com/${GITHUB_REPO}/releases`,
-  releaseNotes: "",
-  macosUrl: null,
-  macosSize: null,
-};
+  return (
+    <Button
+      variant="outline"
+      size="md"
+      onClick={handleDownload}
+      leftIcon={<Download size={16} />}
+    >
+      {asset.label} ({asset.sizeFormatted})
+    </Button>
+  );
+}
 
 function App() {
-  const [release, setRelease] = useState<DownloadInfo | null>(null);
+  const [release, setRelease] = useState<ReleaseManifest | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [platform] = useState(() => detectPlatform());
+  const [detectedPlatform] = useState(() => detectPlatform());
+  const [selectedPlatform, setSelectedPlatform] = useState<OS>("macos");
 
+  // Determine available platforms from release
+  const availablePlatforms = useMemo(() => {
+    if (!release) return [];
+    return getAvailablePlatforms(release);
+  }, [release]);
+
+  // Get downloads for selected platform
+  const platformDownloads = useMemo(() => {
+    if (!release) return { primary: null, alternatives: [] };
+    return getDownloadsForPlatform(release, selectedPlatform);
+  }, [release, selectedPlatform]);
+
+  // Set initial platform based on detection
   useEffect(() => {
-    fetchLatestRelease()
-      .then((info) => {
-        if (info) {
-          setRelease(info);
+    if (
+      detectedPlatform !== "unknown" &&
+      availablePlatforms.includes(detectedPlatform)
+    ) {
+      setSelectedPlatform(detectedPlatform);
+    } else if (availablePlatforms.length > 0) {
+      setSelectedPlatform(availablePlatforms[0]);
+    }
+  }, [detectedPlatform, availablePlatforms]);
+
+  // Fetch release info
+  useEffect(() => {
+    fetchRelease()
+      .then((manifest) => {
+        if (manifest) {
+          setRelease(manifest);
           setError(null);
         } else {
-          setRelease(FALLBACK_RELEASE);
-          setError("Unable to fetch latest release. Please try again later.");
+          setError("Unable to fetch release information. Please try again.");
         }
         setLoading(false);
       })
       .catch(() => {
-        setRelease(FALLBACK_RELEASE);
-        setError("Unable to fetch latest release. Please try again later.");
+        setError("Unable to fetch release information. Please try again.");
         setLoading(false);
       });
   }, []);
 
-  const handleDownload = () => {
-    if (release?.macosUrl) {
-      window.location.href = release.macosUrl;
-    }
-  };
+  const gitHubRepoUrl = getGitHubRepoUrl();
 
   return (
     <div className="download-page">
@@ -202,7 +205,7 @@ function App() {
               </NavbarItem>
               <NavbarItem>
                 <a
-                  href={`https://github.com/${GITHUB_REPO}`}
+                  href={gitHubRepoUrl}
                   target="_blank"
                   rel="noopener noreferrer"
                   style={{ textDecoration: "none", color: "inherit" }}
@@ -241,60 +244,80 @@ function App() {
                     <Box>
                       <Text color="muted">Checking for latest release...</Text>
                     </Box>
+                  ) : error ? (
+                    <Stack spacing="md">
+                      <Text color="error">{error}</Text>
+                      <a
+                        href={`${gitHubRepoUrl}/releases`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        <Button variant="outline" leftIcon={<ExternalLink />}>
+                          View releases on GitHub
+                        </Button>
+                      </a>
+                    </Stack>
                   ) : (
                     <Stack spacing="lg">
-                      {platform === "macos" && release?.macosUrl ? (
+                      {/* Platform Tabs */}
+                      <Box
+                        style={{
+                          display: "flex",
+                          gap: "0.5rem",
+                          padding: "0.25rem",
+                          background: "var(--color-background-secondary)",
+                          borderRadius: "0.75rem",
+                          width: "fit-content",
+                        }}
+                      >
+                        {PLATFORM_ORDER.map((platform) => (
+                          <PlatformTab
+                            key={platform}
+                            platform={platform}
+                            isActive={selectedPlatform === platform}
+                            isAvailable={availablePlatforms.includes(platform)}
+                            onClick={() => setSelectedPlatform(platform)}
+                          />
+                        ))}
+                      </Box>
+
+                      {/* Primary Download */}
+                      {platformDownloads.primary ? (
                         <Box>
-                          <Button
-                            variant="primary"
-                            size="xl"
-                            onClick={handleDownload}
-                            style={{ width: "100%", maxWidth: "20rem" }}
-                          >
-                            <Stack spacing="xs" align="start">
-                              <Text
-                                weight="semibold"
-                                size="md"
-                                style={{ color: "#1a1a1a" }}
-                              >
-                                Download for macOS
-                              </Text>
-                              <Text size="sm" style={{ color: "#4a4a4a" }}>
-                                Version {release.version} • {release.macosSize}
-                              </Text>
-                            </Stack>
-                          </Button>
+                          <DownloadButton
+                            asset={platformDownloads.primary}
+                            isPrimary
+                          />
                         </Box>
-                      ) : platform === "macos" ? (
-                        <Button
-                          size="xl"
-                          disabled
-                          style={{ width: "100%", maxWidth: "20rem" }}
-                        >
-                          <Text>macOS Download - Coming Soon</Text>
-                        </Button>
+                      ) : availablePlatforms.includes(selectedPlatform) ? (
+                        <Text color="muted">
+                          No installer available for this platform yet.
+                        </Text>
                       ) : (
-                        <Box>
-                          <Text color="muted" style={{ marginBottom: "1rem" }}>
-                            Calimero Desktop is currently available for macOS.
-                            {platform === "windows" &&
-                              " Windows support coming soon."}
-                            {platform === "linux" &&
-                              " Linux support coming soon."}
-                          </Text>
-                          {release?.macosUrl && (
-                            <Button
-                              variant="outline"
-                              size="lg"
-                              onClick={handleDownload}
-                              leftIcon={<Download />}
-                            >
-                              Download for macOS anyway
-                            </Button>
-                          )}
-                        </Box>
+                        <Text color="muted">
+                          {getPlatformLabel(selectedPlatform)} support coming
+                          soon.
+                        </Text>
                       )}
 
+                      {/* Alternative Downloads */}
+                      {platformDownloads.alternatives.length > 0 && (
+                        <Stack spacing="sm">
+                          <Text size="sm" color="muted">
+                            Other formats:
+                          </Text>
+                          <Stack direction="horizontal" spacing="sm">
+                            {platformDownloads.alternatives.map((asset) => (
+                              <DownloadButton
+                                key={asset.filename}
+                                asset={asset}
+                              />
+                            ))}
+                          </Stack>
+                        </Stack>
+                      )}
+
+                      {/* Release Info */}
                       {release && (
                         <Stack
                           direction="horizontal"
@@ -308,13 +331,13 @@ function App() {
                             •
                           </Text>
                           <Text size="sm" color="muted">
-                            {release.releaseDate}
+                            {formatDate(release.publishedAt)}
                           </Text>
                           <Text size="sm" color="muted">
                             •
                           </Text>
                           <a
-                            href={release.releaseUrl}
+                            href={release.notesUrl}
                             target="_blank"
                             rel="noopener noreferrer"
                             style={{ textDecoration: "none" }}
@@ -328,8 +351,6 @@ function App() {
                           </a>
                         </Stack>
                       )}
-
-                      {error && <Text color="error">{error}</Text>}
                     </Stack>
                   )}
                 </Stack>
@@ -568,28 +589,56 @@ function App() {
                 </Stack>
               </Box>
               <Box>
-                <Stack spacing="lg">
-                  <Heading level={4} size="lg" weight="semibold">
-                    macOS
-                  </Heading>
-                  <List
-                    items={[
-                      {
-                        id: 1,
-                        content: "macOS 10.15 (Catalina) or later",
-                      },
-                      {
-                        id: 2,
-                        content: "Apple Silicon or Intel processor",
-                      },
-                      {
-                        id: 3,
-                        content: "100 MB available disk space",
-                      },
-                    ]}
-                    variant="ghost"
-                    divider={true}
-                  />
+                <Stack spacing="xl">
+                  <Stack spacing="lg">
+                    <Heading level={4} size="lg" weight="semibold">
+                      macOS
+                    </Heading>
+                    <List
+                      items={[
+                        { id: 1, content: "macOS 10.15 (Catalina) or later" },
+                        { id: 2, content: "Apple Silicon or Intel processor" },
+                        { id: 3, content: "100 MB available disk space" },
+                      ]}
+                      variant="ghost"
+                      divider={true}
+                    />
+                  </Stack>
+
+                  <Stack spacing="lg">
+                    <Heading level={4} size="lg" weight="semibold">
+                      Windows
+                    </Heading>
+                    <List
+                      items={[
+                        { id: 1, content: "Windows 10 (64-bit) or later" },
+                        { id: 2, content: "x64 processor" },
+                        { id: 3, content: "100 MB available disk space" },
+                      ]}
+                      variant="ghost"
+                      divider={true}
+                    />
+                  </Stack>
+
+                  <Stack spacing="lg">
+                    <Heading level={4} size="lg" weight="semibold">
+                      Linux
+                    </Heading>
+                    <List
+                      items={[
+                        {
+                          id: 1,
+                          content:
+                            "Ubuntu 20.04+, Fedora 35+, or equivalent distro",
+                        },
+                        { id: 2, content: "x64 processor" },
+                        { id: 3, content: "100 MB available disk space" },
+                        { id: 4, content: "WebKit2GTK 4.0" },
+                      ]}
+                      variant="ghost"
+                      divider={true}
+                    />
+                  </Stack>
                 </Stack>
               </Box>
             </Grid>
@@ -633,7 +682,7 @@ function App() {
                   </Text>
                 </a>
                 <a
-                  href={`https://github.com/${GITHUB_REPO}`}
+                  href={gitHubRepoUrl}
                   target="_blank"
                   rel="noopener noreferrer"
                   style={{ textDecoration: "none" }}

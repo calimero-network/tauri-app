@@ -122,14 +122,17 @@ jobs:
           cache: "pnpm"
 
       - name: Get pnpm store directory
+        id: get-pnpm-store
         shell: bash
         run: |
-          echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
+          STORE_PATH=$(pnpm store path --silent || echo "$HOME/.pnpm-store")
+          echo "STORE_PATH=$STORE_PATH" >> $GITHUB_ENV
+          echo "path=$STORE_PATH" >> $GITHUB_OUTPUT
 
       - name: Setup pnpm cache
         uses: actions/cache@v4
         with:
-          path: ${{ env.STORE_PATH }}
+          path: ${{ steps.get-pnpm-store.outputs.path }}
           key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
           restore-keys: |
             ${{ runner.os }}-pnpm-store-
@@ -198,7 +201,6 @@ jobs:
         env:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          TAURI_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
           TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
         id: build-app
@@ -302,47 +304,51 @@ jobs:
 
           # Create latest.json for Tauri updater with signature
           if [ -n "$SIGNATURE" ]; then
-            cat > apps/desktop/src-tauri/target/latest.json << EOF
-          {
-            "version": "v$VERSION",
-            "notes": "Release v$VERSION",
-            "pub_date": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
-            "platforms": {
-              "darwin-universal": {
-                "url": "https://github.com/$REPO/releases/download/v$VERSION/$TAR_NAME",
-                "signature": "$SIGNATURE"
-              },
-              "darwin-x86_64": {
-                "url": "https://github.com/$REPO/releases/download/v$VERSION/$TAR_NAME",
-                "signature": "$SIGNATURE"
-              },
-              "darwin-aarch64": {
-                "url": "https://github.com/$REPO/releases/download/v$VERSION/$TAR_NAME",
-                "signature": "$SIGNATURE"
-              }
-            }
-          }
-          EOF
+            node -e "
+              const fs = require('fs');
+              const manifest = {
+                version: 'v$VERSION',
+                notes: 'Release v$VERSION',
+                pub_date: new Date().toISOString(),
+                platforms: {
+                  'darwin-universal': {
+                    url: 'https://github.com/$REPO/releases/download/v$VERSION/$TAR_NAME',
+                    signature: '$SIGNATURE'
+                  },
+                  'darwin-x86_64': {
+                    url: 'https://github.com/$REPO/releases/download/v$VERSION/$TAR_NAME',
+                    signature: '$SIGNATURE'
+                  },
+                  'darwin-aarch64': {
+                    url: 'https://github.com/$REPO/releases/download/v$VERSION/$TAR_NAME',
+                    signature: '$SIGNATURE'
+                  }
+                }
+              };
+              fs.writeFileSync('apps/desktop/src-tauri/target/latest.json', JSON.stringify(manifest, null, 2));
+            "
           else
             # Fallback without signature (should not happen if TAURI_PRIVATE_KEY is set)
-            cat > apps/desktop/src-tauri/target/latest.json << EOF
-          {
-            "version": "v$VERSION",
-            "notes": "Release v$VERSION",
-            "pub_date": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
-            "platforms": {
-              "darwin-universal": {
-                "url": "https://github.com/$REPO/releases/download/v$VERSION/$TAR_NAME"
-              },
-              "darwin-x86_64": {
-                "url": "https://github.com/$REPO/releases/download/v$VERSION/$TAR_NAME"
-              },
-              "darwin-aarch64": {
-                "url": "https://github.com/$REPO/releases/download/v$VERSION/$TAR_NAME"
-              }
-            }
-          }
-          EOF
+            node -e "
+              const fs = require('fs');
+              const manifest = {
+                version: 'v$VERSION',
+                notes: 'Release v$VERSION',
+                pub_date: new Date().toISOString(),
+                platforms: {
+                  'darwin-universal': {
+                    url: 'https://github.com/$REPO/releases/download/v$VERSION/$TAR_NAME'
+                  },
+                  'darwin-x86_64': {
+                    url: 'https://github.com/$REPO/releases/download/v$VERSION/$TAR_NAME'
+                  },
+                  'darwin-aarch64': {
+                    url: 'https://github.com/$REPO/releases/download/v$VERSION/$TAR_NAME'
+                  }
+                }
+              };
+              fs.writeFileSync('apps/desktop/src-tauri/target/latest.json', JSON.stringify(manifest, null, 2));
+            "
           fi
 
       - name: Upload artifacts

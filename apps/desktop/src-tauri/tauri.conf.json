@@ -50,7 +50,7 @@
     },
     "updater": {
       "active": true,
-      "dialog": true,
+      "dialog": false,
       "endpoints": [
         "https://github.com/calimero-network/tauri-app/releases/latest/download/latest.json"
       ],

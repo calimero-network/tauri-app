@@ -97,6 +97,10 @@ jobs:
                   pnpm build:mero-js
                   pnpm build:mero-react
 
+            - name: Generate Windows icon
+              working-directory: apps/desktop
+              run: pnpm tauri icon src-tauri/icons/icon.png
+
             - name: Update version in tauri.conf.json
               if: steps.build-mode.outputs.mode == 'release'
               shell: bash

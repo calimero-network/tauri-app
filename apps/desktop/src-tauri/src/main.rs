@@ -386,8 +386,8 @@ async fn open_devtools(window_label: String, app_handle: tauri::AppHandle) {
             window.open_devtools();
             return;
         }
-        // Wait a bit before retrying
-        std::thread::sleep(std::time::Duration::from_millis(300));
+        // Wait a bit before retrying (use async sleep to avoid blocking runtime)
+        tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
     }
 }
 

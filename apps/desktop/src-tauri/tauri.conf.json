@@ -19,13 +19,8 @@
       },
       "http": {
         "all": false,
-        "request": true,
-        "scope": [
-          "http://localhost:2528/**",
-          "http://127.0.0.1:2528/**",
-          "https://api.github.com/**",
-          "https://github.com/**"
-        ]
+        "request": false,
+        "scope": []
       },
       "process": {
         "relaunch": true

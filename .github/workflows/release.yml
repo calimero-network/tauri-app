@@ -209,6 +209,10 @@ jobs:
           SIG_FILE="${{ steps.find-tar.outputs.SIG_FILE }}"
           REPO="${{ github.repository }}"
 
+          # GitHub Actions replaces spaces with dots in artifact names
+          # Use the sanitized name (spaces -> dots) for the URL
+          SANITIZED_TAR_NAME=$(echo "$TAR_NAME" | tr ' ' '.')
+
           SIGNATURE=""
           if [ -f "$SIG_FILE" ]; then
             SIGNATURE=$(cat "$SIG_FILE" | tr -d '\n')
@@ -222,15 +226,15 @@ jobs:
               pub_date: new Date().toISOString(),
               platforms: {
                 'darwin-universal': {
-                  url: 'https://github.com/$REPO/releases/download/v$VERSION/$TAR_NAME',
+                  url: 'https://github.com/$REPO/releases/download/v$VERSION/$SANITIZED_TAR_NAME',
                   signature: '$SIGNATURE'
                 },
                 'darwin-x86_64': {
-                  url: 'https://github.com/$REPO/releases/download/v$VERSION/$TAR_NAME',
+                  url: 'https://github.com/$REPO/releases/download/v$VERSION/$SANITIZED_TAR_NAME',
                   signature: '$SIGNATURE'
                 },
                 'darwin-aarch64': {
-                  url: 'https://github.com/$REPO/releases/download/v$VERSION/$TAR_NAME',
+                  url: 'https://github.com/$REPO/releases/download/v$VERSION/$SANITIZED_TAR_NAME',
                   signature: '$SIGNATURE'
                 }
               }

@@ -22,18 +22,39 @@
         "request": true,
         "scope": [
           "http://localhost:2528/**",
-          "http://127.0.0.1:2528/**"
+          "http://127.0.0.1:2528/**",
+          "https://api.github.com/**",
+          "https://github.com/**"
         ]
+      },
+      "process": {
+        "relaunch": true
       }
     },
     "bundle": {
       "active": true,
       "targets": "all",
       "identifier": "network.calimero.desktop",
-      "icon": []
+      "icon": ["icons/icon.png"],
+      "macOS": {
+        "entitlements": null,
+        "exceptionDomain": "",
+        "frameworks": [],
+        "providerShortName": null,
+        "signingIdentity": null,
+        "minimumSystemVersion": "10.15"
+      }
     },
     "security": {
-      "csp": "default-src 'self' 'unsafe-inline' 'unsafe-eval' http://localhost:* http://127.0.0.1:*; connect-src 'self' http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:*;"
+      "csp": "default-src 'self' 'unsafe-inline' 'unsafe-eval' http://localhost:* http://127.0.0.1:* https://api.github.com; connect-src 'self' http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:* https://api.github.com https://github.com;"
+    },
+    "updater": {
+      "active": true,
+      "dialog": false,
+      "endpoints": [
+        "https://github.com/calimero-network/tauri-app/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQ5MjQxOUM0QzJCODQ3MUEKUldRYVI3akN4QmtrMlNZRDVQMVJ4bTFvTW1JSHgycjhDNlhzZ3NOQXpHWHByOHMyZ2ZIU2RoOFYK"
     },
     "windows": [
       {
@@ -48,4 +69,3 @@
     ]
   }
 }
-

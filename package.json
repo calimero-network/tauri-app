@@ -6,12 +6,14 @@
   "type": "module",
   "scripts": {
     "dev:desktop": "pnpm --filter desktop tauri:dev",
-    "build:desktop": "pnpm --filter desktop build",
+    "build:desktop": "pnpm --filter desktop tauri:build",
     "tauri:desktop": "pnpm --filter desktop tauri",
-      "build:mero-js": "pnpm --filter @calimero-network/mero-js build",
-      "build:mero-react": "pnpm --filter @calimero-network/mero-react build",
-      "dev": "pnpm build:mero-js && pnpm build:mero-react && pnpm dev:desktop",
-      "build": "pnpm build:mero-js && pnpm build:mero-react && pnpm build:desktop",
+    "dev:download-site": "pnpm --filter download-site dev",
+    "build:download-site": "pnpm --filter download-site build",
+    "build:mero-js": "pnpm --filter @calimero-network/mero-js build",
+    "build:mero-react": "pnpm --filter @calimero-network/mero-react build",
+    "dev": "pnpm build:mero-js && pnpm build:mero-react && pnpm dev:desktop",
+    "build": "pnpm build:mero-js && pnpm build:mero-react && pnpm build:desktop",
     "clean": "pnpm -r clean && rm -rf node_modules"
   },
   "devDependencies": {

@@ -72,7 +72,25 @@ function formatDate(dateString: string): string {
 
 function detectPlatform(): "macos" | "windows" | "linux" | "unknown" {
   const userAgent = navigator.userAgent.toLowerCase();
-  if (userAgent.includes("mac")) return "macos";
+  const platform = navigator.platform.toLowerCase();
+
+  // Check for iPhone/iPod
+  if (userAgent.includes("iphone") || userAgent.includes("ipod")) {
+    return "unknown";
+  }
+
+  // Check for iPad - iPadOS 13+ may report as MacIntel, so check touch capability
+  if (
+    userAgent.includes("ipad") ||
+    (platform.includes("mac") && navigator.maxTouchPoints > 1)
+  ) {
+    return "unknown";
+  }
+
+  // Check for macOS - Macintosh in user agent and no touch capability
+  if (userAgent.includes("macintosh") && navigator.maxTouchPoints <= 1) {
+    return "macos";
+  }
   if (userAgent.includes("win")) return "windows";
   if (userAgent.includes("linux")) return "linux";
   return "unknown";

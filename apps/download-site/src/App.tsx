@@ -252,10 +252,14 @@ function App() {
                             style={{ width: "100%", maxWidth: "20rem" }}
                           >
                             <Stack spacing="xs" align="start">
-                              <Text weight="semibold" size="md">
+                              <Text
+                                weight="semibold"
+                                size="md"
+                                style={{ color: "#1a1a1a" }}
+                              >
                                 Download for macOS
                               </Text>
-                              <Text size="sm" color="muted">
+                              <Text size="sm" style={{ color: "#4a4a4a" }}>
                                 Version {release.version} • {release.macosSize}
                               </Text>
                             </Stack>

@@ -3,7 +3,7 @@ import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   plugins: [react()],
-  base: "/", // Change to repo name if deploying to GitHub Pages subdirectory
+  base: "/tauri-app/", // GitHub Pages subdirectory
   build: {
     outDir: "dist",
     sourcemap: false,

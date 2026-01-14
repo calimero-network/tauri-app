@@ -100,11 +100,7 @@ The desktop app automatically checks for updates on startup and periodically. Wh
 
 ## Releases
 
-Releases are automated using semantic versioning based on commit messages:
-
-- `feat:` commits trigger minor version bumps
-- `fix:` commits trigger patch version bumps
-- `BREAKING CHANGE:` triggers major version bumps
+Releases are **tag-based**. Pushing a `vX.Y.Z` tag triggers the release workflow, which builds the desktop bundles and creates a GitHub Release.
 
 See [RELEASES.md](./RELEASES.md) for detailed release process documentation.
 

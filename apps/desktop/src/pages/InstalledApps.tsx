@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { apiClient } from "@calimero-network/mero-react";
-import { open } from "@tauri-apps/api/shell";
+import { invoke } from "@tauri-apps/api/tauri";
 import "./InstalledApps.css";
 
 interface InstalledApplication {
@@ -131,9 +131,25 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
     }
   };
 
-  const handleOpenFrontend = async (frontendUrl: string) => {
+  const handleOpenFrontend = async (frontendUrl: string, appName?: string) => {
     try {
-      await open(frontendUrl);
+      // Get configured node URL from settings for HTTP interception
+      const { getSettings } = await import('../utils/settings');
+      const settings = getSettings();
+      
+      // Always open in a new Tauri window
+      // Use unique window label based on domain + timestamp to avoid conflicts
+      // IPC scope uses wildcard pattern (app-*) so any label matching app-* will work
+      const urlObj = new URL(frontendUrl);
+      const domain = urlObj.hostname.replace(/\./g, '-'); // Replace dots with dashes for label
+      const windowLabel = `app-${domain}-${Date.now()}`;
+      await invoke('create_app_window', {
+        windowLabel,
+        url: frontendUrl,
+        title: appName || 'Application',
+        nodeUrl: settings.nodeUrl,
+      });
+      console.log('Opened in new Tauri window:', frontendUrl, 'with label:', windowLabel);
     } catch (error) {
       console.error("Failed to open frontend:", error);
       alert(`Failed to open frontend: ${error instanceof Error ? error.message : "Unknown error"}`);
@@ -169,6 +185,7 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
               const metadata = decodeMetadata(app.metadata);
               const appName = metadata?.name || app.name || app.id;
               const appVersion = metadata?.version || app.version || "Unknown";
+              // Get frontend URL from bundle metadata (no fallback - must be in metadata)
               const frontendUrl = metadata?.links?.frontend;
               
               return (
@@ -202,7 +219,7 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
                   <div className="app-card-actions">
                     {frontendUrl && (
                       <button
-                        onClick={() => handleOpenFrontend(frontendUrl)}
+                        onClick={() => handleOpenFrontend(frontendUrl, appName)}
                         className="button button-primary"
                         title={`Open ${appName} frontend`}
                       >

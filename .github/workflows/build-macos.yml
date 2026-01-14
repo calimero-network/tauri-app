@@ -165,14 +165,15 @@ jobs:
 
                   rm -f certificate.p12
 
-            - name: Build Tauri app for macOS (Universal)
+            - name: Build Tauri app for macOS (Universal) - Release
+              if: steps.build-mode.outputs.mode == 'release'
               working-directory: apps/desktop
               env:
                   APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
                   APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
                   TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
                   TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
-              id: build-app
+              id: build-app-release
               run: |
                   if [ -n "$APPLE_SIGNING_IDENTITY" ]; then
                     echo "is_signed=true" >> $GITHUB_OUTPUT
@@ -182,12 +183,20 @@ jobs:
 
                   pnpm tauri build --target universal-apple-darwin
 
+            - name: Build Tauri app for macOS (Universal) - Validation
+              if: steps.build-mode.outputs.mode == 'validation'
+              working-directory: apps/desktop
+              id: build-app-validation
+              run: |
+                  echo "is_signed=false" >> $GITHUB_OUTPUT
+                  pnpm tauri build --target universal-apple-darwin
+
             - name: Cleanup keychain
               if: always() && steps.build-mode.outputs.mode == 'release'
               run: security delete-keychain build.keychain 2>/dev/null || true
 
             - name: Notarize DMG
-              if: steps.build-mode.outputs.mode == 'release' && steps.build-app.outputs.is_signed == 'true'
+              if: steps.build-mode.outputs.mode == 'release' && steps.build-app-release.outputs.is_signed == 'true'
               env:
                   APPLE_ID: ${{ secrets.APPLE_ID }}
                   APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}

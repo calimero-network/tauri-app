@@ -172,7 +172,9 @@ async fn proxy_http_request(request: HttpRequest, configured_node_url: Option<St
         debug!("[Tauri Proxy] Request headers count: {}", headers.len());
         // Log Authorization header if present (but don't log the full token)
         if let Some(auth_header) = headers.get("Authorization").or_else(|| headers.get("authorization")) {
-            debug!("[Tauri Proxy] Authorization header present: {}...", &auth_header[..auth_header.len().min(20)]);
+            // Safely truncate to first 20 characters (UTF-8 safe)
+            let preview: String = auth_header.chars().take(20).collect();
+            debug!("[Tauri Proxy] Authorization header present: {}...", preview);
         } else {
             warn!("[Tauri Proxy] No Authorization header found!");
         }
@@ -217,9 +219,10 @@ async fn proxy_http_request(request: HttpRequest, configured_node_url: Option<St
             if key_lower == "host" {
                 has_host = true;
             }
-            // Log header being added (truncate value for security)
+            // Log header being added (truncate value for security, UTF-8 safe)
             let value_preview = if value.len() > 50 {
-                format!("{}...", &value[..50])
+                let preview: String = value.chars().take(50).collect();
+                format!("{}...", preview)
             } else {
                 value.clone()
             };

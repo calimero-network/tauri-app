@@ -53,12 +53,7 @@
       "http": {
         "all": true,
         "request": true,
-        "scope": [
-          "http://**",
-          "https://**",
-          "ws://**",
-          "wss://**"
-        ]
+        "scope": ["http://**", "https://**", "ws://**", "wss://**"]
       },
       "process": {
         "relaunch": true
@@ -68,7 +63,14 @@
       "active": true,
       "targets": "all",
       "identifier": "network.calimero.desktop",
-      "icon": ["icons/icon.png"],
+      "icon": [
+        "icons/32x32.png",
+        "icons/128x128.png",
+        "icons/128x128@2x.png",
+        "icons/icon.icns",
+        "icons/icon.ico",
+        "icons/icon.png"
+      ],
       "macOS": {
         "entitlements": null,
         "exceptionDomain": "",

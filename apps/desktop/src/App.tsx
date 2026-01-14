@@ -9,6 +9,7 @@ import InstalledApps from "./pages/InstalledApps";
 import Contexts from "./pages/Contexts";
 import ConfirmAction from "./pages/ConfirmAction";
 import UpdateNotification from "./components/UpdateNotification";
+import { getCurrentVersion } from "./utils/updater";
 import "./App.css";
 
 function App() {
@@ -36,6 +37,12 @@ function App() {
     onConfirm: () => void;
     breadcrumbs: Array<{ label: string; onClick?: () => void }>;
   } | null>(null);
+  const [appVersion, setAppVersion] = useState<string>("");
+
+  // Load app version
+  useEffect(() => {
+    getCurrentVersion().then(setAppVersion);
+  }, []);
 
   // Load contexts for main page
   const loadContexts = useCallback(async () => {
@@ -516,7 +523,16 @@ function App() {
       <UpdateNotification checkOnMount={true} checkInterval={3600000} />
 
       <header className="header">
-        <h1>Calimero Desktop</h1>
+      <div style={{ display: "flex", alignItems: "baseline", gap: "8px" }}>
+          <h1>Calimero Desktop</h1>
+          {appVersion && (
+            <span
+              style={{ fontSize: "12px", color: "#888", fontWeight: "normal" }}
+            >
+              v{appVersion}
+            </span>
+          )}
+        </div>
         <div style={{ display: 'flex', gap: '12px' }}>
           <button onClick={() => setCurrentPage('contexts')} className="button" style={{ background: '#6f42c1', color: 'white' }}>
             🔗 Contexts

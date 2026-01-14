@@ -49,7 +49,8 @@
         
         // Only proxy requests to the configured local node URL (HTTP localhost)
         // HTTPS registries don't need proxying (no mixed content issues)
-        const shouldProxy = urlStr.startsWith(nodeUrl);
+        // Use precise matching to avoid port confusion (e.g., localhost:2528 vs localhost:25280)
+        const shouldProxy = urlStr === nodeUrl || urlStr.startsWith(nodeUrl + '/') || urlStr.startsWith(nodeUrl + '?') || urlStr.startsWith(nodeUrl + '#');
         console.log('[Tauri Proxy] Should proxy?', shouldProxy, 'for URL:', urlStr);
         if (shouldProxy) {
             try {

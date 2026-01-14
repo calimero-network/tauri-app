@@ -150,7 +150,13 @@ function App() {
   useEffect(() => {
     fetchLatestRelease()
       .then((info) => {
-        setRelease(info || FALLBACK_RELEASE);
+        if (info) {
+          setRelease(info);
+          setError(null);
+        } else {
+          setRelease(FALLBACK_RELEASE);
+          setError("Unable to fetch latest release. Please try again later.");
+        }
         setLoading(false);
       })
       .catch(() => {

@@ -148,32 +148,32 @@ jobs:
         id: notes
         run: |
           VERSION="${{ needs.prepare.outputs.version }}"
-          
-          # Check which platforms succeeded
+
+          # Build platform list with actual newlines
           PLATFORMS=""
           if [ "${{ needs.build-macos.result }}" = "success" ]; then
-            PLATFORMS="$PLATFORMS\n- **macOS** (Universal): Download the DMG file"
+            PLATFORMS="${PLATFORMS}"$'\n'"- **macOS** (Universal): Download the DMG file"
           fi
           if [ "${{ needs.build-windows.result }}" = "success" ]; then
-            PLATFORMS="$PLATFORMS\n- **Windows** (64-bit): Download the installer"
+            PLATFORMS="${PLATFORMS}"$'\n'"- **Windows** (64-bit): Download the installer"
           fi
           if [ "${{ needs.build-linux.result }}" = "success" ]; then
-            PLATFORMS="$PLATFORMS\n- **Linux** (64-bit): Download AppImage, deb, or rpm"
+            PLATFORMS="${PLATFORMS}"$'\n'"- **Linux** (64-bit): Download AppImage, deb, or rpm"
           fi
-          
+
           cat > release-notes.md << EOF
           ## Calimero Desktop v${VERSION}
-          
+
           ### Downloads
           ${PLATFORMS}
-          
+
           ### Auto-Updates
           Existing installations will automatically update to this version.
-          
+
           ### Checksums
           See \`release.json\` for file sizes and download URLs.
           EOF
-          
+
           echo "notes_file=release-notes.md" >> $GITHUB_OUTPUT
 
       - name: Create GitHub Release
@@ -183,7 +183,7 @@ jobs:
           VERSION="${{ needs.prepare.outputs.version }}"
 
           echo "Creating release v$VERSION"
-          
+
           # Create release with notes
           gh release create "v$VERSION" \
             --repo "${{ github.repository }}" \

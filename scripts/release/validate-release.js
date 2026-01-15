@@ -15,17 +15,6 @@
 const fs = require("fs");
 const path = require("path");
 
-const REQUIRED_PLATFORMS_LATEST = [
-  "darwin-universal",
-  "darwin-x86_64",
-  "darwin-aarch64",
-];
-
-const OPTIONAL_PLATFORMS_LATEST = [
-  "windows-x86_64",
-  "linux-x86_64",
-];
-
 function parseArgs() {
   const args = process.argv.slice(2);
   const result = {
@@ -71,7 +60,9 @@ function validateLatestJson(filePath) {
   if (!manifest.version) {
     errors.push("latest.json missing 'version' field");
   } else if (!manifest.version.startsWith("v")) {
-    warnings.push(`latest.json version should start with 'v', got: ${manifest.version}`);
+    warnings.push(
+      `latest.json version should start with 'v', got: ${manifest.version}`
+    );
   }
 
   if (!manifest.pub_date) {
@@ -83,32 +74,22 @@ function validateLatestJson(filePath) {
     return { errors, warnings };
   }
 
-  // Check required macOS platforms
-  for (const platform of REQUIRED_PLATFORMS_LATEST) {
-    if (!manifest.platforms[platform]) {
-      errors.push(`latest.json missing required platform: ${platform}`);
-      continue;
-    }
+  // Check that at least one platform exists
+  const platformCount = Object.keys(manifest.platforms).length;
+  if (platformCount === 0) {
+    errors.push("latest.json has no platform entries");
+    return { errors, warnings };
+  }
 
+  // Validate all platform entries that exist (all platforms are optional for partial releases)
+  for (const platform of Object.keys(manifest.platforms)) {
     const entry = manifest.platforms[platform];
+
     if (!entry.url) {
       errors.push(`latest.json platform ${platform} missing 'url'`);
     }
     if (!entry.signature) {
-      warnings.push(`latest.json platform ${platform} missing 'signature' (updater may fail)`);
-    }
-  }
-
-  // Check optional platforms
-  for (const platform of OPTIONAL_PLATFORMS_LATEST) {
-    if (manifest.platforms[platform]) {
-      const entry = manifest.platforms[platform];
-      if (!entry.url) {
-        errors.push(`latest.json platform ${platform} missing 'url'`);
-      }
-      if (!entry.signature) {
-        warnings.push(`latest.json platform ${platform} missing 'signature'`);
-      }
+      warnings.push(`latest.json platform ${platform} missing 'signature'`);
     }
   }
 

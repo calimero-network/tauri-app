@@ -4,7 +4,7 @@ Monorepo for Calimero desktop applications built with Tauri.
 
 ## Download
 
-**[Download Calimero Desktop for macOS](https://github.com/calimero-network/tauri-app/releases/latest)**
+**[Download Calimero Desktop](https://calimero-network.github.io/tauri-app/)** - Available for macOS, Windows, and Linux
 
 ## Structure
 
@@ -100,7 +100,7 @@ The desktop app automatically checks for updates on startup and periodically. Wh
 
 ## Releases
 
-Releases are **tag-based**. Pushing a `vX.Y.Z` tag triggers the release workflow, which builds the desktop bundles and creates a GitHub Release.
+Releases are **tag-based**. Pushing a `vX.Y.Z` tag triggers the release workflow, which builds desktop bundles for macOS, Windows, and Linux in parallel and creates a GitHub Release.
 
 See [RELEASES.md](./RELEASES.md) for detailed release process documentation.
 

@@ -1,185 +1,203 @@
 name: Build Linux
 
 on:
-    workflow_call:
-        inputs:
-            version:
-                description: "Version number (e.g., 1.0.0)"
-                required: true
-                type: string
-        secrets:
-            TAURI_PRIVATE_KEY:
-                required: false
-            TAURI_KEY_PASSWORD:
-                required: false
-            TAURI_PUBLIC_KEY:
-                required: false
-        outputs:
-            artifact-name:
-                description: "Name of the uploaded artifact"
-                value: ${{ jobs.build.outputs.artifact-name }}
-    pull_request:
-        branches:
-            - master
-            - main
+  workflow_call:
+    inputs:
+      version:
+        description: "Version number (e.g., 1.0.0)"
+        required: true
+        type: string
+    secrets:
+      # Tauri updater signing (required for auto-updates)
+      TAURI_PRIVATE_KEY:
+        required: true
+      TAURI_KEY_PASSWORD:
+        required: false
+      TAURI_PUBLIC_KEY:
+        required: true
+    outputs:
+      artifact-name:
+        description: "Name of the uploaded artifact"
+        value: ${{ jobs.build.outputs.artifact-name }}
+  pull_request:
+    branches:
+      - master
+      - main
 
 env:
-    CARGO_TERM_COLOR: always
+  CARGO_TERM_COLOR: always
 
 jobs:
-    build:
-        name: Build Linux x64
-        runs-on: ubuntu-22.04
-        outputs:
-            artifact-name: linux-build
+  build:
+    name: Build Linux x64
+    runs-on: ubuntu-22.04
+    outputs:
+      artifact-name: linux-build
 
-        steps:
-            - name: Checkout code
-              uses: actions/checkout@v4
-              with:
-                  fetch-depth: 0
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-            - name: Determine build mode
-              id: build-mode
-              run: |
-                  if [ "${{ github.event_name }}" = "pull_request" ]; then
-                    echo "mode=validation" >> $GITHUB_OUTPUT
-                    echo "version=0.0.0-dev" >> $GITHUB_OUTPUT
-                  else
-                    echo "mode=release" >> $GITHUB_OUTPUT
-                    echo "version=${{ inputs.version }}" >> $GITHUB_OUTPUT
-                  fi
+      - name: Determine build mode
+        id: build-mode
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "mode=validation" >> $GITHUB_OUTPUT
+            echo "version=0.0.0-dev" >> $GITHUB_OUTPUT
+          else
+            echo "mode=release" >> $GITHUB_OUTPUT
+            echo "version=${{ inputs.version }}" >> $GITHUB_OUTPUT
+          fi
 
-            - name: Install Linux dependencies
-              run: |
-                  sudo apt-get update
-                  sudo apt-get install -y \
-                    libwebkit2gtk-4.0-dev \
-                    libgtk-3-dev \
-                    libayatana-appindicator3-dev \
-                    librsvg2-dev \
-                    patchelf
+      - name: Validate required secrets for release
+        if: steps.build-mode.outputs.mode == 'release'
+        env:
+          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          TAURI_PUBLIC_KEY: ${{ secrets.TAURI_PUBLIC_KEY }}
+        run: |
+          MISSING=""
+          [ -z "$TAURI_PRIVATE_KEY" ] && MISSING="$MISSING TAURI_PRIVATE_KEY"
+          [ -z "$TAURI_PUBLIC_KEY" ] && MISSING="$MISSING TAURI_PUBLIC_KEY"
 
-            - name: Setup pnpm
-              uses: pnpm/action-setup@v4
-              with:
-                  version: 9
+          if [ -n "$MISSING" ]; then
+            echo "Error: Missing required secrets for signed release:$MISSING"
+            echo "All releases must be signed. Set up the required secrets before releasing."
+            exit 1
+          fi
+          echo "All required secrets are configured"
 
-            - name: Setup Node.js
-              uses: actions/setup-node@v4
-              with:
-                  node-version: "20"
-                  cache: "pnpm"
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.0-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
 
-            - name: Get pnpm store directory
-              id: get-pnpm-store
-              shell: bash
-              run: |
-                  STORE_PATH=$(pnpm store path --silent || echo "$HOME/.pnpm-store")
-                  echo "path=$STORE_PATH" >> $GITHUB_OUTPUT
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
 
-            - name: Setup pnpm cache
-              uses: actions/cache@v4
-              with:
-                  path: ${{ steps.get-pnpm-store.outputs.path }}
-                  key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
-                  restore-keys: |
-                      ${{ runner.os }}-pnpm-store-
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "pnpm"
 
-            - name: Setup Rust
-              uses: dtolnay/rust-toolchain@stable
+      - name: Get pnpm store directory
+        id: get-pnpm-store
+        shell: bash
+        run: |
+          STORE_PATH=$(pnpm store path --silent || echo "$HOME/.pnpm-store")
+          echo "path=$STORE_PATH" >> $GITHUB_OUTPUT
 
-            - name: Cache Rust dependencies
-              uses: Swatinem/rust-cache@v2
-              with:
-                  workspaces: apps/desktop/src-tauri
+      - name: Setup pnpm cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.get-pnpm-store.outputs.path }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-store-
 
-            - name: Install dependencies
-              run: pnpm install --frozen-lockfile
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
 
-            - name: Build workspace packages
-              run: |
-                  pnpm build:mero-js
-                  pnpm build:mero-react
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
 
-            - name: Generate icons
-              working-directory: apps/desktop
-              run: pnpm tauri icon src-tauri/icons/icon.png
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
 
-            - name: Update version in tauri.conf.json
-              if: steps.build-mode.outputs.mode == 'release'
-              run: |
-                  VERSION="${{ steps.build-mode.outputs.version }}"
-                  cd apps/desktop/src-tauri
-                  node -e "
-                    const fs = require('fs');
-                    const config = JSON.parse(fs.readFileSync('tauri.conf.json', 'utf8'));
-                    config.package.version = '$VERSION';
-                    fs.writeFileSync('tauri.conf.json', JSON.stringify(config, null, 2));
-                  "
+      - name: Build workspace packages
+        run: |
+          pnpm build:mero-js
+          pnpm build:mero-react
 
-            - name: Inject updater pubkey from secret
-              if: steps.build-mode.outputs.mode == 'release'
-              env:
-                  TAURI_PUBLIC_KEY: ${{ secrets.TAURI_PUBLIC_KEY }}
-              run: |
-                  if [ -n "$TAURI_PUBLIC_KEY" ]; then
-                    cd apps/desktop/src-tauri
-                    node -e "
-                      const fs = require('fs');
-                      const config = JSON.parse(fs.readFileSync('tauri.conf.json', 'utf8'));
-                      config.tauri.updater.pubkey = process.env.TAURI_PUBLIC_KEY;
-                      fs.writeFileSync('tauri.conf.json', JSON.stringify(config, null, 2));
-                    "
-                    echo "Injected TAURI_PUBLIC_KEY into tauri.conf.json"
-                  else
-                    echo "No TAURI_PUBLIC_KEY provided, using default pubkey"
-                  fi
+      - name: Generate icons
+        working-directory: apps/desktop
+        run: pnpm tauri icon src-tauri/icons/icon.png
 
-            - name: Build Tauri app for Linux
-              working-directory: apps/desktop
-              env:
-                  TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
-                  TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
-              run: pnpm tauri build
+      - name: Update version in tauri.conf.json
+        if: steps.build-mode.outputs.mode == 'release'
+        run: |
+          VERSION="${{ steps.build-mode.outputs.version }}"
+          cd apps/desktop/src-tauri
+          node -e "
+            const fs = require('fs');
+            const config = JSON.parse(fs.readFileSync('tauri.conf.json', 'utf8'));
+            config.package.version = '$VERSION';
+            fs.writeFileSync('tauri.conf.json', JSON.stringify(config, null, 2));
+          "
 
-            - name: Verify build outputs
-              if: steps.build-mode.outputs.mode == 'validation'
-              run: |
-                  echo "Checking for expected build outputs..."
+      - name: Inject updater pubkey from secret
+        if: steps.build-mode.outputs.mode == 'release'
+        env:
+          TAURI_PUBLIC_KEY: ${{ secrets.TAURI_PUBLIC_KEY }}
+        run: |
+          if [ -n "$TAURI_PUBLIC_KEY" ]; then
+            cd apps/desktop/src-tauri
+            node -e "
+              const fs = require('fs');
+              const config = JSON.parse(fs.readFileSync('tauri.conf.json', 'utf8'));
+              config.tauri.updater.pubkey = process.env.TAURI_PUBLIC_KEY;
+              fs.writeFileSync('tauri.conf.json', JSON.stringify(config, null, 2));
+            "
+            echo "Injected TAURI_PUBLIC_KEY into tauri.conf.json"
+          else
+            echo "No TAURI_PUBLIC_KEY provided, using default pubkey"
+          fi
 
-                  APPIMAGE_FILE=$(find apps/desktop/src-tauri/target/release/bundle -name "*.AppImage" 2>/dev/null | head -1)
-                  DEB_FILE=$(find apps/desktop/src-tauri/target/release/bundle -name "*.deb" 2>/dev/null | head -1)
-                  RPM_FILE=$(find apps/desktop/src-tauri/target/release/bundle -name "*.rpm" 2>/dev/null | head -1)
+      - name: Build Tauri app for Linux
+        working-directory: apps/desktop
+        env:
+          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+        run: pnpm tauri build
 
-                  if [ -z "$APPIMAGE_FILE" ]; then
-                    echo "Error: AppImage not found"
-                    exit 1
-                  fi
-                  echo "AppImage: $APPIMAGE_FILE"
+      - name: Verify build outputs
+        if: steps.build-mode.outputs.mode == 'validation'
+        run: |
+          echo "Checking for expected build outputs..."
 
-                  if [ -n "$DEB_FILE" ]; then
-                    echo "DEB: $DEB_FILE"
-                  fi
+          APPIMAGE_FILE=$(find apps/desktop/src-tauri/target/release/bundle -name "*.AppImage" 2>/dev/null | head -1)
+          DEB_FILE=$(find apps/desktop/src-tauri/target/release/bundle -name "*.deb" 2>/dev/null | head -1)
+          RPM_FILE=$(find apps/desktop/src-tauri/target/release/bundle -name "*.rpm" 2>/dev/null | head -1)
 
-                  if [ -n "$RPM_FILE" ]; then
-                    echo "RPM: $RPM_FILE"
-                  fi
+          if [ -z "$APPIMAGE_FILE" ]; then
+            echo "Error: AppImage not found"
+            exit 1
+          fi
+          echo "AppImage: $APPIMAGE_FILE"
 
-                  echo "Build validation passed"
+          if [ -n "$DEB_FILE" ]; then
+            echo "DEB: $DEB_FILE"
+          fi
 
-            - name: Collect and normalize assets
-              if: steps.build-mode.outputs.mode == 'release'
-              run: |
-                  node scripts/release/collect-assets.js \
-                    --version "${{ steps.build-mode.outputs.version }}" \
-                    --platform linux \
-                    --output release-assets/
+          if [ -n "$RPM_FILE" ]; then
+            echo "RPM: $RPM_FILE"
+          fi
 
-            - name: Upload artifacts
-              if: steps.build-mode.outputs.mode == 'release'
-              uses: actions/upload-artifact@v4
-              with:
-                  name: linux-build
-                  path: release-assets/
-                  retention-days: 7
+          echo "Build validation passed"
+
+      - name: Collect and normalize assets
+        if: steps.build-mode.outputs.mode == 'release'
+        run: |
+          node scripts/release/collect-assets.js \
+            --version "${{ steps.build-mode.outputs.version }}" \
+            --platform linux \
+            --output release-assets/
+
+      - name: Upload artifacts
+        if: steps.build-mode.outputs.mode == 'release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-build
+          path: release-assets/
+          retention-days: 7

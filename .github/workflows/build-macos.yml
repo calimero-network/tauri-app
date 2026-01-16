@@ -1,269 +1,299 @@
 name: Build macOS
 
 on:
-    workflow_call:
-        inputs:
-            version:
-                description: "Version number (e.g., 1.0.0)"
-                required: true
-                type: string
-        secrets:
-            APPLE_CERTIFICATE:
-                required: false
-            APPLE_CERTIFICATE_PASSWORD:
-                required: false
-            APPLE_SIGNING_IDENTITY:
-                required: false
-            APPLE_TEAM_ID:
-                required: false
-            APPLE_ID:
-                required: false
-            APPLE_APP_SPECIFIC_PASSWORD:
-                required: false
-            TAURI_PRIVATE_KEY:
-                required: false
-            TAURI_KEY_PASSWORD:
-                required: false
-            TAURI_PUBLIC_KEY:
-                required: false
-        outputs:
-            artifact-name:
-                description: "Name of the uploaded artifact"
-                value: ${{ jobs.build.outputs.artifact-name }}
-    pull_request:
-        branches:
-            - master
-            - main
+  workflow_call:
+    inputs:
+      version:
+        description: "Version number (e.g., 1.0.0)"
+        required: true
+        type: string
+    secrets:
+      # Apple code signing (required for signed releases)
+      APPLE_CERTIFICATE:
+        required: true
+      APPLE_CERTIFICATE_PASSWORD:
+        required: true
+      APPLE_SIGNING_IDENTITY:
+        required: true
+      APPLE_TEAM_ID:
+        required: true
+      # Apple notarization (required for distribution)
+      APPLE_ID:
+        required: true
+      APPLE_APP_SPECIFIC_PASSWORD:
+        required: true
+      # Tauri updater signing (required for auto-updates)
+      TAURI_PRIVATE_KEY:
+        required: true
+      TAURI_KEY_PASSWORD:
+        required: false
+      TAURI_PUBLIC_KEY:
+        required: true
+    outputs:
+      artifact-name:
+        description: "Name of the uploaded artifact"
+        value: ${{ jobs.build.outputs.artifact-name }}
+  pull_request:
+    branches:
+      - master
+      - main
 
 env:
-    CARGO_TERM_COLOR: always
+  CARGO_TERM_COLOR: always
 
 jobs:
-    build:
-        name: Build macOS Universal
-        runs-on: macos-latest
-        outputs:
-            artifact-name: macos-build
+  build:
+    name: Build macOS Universal
+    runs-on: macos-latest
+    outputs:
+      artifact-name: macos-build
 
-        steps:
-            - name: Checkout code
-              uses: actions/checkout@v4
-              with:
-                  fetch-depth: 0
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-            - name: Determine build mode
-              id: build-mode
-              run: |
-                  if [ "${{ github.event_name }}" = "pull_request" ]; then
-                    echo "mode=validation" >> $GITHUB_OUTPUT
-                    echo "version=0.0.0-dev" >> $GITHUB_OUTPUT
-                  else
-                    echo "mode=release" >> $GITHUB_OUTPUT
-                    echo "version=${{ inputs.version }}" >> $GITHUB_OUTPUT
-                  fi
+      - name: Determine build mode
+        id: build-mode
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "mode=validation" >> $GITHUB_OUTPUT
+            echo "version=0.0.0-dev" >> $GITHUB_OUTPUT
+          else
+            echo "mode=release" >> $GITHUB_OUTPUT
+            echo "version=${{ inputs.version }}" >> $GITHUB_OUTPUT
+          fi
 
-            - name: Setup pnpm
-              uses: pnpm/action-setup@v4
-              with:
-                  version: 9
+      - name: Validate required secrets for release
+        if: steps.build-mode.outputs.mode == 'release'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          TAURI_PUBLIC_KEY: ${{ secrets.TAURI_PUBLIC_KEY }}
+        run: |
+          MISSING=""
+          [ -z "$APPLE_CERTIFICATE" ] && MISSING="$MISSING APPLE_CERTIFICATE"
+          [ -z "$APPLE_SIGNING_IDENTITY" ] && MISSING="$MISSING APPLE_SIGNING_IDENTITY"
+          [ -z "$APPLE_TEAM_ID" ] && MISSING="$MISSING APPLE_TEAM_ID"
+          [ -z "$APPLE_ID" ] && MISSING="$MISSING APPLE_ID"
+          [ -z "$APPLE_APP_SPECIFIC_PASSWORD" ] && MISSING="$MISSING APPLE_APP_SPECIFIC_PASSWORD"
+          [ -z "$TAURI_PRIVATE_KEY" ] && MISSING="$MISSING TAURI_PRIVATE_KEY"
+          [ -z "$TAURI_PUBLIC_KEY" ] && MISSING="$MISSING TAURI_PUBLIC_KEY"
 
-            - name: Setup Node.js
-              uses: actions/setup-node@v4
-              with:
-                  node-version: "20"
-                  cache: "pnpm"
+          if [ -n "$MISSING" ]; then
+            echo "Error: Missing required secrets for signed release:$MISSING"
+            echo "All releases must be signed. Set up the required secrets before releasing."
+            exit 1
+          fi
+          echo "All required secrets are configured"
 
-            - name: Get pnpm store directory
-              id: get-pnpm-store
-              shell: bash
-              run: |
-                  STORE_PATH=$(pnpm store path --silent || echo "$HOME/.pnpm-store")
-                  echo "path=$STORE_PATH" >> $GITHUB_OUTPUT
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
 
-            - name: Setup pnpm cache
-              uses: actions/cache@v4
-              with:
-                  path: ${{ steps.get-pnpm-store.outputs.path }}
-                  key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
-                  restore-keys: |
-                      ${{ runner.os }}-pnpm-store-
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "pnpm"
 
-            - name: Setup Rust
-              uses: dtolnay/rust-toolchain@stable
-              with:
-                  targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - name: Get pnpm store directory
+        id: get-pnpm-store
+        shell: bash
+        run: |
+          STORE_PATH=$(pnpm store path --silent || echo "$HOME/.pnpm-store")
+          echo "path=$STORE_PATH" >> $GITHUB_OUTPUT
 
-            - name: Cache Rust dependencies
-              uses: Swatinem/rust-cache@v2
-              with:
-                  workspaces: apps/desktop/src-tauri
+      - name: Setup pnpm cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.get-pnpm-store.outputs.path }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-store-
 
-            - name: Install dependencies
-              run: pnpm install --frozen-lockfile
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
 
-            - name: Build workspace packages
-              run: |
-                  pnpm build:mero-js
-                  pnpm build:mero-react
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
 
-            - name: Generate icons
-              working-directory: apps/desktop
-              run: pnpm tauri icon src-tauri/icons/icon.png
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
 
-            - name: Update version in tauri.conf.json
-              if: steps.build-mode.outputs.mode == 'release'
-              run: |
-                  VERSION="${{ steps.build-mode.outputs.version }}"
-                  cd apps/desktop/src-tauri
-                  node -e "
-                    const fs = require('fs');
-                    const config = JSON.parse(fs.readFileSync('tauri.conf.json', 'utf8'));
-                    config.package.version = '$VERSION';
-                    fs.writeFileSync('tauri.conf.json', JSON.stringify(config, null, 2));
-                  "
+      - name: Build workspace packages
+        run: |
+          pnpm build:mero-js
+          pnpm build:mero-react
 
-            - name: Inject updater pubkey from secret
-              if: steps.build-mode.outputs.mode == 'release'
-              env:
-                  TAURI_PUBLIC_KEY: ${{ secrets.TAURI_PUBLIC_KEY }}
-              run: |
-                  if [ -n "$TAURI_PUBLIC_KEY" ]; then
-                    cd apps/desktop/src-tauri
-                    node -e "
-                      const fs = require('fs');
-                      const config = JSON.parse(fs.readFileSync('tauri.conf.json', 'utf8'));
-                      config.tauri.updater.pubkey = process.env.TAURI_PUBLIC_KEY;
-                      fs.writeFileSync('tauri.conf.json', JSON.stringify(config, null, 2));
-                    "
-                    echo "Injected TAURI_PUBLIC_KEY into tauri.conf.json"
-                  else
-                    echo "No TAURI_PUBLIC_KEY provided, using default pubkey"
-                  fi
+      - name: Generate icons
+        working-directory: apps/desktop
+        run: pnpm tauri icon src-tauri/icons/icon.png
 
-            - name: Import Apple codesign cert
-              if: steps.build-mode.outputs.mode == 'release'
-              env:
-                  APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-                  APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-              run: |
-                  if [ -z "$APPLE_CERTIFICATE" ]; then
-                    echo "No Apple certificate provided, skipping code signing setup"
-                    exit 0
-                  fi
+      - name: Update version in tauri.conf.json
+        if: steps.build-mode.outputs.mode == 'release'
+        run: |
+          VERSION="${{ steps.build-mode.outputs.version }}"
+          cd apps/desktop/src-tauri
+          node -e "
+            const fs = require('fs');
+            const config = JSON.parse(fs.readFileSync('tauri.conf.json', 'utf8'));
+            config.package.version = '$VERSION';
+            fs.writeFileSync('tauri.conf.json', JSON.stringify(config, null, 2));
+          "
 
-                  echo "$APPLE_CERTIFICATE" | base64 --decode > certificate.p12
+      - name: Inject updater pubkey from secret
+        if: steps.build-mode.outputs.mode == 'release'
+        env:
+          TAURI_PUBLIC_KEY: ${{ secrets.TAURI_PUBLIC_KEY }}
+        run: |
+          if [ -n "$TAURI_PUBLIC_KEY" ]; then
+            cd apps/desktop/src-tauri
+            node -e "
+              const fs = require('fs');
+              const config = JSON.parse(fs.readFileSync('tauri.conf.json', 'utf8'));
+              config.tauri.updater.pubkey = process.env.TAURI_PUBLIC_KEY;
+              fs.writeFileSync('tauri.conf.json', JSON.stringify(config, null, 2));
+            "
+            echo "Injected TAURI_PUBLIC_KEY into tauri.conf.json"
+          else
+            echo "No TAURI_PUBLIC_KEY provided, using default pubkey"
+          fi
 
-                  security create-keychain -p "" build.keychain
-                  security set-keychain-settings -t 3600 -u build.keychain
-                  security unlock-keychain -p "" build.keychain
-                  security default-keychain -s build.keychain
+      - name: Import Apple codesign cert
+        if: steps.build-mode.outputs.mode == 'release'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          if [ -z "$APPLE_CERTIFICATE" ]; then
+            echo "No Apple certificate provided, skipping code signing setup"
+            exit 0
+          fi
 
-                  security import certificate.p12 \
-                    -k build.keychain \
-                    -P "$APPLE_CERTIFICATE_PASSWORD" \
-                    -T /usr/bin/codesign \
-                    -T /usr/bin/security \
-                    -T /usr/bin/productbuild
+          echo "$APPLE_CERTIFICATE" | base64 --decode > certificate.p12
 
-                  security set-key-partition-list -S apple-tool:,apple: -s -k "" build.keychain
+          security create-keychain -p "" build.keychain
+          security set-keychain-settings -t 3600 -u build.keychain
+          security unlock-keychain -p "" build.keychain
+          security default-keychain -s build.keychain
 
-                  rm -f certificate.p12
+          security import certificate.p12 \
+            -k build.keychain \
+            -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/security \
+            -T /usr/bin/productbuild
 
-            - name: Build Tauri app for macOS (Universal) - Release
-              if: steps.build-mode.outputs.mode == 'release'
-              working-directory: apps/desktop
-              env:
-                  APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-                  APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-                  TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
-                  TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
-              id: build-app-release
-              run: |
-                  if [ -n "$APPLE_SIGNING_IDENTITY" ]; then
-                    echo "is_signed=true" >> $GITHUB_OUTPUT
-                  else
-                    echo "is_signed=false" >> $GITHUB_OUTPUT
-                  fi
+          security set-key-partition-list -S apple-tool:,apple: -s -k "" build.keychain
 
-                  pnpm tauri build --target universal-apple-darwin
+          rm -f certificate.p12
 
-            - name: Build Tauri app for macOS (Universal) - Validation
-              if: steps.build-mode.outputs.mode == 'validation'
-              working-directory: apps/desktop
-              id: build-app-validation
-              env:
-                  TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
-                  TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
-              run: |
-                  echo "is_signed=false" >> $GITHUB_OUTPUT
-                  pnpm tauri build --target universal-apple-darwin
+      - name: Build Tauri app for macOS (Universal) - Release
+        if: steps.build-mode.outputs.mode == 'release'
+        working-directory: apps/desktop
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+        id: build-app-release
+        run: |
+          if [ -n "$APPLE_SIGNING_IDENTITY" ]; then
+            echo "is_signed=true" >> $GITHUB_OUTPUT
+          else
+            echo "is_signed=false" >> $GITHUB_OUTPUT
+          fi
 
-            - name: Cleanup keychain
-              if: always() && steps.build-mode.outputs.mode == 'release'
-              run: security delete-keychain build.keychain 2>/dev/null || true
+          pnpm tauri build --target universal-apple-darwin
 
-            - name: Notarize DMG
-              if: steps.build-mode.outputs.mode == 'release' && steps.build-app-release.outputs.is_signed == 'true'
-              env:
-                  APPLE_ID: ${{ secrets.APPLE_ID }}
-                  APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-                  APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-              run: |
-                  if [ -z "$APPLE_ID" ] || [ -z "$APPLE_APP_SPECIFIC_PASSWORD" ]; then
-                    echo "Notarization credentials not provided, skipping"
-                    exit 0
-                  fi
+      - name: Build Tauri app for macOS (Universal) - Validation
+        if: steps.build-mode.outputs.mode == 'validation'
+        working-directory: apps/desktop
+        id: build-app-validation
+        env:
+          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+        run: |
+          echo "is_signed=false" >> $GITHUB_OUTPUT
+          pnpm tauri build --target universal-apple-darwin
 
-                  DMG_FILE=$(find apps/desktop/src-tauri/target -name "*.dmg" 2>/dev/null | head -1)
+      - name: Cleanup keychain
+        if: always() && steps.build-mode.outputs.mode == 'release'
+        run: security delete-keychain build.keychain 2>/dev/null || true
 
-                  if [ -z "$DMG_FILE" ]; then
-                    echo "No DMG found to notarize"
-                    exit 0
-                  fi
+      - name: Notarize DMG
+        if: steps.build-mode.outputs.mode == 'release' && steps.build-app-release.outputs.is_signed == 'true'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -z "$APPLE_ID" ] || [ -z "$APPLE_APP_SPECIFIC_PASSWORD" ]; then
+            echo "Notarization credentials not provided, skipping"
+            exit 0
+          fi
 
-                  xcrun notarytool submit "$DMG_FILE" \
-                    --apple-id "$APPLE_ID" \
-                    --password "$APPLE_APP_SPECIFIC_PASSWORD" \
-                    --team-id "$APPLE_TEAM_ID" \
-                    --wait \
-                    --timeout 30m
+          DMG_FILE=$(find apps/desktop/src-tauri/target -name "*.dmg" 2>/dev/null | head -1)
 
-                  xcrun stapler staple "$DMG_FILE"
+          if [ -z "$DMG_FILE" ]; then
+            echo "No DMG found to notarize"
+            exit 0
+          fi
 
-            - name: Verify build outputs
-              if: steps.build-mode.outputs.mode == 'validation'
-              run: |
-                  echo "Checking for expected build outputs..."
+          xcrun notarytool submit "$DMG_FILE" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait \
+            --timeout 30m
 
-                  DMG_FILE=$(find apps/desktop/src-tauri/target -name "*.dmg" 2>/dev/null | head -1)
-                  TAR_FILE=$(find apps/desktop/src-tauri/target -name "*.app.tar.gz" 2>/dev/null | head -1)
+          xcrun stapler staple "$DMG_FILE"
 
-                  if [ -z "$DMG_FILE" ]; then
-                    echo "Error: DMG file not found"
-                    exit 1
-                  fi
-                  echo "DMG: $DMG_FILE"
+      - name: Verify build outputs
+        if: steps.build-mode.outputs.mode == 'validation'
+        run: |
+          echo "Checking for expected build outputs..."
 
-                  if [ -z "$TAR_FILE" ]; then
-                    echo "Error: .app.tar.gz not found"
-                    exit 1
-                  fi
-                  echo "TAR: $TAR_FILE"
+          DMG_FILE=$(find apps/desktop/src-tauri/target -name "*.dmg" 2>/dev/null | head -1)
+          TAR_FILE=$(find apps/desktop/src-tauri/target -name "*.app.tar.gz" 2>/dev/null | head -1)
 
-                  echo "Build validation passed"
+          if [ -z "$DMG_FILE" ]; then
+            echo "Error: DMG file not found"
+            exit 1
+          fi
+          echo "DMG: $DMG_FILE"
 
-            - name: Collect and normalize assets
-              if: steps.build-mode.outputs.mode == 'release'
-              run: |
-                  node scripts/release/collect-assets.js \
-                    --version "${{ steps.build-mode.outputs.version }}" \
-                    --platform macos \
-                    --output release-assets/
+          if [ -z "$TAR_FILE" ]; then
+            echo "Error: .app.tar.gz not found"
+            exit 1
+          fi
+          echo "TAR: $TAR_FILE"
 
-            - name: Upload artifacts
-              if: steps.build-mode.outputs.mode == 'release'
-              uses: actions/upload-artifact@v4
-              with:
-                  name: macos-build
-                  path: release-assets/
-                  retention-days: 7
+          echo "Build validation passed"
+
+      - name: Collect and normalize assets
+        if: steps.build-mode.outputs.mode == 'release'
+        run: |
+          node scripts/release/collect-assets.js \
+            --version "${{ steps.build-mode.outputs.version }}" \
+            --platform macos \
+            --output release-assets/
+
+      - name: Upload artifacts
+        if: steps.build-mode.outputs.mode == 'release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-build
+          path: release-assets/
+          retention-days: 7

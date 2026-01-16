@@ -220,7 +220,7 @@ jobs:
         if: steps.build-mode.outputs.mode == 'release'
         shell: bash
         run: |
-          node scripts/release/collect-assets.js \
+          node scripts/release/collect-assets.cjs \
             --version "${{ steps.build-mode.outputs.version }}" \
             --platform windows \
             --output release-assets/

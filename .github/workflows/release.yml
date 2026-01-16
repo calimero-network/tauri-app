@@ -123,7 +123,7 @@ jobs:
 
       - name: Generate latest.json (Tauri updater manifest)
         run: |
-          node scripts/release/generate-latest-json.js \
+          node scripts/release/generate-latest-json.cjs \
             --version "${{ needs.prepare.outputs.version }}" \
             --repo "${{ github.repository }}" \
             --assets release-assets/ \
@@ -131,7 +131,7 @@ jobs:
 
       - name: Generate release.json (download site metadata)
         run: |
-          node scripts/release/generate-release-json.js \
+          node scripts/release/generate-release-json.cjs \
             --version "${{ needs.prepare.outputs.version }}" \
             --repo "${{ github.repository }}" \
             --assets release-assets/ \
@@ -139,7 +139,7 @@ jobs:
 
       - name: Validate release artifacts
         run: |
-          node scripts/release/validate-release.js \
+          node scripts/release/validate-release.cjs \
             --version "${{ needs.prepare.outputs.version }}" \
             --repo "${{ github.repository }}" \
             --assets release-assets/

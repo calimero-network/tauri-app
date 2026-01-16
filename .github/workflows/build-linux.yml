@@ -189,7 +189,7 @@ jobs:
       - name: Collect and normalize assets
         if: steps.build-mode.outputs.mode == 'release'
         run: |
-          node scripts/release/collect-assets.js \
+          node scripts/release/collect-assets.cjs \
             --version "${{ steps.build-mode.outputs.version }}" \
             --platform linux \
             --output release-assets/

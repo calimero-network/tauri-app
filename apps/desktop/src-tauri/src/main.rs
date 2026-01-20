@@ -620,24 +620,54 @@ async fn start_merod(
     let pid = child.id().unwrap();
     info!("[Merod] Started with PID: {}", pid);
     
+    // Take ownership of stdout and stderr to drain them
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+    
+    // Spawn tasks to drain stdout and stderr to prevent process hang
+    if let Some(mut stdout_handle) = stdout {
+        tokio::spawn(async move {
+            use tokio::io::AsyncReadExt;
+            let mut buffer = [0u8; 1024];
+            loop {
+                match stdout_handle.read(&mut buffer).await {
+                    Ok(0) => break, // EOF
+                    Ok(_) => {
+                        // Optionally log stdout if needed for debugging
+                        // let output = String::from_utf8_lossy(&buffer[..n]);
+                        // debug!("[Merod stdout] {}", output);
+                    }
+                    Err(_) => break, // Error reading
+                }
+            }
+        });
+    }
+    
+    if let Some(mut stderr_handle) = stderr {
+        tokio::spawn(async move {
+            use tokio::io::AsyncReadExt;
+            let mut buffer = [0u8; 1024];
+            loop {
+                match stderr_handle.read(&mut buffer).await {
+                    Ok(0) => break, // EOF
+                    Ok(_) => {
+                        // Optionally log stderr if needed for debugging
+                        // let output = String::from_utf8_lossy(&buffer[..n]);
+                        // debug!("[Merod stderr] {}", output);
+                    }
+                    Err(_) => break, // Error reading
+                }
+            }
+        });
+    }
+    
     // Wait a brief moment to check if process is still alive
     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
     
     // Check if process already exited
     if let Ok(Some(status)) = child.try_wait() {
         if let Some(code) = status.code() {
-            // Try to read stderr to get the actual error message
-            let mut stderr_output = String::new();
-            if let Some(mut stderr) = child.stderr.take() {
-                use tokio::io::AsyncReadExt;
-                let _ = stderr.read_to_string(&mut stderr_output).await;
-            }
-            
-            let error_msg = if !stderr_output.is_empty() {
-                format!("Merod process exited with code: {}. Error: {}", code, stderr_output.trim())
-            } else {
-                format!("Merod process exited immediately with code: {}. Check merod logs for details.", code)
-            };
+            let error_msg = format!("Merod process exited immediately with code: {}. Check merod logs for details.", code);
             warn!("[Merod] {}", error_msg);
             return Err(error_msg);
         }
@@ -905,7 +935,18 @@ async fn get_merod_status(merod_state: tauri::State<'_, MerodState>) -> Result<s
                     .arg(format!("PID eq {}", proc.pid))
                     .output();
                 
-                let running = output.is_ok() && output.unwrap().status.success();
+                // tasklist returns exit code 0 even when no process exists
+                // We need to check the output string instead
+                let running = if let Ok(output) = output {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    // If the process exists, stdout will contain the PID in a table row
+                    // If not, it will say "No tasks are running which match the specified criteria"
+                    // Check that we don't have the "no tasks" message AND that PID appears in output
+                    !stdout.contains("No tasks are running") && 
+                    stdout.contains(&proc.pid.to_string())
+                } else {
+                    false
+                };
                 
                 if !running {
                     drop(state);

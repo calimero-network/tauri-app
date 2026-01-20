@@ -1009,23 +1009,14 @@ async fn list_merod_nodes(home_dir: Option<String>) -> Result<Vec<String>, Strin
                     let node_path = entry.path();
                     let config_path = node_path.join("config.toml");
                     
-                    // Check if config.toml exists and validate it
+                    // Check if config.toml exists and is valid TOML
+                    // Include nodes with valid config.toml even if they don't have bootstrap nodes yet
+                    // Bootstrap nodes are only required when starting the node, not for listing
                     if config_path.exists() {
                         if let Ok(config_content) = std::fs::read_to_string(&config_path) {
-                            if let Ok(config) = config_content.parse::<toml::Value>() {
-                                // Check for bootstrap nodes
-                                let has_bootstrap_nodes = config
-                                    .get("bootstrap")
-                                    .and_then(|b| b.get("nodes"))
-                                    .and_then(|n| n.as_array())
-                                    .map(|arr| !arr.is_empty())
-                                    .unwrap_or(false);
-                                
-                                if has_bootstrap_nodes {
-                                    nodes.push(name.to_string());
-                                } else {
-                                    debug!("[Merod] Skipping node '{}': no bootstrap nodes found", name);
-                                }
+                            if config_content.parse::<toml::Value>().is_ok() {
+                                // Valid config.toml found, include the node
+                                nodes.push(name.to_string());
                             } else {
                                 debug!("[Merod] Skipping node '{}': invalid TOML in config.toml", name);
                             }

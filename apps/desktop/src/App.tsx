@@ -125,7 +125,10 @@ function App() {
           return;
         }
 
-        // Node is running - proceed with onboarding/auth checks
+        // Node is running - clear needsNodeConfig since we have a working node
+        setNeedsNodeConfig(false);
+        
+        // Proceed with onboarding/auth checks
         console.log('✅ Node is running, checking onboarding state...');
         const onboardingState = await Promise.race([
           checkOnboardingState(),
@@ -162,7 +165,9 @@ function App() {
         
         if (!onboardingState.authAvailable) {
           // Auth service not available - show onboarding with error
+          // But don't redirect back to Nodes page if node is running
           console.log('⚠️ Auth service not available, showing onboarding with error');
+          setNeedsNodeConfig(false); // Clear needsNodeConfig since node is running
           setShowOnboarding(true);
         } else if (!onboardingState.hasConfiguredProviders) {
           // Auth available but no users configured - show onboarding (first time)
@@ -367,10 +372,16 @@ function App() {
     return (
       <Nodes
         onBack={() => {
-          setShowNodes(false);
-          // If we were configuring node, reload the page to reconnect
-          if (needsNodeConfig) {
-            window.location.reload();
+          const settings = getSettings();
+          // If node URL is configured, allow going back (even if auth isn't working)
+          if (settings.nodeUrl) {
+            setShowNodes(false);
+            setNeedsNodeConfig(false);
+            // Don't reload - just go back to main app
+            // The main app will handle showing errors if auth isn't working
+          } else {
+            // No node URL configured, stay on Nodes page
+            setShowNodes(true);
           }
         }}
       />

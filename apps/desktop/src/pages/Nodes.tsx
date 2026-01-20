@@ -7,7 +7,6 @@ import {
   stopMerodByPid,
   getMerodStatus,
   detectRunningMerodNodes,
-  checkMerodHealth,
   type RunningMerodNode,
   type MerodStatus
 } from "../utils/merod";
@@ -28,7 +27,6 @@ export default function Nodes({ onBack }: NodesProps) {
   const [newNodeName, setNewNodeName] = useState("");
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState<MerodStatus>({ running: false });
-  const [selectedRunningNode, setSelectedRunningNode] = useState<RunningMerodNode | null>(null);
   const [currentNodeUrl, setCurrentNodeUrl] = useState<string>("");
   const [serverPort, setServerPort] = useState<number>(2528);
   const [swarmPort, setSwarmPort] = useState<number>(2428);

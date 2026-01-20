@@ -251,30 +251,6 @@ function App() {
   };
 
   // Reload client when settings change
-  const reloadClient = () => {
-    const settings = getSettings();
-    const adminApiUrl = `${settings.nodeUrl.replace(/\/$/, '')}/admin-api`;
-    const authUrl = getAuthUrl(settings);
-    const authBaseUrl = authUrl.replace(/\/$/, '');
-    const authApiUrl = `${authBaseUrl}/auth`;
-    
-    setAdminApiUrl(adminApiUrl);
-    setAuthApiUrl(authApiUrl);
-
-    // Reinitialize mero-react client
-    createClient({
-      baseUrl: adminApiUrl,
-      authBaseUrl: authBaseUrl,
-      requestCredentials: 'omit',
-    });
-
-    setConnected(false);
-    setAuthConnected(false);
-    setNodeInfo(null);
-    setAuthInfo(null);
-    setError(null);
-    setAuthError(null);
-  };
 
   const checkAuthHealth = async () => {
     try {

@@ -651,15 +651,21 @@ async fn start_merod(
     
     // Spawn a task to monitor the process
     let merod_state_clone = merod_state.inner().clone();
+    let monitored_pid = pid; // Capture PID for verification
     tokio::spawn(async move {
         let status = child.wait().await;
         let mut state = merod_state_clone.lock().unwrap();
-        if let Ok(exit_status) = status {
-            if let Some(code) = exit_status.code() {
-                warn!("[Merod] Process exited with code: {}", code);
+        // Only clear state if the PID matches (prevent race condition)
+        if let Some(proc) = state.as_ref() {
+            if proc.pid == monitored_pid {
+                if let Ok(exit_status) = status {
+                    if let Some(code) = exit_status.code() {
+                        warn!("[Merod] Process exited with code: {}", code);
+                    }
+                }
+                *state = None;
             }
         }
-        *state = None;
     });
     
     Ok(format!("Merod started successfully with PID: {}", pid))

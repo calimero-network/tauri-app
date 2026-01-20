@@ -391,6 +391,924 @@ async fn open_devtools(window_label: String, app_handle: tauri::AppHandle) {
     }
 }
 
+// Merod process management using bundled resource
+use std::sync::{Arc, Mutex};
+use std::process::Stdio;
+use tokio::process::Command;
+
+#[derive(Debug, Clone)]
+struct MerodProcess {
+    pid: u32,
+    port: u16,
+}
+
+type MerodState = Arc<Mutex<Option<MerodProcess>>>;
+
+/// Get the path to the bundled merod binary
+fn get_merod_binary_path(app_handle: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    // Access the bundled resource
+    let resource_path = app_handle
+        .path_resolver()
+        .resolve_resource("merod/merod")
+        .ok_or("Failed to resolve merod resource")?;
+    
+    if !resource_path.exists() {
+        return Err(format!("Merod resource not found at {:?}", resource_path));
+    }
+    
+    Ok(resource_path)
+}
+
+/// Get the app data directory for storing merod data
+fn get_app_data_dir(app_handle: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    let app_data_dir = app_handle
+        .path_resolver()
+        .app_data_dir()
+        .ok_or("Failed to get app data directory")?;
+    
+    std::fs::create_dir_all(&app_data_dir)
+        .map_err(|e| format!("Failed to create app data directory: {}", e))?;
+    
+    Ok(app_data_dir)
+}
+
+#[tauri::command]
+async fn start_merod(
+    server_port: Option<u16>,
+    swarm_port: Option<u16>,
+    data_dir: Option<String>,
+    node_name: Option<String>,
+    app_handle: tauri::AppHandle,
+    merod_state: tauri::State<'_, MerodState>,
+) -> Result<String, String> {
+    let server_port = server_port.unwrap_or(2528);
+    let swarm_port = swarm_port.unwrap_or(2428);
+    
+    // If already running, stop it first before starting a new one
+    let existing_pid = {
+        let state = merod_state.lock().unwrap();
+        state.as_ref().map(|proc| proc.pid)
+    };
+    
+    if let Some(pid) = existing_pid {
+        // Stop the existing process
+        info!("[Merod] Stopping existing process (PID: {}) before starting new one", pid);
+        #[cfg(unix)]
+        {
+            use std::process::Command;
+            let _ = Command::new("kill")
+                .arg("-TERM")
+                .arg(pid.to_string())
+                .output();
+            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+            let _ = Command::new("kill")
+                .arg("-9")
+                .arg(pid.to_string())
+                .output();
+        }
+        #[cfg(windows)]
+        {
+            use std::process::Command;
+            let _ = Command::new("taskkill")
+                .arg("/PID")
+                .arg(pid.to_string())
+                .arg("/F")
+                .output();
+        }
+        // Clear state
+        let mut state = merod_state.lock().unwrap();
+        *state = None;
+    }
+    
+    // Get bundled merod binary
+    let merod_binary = get_merod_binary_path(&app_handle)?;
+    
+    // Prepare home directory (where .calimero folder is, e.g., ~/.calimero)
+    let home_dir_path = if let Some(dir) = data_dir {
+        // Expand ~ if present
+        let expanded = if dir.starts_with("~") {
+            if let Some(home) = dirs::home_dir() {
+                dir.replacen("~", &home.to_string_lossy(), 1)
+            } else {
+                dir
+            }
+        } else {
+            dir
+        };
+        std::path::PathBuf::from(expanded)
+    } else {
+        dirs::home_dir()
+            .ok_or("Failed to get home directory")?
+            .join(".calimero")
+    };
+    
+    std::fs::create_dir_all(&home_dir_path)
+        .map_err(|e| format!("Failed to create home directory: {}", e))?;
+    
+    // Update config.toml with the specified ports if node_name is provided
+    if let Some(name) = &node_name {
+        let node_dir = home_dir_path.join(name);
+        let config_path = node_dir.join("config.toml");
+        
+        if config_path.exists() {
+            // Read existing config
+            let config_content = std::fs::read_to_string(&config_path)
+                .map_err(|e| format!("Failed to read config.toml: {}", e))?;
+            
+            let mut config: toml::Value = config_content.parse()
+                .map_err(|e| format!("Failed to parse config.toml: {}", e))?;
+            
+            // Update server.listen ports - use regex-like replacement for any port number
+            if let Some(server) = config.get_mut("server") {
+                if let Some(listen) = server.get_mut("listen") {
+                    if let Some(listen_array) = listen.as_array_mut() {
+                        for listen_str in listen_array.iter_mut() {
+                            if let Some(addr) = listen_str.as_str() {
+                                // Replace port in IPv4 server addresses (e.g., /ip4/127.0.0.1/tcp/2528)
+                                if addr.contains("/ip4/127.0.0.1/tcp/") {
+                                    let new_addr = regex::Regex::new(r"/tcp/\d+")
+                                        .unwrap()
+                                        .replace(addr, &format!("/tcp/{}", server_port))
+                                        .to_string();
+                                    *listen_str = toml::Value::String(new_addr);
+                                } else if addr.contains("/ip6/::1/tcp/") {
+                                    // Replace port in IPv6 server addresses
+                                    let new_addr = regex::Regex::new(r"/tcp/\d+")
+                                        .unwrap()
+                                        .replace(addr, &format!("/tcp/{}", server_port))
+                                        .to_string();
+                                    *listen_str = toml::Value::String(new_addr);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Update swarm.listen ports - use regex-like replacement for any port number
+            if let Some(swarm) = config.get_mut("swarm") {
+                if let Some(listen) = swarm.get_mut("listen") {
+                    if let Some(listen_array) = listen.as_array_mut() {
+                        for listen_str in listen_array.iter_mut() {
+                            if let Some(addr) = listen_str.as_str() {
+                                // Replace port in swarm addresses - handle both TCP and UDP
+                                if addr.contains("/tcp/") && !addr.contains("/udp/") {
+                                    // Replace TCP port (e.g., /ip4/0.0.0.0/tcp/2428)
+                                    let new_addr = regex::Regex::new(r"/tcp/\d+")
+                                        .unwrap()
+                                        .replace(addr, &format!("/tcp/{}", swarm_port))
+                                        .to_string();
+                                    *listen_str = toml::Value::String(new_addr);
+                                } else if addr.contains("/udp/") {
+                                    // Replace UDP port (e.g., /ip4/0.0.0.0/udp/2428/quic-v1)
+                                    let new_addr = regex::Regex::new(r"/udp/\d+")
+                                        .unwrap()
+                                        .replace(addr, &format!("/udp/{}", swarm_port))
+                                        .to_string();
+                                    *listen_str = toml::Value::String(new_addr);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Write updated config back
+            let updated_config = toml::to_string_pretty(&config)
+                .map_err(|e| format!("Failed to serialize config.toml: {}", e))?;
+            std::fs::write(&config_path, updated_config)
+                .map_err(|e| format!("Failed to write config.toml: {}", e))?;
+            
+            info!("[Merod] Updated config.toml with server_port={} and swarm_port={}", server_port, swarm_port);
+        }
+    }
+    
+    // Build command - global options come BEFORE subcommand
+    // Merod expects: merod --home ~/.calimero --node-name node1 run
+    let mut cmd = Command::new(&merod_binary);
+    
+    // Set home directory (global option, before subcommand)
+    cmd.arg("--home").arg(&home_dir_path);
+    
+    // Set node name (global option, before subcommand)
+    if let Some(name) = node_name {
+        cmd.arg("--node-name").arg(name);
+    } else {
+        return Err("Node name is required".to_string());
+    }
+    
+    // Add 'run' subcommand last
+    cmd.arg("run");
+    
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+    cmd.stdin(Stdio::null());
+    
+    // Log the command being run
+    let cmd_str = format!("{:?}", cmd);
+    info!("[Merod] Running command: {}", cmd_str);
+    
+    // Start the process
+    let mut child = cmd.spawn()
+        .map_err(|e| format!("Failed to start merod: {}", e))?;
+    
+    let pid = child.id().unwrap();
+    info!("[Merod] Started with PID: {}", pid);
+    
+    // Wait a brief moment to check if process is still alive
+    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+    
+    // Check if process already exited
+    if let Ok(Some(status)) = child.try_wait() {
+        if let Some(code) = status.code() {
+            // Try to read stderr to get the actual error message
+            let mut stderr_output = String::new();
+            if let Some(mut stderr) = child.stderr.take() {
+                use tokio::io::AsyncReadExt;
+                let _ = stderr.read_to_string(&mut stderr_output).await;
+            }
+            
+            let error_msg = if !stderr_output.is_empty() {
+                format!("Merod process exited with code: {}. Error: {}", code, stderr_output.trim())
+            } else {
+                format!("Merod process exited immediately with code: {}. Check merod logs for details.", code)
+            };
+            warn!("[Merod] {}", error_msg);
+            return Err(error_msg);
+        }
+    }
+    
+    // Store process state
+    {
+        let mut state = merod_state.lock().unwrap();
+        *state = Some(MerodProcess { pid, port: server_port });
+    }
+    
+    // Spawn a task to monitor the process
+    let merod_state_clone = merod_state.inner().clone();
+    tokio::spawn(async move {
+        let status = child.wait().await;
+        let mut state = merod_state_clone.lock().unwrap();
+        if let Ok(exit_status) = status {
+            if let Some(code) = exit_status.code() {
+                warn!("[Merod] Process exited with code: {}", code);
+            }
+        }
+        *state = None;
+    });
+    
+    Ok(format!("Merod started successfully with PID: {}", pid))
+}
+
+#[tauri::command]
+async fn stop_merod(merod_state: tauri::State<'_, MerodState>) -> Result<String, String> {
+    let pid = {
+        let state = merod_state.lock().unwrap();
+        match state.as_ref() {
+            Some(proc) => proc.pid,
+            None => return Err("Merod is not running".to_string()),
+        }
+    };
+    
+    // Use the same logic as stop_merod_by_pid_command
+    #[cfg(unix)]
+    {
+        use std::process::Command;
+        
+        // Check if process exists first
+        let check_output = Command::new("ps")
+            .arg("-p")
+            .arg(pid.to_string())
+            .output();
+        
+        let process_exists = if let Ok(output) = &check_output {
+            output.status.success()
+        } else {
+            false
+        };
+        
+        if !process_exists {
+            // Process doesn't exist, already stopped
+            info!("[Merod] Process with PID {} already stopped", pid);
+        } else {
+            // Try graceful shutdown first (SIGTERM)
+            let _ = Command::new("kill")
+                .arg("-TERM")
+                .arg(pid.to_string())
+                .output();
+            
+            // Wait a bit
+            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+            
+            // Check if still running before force kill
+            let check_output = Command::new("ps")
+                .arg("-p")
+                .arg(pid.to_string())
+                .output();
+            
+            let still_running = if let Ok(output) = &check_output {
+                output.status.success()
+            } else {
+                false
+            };
+            
+            if still_running {
+                // Force kill if still running (SIGKILL)
+                let output = Command::new("kill")
+                    .arg("-9")
+                    .arg(pid.to_string())
+                    .output();
+                
+                if let Ok(output) = output {
+                    if !output.status.success() {
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        // If process doesn't exist, that's fine - it's already stopped
+                        if !stderr.contains("No such process") {
+                            return Err(format!("Failed to stop merod process: {}", stderr));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    #[cfg(windows)]
+    {
+        use std::process::Command;
+        let output = Command::new("taskkill")
+            .arg("/PID")
+            .arg(pid.to_string())
+            .arg("/F")
+            .output();
+        
+        if let Ok(output) = output {
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                // If process doesn't exist, that's fine - it's already stopped
+                if !stderr.contains("not found") && !stderr.contains("does not exist") {
+                    return Err(format!("Failed to stop merod process: {}", stderr));
+                }
+            }
+        }
+    }
+    
+    // Clear state
+    {
+        let mut state = merod_state.lock().unwrap();
+        *state = None;
+    }
+    
+    info!("[Merod] Stopped process with PID: {}", pid);
+    Ok("Merod stopped successfully".to_string())
+}
+
+#[tauri::command]
+async fn stop_merod_by_pid_command(pid: u32, merod_state: tauri::State<'_, MerodState>) -> Result<String, String> {
+    #[cfg(unix)]
+    {
+        use std::process::Command;
+        
+        // Check if process exists first
+        let check_output = Command::new("ps")
+            .arg("-p")
+            .arg(pid.to_string())
+            .output();
+        
+        let process_exists = if let Ok(output) = &check_output {
+            output.status.success()
+        } else {
+            false
+        };
+        
+        if !process_exists {
+            // Process doesn't exist, already stopped
+            info!("[Merod] Process with PID {} already stopped", pid);
+        } else {
+            // Try graceful shutdown first (SIGTERM)
+            let _ = Command::new("kill")
+                .arg("-TERM")
+                .arg(pid.to_string())
+                .output();
+            
+            // Wait a bit
+            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+            
+            // Check if still running before force kill
+            let check_output = Command::new("ps")
+                .arg("-p")
+                .arg(pid.to_string())
+                .output();
+            
+            let still_running = if let Ok(output) = &check_output {
+                output.status.success()
+            } else {
+                false
+            };
+            
+            if still_running {
+                // Force kill if still running (SIGKILL)
+                let output = Command::new("kill")
+                    .arg("-9")
+                    .arg(pid.to_string())
+                    .output();
+                
+                if let Ok(output) = output {
+                    if !output.status.success() {
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        // If process doesn't exist, that's fine - it's already stopped
+                        if !stderr.contains("No such process") {
+                            return Err(format!("Failed to stop merod process: {}", stderr));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    #[cfg(windows)]
+    {
+        use std::process::Command;
+        let output = Command::new("taskkill")
+            .arg("/PID")
+            .arg(pid.to_string())
+            .arg("/F")
+            .output();
+        
+        if let Ok(output) = output {
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                // If process doesn't exist, that's fine - it's already stopped
+                if !stderr.contains("not found") && !stderr.contains("does not exist") {
+                    return Err(format!("Failed to stop merod process: {}", stderr));
+                }
+            }
+        }
+    }
+    
+    // Clear state if this was the tracked process
+    {
+        let mut state = merod_state.lock().unwrap();
+        if let Some(proc) = state.as_ref() {
+            if proc.pid == pid {
+                *state = None;
+            }
+        }
+    }
+    
+    info!("[Merod] Stopped process with PID: {}", pid);
+    Ok(format!("Merod stopped successfully (PID: {})", pid))
+}
+
+#[tauri::command]
+async fn get_merod_status(merod_state: tauri::State<'_, MerodState>) -> Result<serde_json::Value, String> {
+    let state = merod_state.lock().unwrap();
+    match state.as_ref() {
+        Some(proc) => {
+            // Check if process is still running
+            #[cfg(unix)]
+            {
+                use std::process::Command;
+                let output = Command::new("kill")
+                    .arg("-0")
+                    .arg(proc.pid.to_string())
+                    .output();
+                
+                let running = output.is_ok() && output.unwrap().status.success();
+                
+                if !running {
+                    // Process died, clear state
+                    drop(state);
+                    let mut state = merod_state.lock().unwrap();
+                    *state = None;
+                    return Ok(serde_json::json!({
+                        "running": false
+                    }));
+                }
+            }
+            
+            #[cfg(windows)]
+            {
+                use std::process::Command;
+                let output = Command::new("tasklist")
+                    .arg("/FI")
+                    .arg(format!("PID eq {}", proc.pid))
+                    .output();
+                
+                let running = output.is_ok() && output.unwrap().status.success();
+                
+                if !running {
+                    drop(state);
+                    let mut state = merod_state.lock().unwrap();
+                    *state = None;
+                    return Ok(serde_json::json!({
+                        "running": false
+                    }));
+                }
+            }
+            
+            Ok(serde_json::json!({
+                "running": true,
+                "pid": proc.pid,
+                "port": proc.port
+            }))
+        }
+        None => Ok(serde_json::json!({
+            "running": false
+        })),
+    }
+}
+
+#[tauri::command]
+async fn list_merod_nodes(home_dir: Option<String>) -> Result<Vec<String>, String> {
+    // Merod stores nodes in ~/.calimero/ as directories (node1, node2, etc.)
+    let calimero_home = if let Some(dir) = home_dir {
+        // Expand ~ if present
+        let expanded = if dir.starts_with("~") {
+            if let Some(home) = dirs::home_dir() {
+                dir.replacen("~", &home.to_string_lossy(), 1)
+            } else {
+                dir
+            }
+        } else {
+            dir
+        };
+        std::path::PathBuf::from(expanded)
+    } else {
+        dirs::home_dir()
+            .ok_or("Failed to get home directory")?
+            .join(".calimero")
+    };
+    
+    if !calimero_home.exists() {
+        return Ok(vec![]);
+    }
+    
+    let entries = std::fs::read_dir(&calimero_home)
+        .map_err(|e| format!("Failed to read calimero directory: {}", e))?;
+    
+    let mut nodes = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
+        let file_type = entry.file_type().map_err(|e| format!("Failed to get file type: {}", e))?;
+        if file_type.is_dir() {
+            if let Some(name) = entry.file_name().to_str() {
+                // Skip hidden directories
+                if !name.starts_with('.') {
+                    let node_path = entry.path();
+                    let config_path = node_path.join("config.toml");
+                    
+                    // Check if config.toml exists and validate it
+                    if config_path.exists() {
+                        if let Ok(config_content) = std::fs::read_to_string(&config_path) {
+                            if let Ok(config) = config_content.parse::<toml::Value>() {
+                                // Check for bootstrap nodes
+                                let has_bootstrap_nodes = config
+                                    .get("bootstrap")
+                                    .and_then(|b| b.get("nodes"))
+                                    .and_then(|n| n.as_array())
+                                    .map(|arr| !arr.is_empty())
+                                    .unwrap_or(false);
+                                
+                                if has_bootstrap_nodes {
+                                    nodes.push(name.to_string());
+                                } else {
+                                    debug!("[Merod] Skipping node '{}': no bootstrap nodes found", name);
+                                }
+                            } else {
+                                debug!("[Merod] Skipping node '{}': invalid TOML in config.toml", name);
+                            }
+                        } else {
+                            debug!("[Merod] Skipping node '{}': failed to read config.toml", name);
+                        }
+                    } else {
+                        debug!("[Merod] Skipping node '{}': config.toml not found", name);
+                    }
+                }
+            }
+        }
+    }
+    
+    // Sort nodes alphabetically
+    nodes.sort();
+    
+    Ok(nodes)
+}
+
+#[tauri::command]
+async fn check_merod_health(node_url: String) -> Result<serde_json::Value, String> {
+    let health_url = format!("{}/health", node_url.trim_end_matches('/'));
+    
+    info!("[Merod] Checking health at: {}", health_url);
+    
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+    
+    let response = client.get(&health_url).send().await;
+    
+    match response {
+        Ok(resp) => {
+            let status = resp.status().as_u16();
+            let body = resp.text().await.unwrap_or_default();
+            let healthy = status >= 200 && status < 300;
+            
+            Ok(serde_json::json!({
+                "status": status,
+                "healthy": healthy,
+                "body": body
+            }))
+        }
+        Err(e) => {
+            Ok(serde_json::json!({
+                "status": 0,
+                "healthy": false,
+                "body": format!("Request failed: {}", e)
+            }))
+        }
+    }
+}
+
+#[tauri::command]
+async fn init_merod_node(
+    node_name: String,
+    home_dir: Option<String>,
+    app_handle: tauri::AppHandle,
+) -> Result<String, String> {
+    // Get bundled merod binary
+    let merod_binary = get_merod_binary_path(&app_handle)?;
+    
+    // Prepare home directory (where .calimero folder will be)
+    let home_dir_path = if let Some(dir) = home_dir {
+        // Expand ~ if present
+        let expanded = if dir.starts_with("~") {
+            if let Some(home) = dirs::home_dir() {
+                dir.replacen("~", &home.to_string_lossy(), 1)
+            } else {
+                dir
+            }
+        } else {
+            dir
+        };
+        std::path::PathBuf::from(expanded)
+    } else {
+        dirs::home_dir()
+            .ok_or("Failed to get home directory")?
+            .join(".calimero")
+    };
+    
+    std::fs::create_dir_all(&home_dir_path)
+        .map_err(|e| format!("Failed to create home directory: {}", e))?;
+    
+    // Run merod init command - global options come BEFORE subcommand
+    let mut cmd = Command::new(&merod_binary);
+    cmd.arg("--home").arg(&home_dir_path);
+    cmd.arg("--node-name").arg(&node_name);
+    cmd.arg("init");
+    
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+    cmd.stdin(Stdio::null());
+    
+    let output = cmd.output()
+        .await
+        .map_err(|e| format!("Failed to execute merod init: {}", e))?;
+    
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Merod init failed: {}", stderr));
+    }
+    
+    info!("[Merod] Initialized node '{}' in {:?}", node_name, home_dir_path);
+    Ok(format!("Node '{}' initialized successfully", node_name))
+}
+
+#[tauri::command]
+async fn detect_running_merod_nodes() -> Result<Vec<serde_json::Value>, String> {
+    #[cfg(unix)]
+    {
+        use std::process::Command;
+        
+        // Use ps to find merod processes
+        let output = Command::new("ps")
+            .arg("ax")
+            .arg("-o")
+            .arg("pid,command")
+            .output()
+            .map_err(|e| format!("Failed to run ps: {}", e))?;
+        
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut running_nodes = Vec::new();
+        
+        for line in stdout.lines() {
+            if line.contains("merod") && line.contains("run") {
+                // Parse PID and extract node name and home directory from command
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if let Some(pid_str) = parts.get(0) {
+                    if let Ok(pid) = pid_str.parse::<u32>() {
+                        // Try to extract node name and home directory from arguments
+                        let mut node_name = None;
+                        let mut home_dir = None;
+                        
+                        for (i, part) in parts.iter().enumerate() {
+                            if part == &"--node-name" && i + 1 < parts.len() {
+                                node_name = Some(parts[i + 1].to_string());
+                            }
+                            if part == &"--home" && i + 1 < parts.len() {
+                                home_dir = Some(parts[i + 1].to_string());
+                            }
+                        }
+                        
+                        // Try to read ports from config.toml
+                        let mut server_port = 2528; // Default
+                        let mut swarm_port = 2428; // Default
+                        if let (Some(name), Some(home)) = (&node_name, &home_dir) {
+                            let config_path = std::path::PathBuf::from(home).join(name).join("config.toml");
+                            if config_path.exists() {
+                                if let Ok(config_content) = std::fs::read_to_string(&config_path) {
+                                    if let Ok(config) = config_content.parse::<toml::Value>() {
+                                        // Try to extract server port from server.listen
+                                        if let Some(server) = config.get("server") {
+                                            if let Some(listen) = server.get("listen") {
+                                                if let Some(listen_array) = listen.as_array() {
+                                                    for listen_str in listen_array {
+                                                        if let Some(addr) = listen_str.as_str() {
+                                                            // Extract port from /ip4/127.0.0.1/tcp/2528
+                                                            if let Some(tcp_pos) = addr.find("/tcp/") {
+                                                                let port_str = &addr[tcp_pos + 5..];
+                                                                if let Some(slash_pos) = port_str.find('/') {
+                                                                    if let Ok(p) = port_str[..slash_pos].parse::<u16>() {
+                                                                        server_port = p;
+                                                                        break;
+                                                                    }
+                                                                } else if let Ok(p) = port_str.parse::<u16>() {
+                                                                    server_port = p;
+                                                                    break;
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        
+                                        // Try to extract swarm port from swarm.listen
+                                        if let Some(swarm) = config.get("swarm") {
+                                            if let Some(listen) = swarm.get("listen") {
+                                                if let Some(listen_array) = listen.as_array() {
+                                                    for listen_str in listen_array {
+                                                        if let Some(addr) = listen_str.as_str() {
+                                                            // Extract port from /ip4/0.0.0.0/tcp/2428 or /ip4/0.0.0.0/udp/2428/quic-v1
+                                                            if let Some(tcp_pos) = addr.find("/tcp/") {
+                                                                let port_str = &addr[tcp_pos + 5..];
+                                                                if let Some(slash_pos) = port_str.find('/') {
+                                                                    if let Ok(p) = port_str[..slash_pos].parse::<u16>() {
+                                                                        swarm_port = p;
+                                                                        break;
+                                                                    }
+                                                                } else if let Ok(p) = port_str.parse::<u16>() {
+                                                                    swarm_port = p;
+                                                                    break;
+                                                                }
+                                                            } else if let Some(udp_pos) = addr.find("/udp/") {
+                                                                let port_str = &addr[udp_pos + 5..];
+                                                                if let Some(slash_pos) = port_str.find('/') {
+                                                                    if let Ok(p) = port_str[..slash_pos].parse::<u16>() {
+                                                                        swarm_port = p;
+                                                                        break;
+                                                                    }
+                                                                } else if let Ok(p) = port_str.parse::<u16>() {
+                                                                    swarm_port = p;
+                                                                    break;
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        
+                        running_nodes.push(serde_json::json!({
+                            "pid": pid,
+                            "node_name": node_name.unwrap_or_else(|| format!("node_{}", pid)),
+                            "port": server_port,
+                            "swarm_port": swarm_port,
+                            "home_dir": home_dir.unwrap_or_else(|| "unknown".to_string())
+                        }));
+                    }
+                }
+            }
+        }
+        
+        Ok(running_nodes)
+    }
+    
+    #[cfg(windows)]
+    {
+        use std::process::Command;
+        
+        // Use tasklist and wmic on Windows
+        let output = Command::new("tasklist")
+            .arg("/FO")
+            .arg("CSV")
+            .output()
+            .map_err(|e| format!("Failed to run tasklist: {}", e))?;
+        
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut running_nodes = Vec::new();
+        
+        // Parse CSV output and find merod processes
+        for line in stdout.lines().skip(1) {
+            if line.contains("merod") {
+                // Extract PID and command line
+                let parts: Vec<&str> = line.split(',').collect();
+                if parts.len() >= 2 {
+                    if let Ok(pid) = parts[1].trim_matches('"').parse::<u32>() {
+                        // Try to get command line using wmic
+                        let cmd_output = Command::new("wmic")
+                            .arg("process")
+                            .arg("where")
+                            .arg(format!("ProcessId={}", pid))
+                            .arg("get")
+                            .arg("CommandLine")
+                            .output();
+                        
+                        if let Ok(cmd_out) = cmd_output {
+                            let cmd_line = String::from_utf8_lossy(&cmd_out.stdout);
+                            // Parse node name and port from command line
+                            let mut node_name = None;
+                            let mut port = None;
+                            
+                            let cmd_parts: Vec<&str> = cmd_line.split_whitespace().collect();
+                            for (i, part) in cmd_parts.iter().enumerate() {
+                                if part == &"--node-name" && i + 1 < cmd_parts.len() {
+                                    node_name = Some(cmd_parts[i + 1].to_string());
+                                }
+                                if part == &"--port" && i + 1 < cmd_parts.len() {
+                                    if let Ok(p) = cmd_parts[i + 1].parse::<u16>() {
+                                        port = Some(p);
+                                    }
+                                }
+                            }
+                            
+                            let port = port.unwrap_or(2528);
+                            
+                            running_nodes.push(serde_json::json!({
+                                "pid": pid,
+                                "node_name": node_name.unwrap_or_else(|| format!("node_{}", pid)),
+                                "port": port
+                            }));
+                        }
+                    }
+                }
+            }
+        }
+        
+        Ok(running_nodes)
+    }
+}
+
+#[tauri::command]
+async fn pick_directory(default_path: Option<String>) -> Result<Option<String>, String> {
+    use tauri::api::dialog::blocking::FileDialogBuilder;
+    
+    let mut dialog = FileDialogBuilder::new();
+    
+    // Set default directory if provided
+    if let Some(path_str) = default_path {
+        // Expand ~ to home directory
+        let expanded_path = if path_str.starts_with("~") {
+            if let Some(home) = dirs::home_dir() {
+                path_str.replacen("~", &home.to_string_lossy(), 1)
+            } else {
+                path_str
+            }
+        } else {
+            path_str
+        };
+        
+        let path_buf = std::path::PathBuf::from(&expanded_path);
+        if path_buf.exists() && path_buf.is_dir() {
+            dialog = dialog.set_directory(path_buf);
+        } else if let Some(parent) = path_buf.parent() {
+            if parent.exists() && parent.is_dir() {
+                dialog = dialog.set_directory(parent.to_path_buf());
+            }
+        }
+    }
+    
+    let result = dialog.pick_folder();
+    
+    match result {
+        Some(path) => Ok(Some(path.to_string_lossy().to_string())),
+        None => Ok(None),
+    }
+}
+
 fn main() {
     // Initialize logger - reads from RUST_LOG environment variable
     // Default: info level in release, debug level in debug builds
@@ -438,7 +1356,21 @@ fn main() {
             
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![create_app_window, open_devtools, proxy_http_request])
+        .manage(MerodState::default())
+        .invoke_handler(tauri::generate_handler![
+            create_app_window,
+            open_devtools,
+            proxy_http_request,
+            start_merod,
+            stop_merod,
+            stop_merod_by_pid_command,
+            get_merod_status,
+            list_merod_nodes,
+            check_merod_health,
+            pick_directory,
+            init_merod_node,
+            detect_running_merod_nodes
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

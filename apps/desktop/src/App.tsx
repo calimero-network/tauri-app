@@ -3,6 +3,7 @@ import { createClient, apiClient, LoginView, getAccessToken } from "@calimero-ne
 import { getSettings, getAuthUrl } from "./utils/settings";
 import { checkOnboardingState, type OnboardingState } from "./utils/onboarding";
 import Settings from "./pages/Settings";
+import Nodes from "./pages/Nodes";
 import Onboarding from "./pages/Onboarding";
 import Marketplace from "./pages/Marketplace";
 import InstalledApps from "./pages/InstalledApps";
@@ -20,6 +21,7 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [showNodes, setShowNodes] = useState(false);
   const [showLogin, setShowLogin] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [currentPage, setCurrentPage] = useState<'home' | 'marketplace' | 'installed' | 'contexts' | 'confirm'>('home');
@@ -78,10 +80,10 @@ function App() {
       // Check if settings need to be configured (first time)
       const hasCustomSettings = localStorage.getItem('calimero-desktop-settings') !== null;
       if (!hasCustomSettings) {
-        // First time - show settings first to configure node
-        console.log('📋 First time setup - showing settings');
+        // First time - show Nodes page to configure node
+        console.log('📋 First time setup - showing Nodes page');
         setNeedsNodeConfig(true);
-        setShowSettings(true);
+        setShowNodes(true);
         setCheckingOnboarding(false);
         return;
       }
@@ -115,11 +117,11 @@ function App() {
         ]);
 
         if (healthCheck.error) {
-          // Node is not running - show settings to configure
-          console.log('⚠️ Node not running or not accessible, showing settings');
+          // Node is not running - show Nodes page to configure/start node
+          console.log('⚠️ Node not running or not accessible, showing Nodes page');
           setCheckingOnboarding(false);
           setNeedsNodeConfig(true);
-          setShowSettings(true);
+          setShowNodes(true);
           return;
         }
 
@@ -181,10 +183,10 @@ function App() {
         }
       } catch (err) {
         console.error('Failed to check node connection:', err);
-        // On error, show settings to allow configuration
+        // On error, show Nodes page to allow configuration
         setCheckingOnboarding(false);
         setNeedsNodeConfig(true);
-        setShowSettings(true);
+        setShowNodes(true);
         return;
       } finally {
         setCheckingOnboarding(false);
@@ -322,16 +324,54 @@ function App() {
   // Show login if needed
   if (showLogin) {
     return (
-      <LoginView
-        onSuccess={() => {
-          console.log('✅ Login successful');
-          setShowLogin(false);
-          // Reload contexts after login
-          loadContexts();
-          checkConnection();
-        }}
-        onError={(error) => {
-          console.error('❌ Login failed:', error);
+      <div className="app">
+        <div style={{ position: 'absolute', top: '16px', right: '16px', display: 'flex', gap: '8px', zIndex: 1000 }}>
+          <button 
+            onClick={() => { 
+              setShowLogin(false); 
+              setShowNodes(true); 
+            }} 
+            className="button" 
+            style={{ background: '#f0f0f0', padding: '8px 16px' }}
+          >
+            🖥️ Configure Node
+          </button>
+          <button 
+            onClick={() => { 
+              setShowLogin(false); 
+              setShowSettings(true); 
+            }} 
+            className="button" 
+            style={{ background: '#f0f0f0', padding: '8px 16px' }}
+          >
+            ⚙️ Settings
+          </button>
+        </div>
+        <LoginView
+          onSuccess={() => {
+            console.log('✅ Login successful');
+            setShowLogin(false);
+            // Reload contexts after login
+            loadContexts();
+            checkConnection();
+          }}
+          onError={(error) => {
+            console.error('❌ Login failed:', error);
+          }}
+        />
+      </div>
+    );
+  }
+
+  if (showNodes) {
+    return (
+      <Nodes
+        onBack={() => {
+          setShowNodes(false);
+          // If we were configuring node, reload the page to reconnect
+          if (needsNodeConfig) {
+            window.location.reload();
+          }
         }}
       />
     );
@@ -378,13 +418,13 @@ function App() {
               const hasToken = getAccessToken();
               if (!hasToken) {
                 setShowLogin(true);
-              } else {
-                loadContexts();
               }
             }
-          } else {
-            reloadClient();
           }
+        }}
+        onNavigateToNodes={() => {
+          setShowSettings(false);
+          setShowNodes(true);
         }}
       />
     );
@@ -401,6 +441,9 @@ function App() {
             </button>
             <h1>Application Marketplace</h1>
           </div>
+          <button onClick={() => setShowNodes(true)} className="settings-button" style={{ marginRight: '8px' }}>
+            🖥️ Nodes
+          </button>
           <button onClick={() => setShowSettings(true)} className="settings-button">
             ⚙️ Settings
           </button>
@@ -421,6 +464,9 @@ function App() {
             </button>
             <h1>Installed Applications</h1>
           </div>
+          <button onClick={() => setShowNodes(true)} className="settings-button" style={{ marginRight: '8px' }}>
+            🖥️ Nodes
+          </button>
           <button onClick={() => setShowSettings(true)} className="settings-button">
             ⚙️ Settings
           </button>
@@ -462,6 +508,9 @@ function App() {
             </button>
             <h1>Contexts</h1>
           </div>
+          <button onClick={() => setShowNodes(true)} className="settings-button" style={{ marginRight: '8px' }}>
+            🖥️ Nodes
+          </button>
           <button onClick={() => setShowSettings(true)} className="settings-button">
             ⚙️ Settings
           </button>
@@ -542,6 +591,9 @@ function App() {
           </button>
           <button onClick={() => setCurrentPage('marketplace')} className="button" style={{ background: '#007bff', color: 'white' }}>
             🛒 Marketplace
+          </button>
+          <button onClick={() => setShowNodes(true)} className="settings-button" style={{ marginRight: '8px' }}>
+            🖥️ Nodes
           </button>
           <button onClick={() => setShowSettings(true)} className="settings-button">
             ⚙️ Settings

@@ -3,6 +3,7 @@ import { createClient, apiClient, LoginView, getAccessToken } from "@calimero-ne
 import { getSettings, getAuthUrl } from "./utils/settings";
 import { checkOnboardingState, type OnboardingState } from "./utils/onboarding";
 import Settings from "./pages/Settings";
+import Nodes from "./pages/Nodes";
 import Onboarding from "./pages/Onboarding";
 import Marketplace from "./pages/Marketplace";
 import InstalledApps from "./pages/InstalledApps";
@@ -20,6 +21,7 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [showNodes, setShowNodes] = useState(false);
   const [showLogin, setShowLogin] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [currentPage, setCurrentPage] = useState<'home' | 'marketplace' | 'installed' | 'contexts' | 'confirm'>('home');
@@ -78,10 +80,10 @@ function App() {
       // Check if settings need to be configured (first time)
       const hasCustomSettings = localStorage.getItem('calimero-desktop-settings') !== null;
       if (!hasCustomSettings) {
-        // First time - show settings first to configure node
-        console.log('📋 First time setup - showing settings');
+        // First time - show Nodes page to configure node
+        console.log('📋 First time setup - showing Nodes page');
         setNeedsNodeConfig(true);
-        setShowSettings(true);
+        setShowNodes(true);
         setCheckingOnboarding(false);
         return;
       }
@@ -115,15 +117,18 @@ function App() {
         ]);
 
         if (healthCheck.error) {
-          // Node is not running - show settings to configure
-          console.log('⚠️ Node not running or not accessible, showing settings');
+          // Node is not running - show Nodes page to configure/start node
+          console.log('⚠️ Node not running or not accessible, showing Nodes page');
           setCheckingOnboarding(false);
           setNeedsNodeConfig(true);
-          setShowSettings(true);
+          setShowNodes(true);
           return;
         }
 
-        // Node is running - proceed with onboarding/auth checks
+        // Node is running - clear needsNodeConfig since we have a working node
+        setNeedsNodeConfig(false);
+        
+        // Proceed with onboarding/auth checks
         console.log('✅ Node is running, checking onboarding state...');
         const onboardingState = await Promise.race([
           checkOnboardingState(),
@@ -160,7 +165,9 @@ function App() {
         
         if (!onboardingState.authAvailable) {
           // Auth service not available - show onboarding with error
+          // But don't redirect back to Nodes page if node is running
           console.log('⚠️ Auth service not available, showing onboarding with error');
+          setNeedsNodeConfig(false); // Clear needsNodeConfig since node is running
           setShowOnboarding(true);
         } else if (!onboardingState.hasConfiguredProviders) {
           // Auth available but no users configured - show onboarding (first time)
@@ -181,10 +188,10 @@ function App() {
         }
       } catch (err) {
         console.error('Failed to check node connection:', err);
-        // On error, show settings to allow configuration
+        // On error, show Nodes page to allow configuration
         setCheckingOnboarding(false);
         setNeedsNodeConfig(true);
-        setShowSettings(true);
+        setShowNodes(true);
         return;
       } finally {
         setCheckingOnboarding(false);
@@ -244,30 +251,6 @@ function App() {
   };
 
   // Reload client when settings change
-  const reloadClient = () => {
-    const settings = getSettings();
-    const adminApiUrl = `${settings.nodeUrl.replace(/\/$/, '')}/admin-api`;
-    const authUrl = getAuthUrl(settings);
-    const authBaseUrl = authUrl.replace(/\/$/, '');
-    const authApiUrl = `${authBaseUrl}/auth`;
-    
-    setAdminApiUrl(adminApiUrl);
-    setAuthApiUrl(authApiUrl);
-
-    // Reinitialize mero-react client
-    createClient({
-      baseUrl: adminApiUrl,
-      authBaseUrl: authBaseUrl,
-      requestCredentials: 'omit',
-    });
-
-    setConnected(false);
-    setAuthConnected(false);
-    setNodeInfo(null);
-    setAuthInfo(null);
-    setError(null);
-    setAuthError(null);
-  };
 
   const checkAuthHealth = async () => {
     try {
@@ -322,16 +305,101 @@ function App() {
   // Show login if needed
   if (showLogin) {
     return (
-      <LoginView
-        onSuccess={() => {
-          console.log('✅ Login successful');
-          setShowLogin(false);
-          // Reload contexts after login
-          loadContexts();
-          checkConnection();
-        }}
-        onError={(error) => {
-          console.error('❌ Login failed:', error);
+      <div className="app">
+        <div style={{ position: 'absolute', top: '16px', right: '16px', display: 'flex', gap: '8px', zIndex: 1000 }}>
+          <button 
+            onClick={() => { 
+              setShowLogin(false); 
+              setShowNodes(true); 
+            }} 
+            className="button" 
+            style={{ background: '#f0f0f0', padding: '8px 16px' }}
+          >
+            🖥️ Configure Node
+          </button>
+          <button 
+            onClick={() => { 
+              setShowLogin(false); 
+              setShowSettings(true); 
+            }} 
+            className="button" 
+            style={{ background: '#f0f0f0', padding: '8px 16px' }}
+          >
+            ⚙️ Settings
+          </button>
+        </div>
+        <LoginView
+          onSuccess={() => {
+            console.log('✅ Login successful');
+            setShowLogin(false);
+            // Reload contexts after login
+            loadContexts();
+            checkConnection();
+          }}
+          onError={(error) => {
+            console.error('❌ Login failed:', error);
+          }}
+        />
+      </div>
+    );
+  }
+
+  if (showNodes) {
+    return (
+      <Nodes
+        onBack={async () => {
+          const settings = getSettings();
+          // If node URL is configured, initialize app and go back
+          if (settings.nodeUrl) {
+            setShowNodes(false);
+            setNeedsNodeConfig(false);
+            
+            // Initialize the app if it wasn't initialized yet (first-time setup)
+            if (!adminApiUrl) {
+              const adminApiUrl_new = `${settings.nodeUrl.replace(/\/$/, '')}/admin-api`;
+              const authUrl = getAuthUrl(settings);
+              const authBaseUrl = authUrl.replace(/\/$/, '');
+              const authApiUrl_new = `${authBaseUrl}/auth`;
+              
+              setAdminApiUrl(adminApiUrl_new);
+              setAuthApiUrl(authApiUrl_new);
+
+              // Initialize mero-react client
+              createClient({
+                baseUrl: adminApiUrl_new,
+                authBaseUrl: authBaseUrl,
+                requestCredentials: 'omit',
+              });
+
+              // Check onboarding state
+              setCheckingOnboarding(true);
+              try {
+                const state = await checkOnboardingState();
+                setOnboardingState(state);
+                
+                if (!state.authAvailable) {
+                  setShowOnboarding(true);
+                } else if (!state.hasConfiguredProviders) {
+                  setShowOnboarding(true);
+                } else {
+                  const hasToken = getAccessToken();
+                  if (!hasToken) {
+                    setShowLogin(true);
+                  } else {
+                    loadContexts();
+                  }
+                }
+              } catch (err) {
+                console.error('Failed to check onboarding state:', err);
+                setShowOnboarding(true);
+              } finally {
+                setCheckingOnboarding(false);
+              }
+            }
+          } else {
+            // No node URL configured, stay on Nodes page
+            setShowNodes(true);
+          }
         }}
       />
     );
@@ -342,49 +410,64 @@ function App() {
       <Settings
         onBack={async () => {
           setShowSettings(false);
+          
+          // Always reload client when returning from Settings (settings may have changed)
+          const settings = getSettings();
+          const adminApiUrl_new = `${settings.nodeUrl.replace(/\/$/, '')}/admin-api`;
+          const authUrl = getAuthUrl(settings);
+          const authBaseUrl = authUrl.replace(/\/$/, '');
+          const authApiUrl_new = `${authBaseUrl}/auth`;
+          
+          setAdminApiUrl(adminApiUrl_new);
+          setAuthApiUrl(authApiUrl_new);
+
+          // Reload client with new settings
+          createClient({
+            baseUrl: adminApiUrl_new,
+            authBaseUrl: authBaseUrl,
+            requestCredentials: 'omit',
+          });
+          
           if (needsNodeConfig) {
             // After first-time settings, continue with app initialization
             setNeedsNodeConfig(false);
-            
-            // Reload settings and initialize
-            const settings = getSettings();
-            const adminApiUrl = `${settings.nodeUrl.replace(/\/$/, '')}/admin-api`;
-            const authUrl = getAuthUrl(settings);
-            const authBaseUrl = authUrl.replace(/\/$/, '');
-            const authApiUrl = `${authBaseUrl}/auth`;
-            
-            setAdminApiUrl(adminApiUrl);
-            setAuthApiUrl(authApiUrl);
-
-            // Initialize mero-react client
-            createClient({
-              baseUrl: adminApiUrl,
-              authBaseUrl: authBaseUrl,
-              requestCredentials: 'omit',
-            });
 
             // Check onboarding state
             setCheckingOnboarding(true);
-            const state = await checkOnboardingState();
-            setOnboardingState(state);
-            setCheckingOnboarding(false);
+            try {
+              const state = await checkOnboardingState();
+              setOnboardingState(state);
 
-            // Determine what to show
-            if (!state.authAvailable) {
-              setShowOnboarding(true);
-            } else if (!state.hasConfiguredProviders) {
-              setShowOnboarding(true);
-            } else {
-              const hasToken = getAccessToken();
-              if (!hasToken) {
-                setShowLogin(true);
+              // Determine what to show
+              if (!state.authAvailable) {
+                setShowOnboarding(true);
+              } else if (!state.hasConfiguredProviders) {
+                setShowOnboarding(true);
               } else {
-                loadContexts();
+                const hasToken = getAccessToken();
+                if (!hasToken) {
+                  setShowLogin(true);
+                } else {
+                  loadContexts();
+                }
               }
+            } catch (err) {
+              console.error('Failed to check onboarding state:', err);
+              setShowOnboarding(true);
+            } finally {
+              setCheckingOnboarding(false);
             }
           } else {
-            reloadClient();
+            // Settings changed, reload contexts if logged in
+            const hasToken = getAccessToken();
+            if (hasToken) {
+              loadContexts();
+            }
           }
+        }}
+        onNavigateToNodes={() => {
+          setShowSettings(false);
+          setShowNodes(true);
         }}
       />
     );
@@ -401,6 +484,9 @@ function App() {
             </button>
             <h1>Application Marketplace</h1>
           </div>
+          <button onClick={() => setShowNodes(true)} className="settings-button" style={{ marginRight: '8px' }}>
+            🖥️ Nodes
+          </button>
           <button onClick={() => setShowSettings(true)} className="settings-button">
             ⚙️ Settings
           </button>
@@ -421,6 +507,9 @@ function App() {
             </button>
             <h1>Installed Applications</h1>
           </div>
+          <button onClick={() => setShowNodes(true)} className="settings-button" style={{ marginRight: '8px' }}>
+            🖥️ Nodes
+          </button>
           <button onClick={() => setShowSettings(true)} className="settings-button">
             ⚙️ Settings
           </button>
@@ -462,6 +551,9 @@ function App() {
             </button>
             <h1>Contexts</h1>
           </div>
+          <button onClick={() => setShowNodes(true)} className="settings-button" style={{ marginRight: '8px' }}>
+            🖥️ Nodes
+          </button>
           <button onClick={() => setShowSettings(true)} className="settings-button">
             ⚙️ Settings
           </button>
@@ -542,6 +634,9 @@ function App() {
           </button>
           <button onClick={() => setCurrentPage('marketplace')} className="button" style={{ background: '#007bff', color: 'white' }}>
             🛒 Marketplace
+          </button>
+          <button onClick={() => setShowNodes(true)} className="settings-button" style={{ marginRight: '8px' }}>
+            🖥️ Nodes
           </button>
           <button onClick={() => setShowSettings(true)} className="settings-button">
             ⚙️ Settings

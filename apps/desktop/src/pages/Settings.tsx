@@ -4,9 +4,10 @@ import "./Settings.css";
 
 interface SettingsProps {
   onBack?: () => void;
+  onNavigateToNodes?: () => void;
 }
 
-export default function Settings({ onBack }: SettingsProps) {
+export default function Settings({ onBack, onNavigateToNodes }: SettingsProps) {
   const [nodeUrl, setNodeUrl] = useState("");
   const [authUrl, setAuthUrl] = useState("");
   const [registries, setRegistries] = useState<string[]>([]);
@@ -60,6 +61,18 @@ export default function Settings({ onBack }: SettingsProps) {
       </header>
 
       <main className="settings-main">
+        <div className="settings-card">
+          <h2>Node Management</h2>
+          <p className="field-hint" style={{ marginBottom: '16px' }}>
+            Manage merod nodes: create, start, stop, and detect running nodes.
+          </p>
+          {onNavigateToNodes && (
+            <button onClick={onNavigateToNodes} className="button button-primary">
+              Open Nodes Page
+            </button>
+          )}
+        </div>
+
         <div className="settings-card">
           <h2>Node Configuration</h2>
           

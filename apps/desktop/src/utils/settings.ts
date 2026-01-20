@@ -2,6 +2,10 @@ export interface AppSettings {
   nodeUrl: string;
   authUrl?: string; // Optional, defaults to nodeUrl if not set
   registries?: string[]; // Array of registry URLs
+  useEmbeddedNode?: boolean; // Use embedded merod node
+  embeddedNodePort?: number; // Port for embedded node (default: 2528)
+  embeddedNodeDataDir?: string; // Data directory for embedded node (default: ~/.calimero)
+  embeddedNodeName?: string; // Node name for embedded node
 }
 
 const SETTINGS_KEY = 'calimero-desktop-settings';

@@ -299,6 +299,102 @@ jobs:
           
           echo "All binaries in app bundle are signed"
 
+      - name: Recreate DMG and updater archive after signing
+        if: steps.build-mode.outputs.mode == 'release' && steps.build-app-release.outputs.is_signed == 'true'
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+        run: |
+          if [ -z "$APPLE_SIGNING_IDENTITY" ]; then
+            echo "No signing identity provided, skipping archive recreation"
+            exit 0
+          fi
+
+          # Find the signed .app bundle
+          APP_BUNDLE=$(find apps/desktop/src-tauri/target/universal-apple-darwin/release/bundle/macos -name "*.app" -type d | head -1)
+          
+          if [ -z "$APP_BUNDLE" ]; then
+            echo "No .app bundle found"
+            exit 1
+          fi
+
+          APP_NAME=$(basename "$APP_BUNDLE" .app)
+          BUNDLE_DIR=$(dirname "$APP_BUNDLE")
+          TARGET_DIR=$(dirname "$BUNDLE_DIR")
+          DMG_DIR="$BUNDLE_DIR/dmg"
+
+          echo "Recreating DMG and updater archive from signed app bundle: $APP_BUNDLE"
+
+          # Find and remove old DMG and .app.tar.gz files
+          echo "Removing old DMG and archive files..."
+          find "$TARGET_DIR" -name "*.dmg" -delete
+          find "$TARGET_DIR" -name "*.app.tar.gz" -delete
+          find "$TARGET_DIR" -name "*.app.tar.gz.sig" -delete
+
+          # Recreate DMG from signed .app bundle
+          # Tauri creates DMG with format: "Product Name_version_universal.dmg"
+          # We'll use the same format but need to get the version
+          VERSION="${{ steps.build-mode.outputs.version }}"
+          DMG_NAME="${APP_NAME}_${VERSION}_universal.dmg"
+          DMG_PATH="$DMG_DIR/$DMG_NAME"
+          
+          mkdir -p "$DMG_DIR"
+          
+          # Create DMG using hdiutil
+          hdiutil create -volname "$APP_NAME" \
+            -srcfolder "$APP_BUNDLE" \
+            -ov -format UDZO \
+            "$DMG_PATH" || {
+            echo "Failed to create DMG"
+            exit 1
+          }
+
+          # Sign the DMG
+          echo "Signing DMG..."
+          codesign --force --sign "$APPLE_SIGNING_IDENTITY" \
+            --options runtime \
+            --timestamp \
+            "$DMG_PATH" || {
+            echo "Failed to sign DMG"
+            exit 1
+          }
+
+          # Verify DMG signature
+          codesign --verify --verbose "$DMG_PATH" || {
+            echo "Failed to verify DMG signature"
+            exit 1
+          }
+
+          echo "Successfully created and signed DMG: $DMG_PATH"
+
+          # Recreate .app.tar.gz for auto-updater
+          echo "Creating new .app.tar.gz archive from signed app bundle..."
+          TAR_NAME="${APP_NAME}_${VERSION}_universal.app.tar.gz"
+          TAR_PATH="$BUNDLE_DIR/$TAR_NAME"
+          
+          cd "$BUNDLE_DIR"
+          tar -czf "$TAR_PATH" -C "$(dirname "$APP_BUNDLE")" "$(basename "$APP_BUNDLE")" || {
+            echo "Failed to create .app.tar.gz"
+            exit 1
+          }
+
+          echo "Successfully created updater archive: $TAR_PATH"
+
+          # Regenerate signature file for the updater archive
+          # Tauri's build process creates this, but we need to recreate it after rebuilding the archive
+          if [ -n "$TAURI_PRIVATE_KEY" ]; then
+            echo "Regenerating signature for updater archive..."
+            cd apps/desktop
+            # Use absolute path for the tar file
+            ABS_TAR_PATH="$(cd "$BUNDLE_DIR" && pwd)/$(basename "$TAR_PATH")"
+            pnpm tauri signer sign "$ABS_TAR_PATH" || {
+              echo "Warning: Failed to regenerate signature file (this may be expected if signer is not configured)"
+            }
+          else
+            echo "TAURI_PRIVATE_KEY not available, skipping signature regeneration"
+          fi
+
       - name: Cleanup keychain
         if: always() && steps.build-mode.outputs.mode == 'release'
         run: security delete-keychain build.keychain 2>/dev/null || true

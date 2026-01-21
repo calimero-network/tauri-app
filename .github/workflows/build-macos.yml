@@ -403,20 +403,31 @@ jobs:
             echo "Signing updater archive..."
             # Change to apps/desktop directory (using absolute path from original dir)
             cd "$ORIGINAL_DIR/apps/desktop"
-            # Use -k flag to pass private key directly as string
+            
+            # Write private key to temporary file (more reliable than -k flag for encrypted keys)
+            TEMP_KEY_FILE=$(mktemp)
+            echo "$TAURI_PRIVATE_KEY" > "$TEMP_KEY_FILE"
+            chmod 600 "$TEMP_KEY_FILE"
+            
+            # Use -f flag to read key from file, which handles encrypted keys better
             if [ -n "$TAURI_KEY_PASSWORD" ]; then
-              pnpm tauri signer sign "$ABS_TAR_PATH" -k "$TAURI_PRIVATE_KEY" -p "$TAURI_KEY_PASSWORD" || {
+              pnpm tauri signer sign "$ABS_TAR_PATH" -f "$TEMP_KEY_FILE" -p "$TAURI_KEY_PASSWORD" || {
+                rm -f "$TEMP_KEY_FILE"
                 echo "Error: Failed to sign updater archive"
                 echo "TAURI_PRIVATE_KEY is configured, so signing should succeed. This is a critical error."
                 exit 1
               }
             else
-              pnpm tauri signer sign "$ABS_TAR_PATH" -k "$TAURI_PRIVATE_KEY" || {
+              pnpm tauri signer sign "$ABS_TAR_PATH" -f "$TEMP_KEY_FILE" || {
+                rm -f "$TEMP_KEY_FILE"
                 echo "Error: Failed to sign updater archive"
                 echo "TAURI_PRIVATE_KEY is configured, so signing should succeed. This is a critical error."
                 exit 1
               }
             fi
+            
+            # Clean up temporary key file
+            rm -f "$TEMP_KEY_FILE"
             echo "Successfully signed updater archive: ${ABS_TAR_PATH}.sig"
           else
             echo "TAURI_PRIVATE_KEY not available, skipping archive signing"

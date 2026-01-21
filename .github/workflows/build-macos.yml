@@ -396,21 +396,30 @@ jobs:
 
           echo "Successfully created updater archive: $ABS_TAR_PATH"
 
-          # Regenerate signature file for the updater archive
-          # Tauri's build process creates this, but we need to recreate it after rebuilding the archive
+          # Sign the archive using Tauri signer
+          # Tauri's build process normally signs during build, but since we recreated the archive
+          # after signing embedded binaries, we need to sign it manually
           if [ -n "$TAURI_PRIVATE_KEY" ]; then
-            echo "Regenerating signature for updater archive..."
+            echo "Signing updater archive..."
             # Change to apps/desktop directory (using absolute path from original dir)
             cd "$ORIGINAL_DIR/apps/desktop"
-            # ABS_TAR_PATH is already computed as absolute path above
-            pnpm tauri signer sign "$ABS_TAR_PATH" || {
-              echo "Error: Failed to regenerate signature file for updater archive"
-              echo "TAURI_PRIVATE_KEY is configured, so signing should succeed. This is a critical error."
-              exit 1
-            }
-            echo "Successfully regenerated signature file: ${ABS_TAR_PATH}.sig"
+            # Use -k flag to pass private key directly as string
+            if [ -n "$TAURI_KEY_PASSWORD" ]; then
+              pnpm tauri signer sign "$ABS_TAR_PATH" -k "$TAURI_PRIVATE_KEY" -p "$TAURI_KEY_PASSWORD" || {
+                echo "Error: Failed to sign updater archive"
+                echo "TAURI_PRIVATE_KEY is configured, so signing should succeed. This is a critical error."
+                exit 1
+              }
+            else
+              pnpm tauri signer sign "$ABS_TAR_PATH" -k "$TAURI_PRIVATE_KEY" || {
+                echo "Error: Failed to sign updater archive"
+                echo "TAURI_PRIVATE_KEY is configured, so signing should succeed. This is a critical error."
+                exit 1
+              }
+            fi
+            echo "Successfully signed updater archive: ${ABS_TAR_PATH}.sig"
           else
-            echo "TAURI_PRIVATE_KEY not available, skipping signature regeneration"
+            echo "TAURI_PRIVATE_KEY not available, skipping archive signing"
           fi
 
       - name: Cleanup keychain

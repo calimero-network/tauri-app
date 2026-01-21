@@ -287,17 +287,27 @@ jobs:
             exit 1
           }
           
-          # Check for any unsigned binaries
-          echo "Checking for unsigned binaries in app bundle..."
-          UNSIGNED=$(find "$APP_BUNDLE" -type f -exec sh -c 'codesign --verify "$1" 2>&1 | grep -q "code object is not signed" && echo "$1"' _ {} \;)
+          # Check for any unsigned executable binaries
+          # Only check actual executables and libraries, not resource files (icons, plists, etc.)
+          echo "Checking for unsigned executable binaries in app bundle..."
+          # Find all potential binaries (executables, dylibs) excluding known resource files
+          UNSIGNED=$(find "$APP_BUNDLE" -type f \
+            \( -perm +111 -o -name "*.dylib" -o -name "*.so" \) \
+            ! -path "*/_CodeSignature/*" \
+            ! -name "*.icns" \
+            ! -name "*.png" \
+            ! -name "*.plist" \
+            ! -name "*.json" \
+            ! -name "*.txt" \
+            -exec sh -c 'if file "$1" | grep -q "Mach-O"; then codesign --verify "$1" 2>&1 | grep -q "code object is not signed" && echo "$1"; fi' _ {} \;)
           
           if [ -n "$UNSIGNED" ]; then
-            echo "Error: Found unsigned binaries:"
+            echo "Error: Found unsigned executable binaries:"
             echo "$UNSIGNED"
             exit 1
           fi
           
-          echo "All binaries in app bundle are signed"
+          echo "All executable binaries in app bundle are signed"
 
       - name: Recreate DMG and updater archive after signing
         if: steps.build-mode.outputs.mode == 'release' && steps.build-app-release.outputs.is_signed == 'true'

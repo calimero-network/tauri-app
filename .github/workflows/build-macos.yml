@@ -393,8 +393,11 @@ jobs:
             # Use absolute path for the tar file
             ABS_TAR_PATH="$(cd "$BUNDLE_DIR" && pwd)/$(basename "$TAR_PATH")"
             pnpm tauri signer sign "$ABS_TAR_PATH" || {
-              echo "Warning: Failed to regenerate signature file (this may be expected if signer is not configured)"
+              echo "Error: Failed to regenerate signature file for updater archive"
+              echo "TAURI_PRIVATE_KEY is configured, so signing should succeed. This is a critical error."
+              exit 1
             }
+            echo "Successfully regenerated signature file: ${ABS_TAR_PATH}.sig"
           else
             echo "TAURI_PRIVATE_KEY not available, skipping signature regeneration"
           fi

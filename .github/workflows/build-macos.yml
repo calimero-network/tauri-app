@@ -323,6 +323,9 @@ jobs:
           BUNDLE_DIR=$(dirname "$APP_BUNDLE")
           TARGET_DIR=$(dirname "$BUNDLE_DIR")
           DMG_DIR="$BUNDLE_DIR/dmg"
+          
+          # Save original working directory for later use
+          ORIGINAL_DIR="$(pwd)"
 
           echo "Recreating DMG and updater archive from signed app bundle: $APP_BUNDLE"
 
@@ -385,7 +388,8 @@ jobs:
           # Tauri's build process creates this, but we need to recreate it after rebuilding the archive
           if [ -n "$TAURI_PRIVATE_KEY" ]; then
             echo "Regenerating signature for updater archive..."
-            cd apps/desktop
+            # Return to original directory before changing to apps/desktop
+            cd "$ORIGINAL_DIR/apps/desktop"
             # Use absolute path for the tar file
             ABS_TAR_PATH="$(cd "$BUNDLE_DIR" && pwd)/$(basename "$TAR_PATH")"
             pnpm tauri signer sign "$ABS_TAR_PATH" || {

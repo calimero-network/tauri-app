@@ -199,6 +199,34 @@ jobs:
 
           rm -f certificate.p12
 
+      - name: Sign merod binary before bundling
+        if: steps.build-mode.outputs.mode == 'release'
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          if [ -z "$APPLE_SIGNING_IDENTITY" ]; then
+            echo "No signing identity provided, skipping merod signing"
+            exit 0
+          fi
+
+          MEROD_BINARY="apps/desktop/src-tauri/merod/merod"
+          
+          if [ -f "$MEROD_BINARY" ]; then
+            echo "Signing merod binary before bundling: $MEROD_BINARY"
+            codesign --force --sign "$APPLE_SIGNING_IDENTITY" \
+              --options runtime \
+              --timestamp \
+              "$MEROD_BINARY"
+            
+            codesign --verify --verbose "$MEROD_BINARY" || {
+              echo "Failed to verify merod binary signature"
+              exit 1
+            }
+            echo "Successfully signed merod binary"
+          else
+            echo "Warning: merod binary not found at $MEROD_BINARY (will be downloaded during build)"
+          fi
+
       - name: Build Tauri app for macOS (Universal) - Release
         if: steps.build-mode.outputs.mode == 'release'
         working-directory: apps/desktop
@@ -227,193 +255,6 @@ jobs:
         run: |
           echo "is_signed=false" >> $GITHUB_OUTPUT
           pnpm tauri build --target universal-apple-darwin
-
-      - name: Sign embedded binaries
-        if: steps.build-mode.outputs.mode == 'release' && steps.build-app-release.outputs.is_signed == 'true'
-        env:
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-        run: |
-          if [ -z "$APPLE_SIGNING_IDENTITY" ]; then
-            echo "No signing identity provided, skipping embedded binary signing"
-            exit 0
-          fi
-
-          # Find the .app bundle
-          APP_BUNDLE=$(find apps/desktop/src-tauri/target/universal-apple-darwin/release/bundle/macos -name "*.app" -type d | head -1)
-          
-          if [ -z "$APP_BUNDLE" ]; then
-            echo "No .app bundle found"
-            exit 1
-          fi
-
-          echo "Found app bundle: $APP_BUNDLE"
-
-          # Sign the merod binary if it exists
-          MEROD_BINARY="$APP_BUNDLE/Contents/Resources/merod/merod"
-          
-          if [ -f "$MEROD_BINARY" ]; then
-            echo "Signing merod binary: $MEROD_BINARY"
-            codesign --force --deep --sign "$APPLE_SIGNING_IDENTITY" \
-              --options runtime \
-              --timestamp \
-              "$MEROD_BINARY"
-            
-            # Verify the signature
-            codesign --verify --verbose "$MEROD_BINARY" || {
-              echo "Failed to verify merod binary signature"
-              exit 1
-            }
-            echo "Successfully signed merod binary"
-          else
-            echo "Warning: merod binary not found at $MEROD_BINARY"
-          fi
-
-          # Re-sign the entire app bundle to update the code signature
-          # This is necessary because signing embedded binaries invalidates the app's signature
-          echo "Re-signing app bundle..."
-          codesign --force --deep --sign "$APPLE_SIGNING_IDENTITY" \
-            --options runtime \
-            --timestamp \
-            --entitlements "$APP_BUNDLE/Contents/Resources/entitlements.plist" \
-            "$APP_BUNDLE" 2>/dev/null || \
-          codesign --force --deep --sign "$APPLE_SIGNING_IDENTITY" \
-            --options runtime \
-            --timestamp \
-            "$APP_BUNDLE"
-
-          # Verify the app bundle signature
-          codesign --verify --verbose "$APP_BUNDLE" || {
-            echo "Failed to verify app bundle signature"
-            exit 1
-          }
-          
-          # Check for any unsigned executable binaries
-          # Only check actual executables and libraries, not resource files (icons, plists, etc.)
-          echo "Checking for unsigned executable binaries in app bundle..."
-          # Find all potential binaries (executables, dylibs) excluding known resource files
-          UNSIGNED=$(find "$APP_BUNDLE" -type f \
-            \( -perm +111 -o -name "*.dylib" -o -name "*.so" \) \
-            ! -path "*/_CodeSignature/*" \
-            ! -name "*.icns" \
-            ! -name "*.png" \
-            ! -name "*.plist" \
-            ! -name "*.json" \
-            ! -name "*.txt" \
-            -exec sh -c 'if file "$1" | grep -q "Mach-O"; then codesign --verify "$1" 2>&1 | grep -q "code object is not signed" && echo "$1"; fi' _ {} \;)
-          
-          if [ -n "$UNSIGNED" ]; then
-            echo "Error: Found unsigned executable binaries:"
-            echo "$UNSIGNED"
-            exit 1
-          fi
-          
-          echo "All executable binaries in app bundle are signed"
-
-      - name: Recreate DMG and updater archive after signing
-        if: steps.build-mode.outputs.mode == 'release' && steps.build-app-release.outputs.is_signed == 'true'
-        env:
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
-          TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
-        run: |
-          if [ -z "$APPLE_SIGNING_IDENTITY" ]; then
-            echo "No signing identity provided, skipping archive recreation"
-            exit 0
-          fi
-
-          # Find the signed .app bundle
-          APP_BUNDLE=$(find apps/desktop/src-tauri/target/universal-apple-darwin/release/bundle/macos -name "*.app" -type d | head -1)
-          
-          if [ -z "$APP_BUNDLE" ]; then
-            echo "No .app bundle found"
-            exit 1
-          fi
-
-          APP_NAME=$(basename "$APP_BUNDLE" .app)
-          BUNDLE_DIR=$(dirname "$APP_BUNDLE")
-          TARGET_DIR=$(dirname "$BUNDLE_DIR")
-          DMG_DIR="$BUNDLE_DIR/dmg"
-          
-          # Save original working directory and compute absolute paths
-          ORIGINAL_DIR="$(pwd)"
-          ABS_BUNDLE_DIR="$(cd "$BUNDLE_DIR" && pwd)"
-          ABS_APP_BUNDLE="$(cd "$(dirname "$APP_BUNDLE")" && pwd)/$(basename "$APP_BUNDLE")"
-
-          echo "Recreating DMG and updater archive from signed app bundle: $APP_BUNDLE"
-
-          # Find and remove old DMG and .app.tar.gz files
-          echo "Removing old DMG and archive files..."
-          find "$TARGET_DIR" -name "*.dmg" -delete
-          find "$TARGET_DIR" -name "*.app.tar.gz" -delete
-          find "$TARGET_DIR" -name "*.app.tar.gz.sig" -delete
-
-          # Recreate DMG from signed .app bundle
-          # Tauri creates DMG with format: "Product Name_version_universal.dmg"
-          # We'll use the same format but need to get the version
-          VERSION="${{ steps.build-mode.outputs.version }}"
-          DMG_NAME="${APP_NAME}_${VERSION}_universal.dmg"
-          DMG_PATH="$DMG_DIR/$DMG_NAME"
-          
-          mkdir -p "$DMG_DIR"
-          
-          # Create DMG using hdiutil
-          hdiutil create -volname "$APP_NAME" \
-            -srcfolder "$APP_BUNDLE" \
-            -ov -format UDZO \
-            "$DMG_PATH" || {
-            echo "Failed to create DMG"
-            exit 1
-          }
-
-          # Sign the DMG
-          echo "Signing DMG..."
-          codesign --force --sign "$APPLE_SIGNING_IDENTITY" \
-            --options runtime \
-            --timestamp \
-            "$DMG_PATH" || {
-            echo "Failed to sign DMG"
-            exit 1
-          }
-
-          # Verify DMG signature
-          codesign --verify --verbose "$DMG_PATH" || {
-            echo "Failed to verify DMG signature"
-            exit 1
-          }
-
-          echo "Successfully created and signed DMG: $DMG_PATH"
-
-          # Recreate .app.tar.gz for auto-updater
-          echo "Creating new .app.tar.gz archive from signed app bundle..."
-          TAR_NAME="${APP_NAME}_${VERSION}_universal.app.tar.gz"
-          ABS_TAR_PATH="$ABS_BUNDLE_DIR/$TAR_NAME"
-          
-          # Create tar archive using absolute paths to avoid issues after cd
-          tar -czf "$ABS_TAR_PATH" -C "$(dirname "$ABS_APP_BUNDLE")" "$(basename "$ABS_APP_BUNDLE")" || {
-            echo "Failed to create .app.tar.gz"
-            exit 1
-          }
-
-          echo "Successfully created updater archive: $ABS_TAR_PATH"
-
-          # Regenerate signature file for the updater archive
-          # Tauri's build process creates this, but we need to recreate it after rebuilding the archive
-          # The signer will use TAURI_PRIVATE_KEY from the environment (set in step env above)
-          if [ -n "$TAURI_PRIVATE_KEY" ]; then
-            echo "Regenerating signature for updater archive..."
-            # Change to apps/desktop directory (using absolute path from original dir)
-            cd "$ORIGINAL_DIR/apps/desktop"
-            # ABS_TAR_PATH is already computed as absolute path above
-            # Tauri signer automatically uses TAURI_PRIVATE_KEY and TAURI_KEY_PASSWORD from environment
-            pnpm tauri signer sign "$ABS_TAR_PATH" || {
-              echo "Error: Failed to regenerate signature file for updater archive"
-              echo "TAURI_PRIVATE_KEY is configured, so signing should succeed. This is a critical error."
-              exit 1
-            }
-            echo "Successfully regenerated signature file: ${ABS_TAR_PATH}.sig"
-          else
-            echo "TAURI_PRIVATE_KEY not available, skipping signature regeneration"
-          fi
 
       - name: Cleanup keychain
         if: always() && steps.build-mode.outputs.mode == 'release'

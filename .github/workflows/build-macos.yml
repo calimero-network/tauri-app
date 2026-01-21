@@ -324,8 +324,10 @@ jobs:
           TARGET_DIR=$(dirname "$BUNDLE_DIR")
           DMG_DIR="$BUNDLE_DIR/dmg"
           
-          # Save original working directory for later use
+          # Save original working directory and compute absolute paths
           ORIGINAL_DIR="$(pwd)"
+          ABS_BUNDLE_DIR="$(cd "$BUNDLE_DIR" && pwd)"
+          ABS_APP_BUNDLE="$(cd "$(dirname "$APP_BUNDLE")" && pwd)/$(basename "$APP_BUNDLE")"
 
           echo "Recreating DMG and updater archive from signed app bundle: $APP_BUNDLE"
 
@@ -374,24 +376,23 @@ jobs:
           # Recreate .app.tar.gz for auto-updater
           echo "Creating new .app.tar.gz archive from signed app bundle..."
           TAR_NAME="${APP_NAME}_${VERSION}_universal.app.tar.gz"
-          TAR_PATH="$BUNDLE_DIR/$TAR_NAME"
+          ABS_TAR_PATH="$ABS_BUNDLE_DIR/$TAR_NAME"
           
-          cd "$BUNDLE_DIR"
-          tar -czf "$TAR_PATH" -C "$(dirname "$APP_BUNDLE")" "$(basename "$APP_BUNDLE")" || {
+          # Create tar archive using absolute paths to avoid issues after cd
+          tar -czf "$ABS_TAR_PATH" -C "$(dirname "$ABS_APP_BUNDLE")" "$(basename "$ABS_APP_BUNDLE")" || {
             echo "Failed to create .app.tar.gz"
             exit 1
           }
 
-          echo "Successfully created updater archive: $TAR_PATH"
+          echo "Successfully created updater archive: $ABS_TAR_PATH"
 
           # Regenerate signature file for the updater archive
           # Tauri's build process creates this, but we need to recreate it after rebuilding the archive
           if [ -n "$TAURI_PRIVATE_KEY" ]; then
             echo "Regenerating signature for updater archive..."
-            # Return to original directory before changing to apps/desktop
+            # Change to apps/desktop directory (using absolute path from original dir)
             cd "$ORIGINAL_DIR/apps/desktop"
-            # Use absolute path for the tar file
-            ABS_TAR_PATH="$(cd "$BUNDLE_DIR" && pwd)/$(basename "$TAR_PATH")"
+            # ABS_TAR_PATH is already computed as absolute path above
             pnpm tauri signer sign "$ABS_TAR_PATH" || {
               echo "Error: Failed to regenerate signature file for updater archive"
               echo "TAURI_PRIVATE_KEY is configured, so signing should succeed. This is a critical error."

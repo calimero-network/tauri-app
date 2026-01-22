@@ -14,10 +14,11 @@ Monorepo for Calimero desktop applications built with Tauri.
 │   ├── desktop/          # Tauri desktop application
 │   └── download-site/    # Download landing page
 ├── packages/
-│   ├── mero-js/          # Mero-js SDK package (workspace)
 │   └── mero-react/       # React bindings and components
 └── pnpm-workspace.yaml   # Workspace configuration
 ```
+
+**Note:** `mero-js` SDK package has been moved to the repository root as an independent package.
 
 ## Prerequisites
 

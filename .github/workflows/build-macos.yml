@@ -133,7 +133,6 @@ jobs:
 
       - name: Build workspace packages
         run: |
-          pnpm build:mero-js
           pnpm build:mero-react
 
       - name: Generate icons

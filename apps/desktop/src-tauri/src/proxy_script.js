@@ -54,6 +54,12 @@
         console.log('[Tauri Proxy] Should proxy?', shouldProxy, 'for URL:', urlStr);
         if (shouldProxy) {
             try {
+                // Handle AbortSignal - if signal is already aborted, reject immediately
+                if (init && init.signal && init.signal.aborted) {
+                    const abortError = new DOMException('The operation was aborted.', 'AbortError');
+                    throw abortError;
+                }
+                
                 const headers = {};
                 if (init && init.headers) {
                     if (init.headers instanceof Headers) {
@@ -83,18 +89,63 @@
                 console.log('[Tauri Proxy] Intercepting fetch:', urlStr, 'method:', init?.method || 'GET');
                 console.log('[Tauri Proxy] Headers being sent:', JSON.stringify(headers, null, 2));
                 console.log('[Tauri Proxy] Has Authorization header?', 'Authorization' in headers || 'authorization' in headers);
-                const response = await proxyRequest(urlStr, (init && init.method) || 'GET', headers, bodyStr);
                 
-                console.log('[Tauri Proxy] Proxy response:', response.status, urlStr);
+                // Create a promise that can be aborted
+                let abortHandler = null;
+                const requestPromise = proxyRequest(urlStr, (init && init.method) || 'GET', headers, bodyStr);
                 
-                // Create a Response-like object
-                return new Response(response.body, {
-                    status: response.status,
-                    statusText: response.status === 200 ? 'OK' : (response.statusText || 'Error'),
-                    headers: new Headers(response.headers)
-                });
+                // If AbortSignal is provided, listen for abort events
+                if (init && init.signal) {
+                    const abortPromise = new Promise((_, reject) => {
+                        abortHandler = () => {
+                            const abortError = new DOMException('The operation was aborted.', 'AbortError');
+                            reject(abortError);
+                        };
+                        init.signal.addEventListener('abort', abortHandler);
+                    });
+                    
+                    // Race between request and abort
+                    try {
+                        const response = await Promise.race([requestPromise, abortPromise]);
+                        // Clean up abort listener
+                        if (abortHandler) {
+                            init.signal.removeEventListener('abort', abortHandler);
+                        }
+                        
+                        console.log('[Tauri Proxy] Proxy response:', response.status, urlStr);
+                        
+                        // Create a Response-like object
+                        return new Response(response.body, {
+                            status: response.status,
+                            statusText: response.status === 200 ? 'OK' : (response.statusText || 'Error'),
+                            headers: new Headers(response.headers)
+                        });
+                    } catch (error) {
+                        // Clean up abort listener
+                        if (abortHandler) {
+                            init.signal.removeEventListener('abort', abortHandler);
+                        }
+                        throw error;
+                    }
+                } else {
+                    // No AbortSignal, proceed normally
+                    const response = await requestPromise;
+                    
+                    console.log('[Tauri Proxy] Proxy response:', response.status, urlStr);
+                    
+                    // Create a Response-like object
+                    return new Response(response.body, {
+                        status: response.status,
+                        statusText: response.status === 200 ? 'OK' : (response.statusText || 'Error'),
+                        headers: new Headers(response.headers)
+                    });
+                }
             } catch (error) {
                 console.error('[Tauri Proxy] Fetch proxy failed:', error, 'URL:', urlStr);
+                // If it's an AbortError, re-throw it
+                if (error.name === 'AbortError') {
+                    throw error;
+                }
                 // Fall back to original fetch (will fail due to mixed content, but at least we tried)
                 return originalFetch.apply(this, arguments);
             }

@@ -15,7 +15,7 @@
     "clean": "rm -rf dist src-tauri/target"
   },
   "dependencies": {
-    "@calimero-network/mero-js": "workspace:*",
+    "@calimero-network/mero-js": "^1.1.0",
     "@calimero-network/mero-react": "workspace:*",
     "@tauri-apps/api": "^1.5.0",
     "bs58": "^6.0.0",

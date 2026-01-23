@@ -19,7 +19,7 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@calimero-network/mero-js": "workspace:*",
+    "@calimero-network/mero-js": "^1.1.0",
     "react": "^19.2.0"
   },
   "devDependencies": {

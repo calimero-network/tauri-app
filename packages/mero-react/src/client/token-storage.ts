@@ -2,6 +2,7 @@
 
 const ACCESS_TOKEN_KEY = 'calimero_access_token';
 const REFRESH_TOKEN_KEY = 'calimero_refresh_token';
+const EXPIRES_AT_KEY = 'calimero_token_expires_at';
 const APP_ENDPOINT_KEY = 'calimero_app_endpoint';
 
 export function setAccessToken(token: string): void {
@@ -28,6 +29,19 @@ export function clearRefreshToken(): void {
   localStorage.removeItem(REFRESH_TOKEN_KEY);
 }
 
+export function setTokenExpiresAt(expiresAt: number): void {
+  localStorage.setItem(EXPIRES_AT_KEY, expiresAt.toString());
+}
+
+export function getTokenExpiresAt(): number | null {
+  const value = localStorage.getItem(EXPIRES_AT_KEY);
+  return value ? parseInt(value, 10) : null;
+}
+
+export function clearTokenExpiresAt(): void {
+  localStorage.removeItem(EXPIRES_AT_KEY);
+}
+
 export function getAppEndpointKey(): string | null {
   return localStorage.getItem(APP_ENDPOINT_KEY);
 }
@@ -40,3 +54,11 @@ export function clearAppEndpointKey(): void {
   localStorage.removeItem(APP_ENDPOINT_KEY);
 }
 
+/**
+ * Clear all auth-related tokens
+ */
+export function clearAllTokens(): void {
+  clearAccessToken();
+  clearRefreshToken();
+  clearTokenExpiresAt();
+}

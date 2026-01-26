@@ -108,9 +108,17 @@ export function AuthProvider({ children, config }: AuthProviderProps) {
         setIsAuthenticated(true);
 
         // Store tokens using calimero-client compatible storage
-        const { setAccessToken: setToken, setRefreshToken: setRefresh } = await import('../client/token-storage');
+        const { setAccessToken: setToken, setRefreshToken: setRefresh, setTokenExpiresAt } = await import('../client/token-storage');
         setToken(response.data.access_token);
         setRefresh(response.data.refresh_token);
+        
+        // Extract expiry from JWT (exp claim is in seconds)
+        try {
+          const payload = JSON.parse(atob(response.data.access_token.split('.')[1]));
+          setTokenExpiresAt(payload.exp * 1000); // Convert seconds to milliseconds
+        } catch {
+          setTokenExpiresAt(Date.now() + 3600 * 1000); // Fallback to 1 hour
+        }
 
         // Also store in our format
         localStorage.setItem(
@@ -140,9 +148,8 @@ export function AuthProvider({ children, config }: AuthProviderProps) {
     localStorage.removeItem(TOKEN_STORAGE_KEY);
     
     // Clear calimero-client compatible tokens
-    const { clearAccessToken, clearRefreshToken } = await import('../client/token-storage');
-    clearAccessToken();
-    clearRefreshToken();
+    const { clearAllTokens } = await import('../client/token-storage');
+    clearAllTokens();
     
     setError(null);
   }, []);
@@ -169,9 +176,17 @@ export function AuthProvider({ children, config }: AuthProviderProps) {
         setIsAuthenticated(true);
 
         // Update stored tokens
-        const { setAccessToken: setToken, setRefreshToken: setRefresh } = await import('../client/token-storage');
+        const { setAccessToken: setToken, setRefreshToken: setRefresh, setTokenExpiresAt } = await import('../client/token-storage');
         setToken(response.data.access_token);
         setRefresh(response.data.refresh_token);
+        
+        // Extract expiry from JWT (exp claim is in seconds)
+        try {
+          const payload = JSON.parse(atob(response.data.access_token.split('.')[1]));
+          setTokenExpiresAt(payload.exp * 1000); // Convert seconds to milliseconds
+        } catch {
+          setTokenExpiresAt(Date.now() + 3600 * 1000); // Fallback to 1 hour
+        }
 
         localStorage.setItem(
           TOKEN_STORAGE_KEY,

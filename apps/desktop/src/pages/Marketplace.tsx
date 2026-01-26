@@ -10,7 +10,11 @@ interface MarketplaceApp extends AppSummary {
   installed?: boolean;
 }
 
-export default function Marketplace() {
+interface MarketplaceProps {
+  clientReady?: boolean;
+}
+
+export default function Marketplace({ clientReady = true }: MarketplaceProps) {
   const [apps, setApps] = useState<MarketplaceApp[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -19,8 +23,10 @@ export default function Marketplace() {
 
   // Load installed applications
   useEffect(() => {
-    loadInstalledApps();
-  }, []);
+    if (clientReady) {
+      loadInstalledApps();
+    }
+  }, [clientReady]);
 
   // Load marketplace applications
   useEffect(() => {

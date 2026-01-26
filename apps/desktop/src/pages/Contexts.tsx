@@ -1,5 +1,7 @@
-import React, { useState, useEffect } from "react";
-import { apiClient } from "@calimero-network/mero-react";
+import React, { useState, useEffect, useCallback } from "react";
+import { apiClient, getAccessToken, getRefreshToken } from "@calimero-network/mero-react";
+import { invoke } from "@tauri-apps/api/tauri";
+import { getSettings } from "../utils/settings";
 import "./Contexts.css";
 
 interface Context {
@@ -25,9 +27,10 @@ interface InstalledApp {
 export interface ContextsProps {
   onAuthRequired?: () => void;
   onConfirmDelete?: (contextId: string, contextName: string, onConfirm: () => Promise<void>) => void;
+  clientReady?: boolean;
 }
 
-const Contexts: React.FC<ContextsProps> = ({ onAuthRequired, onConfirmDelete }) => {
+const Contexts: React.FC<ContextsProps> = ({ onAuthRequired, onConfirmDelete, clientReady = true }) => {
   const [contexts, setContexts] = useState<Context[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -41,9 +44,11 @@ const Contexts: React.FC<ContextsProps> = ({ onAuthRequired, onConfirmDelete }) 
   const [loadingApps, setLoadingApps] = useState(false);
 
   useEffect(() => {
-    loadContexts();
-    loadInstalledApps();
-  }, []);
+    if (clientReady) {
+      loadContexts();
+      loadInstalledApps();
+    }
+  }, [clientReady]);
 
   const loadInstalledApps = async () => {
     setLoadingApps(true);
@@ -229,6 +234,52 @@ const Contexts: React.FC<ContextsProps> = ({ onAuthRequired, onConfirmDelete }) 
       }
     }
   };
+
+  /**
+   * Open the mero-react example app in a Tauri window
+   * with existing tokens and context ID passed via URL hash (SSO flow)
+   */
+  const openFrontend = useCallback(async (contextId: string, applicationId: string) => {
+    const accessToken = getAccessToken();
+    const refreshToken = getRefreshToken();
+    const settings = getSettings();
+    
+    if (!accessToken || !refreshToken) {
+      setError('Not authenticated. Please login first.');
+      return;
+    }
+
+    const nodeUrl = settings.nodeUrl.replace(/\/$/, '');
+    const exampleAppUrl = 'http://localhost:5173';
+
+    // Build URL with tokens and context ID in hash (SSO pattern)
+    const params = new URLSearchParams();
+    params.set('access_token', accessToken);
+    params.set('refresh_token', refreshToken);
+    params.set('node_url', nodeUrl);
+    params.set('context_id', contextId);
+    params.set('application_id', applicationId);
+    params.set('expires_in', '3600'); // 1 hour default
+
+    const fullUrl = `${exampleAppUrl}/#${params.toString()}`;
+    
+    console.log('🚀 Opening frontend with SSO for context:', contextId);
+    
+    try {
+      // Open in a new Tauri window
+      const windowLabel = `app-context-${Date.now()}`;
+      await invoke('create_app_window', {
+        windowLabel,
+        url: fullUrl,
+        title: `Context: ${contextId.slice(0, 8)}...`,
+        nodeUrl: nodeUrl,
+      });
+      console.log('Opened frontend in Tauri window:', fullUrl);
+    } catch (err) {
+      console.error('Failed to open frontend:', err);
+      setError(`Failed to open frontend: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    }
+  }, []);
 
   return (
     <div className="contexts-page">
@@ -473,6 +524,13 @@ const Contexts: React.FC<ContextsProps> = ({ onAuthRequired, onConfirmDelete }) 
                             )}
                           </div>
                           <div className="context-card-actions">
+                            <button
+                              onClick={() => openFrontend(context.id, context.applicationId || context.application_id || appId)}
+                              className="button button-primary"
+                              title="Open frontend with this context"
+                            >
+                              🚀 Open Frontend
+                            </button>
                             <button
                               onClick={() => handleDeleteContext(context.id, context.name || `Context ${index + 1}`)}
                               className="button button-danger"

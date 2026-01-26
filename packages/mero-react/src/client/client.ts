@@ -1,29 +1,75 @@
-import { MeroJs, type MeroJsConfig } from '@calimero-network/mero-js';
-import { createBrowserHttpClient } from '@calimero-network/mero-js';
-import { createAdminApiClientFromHttpClient } from '@calimero-network/mero-js';
-import { createAuthApiClientFromHttpClient } from '@calimero-network/mero-js';
+import { MeroJs, type TokenStorage, type TokenData } from '@calimero-network/mero-js';
 import type { ApiResponse, ClientConfig, Provider, TokenResponse } from './types';
-import type {
-  TokenRequest,
-  RefreshTokenRequest,
-} from '@calimero-network/mero-js';
+import { setClientInstance } from './singleton';
 
-// Auth API wrapper matching calimero-client pattern
+/**
+ * LocalStorage-based TokenStorage implementation for browser/Tauri
+ * 
+ * IMPORTANT: Uses the same keys as the exported token-storage utilities
+ * to maintain consistency across login flows and API calls.
+ */
+class LocalStorageTokenStorage implements TokenStorage {
+  // Match the keys from token-storage.ts
+  private readonly ACCESS_TOKEN_KEY = 'calimero_access_token';
+  private readonly REFRESH_TOKEN_KEY = 'calimero_refresh_token';
+  private readonly EXPIRES_AT_KEY = 'calimero_token_expires_at';
+
+  async get(): Promise<TokenData | null> {
+    try {
+      const accessToken = localStorage.getItem(this.ACCESS_TOKEN_KEY);
+      const refreshToken = localStorage.getItem(this.REFRESH_TOKEN_KEY);
+      const expiresAt = localStorage.getItem(this.EXPIRES_AT_KEY);
+      
+      console.log('[TokenStorage.get] accessToken:', accessToken ? 'EXISTS' : 'NULL');
+      console.log('[TokenStorage.get] refreshToken:', refreshToken ? 'EXISTS' : 'NULL');
+      console.log('[TokenStorage.get] expiresAt:', expiresAt);
+      
+      if (!accessToken || !refreshToken) {
+        console.log('[TokenStorage.get] Missing tokens, returning null');
+        return null;
+      }
+      
+      const tokenData = {
+        access_token: accessToken,
+        refresh_token: refreshToken,
+        expires_at: expiresAt ? parseInt(expiresAt, 10) : Date.now() + 3600000,
+      };
+      console.log('[TokenStorage.get] Returning tokenData with expires_at:', tokenData.expires_at);
+      return tokenData;
+    } catch (error) {
+      console.error('[TokenStorage.get] Error:', error);
+      return null;
+    }
+  }
+
+  async set(token: TokenData): Promise<void> {
+    localStorage.setItem(this.ACCESS_TOKEN_KEY, token.access_token);
+    localStorage.setItem(this.REFRESH_TOKEN_KEY, token.refresh_token);
+    if (token.expires_at) {
+      localStorage.setItem(this.EXPIRES_AT_KEY, token.expires_at.toString());
+    }
+  }
+
+  async clear(): Promise<void> {
+    localStorage.removeItem(this.ACCESS_TOKEN_KEY);
+    localStorage.removeItem(this.REFRESH_TOKEN_KEY);
+    localStorage.removeItem(this.EXPIRES_AT_KEY);
+  }
+}
+
+// Auth API wrapper - maintains compatibility with existing code
 class AuthApi {
   constructor(
-    private authMeroJs: MeroJs,
-    private nodeMeroJs: MeroJs,
-    private config: ClientConfig,
+    private meroJs: MeroJs,
+    private _config: ClientConfig,
   ) {}
 
-  async getHealth(): Promise<ApiResponse<{ status: string; storage?: boolean; uptimeSeconds?: number }>> {
+  async getHealth(): Promise<ApiResponse<{ status: string }>> {
     try {
-      const response = await this.authMeroJs.auth.getHealth();
+      const response = await this.meroJs.auth.getHealth();
       return {
         data: {
           status: response.status,
-          storage: response.storage,
-          uptimeSeconds: response.uptimeSeconds,
         },
       };
     } catch (error) {
@@ -37,17 +83,21 @@ class AuthApi {
 
   async getProviders(): Promise<ApiResponse<{ providers: Provider[]; count: number }>> {
     try {
-      const response = await this.authMeroJs.auth.getProviders();
+      // mero-js returns { providers: AuthProvider[], count?: number }
+      const response = await this.meroJs.auth.getProviders();
+      const providersList = response.providers || [];
       return {
         data: {
-          providers: response.providers.map((p) => ({
+          providers: providersList.map((p) => ({
+            id: p.id,
             name: p.name,
-            type: p.type,
-            description: p.description,
-            configured: p.configured,
-            config: p.config,
+            enabled: p.enabled,
+            // Map to legacy fields for backwards compatibility
+            type: p.name,
+            description: '',
+            configured: p.enabled,
           })),
-          count: response.count,
+          count: response.count ?? providersList.length,
         },
       };
     } catch (error) {
@@ -59,20 +109,54 @@ class AuthApi {
     }
   }
 
-  async requestToken(payload: TokenRequest): Promise<ApiResponse<TokenResponse>> {
+  async requestToken(payload: {
+    auth_method: string;
+    public_key: string;
+    client_name: string;
+    timestamp: number;
+    permissions: string[];
+    provider_data?: Record<string, unknown>;
+  }): Promise<ApiResponse<TokenResponse>> {
     try {
-      const response = await this.authMeroJs.auth.generateTokens(payload);
-      if (response.data?.access_token && response.data?.refresh_token) {
+      // mero-js auth.getToken uses snake_case matching the server API
+      const response = await this.meroJs.auth.getToken({
+        auth_method: payload.auth_method as 'user_password' | 'near_wallet' | 'eth_wallet' | 'starknet_wallet' | 'icp_wallet',
+        public_key: payload.public_key,
+        client_name: payload.client_name,
+        timestamp: payload.timestamp,
+        provider_data: payload.provider_data || {},
+        permissions: payload.permissions,
+      });
+
+      if (response.access_token && response.refresh_token) {
+        // Extract expiry from JWT (more reliable than expires_in)
+        let expiresAt: number;
+        try {
+          const payload = JSON.parse(atob(response.access_token.split('.')[1]));
+          expiresAt = payload.exp * 1000; // JWT exp is in seconds
+          console.log('[AuthApi.requestToken] JWT exp:', payload.exp, '-> expires_at:', expiresAt);
+        } catch (e) {
+          expiresAt = Date.now() + (response.expires_in || 3600) * 1000;
+          console.warn('[AuthApi.requestToken] Failed to parse JWT, using fallback:', expiresAt);
+        }
+        
+        // Store the token in MeroJs so subsequent calls are authenticated
+        await this.meroJs.setToken({
+          access_token: response.access_token,
+          refresh_token: response.refresh_token,
+          expires_at: expiresAt,
+        });
+        
         return {
           data: {
-            access_token: response.data.access_token,
-            refresh_token: response.data.refresh_token,
+            access_token: response.access_token,
+            refresh_token: response.refresh_token,
           },
         };
       }
       return {
         error: {
-          message: response.error || 'Failed to generate tokens',
+          message: 'Failed to generate tokens',
         },
       };
     } catch (error) {
@@ -84,20 +168,46 @@ class AuthApi {
     }
   }
 
-  async refreshToken(payload: RefreshTokenRequest): Promise<ApiResponse<TokenResponse>> {
+  async refreshToken(payload: {
+    access_token: string;
+    refresh_token: string;
+  }): Promise<ApiResponse<TokenResponse>> {
     try {
-      const response = await this.authMeroJs.auth.refreshToken(payload);
-      if (response.data?.access_token && response.data?.refresh_token) {
+      // Server requires BOTH access_token and refresh_token (snake_case)
+      const response = await this.meroJs.auth.refreshToken({
+        access_token: payload.access_token,
+        refresh_token: payload.refresh_token,
+      });
+
+      if (response.access_token && response.refresh_token) {
+        // Extract expiry from JWT (more reliable than expires_in)
+        let expiresAt: number;
+        try {
+          const payload = JSON.parse(atob(response.access_token.split('.')[1]));
+          expiresAt = payload.exp * 1000; // JWT exp is in seconds
+          console.log('[AuthApi.refreshToken] JWT exp:', payload.exp, '-> expires_at:', expiresAt);
+        } catch (e) {
+          expiresAt = Date.now() + (response.expires_in || 3600) * 1000;
+          console.warn('[AuthApi.refreshToken] Failed to parse JWT, using fallback:', expiresAt);
+        }
+        
+        // Store the new token in MeroJs
+        await this.meroJs.setToken({
+          access_token: response.access_token,
+          refresh_token: response.refresh_token,
+          expires_at: expiresAt,
+        });
+        
         return {
           data: {
-            access_token: response.data.access_token,
-            refresh_token: response.data.refresh_token,
+            access_token: response.access_token,
+            refresh_token: response.refresh_token,
           },
         };
       }
       return {
         error: {
-          message: response.error || 'Failed to refresh token',
+          message: 'Failed to refresh token',
         },
       };
     } catch (error) {
@@ -109,13 +219,13 @@ class AuthApi {
     }
   }
 
-  async getChallenge(): Promise<ApiResponse<{ challenge: string; expiresAt: string }>> {
+  async getChallenge(): Promise<ApiResponse<{ challenge: string; nonce: string }>> {
     try {
-      const response = await this.authMeroJs.auth.getChallenge();
+      const response = await this.meroJs.auth.getChallenge();
       return {
         data: {
           challenge: response.challenge,
-          expiresAt: response.expiresAt,
+          nonce: response.nonce,
         },
       };
     } catch (error) {
@@ -131,60 +241,19 @@ class AuthApi {
     context_id: string;
     context_identity: string;
     permissions: string[];
-    target_node_url?: string;
-  }): Promise<ApiResponse<TokenResponse>> {
+  }): Promise<ApiResponse<{ keyId: string; permissions: string[] }>> {
     try {
-      // The actual API endpoint /admin/client-key accepts this format directly
-      // We need to call it using the HTTP client with the auth token
-      const accessToken = this.getAccessToken();
-      if (!accessToken) {
-        return {
-          error: {
-            message: 'No access token available. Please authenticate first.',
-          },
-        };
-      }
-
-      // Use the auth base URL for the client-key endpoint
-      const authBaseUrl = this.config.authBaseUrl || this.config.baseUrl;
-      const url = `${authBaseUrl}/admin/client-key`;
-
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${accessToken}`,
-        },
-        body: JSON.stringify({
-          context_id: payload.context_id,
-          context_identity: payload.context_identity,
-          permissions: payload.permissions,
-          target_node_url: payload.target_node_url,
-        }),
+      // mero-js auth.generateClientKey returns ClientKey, not tokens
+      const response = await this.meroJs.auth.generateClientKey({
+        contextId: payload.context_id,
+        contextIdentity: payload.context_identity,
+        permissions: payload.permissions,
       });
 
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        return {
-          error: {
-            message: errorData.error?.message || `HTTP ${response.status}: ${response.statusText}`,
-          },
-        };
-      }
-
-      const data = await response.json();
-      if (data.data?.access_token && data.data?.refresh_token) {
-        return {
-          data: {
-            access_token: data.data.access_token,
-            refresh_token: data.data.refresh_token,
-          },
-        };
-      }
-
       return {
-        error: {
-          message: data.error?.message || 'Failed to generate client key',
+        data: {
+          keyId: response.keyId,
+          permissions: response.permissions,
         },
       };
     } catch (error) {
@@ -195,31 +264,55 @@ class AuthApi {
       };
     }
   }
-
-  private getAccessToken(): string | null {
-    // Import token storage functions
-    try {
-      return localStorage.getItem('calimero_access_token');
-    } catch {
-      return null;
-    }
-  }
 }
 
-// Node API wrapper matching calimero-client pattern
+// Node API wrapper - maintains compatibility with existing code
 class NodeApi {
-  constructor(
-    private meroJs: MeroJs,
-    private adminBaseUrl: string,
-  ) {}
+  constructor(private meroJs: MeroJs) {
+    console.log('[NodeApi] Created with meroJs:', !!meroJs);
+    console.log('[NodeApi] meroJs.admin:', !!(meroJs as any)?.admin);
+    console.log('[NodeApi] meroJs.admin?.public:', !!(meroJs as any)?.admin?.public);
+  }
 
   async healthCheck(): Promise<ApiResponse<{ status: string }>> {
     try {
-      const health = await this.meroJs.admin.healthCheck();
+      console.log('[NodeApi.healthCheck] Checking health...');
+      console.log('[NodeApi.healthCheck] meroJs:', !!this.meroJs);
+      
+      if (!this.meroJs) {
+        return { error: { message: 'MeroJs not initialized' } };
+      }
+      
+      const admin = this.meroJs.admin;
+      console.log('[NodeApi.healthCheck] admin:', !!admin);
+      console.log('[NodeApi.healthCheck] admin type:', typeof admin);
+      console.log('[NodeApi.healthCheck] admin constructor:', admin?.constructor?.name);
+      
+      if (!admin) {
+        return { error: { message: 'MeroJs.admin not available' } };
+      }
+      
+      // Try to access public getter with explicit error handling
+      let publicApi;
+      try {
+        publicApi = admin.public;
+        console.log('[NodeApi.healthCheck] public:', !!publicApi);
+        console.log('[NodeApi.healthCheck] public type:', typeof publicApi);
+      } catch (e) {
+        console.error('[NodeApi.healthCheck] Error accessing admin.public:', e);
+        return { error: { message: `Error accessing admin.public: ${e}` } };
+      }
+      
+      if (!publicApi) {
+        console.error('[NodeApi.healthCheck] admin.public is falsy:', publicApi);
+        return { error: { message: 'MeroJs.admin.public not available' } };
+      }
+      
+      const health = await publicApi.health();
       return { data: { status: health.status } };
-    } catch (error: any) {
-      // Check if it's a 401 error (HTTPError with status 401)
-      if (error?.status === 401 || (error instanceof Error && error.message.includes('401'))) {
+    } catch (error: unknown) {
+      const err = error as { status?: number; message?: string };
+      if (err?.status === 401 || (error instanceof Error && error.message.includes('401'))) {
         return {
           error: {
             message: 'Unauthorized',
@@ -235,33 +328,14 @@ class NodeApi {
     }
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async getContexts(): Promise<ApiResponse<any[]>> {
     try {
-      const contextsResponse = await this.meroJs.admin.getContexts();
-      // Server returns: { data: { contexts: [...] } } or { contexts: [...] }
-      // mero-js HTTP client returns the raw JSON
-      let contexts: any[] = [];
-      
-      if (contextsResponse && typeof contextsResponse === 'object') {
-        const response = contextsResponse as any;
-        // Check for { data: { contexts: [...] } }
-        if (response.data?.contexts && Array.isArray(response.data.contexts)) {
-          contexts = response.data.contexts;
-        }
-        // Check for { contexts: [...] }
-        else if (response.contexts && Array.isArray(response.contexts)) {
-          contexts = response.contexts;
-        }
-        // Check if data is directly the array
-        else if (Array.isArray(response.data)) {
-          contexts = response.data;
-        }
-      }
-      
-      return { data: contexts };
-    } catch (error: any) {
-      // Check if it's a 401 error (HTTPError with status 401)
-      if (error?.status === 401 || (error instanceof Error && error.message.includes('401'))) {
+      const response = await this.meroJs.admin.contexts.listContexts();
+      return { data: response.contexts || [] };
+    } catch (error: unknown) {
+      const err = error as { status?: number };
+      if (err?.status === 401) {
         return {
           error: {
             message: 'Unauthorized',
@@ -284,14 +358,21 @@ class NodeApi {
     initializationParams: number[];
   }): Promise<ApiResponse<{ contextId: string; memberPublicKey: string }>> {
     try {
-      const response = await this.meroJs.admin.createContext(request);
-      // Server returns: { data: { contextId: string, memberPublicKey: string } }
-      const data = (response as any).data || response;
-      const contextId = data?.contextId || '';
-      const memberPublicKey = data?.memberPublicKey || '';
-      return { data: { contextId, memberPublicKey } };
-    } catch (error: any) {
-      if (error?.status === 401) {
+      const response = await this.meroJs.admin.contexts.createContext({
+        protocol: request.protocol,
+        applicationId: request.applicationId,
+        contextSeed: request.contextSeed,
+        initializationParams: request.initializationParams,
+      });
+      return {
+        data: {
+          contextId: response.contextId,
+          memberPublicKey: response.memberPublicKey,
+        },
+      };
+    } catch (error: unknown) {
+      const err = error as { status?: number };
+      if (err?.status === 401) {
         return {
           error: {
             message: 'Unauthorized',
@@ -309,13 +390,11 @@ class NodeApi {
 
   async deleteContext(contextId: string): Promise<ApiResponse<{ contextId: string }>> {
     try {
-      const response = await this.meroJs.admin.deleteContext(contextId);
-      // Server returns: { contextId: string }
-      const data = (response as any).data || response;
-      const deletedContextId = data?.contextId || contextId;
-      return { data: { contextId: deletedContextId } };
-    } catch (error: any) {
-      if (error?.status === 401) {
+      await this.meroJs.admin.contexts.deleteContext(contextId);
+      return { data: { contextId } };
+    } catch (error: unknown) {
+      const err = error as { status?: number };
+      if (err?.status === 401) {
         return {
           error: {
             message: 'Unauthorized',
@@ -331,86 +410,45 @@ class NodeApi {
     }
   }
 
-  async fetchContextIdentities(contextId: string): Promise<ApiResponse<any[]>> {
+  async fetchContextIdentities(contextId: string): Promise<ApiResponse<string[]>> {
     try {
-      // This would need to be implemented in mero-js admin API
-      // For now, return empty array
-      return { data: [] };
+      const response = await this.meroJs.admin.contexts.getContextIdentitiesOwned(contextId);
+      return { data: (response.identities || []) as string[] };
     } catch (error) {
       return {
         error: {
-          message:
-            error instanceof Error ? error.message : 'Failed to fetch context identities',
+          message: error instanceof Error ? error.message : 'Failed to fetch context identities',
         },
       };
     }
   }
 
-  async getInstalledApplicationDetails(
-    applicationId: string,
-  ): Promise<ApiResponse<any>> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  async getInstalledApplicationDetails(applicationId: string): Promise<ApiResponse<any>> {
     try {
-      const appsResponse = await this.meroJs.admin.listApplications();
-      // mero-js returns ListApplicationsResponse which has an apps array
-      const apps = (appsResponse as any).apps || [];
-      const app = apps.find((a: any) => a.id === applicationId);
-      if (app) {
-        return { data: app };
-      }
-      return {
-        error: {
-          message: 'Application not found',
-        },
-      };
+      const response = await this.meroJs.admin.applications.getApplication(applicationId);
+      return { data: response };
     } catch (error) {
       return {
         error: {
-          message:
-            error instanceof Error
-              ? error.message
-              : 'Failed to get application details',
+          message: error instanceof Error ? error.message : 'Failed to get application details',
         },
       };
     }
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async listApplications(): Promise<ApiResponse<any[]>> {
     try {
-      const appsResponse = await this.meroJs.admin.listApplications();
-      console.log("🔍 meroJs.admin.listApplications() raw response:", JSON.stringify(appsResponse, null, 2));
-      console.log("🔍 appsResponse type:", typeof appsResponse);
-      console.log("🔍 appsResponse is object:", typeof appsResponse === 'object');
-      
-      // Server returns: { data: { apps: [...] } }
-      // mero-js HTTP client returns the raw JSON: { data: { apps: [...] } }
-      // So appsResponse should be: { data: { apps: [...] } }
-      let apps: any[] = [];
-      
-      if (appsResponse && typeof appsResponse === 'object') {
-        const response = appsResponse as any;
-        
-        // Try all possible extraction paths
-        if (response.data?.apps && Array.isArray(response.data.apps)) {
-          // Structure: { data: { apps: [...] } }
-          apps = response.data.apps;
-        } else if (response.apps && Array.isArray(response.apps)) {
-          // Structure: { apps: [...] }
-          apps = response.apps;
-        } else if (Array.isArray(response.data)) {
-          // Structure: { data: [...] }
-          apps = response.data;
-        } else if (Array.isArray(response)) {
-          // Structure: [...] (direct array)
-          apps = response;
-        }
+      if (!this.meroJs?.admin?.applications) {
+        console.error('[NodeApi.listApplications] MeroJs not fully initialized');
+        return { error: { message: 'Client not initialized. Please wait and try again.' } };
       }
-      
-      console.log("🔍 Final extracted apps:", apps);
-      console.log("🔍 Final apps count:", apps.length);
-      return { data: apps };
-    } catch (error: any) {
-      console.error("🔍 Error in listApplications:", error);
-      if (error?.status === 401) {
+      const response = await this.meroJs.admin.applications.listApplications();
+      return { data: response.apps || [] };
+    } catch (error: unknown) {
+      const err = error as { status?: number };
+      if (err?.status === 401) {
         return {
           error: {
             message: 'Unauthorized',
@@ -429,13 +467,18 @@ class NodeApi {
   async installApplication(request: {
     url: string;
     hash?: string;
-    metadata: number[]; // Array of bytes (Vec<u8> in Rust)
+    metadata: number[];
   }): Promise<ApiResponse<{ applicationId: string }>> {
     try {
-      const response = await this.meroJs.admin.installApplication(request);
-      return { data: response };
-    } catch (error: any) {
-      if (error?.status === 401) {
+      const response = await this.meroJs.admin.applications.installApplication({
+        url: request.url,
+        hash: request.hash,
+        metadata: request.metadata,
+      });
+      return { data: { applicationId: response.applicationId } };
+    } catch (error: unknown) {
+      const err = error as { status?: number };
+      if (err?.status === 401) {
         return {
           error: {
             message: 'Unauthorized',
@@ -453,10 +496,11 @@ class NodeApi {
 
   async uninstallApplication(applicationId: string): Promise<ApiResponse<{ applicationId: string }>> {
     try {
-      const response = await this.meroJs.admin.uninstallApplication(applicationId);
-      return { data: response };
-    } catch (error: any) {
-      if (error?.status === 401) {
+      await this.meroJs.admin.applications.uninstallApplication(applicationId);
+      return { data: { applicationId } };
+    } catch (error: unknown) {
+      const err = error as { status?: number };
+      if (err?.status === 401) {
         return {
           error: {
             message: 'Unauthorized',
@@ -473,82 +517,86 @@ class NodeApi {
   }
 }
 
-// Main client class matching calimero-client pattern
+/**
+ * Main client class - wraps MeroJs with backwards-compatible API
+ */
 export class Client {
   public auth: AuthApi;
   public node: NodeApi;
+  public meroJs: MeroJs;
 
   constructor(config: ClientConfig) {
-    // Extract node base URL (without /admin-api suffix)
-    // If baseUrl ends with /admin-api, remove it to get the node base URL
-    const nodeBaseUrl = config.baseUrl.endsWith('/admin-api')
-      ? config.baseUrl.slice(0, -10) // Remove '/admin-api'
-      : config.baseUrl;
-
-    // Helper to get token from localStorage
-    const getTokenFromStorage = async (): Promise<string | undefined> => {
-      try {
-        // Dynamic import to avoid circular dependency
-        const { getAccessToken } = await import('./token-storage');
-        return getAccessToken() || undefined;
-      } catch {
-        return undefined;
-      }
-    };
-
-    // Create HTTP client that reads token from localStorage
-    const createHttpClientWithToken = (baseUrl: string) => {
-      return createBrowserHttpClient({
-        baseUrl,
-        getAuthToken: getTokenFromStorage,
-        timeoutMs: config.timeoutMs,
-        credentials: config.requestCredentials,
-      });
-    };
-
-    // Create auth HTTP client
-    const authBaseUrl = config.authBaseUrl || nodeBaseUrl;
-    const authHttpClient = createHttpClientWithToken(authBaseUrl);
-    const authApiClient = createAuthApiClientFromHttpClient(authHttpClient, {
-      baseUrl: authBaseUrl,
-      getAuthToken: getTokenFromStorage,
+    console.log('[Client] Constructor called with config:', config);
+    
+    // Create token storage
+    const tokenStorage = new LocalStorageTokenStorage();
+    console.log('[Client] Created LocalStorageTokenStorage');
+    
+    // Create MeroJs instance with token storage
+    this.meroJs = new MeroJs({
+      baseUrl: config.baseUrl,
+      authBaseUrl: config.authBaseUrl,
       timeoutMs: config.timeoutMs,
+      requestCredentials: config.requestCredentials,
+      tokenStorage: tokenStorage,
     });
+    console.log('[Client] Created MeroJs instance');
 
-    // Create node HTTP client (admin API)
-    const nodeBaseUrlWithAdmin = `${nodeBaseUrl}/admin-api`;
-    const nodeHttpClient = createHttpClientWithToken(nodeBaseUrlWithAdmin);
-    const nodeApiClient = createAdminApiClientFromHttpClient(nodeHttpClient, {
-      baseUrl: nodeBaseUrlWithAdmin,
-      getAuthToken: getTokenFromStorage,
-      timeoutMs: config.timeoutMs,
-    });
+    this.auth = new AuthApi(this.meroJs, config);
+    this.node = new NodeApi(this.meroJs);
+    console.log('[Client] Constructor complete');
+  }
 
-    // Create MeroJs instances for compatibility (they won't be used directly)
-    // but we need them for the API wrappers
-    const authMeroJs = {
-      auth: authApiClient,
-      admin: nodeApiClient,
-    } as any as MeroJs;
-
-    const nodeMeroJs = {
-      auth: authApiClient,
-      admin: nodeApiClient,
-    } as any as MeroJs;
-
-    this.auth = new AuthApi(authMeroJs, nodeMeroJs, config);
-    this.node = new NodeApi(nodeMeroJs, nodeBaseUrlWithAdmin);
+  /**
+   * Initialize the client (load tokens from storage)
+   */
+  async init(): Promise<void> {
+    console.log('[Client.init] START - calling meroJs.init()');
+    await this.meroJs.init();
+    console.log('[Client.init] END - meroJs.init() completed');
   }
 }
 
+/**
+ * Create a new client instance synchronously.
+ * Note: Tokens are loaded async - use createClientAsync for guaranteed token loading.
+ */
 export function createClient(config: ClientConfig): Client {
+  console.log('[createClient] Creating client with config:', config);
   const client = new Client(config);
-  // Update global singleton via import
-  import('./singleton').then(({ setClientInstance }) => {
-    setClientInstance(client);
-  });
+  
+  // Update global singleton immediately
+  setClientInstance(client);
+  
+  // Initialize async (load tokens from storage)
+  // This runs in background - use createClientAsync if you need guaranteed token loading
+  client.init().then(() => {
+    console.log('[createClient] Token initialization complete');
+  }).catch(console.error);
+  
+  return client;
+}
+
+/**
+ * Create a new client instance with guaranteed token initialization.
+ * Use this when you need tokens to be loaded before making API calls.
+ */
+export async function createClientAsync(config: ClientConfig): Promise<Client> {
+  console.log('[createClientAsync] Creating client with config:', config);
+  const client = new Client(config);
+  
+  // Update global singleton
+  setClientInstance(client);
+  
+  // Wait for token initialization to complete
+  console.log('[createClientAsync] Calling init() to load tokens...');
+  await client.init();
+  
+  // Check if tokens were loaded
+  const isAuth = client.meroJs.isAuthenticated();
+  console.log('[createClientAsync] Token initialization complete, isAuthenticated:', isAuth);
+  
   return client;
 }
 
 export type { ClientConfig };
-

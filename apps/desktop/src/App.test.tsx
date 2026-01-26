@@ -10,15 +10,16 @@ export async function testMeroReact() {
     // 1. Initialize client
     const settings = getSettings();
     const authUrl = getAuthUrl(settings);
-    const adminApiUrl = `${settings.nodeUrl.replace(/\/$/, '')}/admin-api`;
+    // baseUrl should NOT include /admin-api - mero-js adds that internally
+    const nodeBaseUrl = settings.nodeUrl.replace(/\/$/, '');
     
     console.log('📡 Initializing client...');
     console.log('  Node URL:', settings.nodeUrl);
     console.log('  Auth URL:', authUrl);
-    console.log('  Admin API URL:', adminApiUrl);
+    console.log('  Admin API URL:', `${nodeBaseUrl}/admin-api`);
 
     createClient({
-      baseUrl: adminApiUrl,
+      baseUrl: nodeBaseUrl,
       authBaseUrl: authUrl,
       requestCredentials: 'omit',
     });

@@ -21,6 +21,9 @@ export const apiClient = new Proxy({} as Client, {
   get(target, prop) {
     if (!clientInstance) {
       // Try to auto-initialize with default config
+      console.warn('[apiClient PROXY] Auto-initializing with default config! This may cause issues.');
+      console.warn('[apiClient PROXY] Accessed property:', String(prop));
+      console.trace('[apiClient PROXY] Stack trace:');
       const defaultConfig: ClientConfig = {
         baseUrl: 'http://localhost:2528',
       };

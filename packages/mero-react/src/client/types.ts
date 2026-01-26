@@ -1,4 +1,4 @@
-// Types matching calimero-client API
+// Types for mero-react client
 export interface ApiResponse<T> {
   data?: T;
   error?: {
@@ -7,12 +7,16 @@ export interface ApiResponse<T> {
   };
 }
 
+// Provider type - adapts to mero-js AuthProvider
 export interface Provider {
+  id: string;
   name: string;
-  type: string;
-  description: string;
-  configured: boolean;
-  config?: Record<string, any>;
+  enabled: boolean;
+  // Legacy fields for backwards compatibility
+  type?: string;
+  description?: string;
+  configured?: boolean;
+  config?: Record<string, unknown>;
 }
 
 export interface ProvidersResponse {
@@ -27,8 +31,10 @@ export interface TokenResponse {
 
 export interface ClientConfig {
   baseUrl: string;
-  authBaseUrl?: string; // Optional separate auth URL
+  authBaseUrl?: string;
   requestCredentials?: RequestCredentials;
   timeoutMs?: number;
 }
 
+// Re-export mero-js types for convenience
+export type { TokenData, TokenStorage, MeroJsConfig } from '@calimero-network/mero-js';

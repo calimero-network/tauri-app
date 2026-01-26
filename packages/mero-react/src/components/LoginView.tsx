@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { apiClient, setAccessToken, setRefreshToken } from '../client';
+import { apiClient, setAccessToken, setRefreshToken, setTokenExpiresAt } from '../client';
 import type { Provider } from '../client/types';
 import { ProviderSelector } from './ProviderSelector';
 import { UsernamePasswordForm } from './UsernamePasswordForm';
@@ -94,6 +94,18 @@ export function LoginView({ onSuccess, onError }: LoginViewProps) {
         // Store tokens using calimero-client compatible storage
         setAccessToken(tokenResponse.data.access_token);
         setRefreshToken(tokenResponse.data.refresh_token);
+        
+        // Extract expiry from JWT (exp claim is in seconds)
+        try {
+          const payload = JSON.parse(atob(tokenResponse.data.access_token.split('.')[1]));
+          const expiresAt = payload.exp * 1000; // Convert seconds to milliseconds
+          console.log('[LoginView] JWT exp:', payload.exp, 'expiresAt:', expiresAt);
+          setTokenExpiresAt(expiresAt);
+        } catch (e) {
+          // Fallback to 1 hour if JWT parsing fails
+          console.warn('[LoginView] Failed to parse JWT, using 1 hour default:', e);
+          setTokenExpiresAt(Date.now() + 3600 * 1000);
+        }
 
         onSuccess?.();
       } else {

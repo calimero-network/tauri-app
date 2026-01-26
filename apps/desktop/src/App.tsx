@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { createClient, apiClient, LoginView, getAccessToken } from "@calimero-network/mero-react";
+import { createClientAsync, apiClient, LoginView, getAccessToken } from "@calimero-network/mero-react";
 import { getSettings, getAuthUrl } from "./utils/settings";
 import { checkOnboardingState, type OnboardingState } from "./utils/onboarding";
 import Settings from "./pages/Settings";
@@ -27,6 +27,7 @@ function App() {
   const [currentPage, setCurrentPage] = useState<'home' | 'marketplace' | 'installed' | 'contexts' | 'confirm'>('home');
   const [onboardingState, setOnboardingState] = useState<OnboardingState | null>(null);
   const [checkingOnboarding, setCheckingOnboarding] = useState(true);
+  const [clientReady, setClientReady] = useState(false);
   const [needsNodeConfig, setNeedsNodeConfig] = useState(false);
   const [adminApiUrl, setAdminApiUrl] = useState("");
   const [authApiUrl, setAuthApiUrl] = useState("");
@@ -48,6 +49,10 @@ function App() {
 
   // Load contexts for main page
   const loadContexts = useCallback(async () => {
+    if (!clientReady) {
+      console.log('⏳ loadContexts: Client not ready yet, skipping');
+      return;
+    }
     try {
       const contextsResponse = await apiClient.node.getContexts();
       if (contextsResponse.error) {
@@ -70,7 +75,7 @@ function App() {
       }
       console.error('Failed to load contexts:', err);
     }
-  }, []);
+  }, [clientReady]);
 
   useEffect(() => {
     async function initializeApp() {
@@ -88,20 +93,23 @@ function App() {
         return;
       }
       
-      const adminApiUrl = `${settings.nodeUrl.replace(/\/$/, '')}/admin-api`;
+      // baseUrl should NOT include /admin-api - mero-js adds that internally
+      const nodeBaseUrl = settings.nodeUrl.replace(/\/$/, '');
       const authUrl = getAuthUrl(settings);
       const authBaseUrl = authUrl.replace(/\/$/, '');
       const authApiUrl = `${authBaseUrl}/auth`;
       
-      setAdminApiUrl(adminApiUrl);
+      setAdminApiUrl(`${nodeBaseUrl}/admin-api`); // For display only
       setAuthApiUrl(authApiUrl);
 
-      // Initialize mero-react client
-      createClient({
-        baseUrl: adminApiUrl,
+      // Initialize mero-react client with token loading
+      // Note: baseUrl is the node URL, NOT /admin-api - mero-js adds that internally
+      await createClientAsync({
+        baseUrl: nodeBaseUrl,
         authBaseUrl: authBaseUrl,
         requestCredentials: 'omit',
       });
+      setClientReady(true);
 
       // First, quickly check if the node is running at the configured URL
       setCheckingOnboarding(true);
@@ -157,13 +165,20 @@ function App() {
         });
 
         // Flow logic:
-        // 1. If auth is NOT configured (no users) → Onboarding (first time, create account)
-        // 2. If auth IS configured (has users) → Check if logged in
-        //    - Not logged in → Login screen
-        //    - Logged in → Main app
-        // 3. If auth service unavailable → Show error in onboarding
+        // 1. FIRST: Check if user has existing tokens (already logged in)
+        // 2. If no tokens AND auth not configured → Onboarding (first time)
+        // 3. If no tokens AND auth configured → Login screen
+        // 4. If auth service unavailable → Show error
         
-        if (!onboardingState.authAvailable) {
+        // PRIORITY: Check for existing tokens FIRST
+        const existingToken = getAccessToken();
+        console.log('🔑 Existing token check:', existingToken ? 'EXISTS' : 'NONE');
+        
+        if (existingToken) {
+          // User has token - try to use it (mero-js will refresh if needed)
+          console.log('✅ User has existing token, loading contexts');
+          loadContexts();
+        } else if (!onboardingState.authAvailable) {
           // Auth service not available - show onboarding with error
           // But don't redirect back to Nodes page if node is running
           console.log('⚠️ Auth service not available, showing onboarding with error');
@@ -174,17 +189,9 @@ function App() {
           console.log('📋 No users configured, showing onboarding screen');
           setShowOnboarding(true);
         } else {
-          // Auth is configured (has users) - check if user is logged in
-          const hasToken = getAccessToken();
-          console.log('🔑 Token check:', hasToken ? 'EXISTS' : 'NONE');
-          if (!hasToken) {
-            console.log('🔐 Showing login screen');
-            setShowLogin(true);
-          } else {
-            // User has token, try to load contexts
-            console.log('✅ User logged in, loading contexts');
-            loadContexts();
-          }
+          // Auth is configured (has users) but no token - show login
+          console.log('🔐 No token, showing login screen');
+          setShowLogin(true);
         }
       } catch (err) {
         console.error('Failed to check node connection:', err);
@@ -356,20 +363,23 @@ function App() {
             
             // Initialize the app if it wasn't initialized yet (first-time setup)
             if (!adminApiUrl) {
-              const adminApiUrl_new = `${settings.nodeUrl.replace(/\/$/, '')}/admin-api`;
+              // baseUrl should NOT include /admin-api - mero-js adds that internally
+              const nodeBaseUrl = settings.nodeUrl.replace(/\/$/, '');
               const authUrl = getAuthUrl(settings);
               const authBaseUrl = authUrl.replace(/\/$/, '');
               const authApiUrl_new = `${authBaseUrl}/auth`;
               
-              setAdminApiUrl(adminApiUrl_new);
+              setAdminApiUrl(`${nodeBaseUrl}/admin-api`); // For display only
               setAuthApiUrl(authApiUrl_new);
 
-              // Initialize mero-react client
-              createClient({
-                baseUrl: adminApiUrl_new,
+              // Initialize mero-react client with token loading
+              // Note: baseUrl is the node URL, NOT /admin-api - mero-js adds that internally
+              await createClientAsync({
+                baseUrl: nodeBaseUrl,
                 authBaseUrl: authBaseUrl,
                 requestCredentials: 'omit',
               });
+              setClientReady(true);
 
               // Check onboarding state
               setCheckingOnboarding(true);
@@ -413,20 +423,23 @@ function App() {
           
           // Always reload client when returning from Settings (settings may have changed)
           const settings = getSettings();
-          const adminApiUrl_new = `${settings.nodeUrl.replace(/\/$/, '')}/admin-api`;
+          // baseUrl should NOT include /admin-api - mero-js adds that internally
+          const nodeBaseUrl = settings.nodeUrl.replace(/\/$/, '');
           const authUrl = getAuthUrl(settings);
           const authBaseUrl = authUrl.replace(/\/$/, '');
           const authApiUrl_new = `${authBaseUrl}/auth`;
           
-          setAdminApiUrl(adminApiUrl_new);
+          setAdminApiUrl(`${nodeBaseUrl}/admin-api`); // For display only
           setAuthApiUrl(authApiUrl_new);
 
-          // Reload client with new settings
-          createClient({
-            baseUrl: adminApiUrl_new,
+          // Reload client with new settings and await token loading
+          // Note: baseUrl is the node URL, NOT /admin-api - mero-js adds that internally
+          await createClientAsync({
+            baseUrl: nodeBaseUrl,
             authBaseUrl: authBaseUrl,
             requestCredentials: 'omit',
           });
+          setClientReady(true);
           
           if (needsNodeConfig) {
             // After first-time settings, continue with app initialization
@@ -491,7 +504,7 @@ function App() {
             ⚙️ Settings
           </button>
         </header>
-        <Marketplace />
+        <Marketplace clientReady={clientReady} />
       </div>
     );
   }
@@ -515,6 +528,7 @@ function App() {
           </button>
         </header>
         <InstalledApps 
+          clientReady={clientReady}
           onAuthRequired={() => setShowLogin(true)}
           onConfirmUninstall={(_appId, appName, onConfirm) => {
             setConfirmAction({
@@ -559,6 +573,7 @@ function App() {
           </button>
         </header>
         <Contexts 
+          clientReady={clientReady}
           onAuthRequired={() => setShowLogin(true)}
           onConfirmDelete={(_contextId, contextName, onConfirm) => {
             setConfirmAction({

@@ -63,11 +63,11 @@ export async function checkOnboardingState(): Promise<OnboardingState> {
     console.log('📋 Providers available:', state.providersAvailable, providers.length);
 
     // Check if any providers are configured (have users/keys)
-    const configuredProviders = providers.filter((p: { configured: boolean }) => p.configured === true);
+    const configuredProviders = providers.filter((p) => p.configured === true);
     state.providersConfigured = configuredProviders.length > 0;
     state.hasConfiguredProviders = configuredProviders.length > 0;
     console.log('✅ Configured providers:', state.hasConfiguredProviders, configuredProviders.length);
-    console.log('📝 Provider details:', providers.map((p: { name: string; configured: boolean }) => ({ name: p.name, configured: p.configured })));
+    console.log('📝 Provider details:', providers.map((p) => ({ name: p.name, configured: p.configured })));
 
     // Determine if this is first-time setup
     // First time = auth is available, providers are available, but none are configured

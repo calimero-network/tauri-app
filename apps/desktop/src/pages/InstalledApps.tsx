@@ -19,16 +19,19 @@ interface InstalledApplication {
 export interface InstalledAppsProps {
   onAuthRequired?: () => void;
   onConfirmUninstall?: (appId: string, appName: string, onConfirm: () => Promise<void>) => void;
+  clientReady?: boolean;
 }
 
-const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirmUninstall }) => {
+const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirmUninstall, clientReady = true }) => {
   const [apps, setApps] = useState<InstalledApplication[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    loadInstalledApps();
-  }, []);
+    if (clientReady) {
+      loadInstalledApps();
+    }
+  }, [clientReady]);
 
   const loadInstalledApps = async () => {
     setLoading(true);

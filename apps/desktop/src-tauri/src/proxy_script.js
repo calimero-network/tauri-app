@@ -83,6 +83,12 @@
                 console.log('[Tauri Proxy] Intercepting fetch:', urlStr, 'method:', init?.method || 'GET');
                 console.log('[Tauri Proxy] Headers being sent:', JSON.stringify(headers, null, 2));
                 console.log('[Tauri Proxy] Has Authorization header?', 'Authorization' in headers || 'authorization' in headers);
+                // Debug: Log body for /refresh endpoint
+                if (urlStr.includes('/refresh')) {
+                    console.log('[Tauri Proxy /refresh] Body being proxied:', bodyStr);
+                    console.log('[Tauri Proxy /refresh] Body type:', typeof bodyStr);
+                    console.log('[Tauri Proxy /refresh] Body length:', bodyStr ? bodyStr.length : 0);
+                }
                 const response = await proxyRequest(urlStr, (init && init.method) || 'GET', headers, bodyStr);
                 
                 console.log('[Tauri Proxy] Proxy response:', response.status, urlStr);

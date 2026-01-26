@@ -12,6 +12,7 @@ import {
 } from "../utils/merod";
 import { invoke } from "@tauri-apps/api/tauri";
 import { getSettings, saveSettings } from "../utils/settings";
+import { useToast } from "../contexts/ToastContext";
 import "./Nodes.css";
 
 interface NodesProps {
@@ -19,6 +20,7 @@ interface NodesProps {
 }
 
 export default function Nodes({ onBack }: NodesProps) {
+  const toast = useToast();
   const [availableNodes, setAvailableNodes] = useState<string[]>([]);
   const [runningNodes, setRunningNodes] = useState<RunningMerodNode[]>([]);
   const [homeDir, setHomeDir] = useState("~/.calimero");
@@ -107,13 +109,13 @@ export default function Nodes({ onBack }: NodesProps) {
       }
     } catch (error) {
       console.error("Failed to pick directory:", error);
-      alert("Failed to pick directory");
+      toast.error("Failed to pick directory");
     }
   };
 
   const handleCreateNode = async () => {
     if (!newNodeName.trim()) {
-      alert("Please enter a node name");
+      toast.warning("Please enter a node name");
       return;
     }
     
@@ -126,10 +128,10 @@ export default function Nodes({ onBack }: NodesProps) {
       await loadNodes();
       // Select the newly created node
       setSelectedNode(createdNodeName);
-      alert(`Node '${createdNodeName}' created successfully`);
+      toast.success(`Node '${createdNodeName}' created successfully`);
     } catch (error: any) {
       console.error("Failed to create node:", error);
-      alert(`Failed to create node: ${error.message || error}`);
+      toast.error(`Failed to create node: ${error.message || error}`);
     } finally {
       setLoading(false);
     }
@@ -137,14 +139,14 @@ export default function Nodes({ onBack }: NodesProps) {
 
   const handleStartNode = async () => {
     if (!selectedNode) {
-      alert("Please select a node");
+      toast.warning("Please select a node");
       return;
     }
     
     // Check if node is already running
     const nodeInfo = getRunningNodeInfo(selectedNode);
     if (nodeInfo.running) {
-      alert(`Node '${selectedNode}' is already running on port ${nodeInfo.port}`);
+      toast.info(`Node '${selectedNode}' is already running on port ${nodeInfo.port}`);
       return;
     }
     
@@ -153,12 +155,12 @@ export default function Nodes({ onBack }: NodesProps) {
       await startMerod(serverPort, swarmPort, homeDir, selectedNode);
       await checkStatus();
       await detectRunning();
-      alert(`Node '${selectedNode}' started successfully on server port ${serverPort} and swarm port ${swarmPort}`);
+      toast.success(`Node '${selectedNode}' started successfully on server port ${serverPort} and swarm port ${swarmPort}`);
     } catch (error: any) {
       console.error("Failed to start node:", error);
       await checkStatus();
       await detectRunning();
-      alert(`Failed to start node: ${error.message || error}`);
+      toast.error(`Failed to start node: ${error.message || error}`);
     } finally {
       setLoading(false);
     }
@@ -174,12 +176,12 @@ export default function Nodes({ onBack }: NodesProps) {
       }
       await checkStatus();
       await detectRunning();
-      alert("Node stopped successfully");
+      toast.success("Node stopped successfully");
     } catch (error: any) {
       console.error("Failed to stop node:", error);
       await checkStatus();
       await detectRunning();
-      alert(`Failed to stop node: ${error.message || error}`);
+      toast.error(`Failed to stop node: ${error.message || error}`);
     } finally {
       setLoading(false);
     }
@@ -195,12 +197,12 @@ export default function Nodes({ onBack }: NodesProps) {
         authUrl: undefined, // Clear authUrl so it defaults to nodeUrl
       });
       setCurrentNodeUrl(nodeUrl);
-      alert(`Node URL set to ${nodeUrl}. The app will reload to connect to this node.`);
+      toast.success(`Node URL set to ${nodeUrl}. The app will reload to connect to this node.`);
       // Reload the page to reconnect with new node URL
       window.location.reload();
     } catch (error: any) {
       console.error("Failed to use node:", error);
-      alert(`Failed to use node: ${error.message || error}`);
+      toast.error(`Failed to use node: ${error.message || error}`);
     }
   };
 

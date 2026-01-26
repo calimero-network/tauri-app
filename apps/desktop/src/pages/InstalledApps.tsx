@@ -1,6 +1,9 @@
 import React, { useState, useEffect } from "react";
 import { apiClient } from "@calimero-network/mero-react";
 import { invoke } from "@tauri-apps/api/tauri";
+import { useToast } from "../contexts/ToastContext";
+import DataTable from "../components/DataTable";
+import { SkeletonTable } from "../components/Skeleton";
 import "./InstalledApps.css";
 
 interface InstalledApplication {
@@ -22,6 +25,7 @@ export interface InstalledAppsProps {
 }
 
 const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirmUninstall }) => {
+  const toast = useToast();
   const [apps, setApps] = useState<InstalledApplication[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -82,15 +86,15 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
         try {
           const response = await apiClient.node.uninstallApplication(appId);
           if (response.error) {
-            alert(`Failed to uninstall: ${response.error.message}`);
+            toast.error(`Failed to uninstall: ${response.error.message}`);
             return;
           }
 
-          alert(`Application "${appName}" uninstalled successfully`);
+          toast.success(`Application "${appName}" uninstalled successfully`);
           // Reload the list
           await loadInstalledApps();
         } catch (err) {
-          alert(`Failed to uninstall application: ${err instanceof Error ? err.message : "Unknown error"}`);
+          toast.error(`Failed to uninstall application: ${err instanceof Error ? err.message : "Unknown error"}`);
           console.error("Uninstall error:", err);
         }
       });
@@ -99,14 +103,14 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
       try {
         const response = await apiClient.node.uninstallApplication(appId);
         if (response.error) {
-          alert(`Failed to uninstall: ${response.error.message}`);
+          toast.error(`Failed to uninstall: ${response.error.message}`);
           return;
         }
 
-        alert(`Application "${appName}" uninstalled successfully`);
+        toast.success(`Application "${appName}" uninstalled successfully`);
         await loadInstalledApps();
       } catch (err) {
-        alert(`Failed to uninstall application: ${err instanceof Error ? err.message : "Unknown error"}`);
+        toast.error(`Failed to uninstall application: ${err instanceof Error ? err.message : "Unknown error"}`);
         console.error("Uninstall error:", err);
       }
     }
@@ -147,12 +151,13 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
         windowLabel,
         url: frontendUrl,
         title: appName || 'Application',
+        openDevtools: false,
         nodeUrl: settings.nodeUrl,
       });
       console.log('Opened in new Tauri window:', frontendUrl, 'with label:', windowLabel);
     } catch (error) {
       console.error("Failed to open frontend:", error);
-      alert(`Failed to open frontend: ${error instanceof Error ? error.message : "Unknown error"}`);
+      toast.error(`Failed to open frontend: ${error instanceof Error ? error.message : "Unknown error"}`);
     }
   };
 
@@ -173,70 +178,115 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
         )}
 
         {loading ? (
-          <div className="loading">Loading applications...</div>
-        ) : apps.length === 0 ? (
-          <div className="empty-state">
-            <p>No applications installed.</p>
-            <p>Visit the <a href="#marketplace">Marketplace</a> to install applications.</p>
-          </div>
+          <SkeletonTable rows={5} columns={5} showHeader={true} />
         ) : (
-          <div className="apps-grid">
-            {apps.map((app) => {
-              const metadata = decodeMetadata(app.metadata);
-              const appName = metadata?.name || app.name || app.id;
-              const appVersion = metadata?.version || app.version || "Unknown";
-              // Get frontend URL from bundle metadata (no fallback - must be in metadata)
-              const frontendUrl = metadata?.links?.frontend;
-              
-              return (
-                <div key={app.id} className="app-card">
-                  <div className="app-card-header">
-                    <h3>{appName}</h3>
-                  </div>
-                  <div className="app-card-body">
-                    <p className="app-id">ID: {app.id}</p>
-                    <p className="app-version">Version: {appVersion}</p>
-                    {app.size && (
-                      <p className="app-size">Size: {(app.size / 1024).toFixed(2)} KB</p>
-                    )}
-                    {app.source && (
-                      <p className="app-source">Source: {app.source}</p>
-                    )}
-                    {metadata?.description && (
-                      <p className="app-description">{metadata.description}</p>
-                    )}
-                    {metadata?.developer && (
-                      <p className="app-developer">
-                        Developer: {metadata.developer.substring(0, 16)}...
-                      </p>
-                    )}
-                    {app.blob && (
-                      <p className="app-blob">
-                        Bytecode: {app.blob.bytecode.substring(0, 16)}...
-                      </p>
-                    )}
-                  </div>
-                  <div className="app-card-actions">
-                    {frontendUrl && (
+          <DataTable
+            data={apps}
+            columns={[
+              {
+                key: 'name',
+                label: 'Name',
+                sortable: true,
+                width: '25%',
+                render: (app) => {
+                  const metadata = decodeMetadata(app.metadata);
+                  const appName = metadata?.name || app.name || app.id;
+                  return (
+                    <div className="table-cell-name">
+                      <div className="table-cell-primary">{appName}</div>
+                      <div className="table-cell-secondary">ID: {app.id.substring(0, 16)}...</div>
+                    </div>
+                  );
+                },
+              },
+              {
+                key: 'version',
+                label: 'Version',
+                sortable: true,
+                width: '15%',
+                render: (app) => {
+                  const metadata = decodeMetadata(app.metadata);
+                  return metadata?.version || app.version || "Unknown";
+                },
+              },
+              {
+                key: 'size',
+                label: 'Size',
+                sortable: true,
+                width: '12%',
+                render: (app) => {
+                  if (!app.size) return '—';
+                  const sizeKB = app.size / 1024;
+                  if (sizeKB < 1024) {
+                    return `${sizeKB.toFixed(2)} KB`;
+                  }
+                  return `${(sizeKB / 1024).toFixed(2)} MB`;
+                },
+              },
+              {
+                key: 'description',
+                label: 'Description',
+                sortable: false,
+                width: '28%',
+                render: (app) => {
+                  const metadata = decodeMetadata(app.metadata);
+                  return metadata?.description ? (
+                    <div className="table-cell-description" title={metadata.description}>
+                      {metadata.description.length > 60
+                        ? `${metadata.description.substring(0, 60)}...`
+                        : metadata.description}
+                    </div>
+                  ) : (
+                    <span className="table-cell-empty">—</span>
+                  );
+                },
+              },
+              {
+                key: 'actions',
+                label: 'Actions',
+                sortable: false,
+                width: '20%',
+                render: (app) => {
+                  const metadata = decodeMetadata(app.metadata);
+                  const appName = metadata?.name || app.name || app.id;
+                  const frontendUrl = metadata?.links?.frontend;
+                  
+                  return (
+                    <div className="table-cell-actions">
+                      {frontendUrl && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleOpenFrontend(frontendUrl, appName);
+                          }}
+                          className="button button-primary button-small"
+                          title={`Open ${appName} frontend`}
+                        >
+                          Open
+                        </button>
+                      )}
                       <button
-                        onClick={() => handleOpenFrontend(frontendUrl, appName)}
-                        className="button button-primary"
-                        title={`Open ${appName} frontend`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleUninstall(app.id, appName);
+                        }}
+                        className="button button-danger button-small"
                       >
-                        Open Frontend
+                        Uninstall
                       </button>
-                    )}
-                    <button
-                      onClick={() => handleUninstall(app.id, appName)}
-                      className="button button-danger"
-                    >
-                      Uninstall
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+                    </div>
+                  );
+                },
+              },
+            ]}
+            keyExtractor={(app) => app.id}
+            emptyMessage={
+              <div className="empty-state">
+                <p>No applications installed.</p>
+                <p>Visit the <a href="#marketplace">Marketplace</a> to install applications.</p>
+              </div>
+            }
+          />
         )}
       </main>
     </div>

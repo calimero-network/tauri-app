@@ -14,7 +14,6 @@ import UpdateNotification from "./components/UpdateNotification";
 import Sidebar from "./components/Sidebar";
 import ToastContainer from "./components/ToastContainer";
 import { getCurrentVersion } from "./utils/updater";
-import { useTheme } from "./contexts/ThemeContext";
 import { Settings as SettingsIcon, ArrowRight, Package, ShoppingCart } from "lucide-react";
 import "./App.css";
 
@@ -25,12 +24,8 @@ function App() {
   const [showLogin, setShowLogin] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [currentPage, setCurrentPage] = useState<'home' | 'marketplace' | 'installed' | 'contexts' | 'nodes' | 'confirm'>('home');
-  const [onboardingState, setOnboardingState] = useState<OnboardingState | null>(null);
   const [checkingOnboarding, setCheckingOnboarding] = useState(true);
   const [needsNodeConfig, setNeedsNodeConfig] = useState(false);
-  const [adminApiUrl, setAdminApiUrl] = useState("");
-  const [authApiUrl, setAuthApiUrl] = useState("");
-  const [contexts, setContexts] = useState<any[]>([]);
   const [installedApps, setInstalledApps] = useState<any[]>([]);
   const [loadingApps, setLoadingApps] = useState(false);
   const [confirmAction, setConfirmAction] = useState<{
@@ -89,9 +84,7 @@ function App() {
         console.error('❌ Contexts error:', contextsResponse.error.message);
         return;
       }
-      if (contextsResponse.data) {
-        setContexts(contextsResponse.data);
-      }
+      // Contexts loaded (stored in API client state)
     } catch (err: any) {
       // Check for 401 in error object
       if (err?.status === 401) {
@@ -227,7 +220,7 @@ function App() {
             }, 10000)
           ),
         ]);
-        setOnboardingState(onboardingState);
+        // Onboarding state checked
 
         // Debug logging
         console.log('🔍 Onboarding State:', {
@@ -391,6 +384,34 @@ function App() {
     );
   }
 
+  // Calculate page title and sidebar page before early returns
+  const sidebarPage: 'home' | 'marketplace' | 'installed' | 'contexts' | 'nodes' = 
+    currentPage === 'confirm' ? 'home' : currentPage;
+
+  let pageTitle: string;
+  switch (currentPage) {
+    case 'home':
+      pageTitle = 'Home';
+      break;
+    case 'nodes':
+      pageTitle = 'Nodes';
+      break;
+    case 'contexts':
+      pageTitle = 'Contexts';
+      break;
+    case 'installed':
+      pageTitle = 'Applications';
+      break;
+    case 'marketplace':
+      pageTitle = 'Marketplace';
+      break;
+    case 'confirm':
+      pageTitle = 'Confirm Action';
+      break;
+    default:
+      pageTitle = 'Home';
+  }
+
   if (showOnboarding) {
     return (
       <Onboarding
@@ -452,17 +473,13 @@ function App() {
           
           // Always reload client when returning from Settings (settings may have changed)
           const settings = getSettings();
-          const adminApiUrl_new = `${settings.nodeUrl.replace(/\/$/, '')}/admin-api`;
+          const adminApiUrl = `${settings.nodeUrl.replace(/\/$/, '')}/admin-api`;
           const authUrl = getAuthUrl(settings);
           const authBaseUrl = authUrl.replace(/\/$/, '');
-          const authApiUrl_new = `${authBaseUrl}/auth`;
           
-          setAdminApiUrl(adminApiUrl_new);
-          setAuthApiUrl(authApiUrl_new);
-
           // Reload client with new settings
           createClient({
-            baseUrl: adminApiUrl_new,
+            baseUrl: adminApiUrl,
             authBaseUrl: authBaseUrl,
             requestCredentials: 'omit',
           });
@@ -475,7 +492,7 @@ function App() {
             setCheckingOnboarding(true);
             try {
               const state = await checkOnboardingState();
-              setOnboardingState(state);
+              // Onboarding state checked
 
               // Determine what to show
               if (!state.authAvailable) {
@@ -587,7 +604,7 @@ function App() {
       <div className="app">
         <div className="app-layout">
           <Sidebar 
-            currentPage={currentPage === 'confirm' ? 'home' : (currentPage as 'home' | 'marketplace' | 'installed' | 'contexts' | 'nodes')} 
+            currentPage="nodes" 
             onNavigate={(p) => {
               if (p === 'nodes') setCurrentPage('nodes');
               else if (p === 'contexts') setCurrentPage('contexts');
@@ -683,19 +700,6 @@ function App() {
     );
   }
 
-  // Determine the page to show in sidebar (exclude 'confirm' from sidebar)
-  const sidebarPage: 'home' | 'marketplace' | 'installed' | 'contexts' | 'nodes' = 
-    currentPage === 'confirm' ? 'home' : (currentPage as 'home' | 'marketplace' | 'installed' | 'contexts' | 'nodes');
-
-  // Get page title
-  const pageTitle = 
-    currentPage === 'home' ? 'Home' :
-    currentPage === 'nodes' ? 'Nodes' :
-    currentPage === 'contexts' ? 'Contexts' :
-    currentPage === 'installed' ? 'Applications' :
-    currentPage === 'marketplace' ? 'Marketplace' :
-    currentPage === 'confirm' ? 'Confirm Action' :
-    'Home';
 
   return (
     <div className="app">

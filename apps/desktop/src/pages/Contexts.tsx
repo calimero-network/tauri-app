@@ -199,7 +199,7 @@ const Contexts: React.FC<ContextsProps> = ({ onAuthRequired, onConfirmDelete }) 
         metadata = app.metadata;
       }
       
-      return metadata.alias || metadata.name || app.name || appId;
+      return metadata.name || metadata.alias || app.name || appId;
     } catch (e) {
       return app.name || appId;
     }

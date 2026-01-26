@@ -1,36 +1,38 @@
 import { useState, useEffect, useCallback } from "react";
 import { createClient, apiClient, LoginView, getAccessToken } from "@calimero-network/mero-react";
-import { getSettings, getAuthUrl } from "./utils/settings";
+import { getSettings, getAuthUrl, saveSettings } from "./utils/settings";
+import { invoke } from "@tauri-apps/api/tauri";
 import { checkOnboardingState, type OnboardingState } from "./utils/onboarding";
 import Settings from "./pages/Settings";
-import Nodes from "./pages/Nodes";
 import Onboarding from "./pages/Onboarding";
 import Marketplace from "./pages/Marketplace";
 import InstalledApps from "./pages/InstalledApps";
 import Contexts from "./pages/Contexts";
+import NodeManagement from "./pages/NodeManagement";
 import ConfirmAction from "./pages/ConfirmAction";
 import UpdateNotification from "./components/UpdateNotification";
+import Sidebar from "./components/Sidebar";
+import ToastContainer from "./components/ToastContainer";
 import { getCurrentVersion } from "./utils/updater";
+import { useTheme } from "./contexts/ThemeContext";
+import { Settings as SettingsIcon, ArrowRight, Package, ShoppingCart } from "lucide-react";
 import "./App.css";
 
 function App() {
   const [connected, setConnected] = useState(false);
-  const [authConnected, setAuthConnected] = useState(false);
-  const [nodeInfo, setNodeInfo] = useState<any>(null);
-  const [authInfo, setAuthInfo] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
-  const [authError, setAuthError] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
-  const [showNodes, setShowNodes] = useState(false);
   const [showLogin, setShowLogin] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
-  const [currentPage, setCurrentPage] = useState<'home' | 'marketplace' | 'installed' | 'contexts' | 'confirm'>('home');
+  const [currentPage, setCurrentPage] = useState<'home' | 'marketplace' | 'installed' | 'contexts' | 'nodes' | 'confirm'>('home');
   const [onboardingState, setOnboardingState] = useState<OnboardingState | null>(null);
   const [checkingOnboarding, setCheckingOnboarding] = useState(true);
   const [needsNodeConfig, setNeedsNodeConfig] = useState(false);
   const [adminApiUrl, setAdminApiUrl] = useState("");
   const [authApiUrl, setAuthApiUrl] = useState("");
   const [contexts, setContexts] = useState<any[]>([]);
+  const [installedApps, setInstalledApps] = useState<any[]>([]);
+  const [loadingApps, setLoadingApps] = useState(false);
   const [confirmAction, setConfirmAction] = useState<{
     title: string;
     message: string;
@@ -46,8 +48,36 @@ function App() {
     getCurrentVersion().then(setAppVersion);
   }, []);
 
-  // Load contexts for main page
+  // Load installed apps for main page
+  const loadInstalledApps = useCallback(async () => {
+    setLoadingApps(true);
+    try {
+      const response = await apiClient.node.listApplications();
+      if (response.error) {
+        // If 401, show login
+        if (response.error.code === '401') {
+          setShowLogin(true);
+          return;
+        }
+        console.error('❌ Apps error:', response.error.message);
+        return;
+      }
+      if (response.data && Array.isArray(response.data)) {
+        setInstalledApps(response.data);
+      }
+    } catch (err: any) {
+      console.error('Failed to load apps:', err);
+    } finally {
+      setLoadingApps(false);
+    }
+  }, []);
+
+  // Load contexts for main page (only if developer mode)
   const loadContexts = useCallback(async () => {
+    const settings = getSettings();
+    if (!settings.developerMode) {
+      return; // Skip loading contexts if developer mode is off
+    }
     try {
       const contextsResponse = await apiClient.node.getContexts();
       if (contextsResponse.error) {
@@ -74,16 +104,72 @@ function App() {
 
   useEffect(() => {
     async function initializeApp() {
+      // Check if settings have been saved (user has completed setup)
+      const hasCustomSettings = localStorage.getItem('calimero-desktop-settings') !== null;
+      
+      // If no settings saved, show onboarding immediately
+      if (!hasCustomSettings) {
+        console.log('📋 No settings found - showing onboarding immediately');
+        setNeedsNodeConfig(true);
+        setShowOnboarding(true);
+        setCheckingOnboarding(false);
+        return;
+      }
+      
       // Load settings on startup
       const settings = getSettings();
       
-      // Check if settings need to be configured (first time)
-      const hasCustomSettings = localStorage.getItem('calimero-desktop-settings') !== null;
-      if (!hasCustomSettings) {
-        // First time - show Nodes page to configure node
-        console.log('📋 First time setup - showing Nodes page');
+      // Always check for nodes first
+      console.log('🔍 Checking for existing nodes...');
+      setCheckingOnboarding(true);
+      
+      try {
+        const { listMerodNodes, detectRunningMerodNodes } = await import('./utils/merod');
+        const defaultDataDir = settings.embeddedNodeDataDir || '~/.calimero';
+        const existingNodes = await listMerodNodes(defaultDataDir);
+        
+        // Check if any nodes are running
+        const runningNodes = await detectRunningMerodNodes();
+        
+        // If no nodes exist at all, show onboarding
+        if (existingNodes.length === 0 && runningNodes.length === 0) {
+          console.log('📋 No nodes found - showing onboarding');
+          setNeedsNodeConfig(true);
+          setShowOnboarding(true);
+          setCheckingOnboarding(false);
+          return;
+        }
+        
+        // If nodes exist but none are running, show onboarding to start one
+        if (existingNodes.length > 0 && runningNodes.length === 0) {
+          console.log('📋 Nodes exist but none running - showing onboarding');
+          setNeedsNodeConfig(true);
+          setShowOnboarding(true);
+          setCheckingOnboarding(false);
+          return;
+        }
+        
+        // If we have running nodes, use the first one
+        if (runningNodes.length > 0) {
+          const node = runningNodes[0];
+          const nodeUrl = `http://localhost:${node.port}`;
+          
+          // Update settings if needed
+          if (!settings.nodeUrl || settings.nodeUrl !== nodeUrl) {
+            saveSettings({ ...settings, nodeUrl });
+            // Reload to continue with normal flow
+            window.location.reload();
+            return;
+          }
+        }
+        
+        // We have a node URL configured - continue with normal initialization
+        console.log('✅ Node URL configured, continuing with normal flow');
+      } catch (error) {
+        console.error('Failed to check for existing nodes:', error);
+        // On error, show onboarding
         setNeedsNodeConfig(true);
-        setShowNodes(true);
+        setShowOnboarding(true);
         setCheckingOnboarding(false);
         return;
       }
@@ -91,10 +177,6 @@ function App() {
       const adminApiUrl = `${settings.nodeUrl.replace(/\/$/, '')}/admin-api`;
       const authUrl = getAuthUrl(settings);
       const authBaseUrl = authUrl.replace(/\/$/, '');
-      const authApiUrl = `${authBaseUrl}/auth`;
-      
-      setAdminApiUrl(adminApiUrl);
-      setAuthApiUrl(authApiUrl);
 
       // Initialize mero-react client
       createClient({
@@ -117,11 +199,11 @@ function App() {
         ]);
 
         if (healthCheck.error) {
-          // Node is not running - show Nodes page to configure/start node
-          console.log('⚠️ Node not running or not accessible, showing Nodes page');
+          // Node is not running - show onboarding to configure/start node
+          console.log('⚠️ Node not running or not accessible, showing onboarding');
           setCheckingOnboarding(false);
           setNeedsNodeConfig(true);
-          setShowNodes(true);
+          setShowOnboarding(true);
           return;
         }
 
@@ -181,17 +263,18 @@ function App() {
             console.log('🔐 Showing login screen');
             setShowLogin(true);
           } else {
-            // User has token, try to load contexts
-            console.log('✅ User logged in, loading contexts');
+            // User has token, try to load contexts and apps
+            console.log('✅ User logged in, loading contexts and apps');
             loadContexts();
+            loadInstalledApps();
           }
         }
       } catch (err) {
         console.error('Failed to check node connection:', err);
-        // On error, show Nodes page to allow configuration
+        // On error, show onboarding to allow configuration
         setCheckingOnboarding(false);
         setNeedsNodeConfig(true);
-        setShowNodes(true);
+        setShowOnboarding(true);
         return;
       } finally {
         setCheckingOnboarding(false);
@@ -201,7 +284,7 @@ function App() {
     initializeApp();
   }, [loadContexts]);
 
-  const checkConnection = async () => {
+  const checkConnection = useCallback(async () => {
     try {
       setError(null);
       
@@ -219,80 +302,104 @@ function App() {
         return;
       }
       
-      if (healthResponse.data) {
-        setConnected(healthResponse.data.status === "ok" || 
-                    healthResponse.data.status === "healthy" || 
-                    healthResponse.data.status === "alive");
-        setNodeInfo({ health: healthResponse.data });
-      }
+      setConnected(true);
+      setError(null);
 
-      // Check auth health
-      const providersResponse = await apiClient.auth.getProviders();
-      if (providersResponse.error) {
-        console.error('❌ Providers error:', providersResponse.error.message);
-        setAuthError(providersResponse.error.message);
-        setAuthConnected(false);
-      } else {
-        setAuthConnected(true);
-        setAuthInfo({ providers: providersResponse.data });
-      }
-
-      // Load contexts after successful connection
-      if (connected) {
-        await loadContexts();
-      }
+      // Load contexts and apps after successful connection
+      await loadContexts();
+      await loadInstalledApps();
     } catch (err) {
       setConnected(false);
       const errorMessage = err instanceof Error ? err.message : String(err);
       setError(errorMessage);
-      setNodeInfo(null);
       console.error("Connection error:", err);
     }
-  };
+  }, [loadContexts, loadInstalledApps]);
 
-  // Reload client when settings change
-
-  const checkAuthHealth = async () => {
+  // Helper function to decode app metadata
+  const decodeMetadata = useCallback((metadata: any): any => {
+    if (!metadata) return null;
     try {
-      setAuthError(null);
-      
-      // Test auth API
-      const providersResponse = await apiClient.auth.getProviders();
-      if (providersResponse.error) {
-        setAuthError(providersResponse.error.message);
-        setAuthConnected(false);
+      let jsonString: string;
+      if (typeof metadata === 'string') {
+        jsonString = atob(metadata);
+      } else if (Array.isArray(metadata)) {
+        jsonString = String.fromCharCode(...metadata);
       } else {
-        setAuthConnected(true);
-        setAuthInfo({ providers: providersResponse.data });
+        return metadata;
       }
-    } catch (authErr) {
-      setAuthConnected(false);
-      setAuthInfo(null);
-      const errorMessage = authErr instanceof Error ? authErr.message : String(authErr);
-      setAuthError(errorMessage);
-      console.error("Auth health check error:", authErr);
+      return JSON.parse(jsonString);
+    } catch (error) {
+      console.warn("Failed to decode metadata:", error);
+      return null;
     }
-  };
+  }, []);
+
+  // Open app frontend in a new window
+  const handleOpenAppFrontend = useCallback(async (frontendUrl: string, appName?: string) => {
+    try {
+      const settings = getSettings();
+      const urlObj = new URL(frontendUrl);
+      const domain = urlObj.hostname.replace(/\./g, '-');
+      const windowLabel = `app-${domain}-${Date.now()}`;
+      await invoke('create_app_window', {
+        windowLabel,
+        url: frontendUrl,
+        title: appName || 'Application',
+        openDevtools: false,
+        nodeUrl: settings.nodeUrl,
+      });
+      console.log('Opened app frontend in new window:', frontendUrl);
+    } catch (error) {
+      console.error("Failed to open frontend:", error);
+      // Fallback to navigating to installed apps page
+      setCurrentPage('installed');
+    }
+  }, []);
+
+  // Auto-check node status every 5 seconds when on home page
+  useEffect(() => {
+    // Only run on home page
+    if (currentPage !== 'home') {
+      return;
+    }
+
+    // Initial check
+    checkConnection();
+
+    // Set up interval to check every 5 seconds
+    const interval = setInterval(() => {
+      checkConnection();
+    }, 5000);
+
+    // Cleanup interval on unmount or page change
+    return () => {
+      clearInterval(interval);
+    };
+  }, [currentPage, checkConnection]); // Re-run when page changes or checkConnection changes
 
   // Show onboarding if needed
   if (checkingOnboarding) {
     return (
       <div className="app">
-        <div style={{ textAlign: 'center', padding: '40px' }}>
-          <p>Checking configuration...</p>
+        <div className="loading-screen">
+          <div className="loading-spinner-large"></div>
+          <h2>Setting up Calimero Desktop</h2>
+          <p>Checking your node connection and configuration...</p>
         </div>
       </div>
     );
   }
 
-  if (showOnboarding && onboardingState) {
+  if (showOnboarding) {
     return (
       <Onboarding
         onComplete={() => {
           setShowOnboarding(false);
-          // After onboarding, try to load contexts
+          // After onboarding, user is already logged in, just load data
+          // Don't call checkConnection() as it might trigger login screen
           loadContexts();
-          checkConnection();
+          loadInstalledApps();
         }}
         onSettings={() => {
           setShowOnboarding(false);
@@ -310,22 +417,13 @@ function App() {
           <button 
             onClick={() => { 
               setShowLogin(false); 
-              setShowNodes(true); 
-            }} 
-            className="button" 
-            style={{ background: '#f0f0f0', padding: '8px 16px' }}
-          >
-            🖥️ Configure Node
-          </button>
-          <button 
-            onClick={() => { 
-              setShowLogin(false); 
               setShowSettings(true); 
             }} 
             className="button" 
             style={{ background: '#f0f0f0', padding: '8px 16px' }}
           >
-            ⚙️ Settings
+            <SettingsIcon size={16} style={{ marginRight: '4px', verticalAlign: 'middle' }} />
+            Settings
           </button>
         </div>
         <LoginView
@@ -334,6 +432,7 @@ function App() {
             setShowLogin(false);
             // Reload contexts after login
             loadContexts();
+            loadInstalledApps();
             checkConnection();
           }}
           onError={(error) => {
@@ -344,66 +443,6 @@ function App() {
     );
   }
 
-  if (showNodes) {
-    return (
-      <Nodes
-        onBack={async () => {
-          const settings = getSettings();
-          // If node URL is configured, initialize app and go back
-          if (settings.nodeUrl) {
-            setShowNodes(false);
-            setNeedsNodeConfig(false);
-            
-            // Initialize the app if it wasn't initialized yet (first-time setup)
-            if (!adminApiUrl) {
-              const adminApiUrl_new = `${settings.nodeUrl.replace(/\/$/, '')}/admin-api`;
-              const authUrl = getAuthUrl(settings);
-              const authBaseUrl = authUrl.replace(/\/$/, '');
-              const authApiUrl_new = `${authBaseUrl}/auth`;
-              
-              setAdminApiUrl(adminApiUrl_new);
-              setAuthApiUrl(authApiUrl_new);
-
-              // Initialize mero-react client
-              createClient({
-                baseUrl: adminApiUrl_new,
-                authBaseUrl: authBaseUrl,
-                requestCredentials: 'omit',
-              });
-
-              // Check onboarding state
-              setCheckingOnboarding(true);
-              try {
-                const state = await checkOnboardingState();
-                setOnboardingState(state);
-                
-                if (!state.authAvailable) {
-                  setShowOnboarding(true);
-                } else if (!state.hasConfiguredProviders) {
-                  setShowOnboarding(true);
-                } else {
-                  const hasToken = getAccessToken();
-                  if (!hasToken) {
-                    setShowLogin(true);
-                  } else {
-                    loadContexts();
-                  }
-                }
-              } catch (err) {
-                console.error('Failed to check onboarding state:', err);
-                setShowOnboarding(true);
-              } finally {
-                setCheckingOnboarding(false);
-              }
-            }
-          } else {
-            // No node URL configured, stay on Nodes page
-            setShowNodes(true);
-          }
-        }}
-      />
-    );
-  }
 
   if (showSettings) {
     return (
@@ -449,6 +488,7 @@ function App() {
                   setShowLogin(true);
                 } else {
                   loadContexts();
+            loadInstalledApps();
                 }
               }
             } catch (err) {
@@ -462,12 +502,9 @@ function App() {
             const hasToken = getAccessToken();
             if (hasToken) {
               loadContexts();
+            loadInstalledApps();
             }
           }
-        }}
-        onNavigateToNodes={() => {
-          setShowSettings(false);
-          setShowNodes(true);
         }}
       />
     );
@@ -477,21 +514,23 @@ function App() {
   if (currentPage === 'marketplace') {
     return (
       <div className="app">
-        <header className="header">
-          <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-            <button onClick={() => setCurrentPage('home')} className="button" style={{ background: '#f0f0f0' }}>
-              ← Home
-            </button>
-            <h1>Application Marketplace</h1>
+        <div className="app-layout">
+          <Sidebar 
+            currentPage={currentPage} 
+            onNavigate={setCurrentPage}
+            onOpenSettings={() => setShowSettings(true)}
+          />
+          <div className="app-content">
+            <header className="header">
+              <div className="header-title">
+                <h1>Marketplace</h1>
+              </div>
+            </header>
+            <main className="main">
+              <Marketplace />
+            </main>
           </div>
-          <button onClick={() => setShowNodes(true)} className="settings-button" style={{ marginRight: '8px' }}>
-            🖥️ Nodes
-          </button>
-          <button onClick={() => setShowSettings(true)} className="settings-button">
-            ⚙️ Settings
-          </button>
-        </header>
-        <Marketplace />
+        </div>
       </div>
     );
   }
@@ -500,21 +539,20 @@ function App() {
   if (currentPage === 'installed') {
     return (
       <div className="app">
-        <header className="header">
-          <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-            <button onClick={() => setCurrentPage('home')} className="button" style={{ background: '#f0f0f0' }}>
-              ← Home
-            </button>
-            <h1>Installed Applications</h1>
-          </div>
-          <button onClick={() => setShowNodes(true)} className="settings-button" style={{ marginRight: '8px' }}>
-            🖥️ Nodes
-          </button>
-          <button onClick={() => setShowSettings(true)} className="settings-button">
-            ⚙️ Settings
-          </button>
-        </header>
-        <InstalledApps 
+        <div className="app-layout">
+          <Sidebar 
+            currentPage={currentPage} 
+            onNavigate={setCurrentPage}
+            onOpenSettings={() => setShowSettings(true)}
+          />
+          <div className="app-content">
+            <header className="header">
+              <div className="header-title">
+                <h1>Applications</h1>
+              </div>
+            </header>
+            <main className="main">
+              <InstalledApps 
           onAuthRequired={() => setShowLogin(true)}
           onConfirmUninstall={(_appId, appName, onConfirm) => {
             setConfirmAction({
@@ -529,13 +567,47 @@ function App() {
               },
               breadcrumbs: [
                 { label: "Home", onClick: () => setCurrentPage('home') },
-                { label: "Installed Apps", onClick: () => setCurrentPage('installed') },
+                { label: "Applications", onClick: () => setCurrentPage('installed') },
                 { label: "Uninstall Application" },
               ],
             });
             setCurrentPage('confirm');
           }}
-        />
+              />
+            </main>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Show Node Management if selected
+  if (currentPage === 'nodes') {
+    return (
+      <div className="app">
+        <div className="app-layout">
+          <Sidebar 
+            currentPage={currentPage === 'confirm' ? 'home' : (currentPage as 'home' | 'marketplace' | 'installed' | 'contexts' | 'nodes')} 
+            onNavigate={(p) => {
+              if (p === 'nodes') setCurrentPage('nodes');
+              else if (p === 'contexts') setCurrentPage('contexts');
+              else if (p === 'marketplace') setCurrentPage('marketplace');
+              else if (p === 'installed') setCurrentPage('installed');
+              else if (p === 'home') setCurrentPage('home');
+            }}
+            onOpenSettings={() => setShowSettings(true)}
+          />
+          <div className="app-content">
+            <header className="header">
+              <div className="header-title">
+                <h1>Nodes</h1>
+              </div>
+            </header>
+            <main className="main">
+              <NodeManagement />
+            </main>
+          </div>
+        </div>
       </div>
     );
   }
@@ -544,21 +616,20 @@ function App() {
   if (currentPage === 'contexts') {
     return (
       <div className="app">
-        <header className="header">
-          <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-            <button onClick={() => setCurrentPage('home')} className="button" style={{ background: '#f0f0f0' }}>
-              ← Home
-            </button>
-            <h1>Contexts</h1>
-          </div>
-          <button onClick={() => setShowNodes(true)} className="settings-button" style={{ marginRight: '8px' }}>
-            🖥️ Nodes
-          </button>
-          <button onClick={() => setShowSettings(true)} className="settings-button">
-            ⚙️ Settings
-          </button>
-        </header>
-        <Contexts 
+        <div className="app-layout">
+          <Sidebar 
+            currentPage={currentPage} 
+            onNavigate={setCurrentPage}
+            onOpenSettings={() => setShowSettings(true)}
+          />
+          <div className="app-content">
+            <header className="header">
+              <div className="header-title">
+                <h1>Contexts</h1>
+              </div>
+            </header>
+            <main className="main">
+              <Contexts 
           onAuthRequired={() => setShowLogin(true)}
           onConfirmDelete={(_contextId, contextName, onConfirm) => {
             setConfirmAction({
@@ -579,7 +650,10 @@ function App() {
             });
             setCurrentPage('confirm');
           }}
-        />
+              />
+            </main>
+          </div>
+        </div>
       </div>
     );
   }
@@ -609,95 +683,183 @@ function App() {
     );
   }
 
+  // Determine the page to show in sidebar (exclude 'confirm' from sidebar)
+  const sidebarPage: 'home' | 'marketplace' | 'installed' | 'contexts' | 'nodes' = 
+    currentPage === 'confirm' ? 'home' : (currentPage as 'home' | 'marketplace' | 'installed' | 'contexts' | 'nodes');
+
+  // Get page title
+  const pageTitle = 
+    currentPage === 'home' ? 'Home' :
+    currentPage === 'nodes' ? 'Nodes' :
+    currentPage === 'contexts' ? 'Contexts' :
+    currentPage === 'installed' ? 'Applications' :
+    currentPage === 'marketplace' ? 'Marketplace' :
+    currentPage === 'confirm' ? 'Confirm Action' :
+    'Home';
+
   return (
     <div className="app">
+      {/* Toast notifications */}
+      <ToastContainer />
+      
       {/* Auto-update notification */}
       <UpdateNotification checkOnMount={true} checkInterval={3600000} />
 
-      <header className="header">
-      <div style={{ display: "flex", alignItems: "baseline", gap: "8px" }}>
-          <h1>Calimero Desktop</h1>
-          {appVersion && (
-            <span
-              style={{ fontSize: "12px", color: "#888", fontWeight: "normal" }}
-            >
-              v{appVersion}
-            </span>
-          )}
-        </div>
-        <div style={{ display: 'flex', gap: '12px' }}>
-          <button onClick={() => setCurrentPage('contexts')} className="button" style={{ background: '#6f42c1', color: 'white' }}>
-            🔗 Contexts
-          </button>
-          <button onClick={() => setCurrentPage('installed')} className="button" style={{ background: '#28a745', color: 'white' }}>
-            📦 Installed Apps
-          </button>
-          <button onClick={() => setCurrentPage('marketplace')} className="button" style={{ background: '#007bff', color: 'white' }}>
-            🛒 Marketplace
-          </button>
-          <button onClick={() => setShowNodes(true)} className="settings-button" style={{ marginRight: '8px' }}>
-            🖥️ Nodes
-          </button>
-          <button onClick={() => setShowSettings(true)} className="settings-button">
-            ⚙️ Settings
-          </button>
-        </div>
-      </header>
+      <div className="app-layout">
+        <Sidebar 
+          currentPage={sidebarPage} 
+          onNavigate={(p) => {
+            if (p === 'nodes') setCurrentPage('nodes');
+            else if (p === 'contexts') setCurrentPage('contexts');
+            else if (p === 'marketplace') setCurrentPage('marketplace');
+            else if (p === 'installed') setCurrentPage('installed');
+            else if (p === 'home') setCurrentPage('home');
+          }}
+          onOpenSettings={() => setShowSettings(true)}
+        />
+        
+        <div className="app-content">
+          <header className="header">
+            <div className="header-title">
+              <h1>{pageTitle}</h1>
+              {appVersion && (
+                <span className="version-badge">v{appVersion}</span>
+              )}
+            </div>
+          </header>
 
       <main className="main">
-        <div className="card">
-          <h2>Node Connection</h2>
-          <p className="url">URL: {adminApiUrl || "Loading..."}</p>
-          
-          <div className="status">
-            <div className={`status-indicator ${connected ? "connected" : "disconnected"}`} />
-            <span>{connected ? "Connected" : "Disconnected"}</span>
-          </div>
-
-          <button onClick={checkConnection} className="button">
-            Check Connection
-          </button>
-
-          {error && <div className="error">{error}</div>}
-
-          {nodeInfo && (
-            <div className="node-info">
-              <h3>Node Information</h3>
-              <pre>{JSON.stringify(nodeInfo, null, 2)}</pre>
-            </div>
-          )}
-
-          {contexts.length > 0 && (
-            <div className="node-info">
-              <h3>Contexts ({contexts.length})</h3>
-              <pre>{JSON.stringify(contexts, null, 2)}</pre>
-            </div>
-          )}
+        {/* Welcome Section */}
+        <div className="welcome-section">
+          <h2>Welcome to Calimero Desktop</h2>
+          <p className="welcome-description">
+            Your gateway to decentralized applications. Get started by installing apps from the marketplace.
+          </p>
         </div>
 
-        <div className="card">
-          <h2>Auth Connection</h2>
-          <p className="url">URL: {authApiUrl || "Loading..."}</p>
-          
-          <div className="status">
-            <div className={`status-indicator ${authConnected ? "connected" : "disconnected"}`} />
-            <span>{authConnected ? "Connected" : "Disconnected"}</span>
-          </div>
-
-          <button onClick={checkAuthHealth} className="button">
-            Check Auth Health
-          </button>
-
-          {authError && <div className="error">{authError}</div>}
-
-          {authInfo && (
-            <div className="node-info">
-              <h3>Auth Information</h3>
-              <pre>{JSON.stringify(authInfo, null, 2)}</pre>
+        {/* Node Status - Simplified */}
+        <div className="status-cards-simple">
+          <div className="status-card-simple">
+            <div className="status-header-simple">
+              <h3>Node Status</h3>
+              <div className={`status-badge ${connected ? "connected" : "disconnected"}`}>
+                <div className="status-dot"></div>
+                {connected ? "Connected" : "Disconnected"}
+              </div>
             </div>
-          )}
+            {!connected && error && (
+              <p className="status-error">{error}</p>
+            )}
+          </div>
         </div>
+
+        {/* Recent Applications */}
+        {installedApps.length > 0 && (
+          <div className="recent-apps-section">
+            <div className="section-header">
+              <h3>Your Applications</h3>
+              <button 
+                onClick={() => setCurrentPage('installed')} 
+                className="view-all-link"
+              >
+                View All
+                <ArrowRight size={14} />
+              </button>
+            </div>
+            <div className="apps-grid">
+              {installedApps.slice(0, 4).map((app: any) => {
+                let appName = app.id;
+                let frontendUrl: string | null = null;
+                try {
+                  const metadata = decodeMetadata(app.metadata);
+                  if (metadata) {
+                    appName = metadata.name || metadata.alias || app.id;
+                    frontendUrl = metadata?.links?.frontend || null;
+                  }
+                } catch (e) {
+                  // Use app.id as fallback
+                }
+                
+                return (
+                  <button
+                    key={app.id}
+                    onClick={() => {
+                      if (frontendUrl) {
+                        handleOpenAppFrontend(frontendUrl, appName);
+                      } else {
+                        setCurrentPage('installed');
+                      }
+                    }}
+                    className="app-card-mini"
+                    title={frontendUrl ? `Open ${appName}` : `View ${appName} details`}
+                  >
+                    <Package className="app-icon" size={20} />
+                    <span className="app-name">{appName}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Empty State for Apps */}
+        {!loadingApps && installedApps.length === 0 && (
+          <div className="empty-state-card">
+            <Package size={48} className="empty-icon" />
+            <h3>No Applications Installed</h3>
+            <p>Get started by browsing the marketplace and installing your first app.</p>
+            <button 
+              onClick={() => setCurrentPage('marketplace')} 
+              className="button button-primary"
+            >
+              <ShoppingCart size={16} />
+              Browse Marketplace
+            </button>
+          </div>
+        )}
+
+        {/* Quick Actions */}
+        <div className="quick-actions">
+          <h3>Quick Actions</h3>
+          <div className="actions-grid">
+            <button 
+              onClick={() => setCurrentPage('marketplace')} 
+              className="action-card"
+            >
+              <ShoppingCart className="action-icon" size={24} />
+              <div>
+                <strong>Browse Marketplace</strong>
+                <p>Discover and install new applications</p>
+              </div>
+            </button>
+            {installedApps.length > 0 && (
+              <button 
+                onClick={() => setCurrentPage('installed')} 
+                className="action-card"
+              >
+                <Package className="action-icon" size={24} />
+                <div>
+                  <strong>Applications</strong>
+                  <p>View and manage your applications</p>
+                </div>
+              </button>
+            )}
+            <button 
+              onClick={() => setShowSettings(true)}
+              className="action-card"
+            >
+              <SettingsIcon className="action-icon" size={24} />
+              <div>
+                <strong>Settings</strong>
+                <p>Configure node, theme, and app settings</p>
+              </div>
+            </button>
+          </div>
+        </div>
+
       </main>
+        </div>
+      </div>
     </div>
   );
 }

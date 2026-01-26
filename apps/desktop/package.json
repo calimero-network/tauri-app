@@ -19,6 +19,7 @@
     "@calimero-network/mero-react": "workspace:*",
     "@tauri-apps/api": "^1.5.0",
     "bs58": "^6.0.0",
+    "lucide-react": "^0.563.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
   },

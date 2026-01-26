@@ -95,7 +95,6 @@ export default function NodeManagement() {
         setHomeDir(result);
         const settings = getSettings();
         // Save the new home directory
-        const { saveSettings } = await import("../utils/settings");
         saveSettings({
           ...settings,
           embeddedNodeDataDir: result,
@@ -155,19 +154,15 @@ export default function NodeManagement() {
 
     setLoading(true);
     try {
-      const nodeInfo = getRunningNodeInfo(selectedNode);
-      if (nodeInfo.running && nodeInfo.port) {
-        await stopMerod(nodeInfo.port);
+      // Try to stop by PID if we have it
+      const runningNode = runningNodes.find(n => n.node_name === selectedNode);
+      if (runningNode && runningNode.pid) {
+        await stopMerodByPid(runningNode.pid);
         toast.success(`Node "${selectedNode}" stopped successfully`);
       } else {
-        // Try to stop by PID if we have it
-        const runningNode = runningNodes.find(n => n.node_name === selectedNode);
-        if (runningNode && runningNode.pid) {
-          await stopMerodByPid(runningNode.pid);
-          toast.success(`Node "${selectedNode}" stopped successfully`);
-        } else {
-          toast.error("Node is not running");
-        }
+        // Fallback to stopping the embedded node
+        await stopMerod();
+        toast.success(`Node "${selectedNode}" stopped successfully`);
       }
       await detectRunning();
       await checkStatus();
@@ -382,7 +377,9 @@ export default function NodeManagement() {
             {status.running && (
               <div className="status-info">
                 <p><strong>Status:</strong> Running</p>
-                {status.port && <p><strong>Port:</strong> {status.port}</p>}
+                {runningNodes.length > 0 && runningNodes[0].port && (
+                  <p><strong>Port:</strong> {runningNodes[0].port}</p>
+                )}
               </div>
             )}
           </div>

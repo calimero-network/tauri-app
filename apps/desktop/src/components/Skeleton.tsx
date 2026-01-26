@@ -20,7 +20,7 @@ export default function Skeleton({
 }: SkeletonProps) {
   const style: React.CSSProperties = {
     width: width || '100%',
-    height: height || variant === 'text' ? '1em' : '1rem',
+    height: height || (variant === 'text' ? '1em' : '1rem'),
     borderRadius: borderRadius || (variant === 'circular' ? '50%' : variant === 'text' ? '4px' : '4px'),
   };
 

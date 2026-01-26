@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { createClient, apiClient, LoginView, getAccessToken, clearAccessToken, clearRefreshToken } from "@calimero-network/mero-react";
+import { createClientAsync, apiClient, LoginView, getAccessToken, clearAccessToken, clearRefreshToken } from "@calimero-network/mero-react";
 import { getSettings, getAuthUrl, saveSettings } from "./utils/settings";
 import { clearOnboardingProgress } from "./utils/onboardingProgress";
 import { startMerod, detectRunningMerodNodes, type RunningMerodNode } from "./utils/merod";
@@ -34,6 +34,7 @@ function App() {
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [currentPage, setCurrentPage] = useState<'home' | 'marketplace' | 'installed' | 'contexts' | 'nodes' | 'confirm'>('home');
   const [checkingOnboarding, setCheckingOnboarding] = useState(true);
+  const [clientReady, setClientReady] = useState(false);
   const [needsNodeConfig, setNeedsNodeConfig] = useState(false);
   const [installedApps, setInstalledApps] = useState<any[]>([]);
   const [loadingApps, setLoadingApps] = useState(false);
@@ -91,6 +92,10 @@ function App() {
 
   // Load contexts for main page (only if developer mode)
   const loadContexts = useCallback(async () => {
+    if (!clientReady) {
+      console.log('⏳ loadContexts: Client not ready yet, skipping');
+      return;
+    }
     const settings = getSettings();
     if (!settings.developerMode) {
       return; // Skip loading contexts if developer mode is off
@@ -115,7 +120,7 @@ function App() {
       }
       console.error('Failed to load contexts:', err);
     }
-  }, [showOnboarding]);
+  }, [clientReady, showOnboarding]);
 
   useEffect(() => {
     async function initializeApp() {
@@ -136,6 +141,7 @@ function App() {
         setCheckingOnboarding(false);
         return;
       }
+
 
       // Returning user - onboarding was completed. Never show onboarding again.
       // Initialize client and go to main app (with login if needed, disconnected if node down).
@@ -195,14 +201,16 @@ function App() {
         console.error('Failed to check nodes:', error);
       }
 
-      const adminApiUrl = `${settings.nodeUrl.replace(/\/$/, '')}/admin-api`;
+      // baseUrl should NOT include /admin-api - mero-js adds that internally
+      const nodeBaseUrl = settings.nodeUrl.replace(/\/$/, '');
       const authUrl = getAuthUrl(settings);
       const authBaseUrl = authUrl.replace(/\/$/, '');
-      createClient({
-        baseUrl: adminApiUrl,
+      await createClientAsync({
+        baseUrl: nodeBaseUrl,
         authBaseUrl: authBaseUrl,
         requestCredentials: 'omit',
       });
+      setClientReady(true);
 
       try {
         const healthCheck = await Promise.race([
@@ -245,18 +253,44 @@ function App() {
           ),
         ]);
 
-        if (!onboardingState.authAvailable || !onboardingState.hasConfiguredProviders) {
-          // Auth not ready - show main app (user can use Nodes/Settings to fix)
-          loadContexts().catch(() => {});
-          loadInstalledApps().catch(() => {});
+        // Debug logging
+        console.log('🔍 Onboarding State:', {
+          isFirstTime: onboardingState.isFirstTime,
+          authAvailable: onboardingState.authAvailable,
+          providersAvailable: onboardingState.providersAvailable,
+          hasConfiguredProviders: onboardingState.hasConfiguredProviders,
+          error: onboardingState.error,
+        });
+
+        // Flow logic:
+        // 1. FIRST: Check if user has existing tokens (already logged in)
+        // 2. If no tokens AND auth not configured → Onboarding (first time)
+        // 3. If no tokens AND auth configured → Login screen
+        // 4. If auth service unavailable → Show error
+        
+        // PRIORITY: Check for existing tokens FIRST
+        const existingToken = getAccessToken();
+        console.log('🔑 Existing token check:', existingToken ? 'EXISTS' : 'NONE');
+        
+        if (existingToken) {
+          // User has token - try to use it (mero-js will refresh if needed)
+          console.log('✅ User has existing token, loading contexts');
+          loadContexts();
+          loadInstalledApps();
+        } else if (!onboardingState.authAvailable) {
+          // Auth service not available - show onboarding with error
+          // But don't redirect back to Nodes page if node is running
+          console.log('⚠️ Auth service not available, showing onboarding with error');
+          setNeedsNodeConfig(false); // Clear needsNodeConfig since node is running
+          setShowOnboarding(true);
+        } else if (!onboardingState.hasConfiguredProviders) {
+          // Auth available but no users configured - show onboarding (first time)
+          console.log('📋 No users configured, showing onboarding screen');
+          setShowOnboarding(true);
         } else {
-          const hasToken = getAccessToken();
-          if (!hasToken) {
-            setShowLogin(true);
-          } else {
-            loadContexts();
-            loadInstalledApps();
-          }
+          // Auth is configured (has users) but no token - show login
+          console.log('🔐 No token, showing login screen');
+          setShowLogin(true);
         }
       } catch (err) {
         console.error('Failed to check node:', err);
@@ -510,16 +544,19 @@ function App() {
           
           // Always reload client when returning from Settings (settings may have changed)
           const settings = getSettings();
-          const adminApiUrl = `${settings.nodeUrl.replace(/\/$/, '')}/admin-api`;
+          // baseUrl should NOT include /admin-api - mero-js adds that internally
+          const nodeBaseUrl = settings.nodeUrl.replace(/\/$/, '');
           const authUrl = getAuthUrl(settings);
           const authBaseUrl = authUrl.replace(/\/$/, '');
 
-          // Reload client with new settings
-          createClient({
-            baseUrl: adminApiUrl,
+          // Reload client with new settings and await token loading
+          // Note: baseUrl is the node URL, NOT /admin-api - mero-js adds that internally
+          await createClientAsync({
+            baseUrl: nodeBaseUrl,
             authBaseUrl: authBaseUrl,
             requestCredentials: 'omit',
           });
+          setClientReady(true);
           
           if (needsNodeConfig) {
             // After first-time settings, continue with app initialization
@@ -592,7 +629,7 @@ function App() {
               />
             </header>
             <main className="main">
-              <Marketplace />
+              <Marketplace clientReady={clientReady} />
             </main>
           </div>
         </div>
@@ -629,6 +666,7 @@ function App() {
             </header>
             <main className="main">
         <InstalledApps 
+          clientReady={clientReady}
           onAuthRequired={() => setShowLogin(true)}
           onConfirmUninstall={(_appId, appName, onConfirm) => {
             setConfirmAction({
@@ -728,6 +766,7 @@ function App() {
             </header>
             <main className="main">
         <Contexts 
+          clientReady={clientReady}
           onAuthRequired={() => setShowLogin(true)}
           onConfirmDelete={(_contextId, contextName, onConfirm) => {
             setConfirmAction({

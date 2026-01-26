@@ -24,9 +24,10 @@ interface InstalledApplication {
 export interface InstalledAppsProps {
   onAuthRequired?: () => void;
   onConfirmUninstall?: (appId: string, appName: string, onConfirm: () => Promise<void>) => void;
+  clientReady?: boolean;
 }
 
-const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirmUninstall }) => {
+const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirmUninstall, clientReady = true }) => {
   const toast = useToast();
   const [apps, setApps] = useState<InstalledApplication[]>([]);
   const [loading, setLoading] = useState(false);
@@ -34,8 +35,10 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; app: InstalledApplication } | null>(null);
 
   useEffect(() => {
-    loadInstalledApps();
-  }, []);
+    if (clientReady) {
+      loadInstalledApps();
+    }
+  }, [clientReady]);
 
   const loadInstalledApps = async () => {
     setLoading(true);

@@ -8,6 +8,7 @@ export interface Column<T> {
   label: string;
   sortable?: boolean;
   render?: (item: T) => React.ReactNode;
+  sortValue?: (item: T) => string | number | null | undefined; // Extract sortable value (should match displayed value)
   width?: string;
 }
 
@@ -57,8 +58,9 @@ export default function DataTable<T>({
     }
 
     return [...data].sort((a, b) => {
-      const aValue = (a as any)[sortColumn];
-      const bValue = (b as any)[sortColumn];
+      // Use sortValue function if provided (matches displayed value), otherwise use raw property
+      const aValue = column.sortValue ? column.sortValue(a) : (a as any)[sortColumn];
+      const bValue = column.sortValue ? column.sortValue(b) : (b as any)[sortColumn];
 
       // Handle null/undefined
       if (aValue == null && bValue == null) return 0;

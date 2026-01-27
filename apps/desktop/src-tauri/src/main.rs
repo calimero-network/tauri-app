@@ -1113,8 +1113,13 @@ async fn init_merod_node(
     cmd.stderr(Stdio::piped());
     cmd.stdin(Stdio::null());
     
-    let output = cmd.output()
+    // Add timeout to prevent hanging (30 seconds should be enough for init)
+    let output = tokio::time::timeout(
+        tokio::time::Duration::from_secs(30),
+        cmd.output()
+    )
         .await
+    .map_err(|_| "Merod init command timed out after 30 seconds. Please check if the merod binary is working correctly.")?
         .map_err(|e| format!("Failed to execute merod init: {}", e))?;
     
     if !output.status.success() {
@@ -1398,8 +1403,9 @@ fn main() {
     
     tauri::Builder::default()
         .setup(|app| {
-            // Enable devtools for main window based on TAURI_OPEN_DEVTOOLS env var or debug mode
+            // Enable devtools for main window based on TAURI_OPEN_DEVTOOLS env var
             // IMPORTANT: Release builds NEVER enable devtools, even if env var is set
+            // Debug builds also default to false - only open if explicitly requested
             let should_open_main_devtools = {
                 #[cfg(not(debug_assertions))]
                 {
@@ -1408,12 +1414,12 @@ fn main() {
                 }
                 #[cfg(debug_assertions)]
                 {
-                    // Debug builds: Check env var, then default to true
+                    // Debug builds: Only open if explicitly requested via env var
                     if let Ok(env_value) = std::env::var("TAURI_OPEN_DEVTOOLS") {
                         env_value == "true" || env_value == "1"
                     } else {
-                        // Default to true in debug builds
-                        true
+                        // Default to false - don't open devtools automatically
+                        false
                     }
                 }
             };

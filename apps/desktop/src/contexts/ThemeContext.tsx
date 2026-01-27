@@ -19,6 +19,11 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     if (stored === 'dark' || stored === 'light') {
       return stored;
     }
+    // If no settings saved (onboarding), default to dark mode
+    const hasCustomSettings = localStorage.getItem('calimero-desktop-settings') !== null;
+    if (!hasCustomSettings) {
+      return 'dark';
+    }
     // Check system preference
     if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
       return 'dark';

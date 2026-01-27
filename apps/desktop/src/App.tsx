@@ -49,8 +49,8 @@ function App() {
     try {
       const response = await apiClient.node.listApplications();
       if (response.error) {
-        // If 401, show login
-        if (response.error.code === '401') {
+        // If 401, show login (but not if we just completed onboarding)
+        if (response.error.code === '401' && !showOnboarding) {
           setShowLogin(true);
           return;
         }
@@ -65,7 +65,7 @@ function App() {
     } finally {
       setLoadingApps(false);
     }
-  }, []);
+  }, [showOnboarding]);
 
   // Load contexts for main page (only if developer mode)
   const loadContexts = useCallback(async () => {
@@ -76,8 +76,8 @@ function App() {
     try {
       const contextsResponse = await apiClient.node.getContexts();
       if (contextsResponse.error) {
-        // If 401, show login
-        if (contextsResponse.error.code === '401') {
+        // If 401, show login (but not if we just completed onboarding)
+        if (contextsResponse.error.code === '401' && !showOnboarding) {
           setShowLogin(true);
           return;
         }
@@ -86,14 +86,14 @@ function App() {
       }
       // Contexts loaded (stored in API client state)
     } catch (err: any) {
-      // Check for 401 in error object
-      if (err?.status === 401) {
+      // Check for 401 in error object (but not if we just completed onboarding)
+      if (err?.status === 401 && !showOnboarding) {
         setShowLogin(true);
         return;
       }
       console.error('Failed to load contexts:', err);
     }
-  }, []);
+  }, [showOnboarding]);
 
   useEffect(() => {
     async function initializeApp() {
@@ -299,7 +299,7 @@ function App() {
       setError(null);
 
       // Load contexts and apps after successful connection
-      await loadContexts();
+        await loadContexts();
       await loadInstalledApps();
     } catch (err) {
       setConnected(false);
@@ -325,7 +325,7 @@ function App() {
     } catch (error) {
       console.warn("Failed to decode metadata:", error);
       return null;
-    }
+      }
   }, []);
 
   // Open app frontend in a new window
@@ -419,8 +419,16 @@ function App() {
           setShowOnboarding(false);
           // After onboarding, user is already logged in, just load data
           // Don't call checkConnection() as it might trigger login screen
-          loadContexts();
-          loadInstalledApps();
+          // Set connected to true since user just authenticated
+          setConnected(true);
+          setError(null);
+          // Load data but don't show login on 401 errors since user just authenticated
+          loadContexts().catch(() => {
+            // Silently fail - user can retry later if needed
+          });
+          loadInstalledApps().catch(() => {
+            // Silently fail - user can retry later if needed
+          });
         }}
         onSettings={() => {
           setShowOnboarding(false);
@@ -476,7 +484,7 @@ function App() {
           const adminApiUrl = `${settings.nodeUrl.replace(/\/$/, '')}/admin-api`;
           const authUrl = getAuthUrl(settings);
           const authBaseUrl = authUrl.replace(/\/$/, '');
-          
+
           // Reload client with new settings
           createClient({
             baseUrl: adminApiUrl,
@@ -538,7 +546,7 @@ function App() {
             onOpenSettings={() => setShowSettings(true)}
           />
           <div className="app-content">
-            <header className="header">
+        <header className="header">
               <div className="header-title">
                 <h1>Marketplace</h1>
               </div>
@@ -563,13 +571,13 @@ function App() {
             onOpenSettings={() => setShowSettings(true)}
           />
           <div className="app-content">
-            <header className="header">
+        <header className="header">
               <div className="header-title">
                 <h1>Applications</h1>
-              </div>
-            </header>
+          </div>
+        </header>
             <main className="main">
-              <InstalledApps 
+        <InstalledApps 
           onAuthRequired={() => setShowLogin(true)}
           onConfirmUninstall={(_appId, appName, onConfirm) => {
             setConfirmAction({
@@ -590,7 +598,7 @@ function App() {
             });
             setCurrentPage('confirm');
           }}
-              />
+        />
             </main>
           </div>
         </div>
@@ -640,13 +648,13 @@ function App() {
             onOpenSettings={() => setShowSettings(true)}
           />
           <div className="app-content">
-            <header className="header">
+        <header className="header">
               <div className="header-title">
-                <h1>Contexts</h1>
-              </div>
-            </header>
+            <h1>Contexts</h1>
+          </div>
+        </header>
             <main className="main">
-              <Contexts 
+        <Contexts 
           onAuthRequired={() => setShowLogin(true)}
           onConfirmDelete={(_contextId, contextName, onConfirm) => {
             setConfirmAction({
@@ -667,7 +675,7 @@ function App() {
             });
             setCurrentPage('confirm');
           }}
-              />
+        />
             </main>
           </div>
         </div>
@@ -723,14 +731,14 @@ function App() {
         />
         
         <div className="app-content">
-          <header className="header">
+      <header className="header">
             <div className="header-title">
               <h1>{pageTitle}</h1>
-              {appVersion && (
+          {appVersion && (
                 <span className="version-badge">v{appVersion}</span>
-              )}
-            </div>
-          </header>
+          )}
+        </div>
+      </header>
 
       <main className="main">
         {/* Welcome Section */}
@@ -755,7 +763,7 @@ function App() {
               <p className="status-error">{error}</p>
             )}
           </div>
-        </div>
+          </div>
 
         {/* Recent Applications */}
         {installedApps.length > 0 && (
@@ -768,7 +776,7 @@ function App() {
               >
                 View All
                 <ArrowRight size={14} />
-              </button>
+          </button>
             </div>
             <div className="apps-grid">
               {installedApps.slice(0, 4).map((app: any) => {
@@ -803,8 +811,8 @@ function App() {
                 );
               })}
             </div>
-          </div>
-        )}
+            </div>
+          )}
 
         {/* Empty State for Apps */}
         {!loadingApps && installedApps.length === 0 && (
@@ -835,7 +843,7 @@ function App() {
                 <strong>Browse Marketplace</strong>
                 <p>Discover and install new applications</p>
               </div>
-            </button>
+          </button>
             {installedApps.length > 0 && (
               <button 
                 onClick={() => setCurrentPage('installed')} 
@@ -845,7 +853,7 @@ function App() {
                 <div>
                   <strong>Applications</strong>
                   <p>View and manage your applications</p>
-                </div>
+            </div>
               </button>
             )}
             <button 

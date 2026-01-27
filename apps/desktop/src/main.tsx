@@ -9,7 +9,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <ThemeProvider>
       <ToastProvider>
-        <App />
+    <App />
       </ToastProvider>
     </ThemeProvider>
   </React.StrictMode>

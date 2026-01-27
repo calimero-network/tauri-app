@@ -1,12 +1,13 @@
 import { useState, useEffect } from "react";
 import { checkOnboardingState, getOnboardingMessage, type OnboardingState } from "../utils/onboarding";
-import { LoginView, apiClient } from "@calimero-network/mero-react";
+import { apiClient, setAccessToken, setRefreshToken } from "@calimero-network/mero-react";
 import { initMerodNode, startMerod } from "../utils/merod";
 import { invoke } from "@tauri-apps/api/tauri";
 import { saveSettings, getSettings } from "../utils/settings";
 import { fetchAppsFromAllRegistries, fetchAppManifest, type AppSummary } from "../utils/registry";
 import { useToast } from "../contexts/ToastContext";
-import { AlertTriangle, ArrowLeft, ArrowRight, Settings, PartyPopper, Lock, Check, Home, Shield, Network, Sparkles, Package, Download, CheckCircle2, ChevronDown, ChevronUp, Search } from "lucide-react";
+import { useTheme } from "../contexts/ThemeContext";
+import { ArrowLeft, ArrowRight, Settings, Check, Shield, Package, Download, CheckCircle2, ChevronDown, ChevronUp, Search, AlertTriangle, Lock as LockIcon } from "lucide-react";
 import calimeroLogo from "../assets/calimero-logo.svg";
 import bs58 from "bs58";
 import "./Onboarding.css";
@@ -16,15 +17,181 @@ interface OnboardingProps {
   onSettings?: () => void;
 }
 
-type OnboardingStep = 'welcome' | 'what-is' | 'how-it-works' | 'node-setup' | 'login' | 'install-app' | 'complete';
+type OnboardingStep = 'welcome' | 'what-is' | 'node-setup' | 'login' | 'install-app';
 
-const ONBOARDING_STEPS: OnboardingStep[] = ['welcome', 'what-is', 'how-it-works', 'node-setup', 'login', 'install-app'];
+const ONBOARDING_STEPS: OnboardingStep[] = ['welcome', 'what-is', 'node-setup', 'login', 'install-app'];
+
+interface UsernamePasswordFormProps {
+  onSuccess: () => void;
+  onError: (error: Error) => void;
+  loading: boolean;
+}
+
+// Username/Password Form Component - defined outside to prevent re-creation on each render
+const UsernamePasswordForm: React.FC<UsernamePasswordFormProps> = ({ onSuccess, onError, loading: parentLoading }) => {
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+
+    // Basic validation
+    if (!username.trim()) {
+      setError('Username is required');
+      return;
+    }
+
+    if (!password.trim()) {
+      setError('Password is required');
+      return;
+    }
+
+    if (password.length < 1) {
+      setError('Password must be at least 1 character long');
+      return;
+    }
+
+    try {
+      setLoading(true);
+
+      const tokenPayload = {
+        auth_method: 'user_password',
+        public_key: username.trim(), // Use username as public key for user_password provider
+        client_name: 'calimero-desktop',
+        timestamp: Date.now(),
+        permissions: [],
+        provider_data: {
+          username: username.trim(),
+          password: password
+        }
+      };
+
+      // apiClient.auth is already an instance, not a function
+      const tokenResponse = await apiClient.auth.requestToken(tokenPayload);
+
+      if (tokenResponse.error) {
+        setError(tokenResponse.error.message || 'Authentication failed');
+        onError(new Error(tokenResponse.error.message || 'Authentication failed'));
+        return;
+      }
+
+      if (tokenResponse.data?.access_token && tokenResponse.data?.refresh_token) {
+        setAccessToken(tokenResponse.data.access_token);
+        setRefreshToken(tokenResponse.data.refresh_token);
+        onSuccess();
+      } else {
+        throw new Error('Failed to get access token');
+      }
+    } catch (err) {
+      console.error('Authentication error:', err);
+      const errorMessage = err instanceof Error ? err.message : 'Authentication failed';
+      setError(errorMessage);
+      onError(err instanceof Error ? err : new Error(errorMessage));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const isLoading = loading || parentLoading;
+
+  return (
+    <form onSubmit={handleSubmit} className="username-password-form">
+      <div className="form-group">
+        <label htmlFor="username">Username</label>
+        <input
+          id="username"
+          type="text"
+          value={username}
+          onChange={(e) => setUsername(e.target.value)}
+          placeholder="Enter your username"
+          disabled={isLoading}
+          autoComplete="off"
+          autoCapitalize="none"
+          autoCorrect="off"
+          spellCheck="false"
+          required
+        />
+      </div>
+
+      <div className="form-group">
+        <label htmlFor="password">Password</label>
+        <input
+          id="password"
+          type="password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          placeholder="Enter your password"
+          disabled={isLoading}
+          autoComplete="off"
+          autoCapitalize="none"
+          autoCorrect="off"
+          spellCheck="false"
+          required
+        />
+      </div>
+
+      {error && (
+        <div className="form-error">
+          {error}
+        </div>
+      )}
+
+      <div className="form-actions">
+        <button
+          type="submit"
+          className="button button-primary"
+          disabled={isLoading || !username.trim() || !password.trim()}
+        >
+          {isLoading ? 'Signing In...' : 'Sign In'}
+        </button>
+      </div>
+    </form>
+  );
+};
 
 export default function Onboarding({ onComplete, onSettings }: OnboardingProps) {
   const toast = useToast();
+  const { setTheme } = useTheme();
   const [state, setState] = useState<OnboardingState | null>(null);
   const [loading, setLoading] = useState(true);
   const [currentStep, setCurrentStep] = useState<OnboardingStep>('welcome'); // Start with welcome screen
+
+  // Force dark mode during onboarding - override any theme changes
+  useEffect(() => {
+    // Set dark mode explicitly using theme context
+    setTheme('dark');
+    
+    const forceDarkMode = () => {
+      document.documentElement.setAttribute('data-theme', 'dark');
+    };
+    
+    // Set immediately
+    forceDarkMode();
+    
+    // Also set on any theme changes to ensure it stays dark
+    const observer = new MutationObserver((mutations) => {
+      mutations.forEach((mutation) => {
+        if (mutation.type === 'attributes' && mutation.attributeName === 'data-theme') {
+          const currentTheme = document.documentElement.getAttribute('data-theme');
+          if (currentTheme !== 'dark') {
+            forceDarkMode();
+          }
+        }
+      });
+    });
+    
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['data-theme']
+    });
+    
+    return () => {
+      observer.disconnect();
+    };
+  }, [setTheme]);
   
   // App installation state
   const [allApps, setAllApps] = useState<AppSummary[]>([]);
@@ -111,12 +278,17 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
     setNodeError(null);
     
     try {
+      console.log("Starting node creation...");
       // Create the node
+      console.log("Initializing merod node...");
       await initMerodNode(nodeName.trim(), dataDir);
+      console.log("Node initialized successfully");
       setNodeCreated(true);
       
       // Start the node
+      console.log("Starting merod node...");
       await startMerod(serverPort, swarmPort, dataDir, nodeName.trim());
+      console.log("Node started successfully");
       setNodeStarted(true);
       
       // Save settings with the new node URL
@@ -144,8 +316,12 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
       }, 2000);
     } catch (error: any) {
       console.error("Failed to create node:", error);
-      setNodeError(error.message || "Failed to create node");
+      const errorMessage = error?.message || error?.toString() || "Failed to create node";
+      setNodeError(errorMessage);
       setCreatingNode(false);
+      setNodeCreated(false);
+      setNodeStarted(false);
+      toast.error(`Failed to create node: ${errorMessage}`);
     }
   };
 
@@ -260,9 +436,12 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
       toast.success(`Successfully installed ${app.name}!`);
       setInstalledAppIds(new Set([...installedAppIds, app.id]));
       
-      // Move to complete step after successful installation
+      // Ensure dark mode is saved before completing onboarding
+      setTheme('dark');
+      
+      // Go directly to dashboard after successful installation
       setTimeout(() => {
-        setCurrentStep('complete');
+        onComplete();
       }, 1000);
     } catch (error: any) {
       console.error("Failed to install app:", error);
@@ -277,7 +456,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
   const progress = ((currentStepIndex + 1) / ONBOARDING_STEPS.length) * 100;
 
   // If loading and we have a step other than welcome/node-setup, show loading
-  if (loading && !['welcome', 'what-is', 'how-it-works', 'node-setup'].includes(currentStep)) {
+  if (loading && !['welcome', 'what-is', 'node-setup'].includes(currentStep)) {
     return (
       <div className="onboarding-page">
         <div className="onboarding-content">
@@ -346,32 +525,36 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
                 </button>
               )}
             </div>
-            </div>
           </div>
         </div>
-      );
-    }
+      </div>
+    );
+  }
     // If no node configured, just continue with normal flow (welcome screen)
   }
 
   // Progress indicator component
-  const ProgressIndicator = () => (
-    <div className="onboarding-progress">
-      <div className="progress-bar">
-        <div className="progress-fill" style={{ width: `${progress}%` }}></div>
+  const ProgressIndicator = () => {
+    const totalSteps = ONBOARDING_STEPS.length;
+    const progressWidth = totalSteps > 1 ? ((currentStepIndex + 1) / totalSteps) * 100 : 0;
+    const lineWidth = totalSteps > 1 ? `calc(${progressWidth}% - 80px)` : '0px';
+    
+    return (
+      <div className="onboarding-progress">
+        <div className="progress-steps">
+          <div className="progress-fill-line" style={{ width: lineWidth }}></div>
+          {ONBOARDING_STEPS.map((step, index) => (
+            <div
+              key={step}
+              className={`progress-step ${index <= currentStepIndex ? 'active' : ''} ${index === currentStepIndex ? 'current' : ''}`}
+            >
+              <div className="progress-dot"></div>
+            </div>
+          ))}
+        </div>
       </div>
-      <div className="progress-steps">
-        {ONBOARDING_STEPS.map((step, index) => (
-          <div
-            key={step}
-            className={`progress-step ${index <= currentStepIndex ? 'active' : ''} ${index === currentStepIndex ? 'current' : ''}`}
-          >
-            <div className="progress-dot"></div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
+    );
+  };
 
   // Welcome screen
   if (currentStep === 'welcome') {
@@ -385,30 +568,16 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
             </div>
             <h1 className="step-title">Welcome to Calimero</h1>
             <p className="step-description">
-              Your gateway to self-sovereign, peer-to-peer applications. 
-              Let's get you set up in just a few steps.
+              Calimero is like Signal, but designed to power any kind of application—not just messaging. 
+              It's fully peer-to-peer, censorship-resistant, and owned by you.
             </p>
-            <div className="step-features">
-              <div className="step-feature">
-                <Shield size={20} />
-                <span>Your data, your control</span>
-              </div>
-              <div className="step-feature">
-                <Network size={20} />
-                <span>Peer-to-peer networking</span>
-              </div>
-              <div className="step-feature">
-                <Sparkles size={20} />
-                <span>Decentralized applications</span>
-              </div>
-            </div>
           </div>
           <div className="step-actions">
             <button
               onClick={() => setCurrentStep('what-is')}
               className="step-button step-button-primary"
             >
-              Get Started
+              Continue
               <ArrowRight size={18} />
             </button>
           </div>
@@ -432,57 +601,41 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
           </button>
           <div className="step-content">
             <div className="step-icon-wrapper">
-              <Network size={72} />
+              <Shield size={60} />
             </div>
-            <h1 className="step-title">Decentralized by Design</h1>
+            <h1 className="step-title">Your Data, Your Control</h1>
             <p className="step-description">
-              Calimero is a peer-to-peer platform where applications run locally on your device. 
-              No central servers, no data collection—just you and your peers working together.
+              Calimero is built on principles that put you in charge:
             </p>
-          </div>
-          <div className="step-actions">
-            <button
-              onClick={() => setCurrentStep('how-it-works')}
-              className="step-button step-button-primary"
-            >
-              Continue
-              <ArrowRight size={18} />
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // How it works screen - split into multiple focused steps
-  if (currentStep === 'how-it-works') {
-    return (
-      <div className="onboarding-page">
-        <ProgressIndicator />
-        <div className="onboarding-step-container">
-          <button 
-            onClick={() => setCurrentStep('what-is')} 
-            className="step-back-button"
-            aria-label="Go back"
-          >
-            <ArrowLeft size={18} />
-          </button>
-          <div className="step-content">
-            <div className="step-icon-wrapper">
-              <Home size={72} />
+            <div className="step-principles">
+              <div className="principle-item">
+                <Check size={18} />
+                <span><strong>Local-first</strong> — computations run on your device</span>
+              </div>
+              <div className="principle-item">
+                <Check size={18} />
+                <span><strong>Self-sovereign</strong> — you own your data</span>
+              </div>
+              <div className="principle-item">
+                <Check size={18} />
+                <span><strong>End-to-end encrypted</strong> — privacy by default</span>
+              </div>
+              <div className="principle-item">
+                <Check size={18} />
+                <span><strong>No central servers</strong> — truly decentralized</span>
+              </div>
+              <div className="principle-item">
+                <Check size={18} />
+                <span><strong>Invite-only</strong> — you control who joins</span>
+              </div>
             </div>
-            <h1 className="step-title">Contexts</h1>
-            <p className="step-description">
-              Contexts are private, isolated networks where you collaborate with others on specific applications. 
-              Each context has its own state and members—think of it like a private room for a specific app.
-            </p>
           </div>
           <div className="step-actions">
             <button
               onClick={() => setCurrentStep('node-setup')}
               className="step-button step-button-primary"
             >
-              Continue
+              Get Started
               <ArrowRight size={18} />
             </button>
           </div>
@@ -498,7 +651,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
         <ProgressIndicator />
         <div className="onboarding-step-container">
           <button 
-            onClick={() => setCurrentStep('how-it-works')} 
+            onClick={() => setCurrentStep('what-is')} 
             className="step-back-button"
             aria-label="Go back"
           >
@@ -634,31 +787,28 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
       return (
         <div className="onboarding-page">
         <ProgressIndicator />
-          <div className="onboarding-content">
-          <div className="onboarding-card">
-            <div className="onboarding-header">
-              <button 
-                onClick={() => {
-                  setCurrentStep('node-setup');
-                }} 
-                className="back-button"
-                aria-label="Go back"
-              >
-                <ArrowLeft size={16} />
-                Back
-              </button>
-              <h1>Create Your Account</h1>
-            </div>
-            <p className="onboarding-subtitle">
-              Create your first account to start using Calimero Desktop. This account will be used to authenticate with your node.
-            </p>
-            {loginLoading ? (
-              <div className="loading-spinner">
-                <div className="spinner"></div>
-                <p>Authenticating...</p>
+          <div className="onboarding-step-container">
+            <button 
+              onClick={() => {
+                setCurrentStep('node-setup');
+              }} 
+              className="step-back-button"
+              aria-label="Go back"
+            >
+              <ArrowLeft size={18} />
+            </button>
+            <div className="step-content">
+              <div className="step-icon-wrapper">
+                <LockIcon size={60} />
               </div>
-            ) : (
-            <LoginView
+              <h1 className="step-title">Set Up Authentication</h1>
+              <p className="step-description">
+                Create a username and password to authenticate with your Calimero node. 
+                This account will be used to securely access your node and manage your applications.
+              </p>
+            </div>
+            <div className="onboarding-card">
+              <UsernamePasswordForm
                 onSuccess={async () => {
                 console.log("✅ Onboarding login successful");
                   setLoginLoading(true);
@@ -679,9 +829,9 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
                 console.error("❌ Onboarding login failed:", error);
                   setLoginLoading(false);
               }}
+                loading={loginLoading}
             />
-            )}
-          </div>
+            </div>
           </div>
         </div>
       );
@@ -718,10 +868,8 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
                 <p>No applications available. You can install apps later from the Marketplace.</p>
                 <button
                   onClick={() => {
-                    setCurrentStep('complete');
-                    setTimeout(() => {
-                      onComplete();
-                    }, 500);
+                    setTheme('dark');
+                    onComplete();
                   }}
                   className="step-button step-button-primary"
                 >
@@ -821,15 +969,13 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
           <div className="step-actions">
             {apps.length > 0 && (
               <button
-                onClick={() => {
-                  setCurrentStep('complete');
-                  setTimeout(() => {
+                  onClick={() => {
+                    setTheme('dark');
                     onComplete();
-                  }, 500);
-                }}
-                className="step-button step-button-secondary"
-              >
-                Skip for now
+                  }}
+                  className="step-button step-button-secondary"
+                >
+                  Skip for now
                 </button>
               )}
           </div>
@@ -838,57 +984,6 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
     );
   }
 
-  // Complete step
-  if (currentStep === 'complete') {
-    return (
-      <div className="onboarding-page">
-        <ProgressIndicator />
-        <div className="onboarding-step-container">
-          <div className="step-content">
-            <div className="step-icon-wrapper step-icon-success">
-              <PartyPopper size={72} />
-            </div>
-            <h1 className="step-title">You're All Set!</h1>
-            <p className="step-description">
-              Your Calimero node is running, your account is ready, and you've installed your first app. 
-              Start exploring contexts and installing more applications from the marketplace.
-            </p>
-          </div>
-          <div className="step-actions">
-            <button
-              onClick={onComplete}
-              className="step-button step-button-primary"
-            >
-              Go to Dashboard
-              <ArrowRight size={18} />
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // Everything is configured, show login
-  return (
-    <div className="onboarding-page">
-      <div className="onboarding-content">
-        <div className="onboarding-card">
-          <Lock className="onboarding-icon" size={48} />
-          <h1>Sign In</h1>
-          <p className="onboarding-subtitle">
-            Sign in to your account to continue using Calimero Desktop.
-          </p>
-        <LoginView
-          onSuccess={() => {
-            console.log("✅ Login successful");
-            onComplete();
-          }}
-          onError={(error) => {
-            console.error("❌ Login failed:", error);
-          }}
-        />
-        </div>
-      </div>
-    </div>
-  );
+  // If we reach here, something went wrong - go to dashboard
+  return null;
 }

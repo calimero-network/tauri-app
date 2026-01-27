@@ -290,13 +290,13 @@ export default function Marketplace() {
         <div className="marketplace-controls">
           <div className="search-container">
             <Search className="search-icon" size={18} />
-            <input
-              type="text"
-              placeholder="Search applications..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="search-input"
-            />
+          <input
+            type="text"
+            placeholder="Search applications..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="search-input"
+          />
             {searchQuery && (
               <button
                 onClick={() => setSearchQuery("")}
@@ -304,7 +304,7 @@ export default function Marketplace() {
                 aria-label="Clear search"
               >
                 <X size={14} />
-              </button>
+          </button>
             )}
           </div>
           
@@ -326,7 +326,7 @@ export default function Marketplace() {
               title="Refresh applications"
             >
               <RefreshCw size={16} className={loading ? 'spinning' : ''} />
-            </button>
+          </button>
           </div>
         </div>
 
@@ -379,18 +379,18 @@ export default function Marketplace() {
                 : app.developer_pubkey;
               
               return (
-                <div key={`${app.developer_pubkey}-${app.name}-${index}`} className="app-card">
-                  <div className="app-card-header">
+              <div key={`${app.developer_pubkey}-${app.name}-${index}`} className="app-card">
+                <div className="app-card-header">
                     <div className="app-icon-wrapper">
                       <Package className="app-icon" size={20} />
                     </div>
                     <div className="app-title-section">
-                      <h3>{app.alias || app.name}</h3>
+                  <h3>{app.alias || app.name}</h3>
                       {app.latest_version && (
                         <span className="app-version-badge">v{app.latest_version}</span>
                       )}
                     </div>
-                    {app.installed && (
+                  {app.installed && (
                       <CheckCircle2 className="installed-icon" size={18} />
                     )}
                   </div>
@@ -406,20 +406,20 @@ export default function Marketplace() {
                       <div className="app-developer">
                         <span className="app-developer-label">Developer:</span>
                         <span className="app-developer-value">{shortPubkey}</span>
-                      </div>
+                </div>
                     )}
-                  </div>
+                </div>
                   
-                  <div className="app-card-actions">
-                    {app.installed ? (
+                <div className="app-card-actions">
+                  {app.installed ? (
                       <button className="button button-success" disabled>
                         <CheckCircle2 size={16} />
-                        Installed
-                      </button>
-                    ) : (
-                      <button
-                        onClick={() => handleInstall(app)}
-                        className="button button-primary"
+                      Installed
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => handleInstall(app)}
+                      className="button button-primary"
                         disabled={installingAppId === app.id}
                       >
                         {installingAppId === app.id ? (
@@ -430,13 +430,13 @@ export default function Marketplace() {
                         ) : (
                           <>
                             <Download size={16} />
-                            Install
+                      Install
                           </>
                         )}
-                      </button>
-                    )}
-                  </div>
+                    </button>
+                  )}
                 </div>
+              </div>
               );
             })}
           </div>

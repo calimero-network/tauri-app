@@ -188,6 +188,10 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
                 label: 'Name',
                 sortable: true,
                 width: '25%',
+                sortValue: (app) => {
+                  const metadata = decodeMetadata(app.metadata);
+                  return metadata?.name || app.name || app.id;
+                },
                 render: (app) => {
                   const metadata = decodeMetadata(app.metadata);
                   const appName = metadata?.name || app.name || app.id;
@@ -204,6 +208,10 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
                 label: 'Version',
                 sortable: true,
                 width: '15%',
+                sortValue: (app) => {
+                  const metadata = decodeMetadata(app.metadata);
+                  return metadata?.version || app.version || "Unknown";
+                },
                 render: (app) => {
                   const metadata = decodeMetadata(app.metadata);
                   return metadata?.version || app.version || "Unknown";
@@ -214,6 +222,7 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
                 label: 'Size',
                 sortable: true,
                 width: '12%',
+                sortValue: (app) => app.size ?? 0, // Sort by raw byte value
                 render: (app) => {
                   if (!app.size) return '—';
                   const sizeKB = app.size / 1024;
@@ -247,35 +256,35 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
                 sortable: false,
                 width: '20%',
                 render: (app) => {
-                  const metadata = decodeMetadata(app.metadata);
-                  const appName = metadata?.name || app.name || app.id;
-                  const frontendUrl = metadata?.links?.frontend;
-                  
-                  return (
+              const metadata = decodeMetadata(app.metadata);
+              const appName = metadata?.name || app.name || app.id;
+              const frontendUrl = metadata?.links?.frontend;
+              
+              return (
                     <div className="table-cell-actions">
-                      {frontendUrl && (
-                        <button
+                    {frontendUrl && (
+                      <button
                           onClick={(e) => {
                             e.stopPropagation();
                             handleOpenFrontend(frontendUrl, appName);
                           }}
                           className="button button-primary button-small"
-                          title={`Open ${appName} frontend`}
-                        >
+                        title={`Open ${appName} frontend`}
+                      >
                           Open
-                        </button>
-                      )}
-                      <button
+                      </button>
+                    )}
+                    <button
                         onClick={(e) => {
                           e.stopPropagation();
                           handleUninstall(app.id, appName);
                         }}
                         className="button button-danger button-small"
-                      >
-                        Uninstall
-                      </button>
-                    </div>
-                  );
+                    >
+                      Uninstall
+                    </button>
+                </div>
+              );
                 },
               },
             ]}
@@ -284,7 +293,7 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
               <div className="empty-state">
                 <p>No applications installed.</p>
                 <p>Visit the <a href="#marketplace">Marketplace</a> to install applications.</p>
-              </div>
+          </div>
             }
           />
         )}

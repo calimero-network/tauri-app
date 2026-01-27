@@ -8,7 +8,7 @@
   min-height: 100vh;
   height: 100vh;
   background: var(--bg-primary);
-  padding: 0;
+  padding: 20px;
   transition: background 0.3s ease;
   overflow-y: auto;
   overflow-x: hidden;
@@ -19,38 +19,47 @@
 /* Progress Indicator */
 .onboarding-progress {
   width: 100%;
-  max-width: 800px;
-  margin: 0 auto;
-  padding: 24px 32px 0;
+  max-width: 700px;
+  margin: 0 auto 32px;
+  padding: 0;
   flex-shrink: 0;
-  position: sticky;
-  top: 0;
-  background: var(--bg-primary);
+  position: relative;
+  background: transparent;
   z-index: 10;
-  padding-bottom: 16px;
-}
-
-.progress-bar {
-  width: 100%;
-  height: 3px;
-  background: var(--bg-tertiary);
-  border-radius: 2px;
-  overflow: hidden;
-  margin-bottom: 20px;
-}
-
-.progress-fill {
-  height: 100%;
-  background: var(--accent-primary);
-  border-radius: 2px;
-  transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  order: -1; /* Ensure it appears at the top */
 }
 
 .progress-steps {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 8px;
+  position: relative;
+  padding: 0 20px;
+}
+
+.progress-steps::before {
+  content: '';
+  position: absolute;
+  left: 40px;
+  right: 40px;
+  top: 50%;
+  transform: translateY(-50%);
+  height: 2px;
+  background: var(--bg-tertiary);
+  z-index: 0;
+  border-radius: 1px;
+}
+
+.progress-fill-line {
+  position: absolute;
+  left: 40px;
+  top: 50%;
+  transform: translateY(-50%);
+  height: 2px;
+  background: var(--accent-primary);
+  z-index: 1;
+  border-radius: 1px;
+  transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .progress-step {
@@ -59,68 +68,54 @@
   justify-content: center;
   align-items: center;
   position: relative;
-}
-
-.progress-step::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  right: 0;
-  height: 2px;
-  background: var(--bg-tertiary);
-  z-index: 0;
-}
-
-.progress-step:first-child::before {
-  left: 50%;
-}
-
-.progress-step:last-child::before {
-  right: 50%;
-}
-
-.progress-step.active::before {
-  background: var(--accent-primary);
-  opacity: 0.5;
+  z-index: 2;
 }
 
 .progress-dot {
-  width: 8px;
-  height: 8px;
+  width: 12px;
+  height: 12px;
   border-radius: 50%;
-  background: var(--bg-tertiary);
+  background: var(--bg-secondary);
   border: 2px solid var(--border-color);
   position: relative;
-  z-index: 1;
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 0 0 0 var(--accent-light);
 }
 
 .progress-step.active .progress-dot {
   background: var(--accent-primary);
   border-color: var(--accent-primary);
-  transform: scale(1.3);
+  transform: scale(1.2);
+  box-shadow: 0 0 0 3px var(--accent-light);
 }
 
 .progress-step.current .progress-dot {
   background: var(--accent-primary);
   border-color: var(--accent-primary);
-  transform: scale(1.5);
+  transform: scale(1.4);
   box-shadow: 0 0 0 4px var(--accent-light);
 }
 
 /* Step Container */
 .onboarding-step-container {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 20px;
+  padding: 40px 48px;
   width: 100%;
-  max-width: 600px;
-  margin: 0 auto;
-  padding: 40px 32px;
+  max-width: 700px;
+  box-shadow: var(--shadow-lg);
   display: flex;
   flex-direction: column;
-  min-height: calc(100vh - 120px);
-  box-sizing: border-box;
+  min-height: auto;
+  max-height: calc(100vh - 100px);
   position: relative;
+  margin: 0 auto;
+  box-sizing: border-box;
   overflow-y: auto;
   overflow-x: hidden;
+  /* Ensure content doesn't get cut off */
+  scroll-behavior: smooth;
 }
 
 /* Back Button */
@@ -155,22 +150,26 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   text-align: center;
-  padding: 40px 0;
+  padding: 32px 0;
   min-height: 0;
+  width: 100%;
+  /* Ensure content can scroll and doesn't get cut off */
+  overflow: visible;
+  position: relative;
 }
 
 .step-icon-wrapper {
-  width: 120px;
-  height: 120px;
+  width: 100px;
+  height: 100px;
   border-radius: 30px;
   background: var(--bg-secondary);
   border: 1px solid var(--border-color);
   display: flex;
   align-items: center;
   justify-content: center;
-  margin-bottom: 32px;
+  margin-bottom: 24px;
   color: var(--accent-primary);
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   animation: iconFloat 3s ease-in-out infinite;
@@ -179,19 +178,19 @@
 }
 
 .step-icon-wrapper svg {
-  width: 72px;
-  height: 72px;
+  width: 60px;
+  height: 60px;
 }
 
 .step-logo-wrapper {
   display: flex;
   align-items: center;
   justify-content: center;
-  margin-bottom: 32px;
+  margin-bottom: 24px;
 }
 
 .step-logo-wrapper .calimero-logo {
-  width: 240px;
+  width: 200px;
   height: auto;
   max-width: 100%;
   object-fit: contain;
@@ -230,7 +229,7 @@
 
 .step-title {
   margin: 0 0 16px 0;
-  font-size: 36px;
+  font-size: 32px;
   font-weight: 700;
   color: var(--text-primary);
   line-height: 1.2;
@@ -242,8 +241,9 @@
   font-size: 17px;
   line-height: 1.6;
   color: var(--text-secondary);
-  max-width: 500px;
+  max-width: 600px;
   font-weight: 400;
+  width: 100%;
 }
 
 /* Step Features (for welcome screen) */
@@ -273,6 +273,117 @@
 .step-feature svg {
   color: var(--accent-primary);
   flex-shrink: 0;
+}
+
+/* Step Principles (for explanation screens) */
+.step-principles {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 24px;
+  width: 100%;
+  max-width: 550px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.principle-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 16px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  color: var(--text-primary);
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+.principle-item svg {
+  color: var(--accent-primary);
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.principle-item strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+/* Responsive adjustments for principles */
+@media (max-width: 768px) {
+  .step-principles {
+    margin-top: 20px;
+    gap: 10px;
+    max-width: 100%;
+  }
+
+  .principle-item {
+    padding: 10px 14px;
+    font-size: 14px;
+  }
+
+  .step-features {
+    margin-top: 32px;
+    gap: 10px;
+    max-width: 100%;
+  }
+
+  .step-feature {
+    padding: 10px 16px;
+    font-size: 13px;
+  }
+
+  .step-description {
+    max-width: 100%;
+  }
+}
+
+/* Large screens - better use of space */
+@media (min-width: 1200px) {
+  .onboarding-step-container {
+    max-width: 900px;
+    padding: 56px 64px;
+  }
+
+  .step-description {
+    max-width: 700px;
+    font-size: 18px;
+  }
+
+  .step-principles {
+    max-width: 700px;
+  }
+
+  .step-title {
+    font-size: 40px;
+  }
+
+  .step-features {
+    max-width: 500px;
+  }
+}
+
+/* Very large screens */
+@media (min-width: 1600px) {
+  .onboarding-step-container {
+    max-width: 1000px;
+    padding: 64px 72px;
+  }
+
+  .step-description {
+    max-width: 800px;
+    font-size: 19px;
+  }
+
+  .step-principles {
+    max-width: 800px;
+  }
+
+  .step-title {
+    font-size: 42px;
+  }
 }
 
 /* Step Messages */
@@ -305,7 +416,12 @@
   width: 100%;
   max-width: 500px;
   margin-top: 32px;
+  margin-bottom: 24px;
   overflow-x: hidden;
+  overflow-y: visible;
+  /* Ensure form content is visible */
+  position: relative;
+  z-index: 0;
 }
 
 .step-form .form-group {
@@ -411,7 +527,10 @@
   gap: 12px;
   margin-top: auto;
   padding-top: 32px;
+  padding-bottom: 0;
   flex-shrink: 0;
+  position: relative;
+  z-index: 1;
 }
 
 .step-button {
@@ -458,6 +577,9 @@
     padding: 24px 20px;
     min-height: auto;
     max-height: calc(100vh - 100px);
+    /* Ensure proper scrolling on mobile */
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
   }
 
   .onboarding-progress {
@@ -467,6 +589,8 @@
   .step-content {
     padding: 24px 0;
     min-height: 0;
+    /* Ensure content doesn't get cut off */
+    padding-bottom: 100px;
   }
 
   .step-icon-wrapper {
@@ -492,7 +616,18 @@
 
   .step-form {
     margin-top: 24px;
+    margin-bottom: 32px;
     max-width: 100%;
+    /* Ensure form is scrollable and visible */
+    padding-bottom: 20px;
+  }
+  
+  .advanced-options-section {
+    margin-bottom: 24px;
+  }
+  
+  .advanced-options-content {
+    padding-bottom: 16px;
   }
 
   .step-form .form-row {
@@ -515,7 +650,19 @@
 
   .step-actions {
     padding-top: 24px;
+    padding-bottom: 0;
     flex-wrap: wrap;
+    /* Ensure buttons are visible and don't overlap */
+    margin-top: 24px;
+    position: sticky;
+    bottom: 0;
+    background: var(--bg-secondary);
+    border-top: 1px solid var(--border-color);
+    margin-left: -20px;
+    margin-right: -20px;
+    padding-left: 20px;
+    padding-right: 20px;
+    padding-bottom: 8px;
   }
 
   .step-button {
@@ -536,6 +683,9 @@
     padding: 20px 20px;
     min-height: auto;
     max-height: calc(100vh - 80px);
+    /* Ensure proper scrolling on short screens */
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
   }
 
   .onboarding-progress {
@@ -545,6 +695,8 @@
   .step-content {
     padding: 20px 0;
     min-height: 0;
+    /* Add bottom padding to prevent content cutoff */
+    padding-bottom: 120px;
   }
 
   .step-icon-wrapper {
@@ -582,6 +734,26 @@
 
   .step-actions {
     padding-top: 16px;
+    padding-bottom: 0;
+    /* Ensure buttons are visible on short screens */
+    position: sticky;
+    bottom: 0;
+    background: var(--bg-secondary);
+    border-top: 1px solid var(--border-color);
+    margin-left: -20px;
+    margin-right: -20px;
+    padding-left: 20px;
+    padding-right: 20px;
+    padding-bottom: 8px;
+    z-index: 10;
+  }
+  
+  .step-form {
+    margin-bottom: 24px;
+  }
+  
+  .advanced-options-section {
+    margin-bottom: 20px;
   }
 
   .step-button {
@@ -595,6 +767,9 @@
   .onboarding-step-container {
     padding: 16px 16px;
     max-height: calc(100vh - 60px);
+    /* Ensure proper scrolling on very small screens */
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
   }
 
   .onboarding-progress {
@@ -613,6 +788,8 @@
 
   .step-content {
     padding: 16px 0;
+    /* Add bottom padding to prevent content cutoff on small screens */
+    padding-bottom: 140px;
   }
 
   .step-icon-wrapper {
@@ -657,7 +834,31 @@
 
   .step-actions {
     padding-top: 16px;
+    padding-bottom: 0;
     gap: 8px;
+    /* Ensure buttons are visible on very small screens */
+    position: sticky;
+    bottom: 0;
+    background: var(--bg-secondary);
+    border-top: 1px solid var(--border-color);
+    margin-left: -16px;
+    margin-right: -16px;
+    padding-left: 16px;
+    padding-right: 16px;
+    padding-bottom: 8px;
+    z-index: 10;
+  }
+  
+  .step-form {
+    margin-bottom: 24px;
+  }
+  
+  .advanced-options-section {
+    margin-bottom: 16px;
+  }
+  
+  .advanced-options-content {
+    padding-bottom: 12px;
   }
 
   .step-button {
@@ -695,10 +896,14 @@
   box-shadow: none;
   animation: none;
   width: 100%;
+  max-width: 500px;
+  margin: 24px auto 0;
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
   min-height: min-content;
+  visibility: visible;
+  opacity: 1;
 }
 
 /* Override LoginView styles to match theme */
@@ -750,6 +955,106 @@
 .onboarding-card h2,
 .onboarding-card h3 {
   color: var(--text-primary) !important;
+}
+
+/* Username/Password Form Styles */
+.username-password-form {
+  width: 100%;
+  display: flex !important;
+  flex-direction: column;
+  gap: 20px;
+  visibility: visible !important;
+  opacity: 1 !important;
+  position: relative;
+  z-index: 1;
+}
+
+.username-password-form .form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  visibility: visible;
+  opacity: 1;
+}
+
+.username-password-form label {
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.username-password-form input {
+  background: var(--bg-tertiary) !important;
+  border: 1px solid var(--border-color) !important;
+  color: var(--text-primary) !important;
+  padding: 14px 16px !important;
+  border-radius: 12px !important;
+  font-size: 15px !important;
+  width: 100% !important;
+  box-sizing: border-box !important;
+  transition: all 0.2s;
+  visibility: visible !important;
+  opacity: 1 !important;
+  display: block !important;
+  min-height: 48px;
+}
+
+.username-password-form input::placeholder {
+  color: var(--text-tertiary);
+}
+
+.username-password-form input:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+  background: var(--bg-secondary);
+  box-shadow: 0 0 0 4px var(--accent-light);
+}
+
+.username-password-form input:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.username-password-form .form-error {
+  background: var(--error-bg);
+  color: var(--error-text);
+  padding: 12px 16px;
+  border-radius: 8px;
+  font-size: 14px;
+  border: 1px solid var(--error-border);
+}
+
+.username-password-form .form-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+
+.username-password-form .button {
+  padding: 14px 32px;
+  border: none;
+  border-radius: 12px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.username-password-form .button-primary {
+  background: var(--accent-primary);
+  color: white;
+}
+
+.username-password-form .button-primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.username-password-form .button-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
 }
 
 /* Override LoginView button styles */
@@ -896,6 +1201,12 @@
 /* Advanced Options Section */
 .advanced-options-section {
   margin-top: 8px;
+  margin-bottom: 16px;
+  width: 100%;
+  /* Ensure advanced options are visible */
+  position: relative;
+  z-index: 0;
+  overflow: visible;
 }
 
 .advanced-options-toggle {
@@ -904,21 +1215,21 @@
   justify-content: space-between;
   width: 100%;
   padding: 12px 16px;
-  background: rgba(255, 255, 255, 0.1);
-  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
   border-radius: 12px;
-  color: white;
+  color: var(--text-primary);
   font-size: 14px;
   font-weight: 500;
   cursor: pointer;
   transition: all 0.2s ease;
   margin-bottom: 0;
-  backdrop-filter: blur(10px);
+  box-sizing: border-box;
 }
 
 .advanced-options-toggle:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.15);
-  border-color: rgba(255, 255, 255, 0.3);
+  background: var(--bg-secondary);
+  border-color: var(--border-hover);
 }
 
 .advanced-options-toggle:disabled {
@@ -934,8 +1245,14 @@
 .advanced-options-content {
   margin-top: 16px;
   padding-top: 16px;
+  padding-bottom: 8px;
   border-top: 1px solid var(--border-color);
   animation: slideDown 0.2s ease-out;
+  /* Ensure content is visible and scrollable */
+  position: relative;
+  z-index: 0;
+  overflow: visible;
+  width: 100%;
 }
 
 @keyframes slideDown {

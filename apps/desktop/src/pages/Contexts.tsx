@@ -408,6 +408,7 @@ const Contexts: React.FC<ContextsProps> = ({ onAuthRequired, onConfirmDelete }) 
                 label: 'Name',
                 sortable: true,
                 width: '20%',
+                sortValue: (context) => context.name || context.id, // Sort by actual name or full id
                 render: (context) => {
                   const name = context.name || context.id.substring(0, 16) + '...';
                   return (
@@ -423,7 +424,7 @@ const Contexts: React.FC<ContextsProps> = ({ onAuthRequired, onConfirmDelete }) 
                 sortable: true,
                 width: '20%',
                 render: (context) => {
-                  return (
+                return (
                     <div className="table-cell-primary">
                       {context.appAlias || 'Unknown'}
                     </div>
@@ -435,11 +436,12 @@ const Contexts: React.FC<ContextsProps> = ({ onAuthRequired, onConfirmDelete }) 
                 label: 'Context ID',
                 sortable: true,
                 width: '25%',
+                sortValue: (context) => context.id, // Sort by full ID (already correct, but explicit)
                 render: (context) => {
                   return (
                     <div className="table-cell-secondary" style={{ fontFamily: 'monospace', fontSize: '12px' }}>
                       {context.id.substring(0, 32)}...
-                    </div>
+                          </div>
                   );
                 },
               },
@@ -454,7 +456,7 @@ const Contexts: React.FC<ContextsProps> = ({ onAuthRequired, onConfirmDelete }) 
                   return (
                     <div className="table-cell-secondary" style={{ fontFamily: 'monospace', fontSize: '11px' }}>
                       {hash.substring(0, 16)}...
-                    </div>
+                              </div>
                   );
                 },
               },
@@ -463,6 +465,10 @@ const Contexts: React.FC<ContextsProps> = ({ onAuthRequired, onConfirmDelete }) 
                 label: 'Created',
                 sortable: true,
                 width: '12%',
+                sortValue: (context) => {
+                  // Sort by timestamp value (newer dates sort higher)
+                  return context.createdAt ? new Date(context.createdAt).getTime() : 0;
+                },
                 render: (context) => {
                   if (!context.createdAt) return <span className="table-cell-empty">—</span>;
                   const date = new Date(context.createdAt);
@@ -473,7 +479,7 @@ const Contexts: React.FC<ContextsProps> = ({ onAuthRequired, onConfirmDelete }) 
                       <span style={{ fontSize: '11px', color: 'var(--text-tertiary)' }}>
                         {date.toLocaleTimeString()}
                       </span>
-                    </div>
+                          </div>
                   );
                 },
               },
@@ -486,17 +492,17 @@ const Contexts: React.FC<ContextsProps> = ({ onAuthRequired, onConfirmDelete }) 
                   const contextName = context.name || context.id.substring(0, 16) + '...';
                   return (
                     <div className="table-cell-actions">
-                      <button
+                            <button
                         onClick={(e) => {
                           e.stopPropagation();
                           handleDeleteContext(context.id, contextName);
                         }}
                         className="button button-danger button-small"
-                      >
-                        Delete
-                      </button>
-                    </div>
-                  );
+                            >
+                              Delete
+                            </button>
+                  </div>
+                );
                 },
               },
             ]}
@@ -505,7 +511,7 @@ const Contexts: React.FC<ContextsProps> = ({ onAuthRequired, onConfirmDelete }) 
               <div className="empty-state">
                 <p>No contexts found.</p>
                 <p>Click "Create Context" to create your first context.</p>
-              </div>
+          </div>
             }
           />
         )}

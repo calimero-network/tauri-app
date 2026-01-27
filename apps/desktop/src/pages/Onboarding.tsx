@@ -7,7 +7,7 @@ import { saveSettings, getSettings } from "../utils/settings";
 import { fetchAppsFromAllRegistries, fetchAppManifest, type AppSummary } from "../utils/registry";
 import { useToast } from "../contexts/ToastContext";
 import { useTheme } from "../contexts/ThemeContext";
-import { ArrowLeft, ArrowRight, Settings, Check, Shield, Package, Download, CheckCircle2, ChevronDown, ChevronUp, Search, AlertTriangle, Lock as LockIcon } from "lucide-react";
+import { ArrowLeft, ArrowRight, Check, Package, Download, CheckCircle2, ChevronDown, ChevronUp, Search, AlertTriangle } from "lucide-react";
 import calimeroLogo from "../assets/calimero-logo.svg";
 import bs58 from "bs58";
 import "./Onboarding.css";
@@ -600,9 +600,6 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
             <ArrowLeft size={18} />
           </button>
           <div className="step-content">
-            <div className="step-icon-wrapper">
-              <Shield size={60} />
-            </div>
             <h1 className="step-title">Your Data, Your Control</h1>
             <p className="step-description">
               Calimero is built on principles that put you in charge:
@@ -629,15 +626,15 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
                 <span><strong>Invite-only</strong> — you control who joins</span>
               </div>
             </div>
-          </div>
-          <div className="step-actions">
-            <button
-              onClick={() => setCurrentStep('node-setup')}
-              className="step-button step-button-primary"
-            >
-              Get Started
-              <ArrowRight size={18} />
-            </button>
+            <div className="step-actions">
+              <button
+                onClick={() => setCurrentStep('node-setup')}
+                className="step-button step-button-primary"
+              >
+                Get Started
+                <ArrowRight size={18} />
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -658,9 +655,6 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
             <ArrowLeft size={18} />
           </button>
           <div className="step-content">
-            <div className="step-icon-wrapper">
-              <Settings size={72} />
-            </div>
             <h1 className="step-title">Set Up Your Node</h1>
             <p className="step-description">
               Create your first Calimero node to get started. This will store your data and run applications.
@@ -699,7 +693,6 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
                     Browse
                   </button>
                 </div>
-                <p className="field-hint">Where your node data will be stored</p>
               </div>
 
               <div className="advanced-options-section">
@@ -788,27 +781,14 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
         <div className="onboarding-page">
         <ProgressIndicator />
           <div className="onboarding-step-container">
-            <button 
-              onClick={() => {
-                setCurrentStep('node-setup');
-              }} 
-              className="step-back-button"
-              aria-label="Go back"
-            >
-              <ArrowLeft size={18} />
-            </button>
             <div className="step-content">
-              <div className="step-icon-wrapper">
-                <LockIcon size={60} />
-              </div>
               <h1 className="step-title">Set Up Authentication</h1>
               <p className="step-description">
                 Create a username and password to authenticate with your Calimero node. 
                 This account will be used to securely access your node and manage your applications.
               </p>
-            </div>
-            <div className="onboarding-card">
-              <UsernamePasswordForm
+              <div className="onboarding-card">
+                <UsernamePasswordForm
                 onSuccess={async () => {
                 console.log("✅ Onboarding login successful");
                   setLoginLoading(true);
@@ -830,7 +810,8 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
                   setLoginLoading(false);
               }}
                 loading={loginLoading}
-            />
+                />
+              </div>
             </div>
           </div>
         </div>
@@ -843,17 +824,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
       <div className="onboarding-page">
         <ProgressIndicator />
         <div className="onboarding-step-container">
-          <button 
-            onClick={() => setCurrentStep('login')} 
-            className="step-back-button"
-            aria-label="Go back"
-          >
-            <ArrowLeft size={18} />
-          </button>
           <div className="step-content">
-            <div className="step-icon-wrapper">
-              <Package size={72} />
-            </div>
             <h1 className="step-title">Install Your First App</h1>
             <p className="step-description">
               Choose an application to install and get started with Calimero. You can install more apps later from the Marketplace.
@@ -866,16 +837,6 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
             ) : allApps.length === 0 ? (
               <div className="apps-empty">
                 <p>No applications available. You can install apps later from the Marketplace.</p>
-                <button
-                  onClick={() => {
-                    setTheme('dark');
-                    onComplete();
-                  }}
-                  className="step-button step-button-primary"
-                >
-                  Skip & Continue
-                  <ArrowRight size={18} />
-                </button>
               </div>
             ) : (
               <>
@@ -965,19 +926,6 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
                 )}
               </>
             )}
-          </div>
-          <div className="step-actions">
-            {apps.length > 0 && (
-              <button
-                  onClick={() => {
-                    setTheme('dark');
-                    onComplete();
-                  }}
-                  className="step-button step-button-secondary"
-                >
-                  Skip for now
-                </button>
-              )}
           </div>
         </div>
       </div>

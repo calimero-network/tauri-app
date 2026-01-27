@@ -147,12 +147,27 @@ function App() {
           const node = runningNodes[0];
           const nodeUrl = `http://localhost:${node.port}`;
           
-          // Update settings if needed
-          if (!settings.nodeUrl || settings.nodeUrl !== nodeUrl) {
-            saveSettings({ ...settings, nodeUrl });
-            // Reload to continue with normal flow
-            window.location.reload();
-            return;
+          // Only auto-update if:
+          // 1. No nodeUrl is configured, OR
+          // 2. The configured nodeUrl is also localhost (user likely wants local node)
+          // Don't overwrite if user has explicitly configured a remote node
+          const currentUrl = settings.nodeUrl;
+          const isLocalhostUrl = currentUrl && (
+            currentUrl.startsWith('http://localhost:') || 
+            currentUrl.startsWith('http://127.0.0.1:')
+          );
+          
+          if (!currentUrl || isLocalhostUrl) {
+            // Only update if URL actually differs
+            if (!currentUrl || currentUrl !== nodeUrl) {
+              saveSettings({ ...settings, nodeUrl });
+              // Reload to continue with normal flow
+              window.location.reload();
+              return;
+            }
+          } else {
+            // User has configured a remote node - don't overwrite, just continue with their config
+            console.log('ℹ️ Remote node configured, skipping local node auto-detection');
           }
         }
         

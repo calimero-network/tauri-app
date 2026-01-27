@@ -160,6 +160,10 @@ export default function Marketplace() {
       if (manifest.artifact) {
         // V1 format: single artifact object
         console.log("📦 Marketplace: Using v1 format");
+        if (!manifest.artifact.uri) {
+          toast.error("Invalid manifest: artifact URI is missing");
+          return;
+        }
         wasmUrl = manifest.artifact.uri;
         // Extract hash from digest (format: "sha256:...")
         wasmHashHex = manifest.artifact.digest?.replace('sha256:', '') || null;

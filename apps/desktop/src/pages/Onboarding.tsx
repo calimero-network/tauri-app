@@ -378,6 +378,10 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
       let wasmHashHex: string | null = null;
       
       if (manifest.artifact) {
+        if (!manifest.artifact.uri) {
+          toast.error("Invalid manifest: artifact URI is missing");
+          return;
+        }
         wasmUrl = manifest.artifact.uri;
         wasmHashHex = manifest.artifact.digest?.replace('sha256:', '') || null;
       } else if (manifest.artifacts && manifest.artifacts.length > 0) {

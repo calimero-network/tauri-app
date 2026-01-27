@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from "react";
 import { apiClient } from "@calimero-network/mero-react";
-import { invoke } from "@tauri-apps/api/tauri";
 import { useToast } from "../contexts/ToastContext";
 import DataTable from "../components/DataTable";
 import { SkeletonTable } from "../components/Skeleton";
+import { decodeMetadata, openAppFrontend } from "../utils/appUtils";
 import "./InstalledApps.css";
 
 interface InstalledApplication {
@@ -116,49 +116,10 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
     }
   };
 
-  const decodeMetadata = (metadata: number[] | string): any => {
-    try {
-      let jsonString: string;
-      
-      if (Array.isArray(metadata)) {
-        // Convert array of bytes to string
-        jsonString = String.fromCharCode(...metadata);
-      } else {
-        // Assume it's base64 encoded string
-        jsonString = atob(metadata);
-      }
-      
-      return JSON.parse(jsonString);
-    } catch (error) {
-      console.warn("Failed to decode metadata:", error);
-      return null;
-    }
-  };
-
   const handleOpenFrontend = async (frontendUrl: string, appName?: string) => {
-    try {
-      // Get configured node URL from settings for HTTP interception
-      const { getSettings } = await import('../utils/settings');
-      const settings = getSettings();
-      
-      // Always open in a new Tauri window
-      // Use unique window label based on domain + timestamp to avoid conflicts
-      // IPC scope uses wildcard pattern (app-*) so any label matching app-* will work
-      const urlObj = new URL(frontendUrl);
-      const domain = urlObj.hostname.replace(/\./g, '-'); // Replace dots with dashes for label
-      const windowLabel = `app-${domain}-${Date.now()}`;
-      await invoke('create_app_window', {
-        windowLabel,
-        url: frontendUrl,
-        title: appName || 'Application',
-        openDevtools: false,
-        nodeUrl: settings.nodeUrl,
-      });
-      console.log('Opened in new Tauri window:', frontendUrl, 'with label:', windowLabel);
-    } catch (error) {
-      console.error("Failed to open frontend:", error);
-      toast.error(`Failed to open frontend: ${error instanceof Error ? error.message : "Unknown error"}`);
-    }
+    await openAppFrontend(frontendUrl, appName, (error) => {
+      toast.error(`Failed to open frontend: ${error.message}`);
+    });
   };
 
   return (

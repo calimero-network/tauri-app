@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback } from "react";
 import { createClient, apiClient, LoginView, getAccessToken } from "@calimero-network/mero-react";
 import { getSettings, getAuthUrl, saveSettings } from "./utils/settings";
-import { invoke } from "@tauri-apps/api/tauri";
 import { checkOnboardingState, type OnboardingState } from "./utils/onboarding";
+import { decodeMetadata, openAppFrontend } from "./utils/appUtils";
 import Settings from "./pages/Settings";
 import Onboarding from "./pages/Onboarding";
 import Marketplace from "./pages/Marketplace";
@@ -309,42 +309,11 @@ function App() {
     }
   }, [loadContexts, loadInstalledApps]);
 
-  // Helper function to decode app metadata
-  const decodeMetadata = useCallback((metadata: any): any => {
-    if (!metadata) return null;
-    try {
-      let jsonString: string;
-      if (typeof metadata === 'string') {
-        jsonString = atob(metadata);
-      } else if (Array.isArray(metadata)) {
-        jsonString = String.fromCharCode(...metadata);
-      } else {
-        return metadata;
-      }
-      return JSON.parse(jsonString);
-    } catch (error) {
-      console.warn("Failed to decode metadata:", error);
-      return null;
-      }
-  }, []);
-
   // Open app frontend in a new window
   const handleOpenAppFrontend = useCallback(async (frontendUrl: string, appName?: string) => {
     try {
-      const settings = getSettings();
-      const urlObj = new URL(frontendUrl);
-      const domain = urlObj.hostname.replace(/\./g, '-');
-      const windowLabel = `app-${domain}-${Date.now()}`;
-      await invoke('create_app_window', {
-        windowLabel,
-        url: frontendUrl,
-        title: appName || 'Application',
-        openDevtools: false,
-        nodeUrl: settings.nodeUrl,
-      });
-      console.log('Opened app frontend in new window:', frontendUrl);
+      await openAppFrontend(frontendUrl, appName);
     } catch (error) {
-      console.error("Failed to open frontend:", error);
       // Fallback to navigating to installed apps page
       setCurrentPage('installed');
     }

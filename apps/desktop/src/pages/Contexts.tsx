@@ -1,5 +1,10 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { apiClient } from "@calimero-network/mero-react";
+import { useToast } from "../contexts/ToastContext";
+import DataTable from "../components/DataTable";
+import { SkeletonTable } from "../components/Skeleton";
+import { decodeMetadata } from "../utils/appUtils";
+import { X } from "lucide-react";
 import "./Contexts.css";
 
 interface Context {
@@ -28,10 +33,10 @@ export interface ContextsProps {
 }
 
 const Contexts: React.FC<ContextsProps> = ({ onAuthRequired, onConfirmDelete }) => {
+  const toast = useToast();
   const [contexts, setContexts] = useState<Context[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [createProtocol, setCreateProtocol] = useState("near");
   const [createApplicationId, setCreateApplicationId] = useState("");
@@ -140,7 +145,6 @@ const Contexts: React.FC<ContextsProps> = ({ onAuthRequired, onConfirmDelete }) 
 
     setCreating(true);
     setError(null);
-    setSuccessMessage(null);
     try {
       // Convert initialization params from JSON string to byte array
       let initParams: number[] = [];
@@ -167,15 +171,12 @@ const Contexts: React.FC<ContextsProps> = ({ onAuthRequired, onConfirmDelete }) 
         return;
       }
 
-      setSuccessMessage(`Context created successfully! ID: ${response.data?.contextId || 'N/A'}`);
+      toast.success(`Context created successfully! ID: ${response.data?.contextId || 'N/A'}`);
       setCreateProtocol("near");
       setCreateApplicationId("");
       setCreateInitializationParams("");
       setShowCreateForm(false);
       await loadContexts();
-      
-      // Clear success message after 3 seconds
-      setTimeout(() => setSuccessMessage(null), 3000);
     } catch (err) {
       setError(`Failed to create context: ${err instanceof Error ? err.message : "Unknown error"}`);
       console.error("Create context error:", err);
@@ -183,6 +184,23 @@ const Contexts: React.FC<ContextsProps> = ({ onAuthRequired, onConfirmDelete }) 
       setCreating(false);
     }
   };
+
+  // Get app alias for display
+  const getAppAlias = (appId: string): string => {
+    const app = installedApps.find(a => a.id === appId);
+    if (!app) return appId;
+    
+    const metadata = decodeMetadata(app.metadata);
+    return metadata?.name || metadata?.alias || app.name || appId;
+  };
+
+  // Prepare contexts for table with app names
+  const contextsWithAppNames = useMemo(() => {
+    return contexts.map(context => ({
+      ...context,
+      appAlias: getAppAlias(context.applicationId || context.application_id || 'unknown'),
+    }));
+  }, [contexts, installedApps]);
 
   const handleDeleteContext = async (contextId: string, contextName: string) => {
     if (onConfirmDelete) {
@@ -192,16 +210,14 @@ const Contexts: React.FC<ContextsProps> = ({ onAuthRequired, onConfirmDelete }) 
           const response = await apiClient.node.deleteContext(contextId);
           
           if (response.error) {
-            setError(`Failed to delete context: ${response.error.message}`);
+            toast.error(`Failed to delete context: ${response.error.message}`);
             return;
           }
 
           console.log(`✅ Context deleted successfully: ${response.data?.contextId || contextId}`);
-          setSuccessMessage(`Context "${contextName}" deleted successfully`);
+          toast.success(`Context "${contextName}" deleted successfully`);
           // Reload the list
           await loadContexts();
-          // Clear success message after 3 seconds
-          setTimeout(() => setSuccessMessage(null), 3000);
         } catch (err) {
           console.error("Delete context error:", err);
           setError(`Failed to delete context: ${err instanceof Error ? err.message : "Unknown error"}`);
@@ -214,15 +230,13 @@ const Contexts: React.FC<ContextsProps> = ({ onAuthRequired, onConfirmDelete }) 
         const response = await apiClient.node.deleteContext(contextId);
         
         if (response.error) {
-          setError(`Failed to delete context: ${response.error.message}`);
+          toast.error(`Failed to delete context: ${response.error.message}`);
           return;
         }
 
         console.log(`✅ Context deleted successfully: ${response.data?.contextId || contextId}`);
-        setSuccessMessage(`Context "${contextName}" deleted successfully`);
+        toast.success(`Context "${contextName}" deleted successfully`);
         await loadContexts();
-        // Clear success message after 3 seconds
-        setTimeout(() => setSuccessMessage(null), 3000);
       } catch (err) {
         console.error("Delete context error:", err);
         setError(`Failed to delete context: ${err instanceof Error ? err.message : "Unknown error"}`);
@@ -253,29 +267,9 @@ const Contexts: React.FC<ContextsProps> = ({ onAuthRequired, onConfirmDelete }) 
             {error}
             <button 
               onClick={() => setError(null)} 
-              style={{ marginLeft: '12px', padding: '4px 8px', fontSize: '12px' }}
+              style={{ marginLeft: '12px', padding: '4px 8px', fontSize: '12px', display: 'inline-flex', alignItems: 'center' }}
             >
-              ✕
-            </button>
-          </div>
-        )}
-        {successMessage && (
-          <div className="success-message" style={{ 
-            marginBottom: '16px', 
-            padding: '12px', 
-            backgroundColor: '#d4edda', 
-            color: '#155724', 
-            borderRadius: '4px',
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center'
-          }}>
-            {successMessage}
-            <button 
-              onClick={() => setSuccessMessage(null)} 
-              style={{ padding: '4px 8px', fontSize: '12px', background: 'transparent', border: 'none', cursor: 'pointer' }}
-            >
-              ✕
+              <X size={14} />
             </button>
           </div>
         )}
@@ -313,26 +307,21 @@ const Contexts: React.FC<ContextsProps> = ({ onAuthRequired, onConfirmDelete }) 
                       let appVersion = '';
                       
                       if (app.metadata) {
-                        try {
-                          // Handle empty metadata (bundles use empty metadata)
-                          if (Array.isArray(app.metadata) && app.metadata.length === 0) {
-                            // Empty metadata for bundles - use app.id as name
-                            appName = app.id;
-                            appVersion = '';
-                          } else {
-                            const metadata = typeof app.metadata === 'string' 
-                              ? JSON.parse(atob(app.metadata))
-                              : Array.isArray(app.metadata)
-                              ? JSON.parse(String.fromCharCode(...app.metadata))
-                              : app.metadata;
-                            appName = metadata.name || metadata.alias || app.id;
-                            appVersion = metadata.version || '';
-                          }
-                        } catch (e) {
-                          console.warn("Failed to decode app metadata:", e);
-                          // Fallback to app.id if parsing fails
+                        // Handle empty metadata (bundles use empty metadata)
+                        if (Array.isArray(app.metadata) && app.metadata.length === 0) {
+                          // Empty metadata for bundles - use app.id as name
                           appName = app.id;
                           appVersion = '';
+                        } else {
+                          const metadata = decodeMetadata(app.metadata);
+                          if (metadata) {
+                            appName = metadata.name || metadata.alias || app.id;
+                            appVersion = metadata.version || '';
+                          } else {
+                            // Fallback to app.id if decoding fails
+                            appName = app.id;
+                            appVersion = '';
+                          }
                         }
                       }
                       
@@ -393,101 +382,122 @@ const Contexts: React.FC<ContextsProps> = ({ onAuthRequired, onConfirmDelete }) 
         )}
 
         {loading ? (
-          <div className="loading">Loading contexts...</div>
-        ) : contexts.length === 0 ? (
-          <div className="empty-state">
-            <p>No contexts found.</p>
-            <p>Click "Create Context" to create your first context.</p>
-          </div>
+          <SkeletonTable rows={5} columns={6} showHeader={true} />
         ) : (
-          <div className="contexts-grouped">
-            {(() => {
-              // Group contexts by application_id
-              const grouped = contexts.reduce((acc, context) => {
-                const appId = context.applicationId || context.application_id || 'unknown';
-                if (!acc[appId]) {
-                  acc[appId] = [];
-                }
-                acc[appId].push(context);
-                return acc;
-              }, {} as Record<string, Context[]>);
-
-              // Get app alias for each application_id
-              const getAppAlias = (appId: string): string => {
-                const app = installedApps.find(a => a.id === appId);
-                if (!app) return appId;
-                
-                try {
-                  let metadata: any = {};
-                  if (typeof app.metadata === 'string') {
-                    metadata = JSON.parse(atob(app.metadata));
-                  } else if (Array.isArray(app.metadata)) {
-                    metadata = JSON.parse(String.fromCharCode(...app.metadata));
-                  } else if (app.metadata) {
-                    metadata = app.metadata;
-                  }
-                  
-                  return metadata.alias || metadata.name || app.name || appId;
-                } catch (e) {
-                  return app.name || appId;
-                }
-              };
-
-              // Sort application IDs for consistent display
-              const sortedAppIds = Object.keys(grouped).sort();
-
-              return sortedAppIds.map((appId) => {
-                const appContexts = grouped[appId];
-                const alias = getAppAlias(appId);
-                
-                return (
-                  <div key={appId} className="context-group">
-                    <div className="context-group-header">
-                      <h2>{alias}</h2>
-                      <span className="context-count">({appContexts.length} {appContexts.length === 1 ? 'context' : 'contexts'})</span>
+          <DataTable
+            data={contextsWithAppNames}
+            columns={[
+              {
+                key: 'name',
+                label: 'Name',
+                sortable: true,
+                width: '20%',
+                sortValue: (context) => context.name || context.id, // Sort by actual name or full id
+                render: (context) => {
+                  const name = context.name || context.id.substring(0, 16) + '...';
+                  return (
+                    <div className="table-cell-name">
+                      <div className="table-cell-primary">{name}</div>
                     </div>
-                    <div className="contexts-grid">
-                      {appContexts.map((context, index) => (
-                        <div key={context.id} className="context-card">
-                          <div className="context-card-header">
-                            <h3>{context.name || `Context ${index + 1}`}</h3>
+                  );
+                },
+              },
+              {
+                key: 'appAlias',
+                label: 'Application',
+                sortable: true,
+                width: '20%',
+                render: (context) => {
+                return (
+                    <div className="table-cell-primary">
+                      {context.appAlias || 'Unknown'}
+                    </div>
+                  );
+                },
+              },
+              {
+                key: 'id',
+                label: 'Context ID',
+                sortable: true,
+                width: '25%',
+                sortValue: (context) => context.id, // Sort by full ID (already correct, but explicit)
+                render: (context) => {
+                  return (
+                    <div className="table-cell-secondary" style={{ fontFamily: 'monospace', fontSize: '12px' }}>
+                      {context.id.substring(0, 32)}...
                           </div>
-                          <div className="context-card-body">
-                            <p className="context-id">ID: {context.id}</p>
-                            {(context.rootHash || context.root_hash) && (
-                              <p className="context-root-hash">
-                                Root Hash: {context.rootHash || context.root_hash}
-                              </p>
-                            )}
-                            {context.description && (
-                              <p className="context-description">{context.description}</p>
-                            )}
-                            {context.createdAt && (
-                              <p className="context-date">Created: {new Date(context.createdAt).toLocaleString()}</p>
-                            )}
-                            {context.metadata && Object.keys(context.metadata).length > 0 && (
-                              <div className="context-metadata">
-                                <strong>Metadata:</strong>
-                                <pre>{JSON.stringify(context.metadata, null, 2)}</pre>
+                  );
+                },
+              },
+              {
+                key: 'rootHash',
+                label: 'Root Hash',
+                sortable: false,
+                width: '15%',
+                render: (context) => {
+                  const hash = context.rootHash || context.root_hash;
+                  if (!hash) return <span className="table-cell-empty">—</span>;
+                  return (
+                    <div className="table-cell-secondary" style={{ fontFamily: 'monospace', fontSize: '11px' }}>
+                      {hash.substring(0, 16)}...
                               </div>
-                            )}
+                  );
+                },
+              },
+              {
+                key: 'createdAt',
+                label: 'Created',
+                sortable: true,
+                width: '12%',
+                sortValue: (context) => {
+                  // Sort by timestamp value (newer dates sort higher)
+                  return context.createdAt ? new Date(context.createdAt).getTime() : 0;
+                },
+                render: (context) => {
+                  if (!context.createdAt) return <span className="table-cell-empty">—</span>;
+                  const date = new Date(context.createdAt);
+                  return (
+                    <div className="table-cell-secondary" style={{ fontSize: '12px' }}>
+                      {date.toLocaleDateString()}
+                      <br />
+                      <span style={{ fontSize: '11px', color: 'var(--text-tertiary)' }}>
+                        {date.toLocaleTimeString()}
+                      </span>
                           </div>
-                          <div className="context-card-actions">
+                  );
+                },
+              },
+              {
+                key: 'actions',
+                label: 'Actions',
+                sortable: false,
+                width: '8%',
+                render: (context) => {
+                  const contextName = context.name || context.id.substring(0, 16) + '...';
+                  return (
+                    <div className="table-cell-actions">
                             <button
-                              onClick={() => handleDeleteContext(context.id, context.name || `Context ${index + 1}`)}
-                              className="button button-danger"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDeleteContext(context.id, contextName);
+                        }}
+                        className="button button-danger button-small"
                             >
                               Delete
                             </button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
                   </div>
                 );
-              });
-            })()}
+                },
+              },
+            ]}
+            keyExtractor={(context) => context.id}
+            emptyMessage={
+              <div className="empty-state">
+                <p>No contexts found.</p>
+                <p>Click "Create Context" to create your first context.</p>
           </div>
+            }
+          />
         )}
       </main>
     </div>

@@ -3,6 +3,7 @@ import { apiClient } from "@calimero-network/mero-react";
 import { useToast } from "../contexts/ToastContext";
 import DataTable from "../components/DataTable";
 import { SkeletonTable } from "../components/Skeleton";
+import { decodeMetadata } from "../utils/appUtils";
 import { X } from "lucide-react";
 import "./Contexts.css";
 
@@ -189,20 +190,8 @@ const Contexts: React.FC<ContextsProps> = ({ onAuthRequired, onConfirmDelete }) 
     const app = installedApps.find(a => a.id === appId);
     if (!app) return appId;
     
-    try {
-      let metadata: any = {};
-      if (typeof app.metadata === 'string') {
-        metadata = JSON.parse(atob(app.metadata));
-      } else if (Array.isArray(app.metadata)) {
-        metadata = JSON.parse(String.fromCharCode(...app.metadata));
-      } else if (app.metadata) {
-        metadata = app.metadata;
-      }
-      
-      return metadata.name || metadata.alias || app.name || appId;
-    } catch (e) {
-      return app.name || appId;
-    }
+    const metadata = decodeMetadata(app.metadata);
+    return metadata?.name || metadata?.alias || app.name || appId;
   };
 
   // Prepare contexts for table with app names
@@ -318,26 +307,21 @@ const Contexts: React.FC<ContextsProps> = ({ onAuthRequired, onConfirmDelete }) 
                       let appVersion = '';
                       
                       if (app.metadata) {
-                        try {
-                          // Handle empty metadata (bundles use empty metadata)
-                          if (Array.isArray(app.metadata) && app.metadata.length === 0) {
-                            // Empty metadata for bundles - use app.id as name
-                            appName = app.id;
-                            appVersion = '';
-                          } else {
-                            const metadata = typeof app.metadata === 'string' 
-                              ? JSON.parse(atob(app.metadata))
-                              : Array.isArray(app.metadata)
-                              ? JSON.parse(String.fromCharCode(...app.metadata))
-                              : app.metadata;
-                            appName = metadata.name || metadata.alias || app.id;
-                            appVersion = metadata.version || '';
-                          }
-                        } catch (e) {
-                          console.warn("Failed to decode app metadata:", e);
-                          // Fallback to app.id if parsing fails
+                        // Handle empty metadata (bundles use empty metadata)
+                        if (Array.isArray(app.metadata) && app.metadata.length === 0) {
+                          // Empty metadata for bundles - use app.id as name
                           appName = app.id;
                           appVersion = '';
+                        } else {
+                          const metadata = decodeMetadata(app.metadata);
+                          if (metadata) {
+                            appName = metadata.name || metadata.alias || app.id;
+                            appVersion = metadata.version || '';
+                          } else {
+                            // Fallback to app.id if decoding fails
+                            appName = app.id;
+                            appVersion = '';
+                          }
                         }
                       }
                       

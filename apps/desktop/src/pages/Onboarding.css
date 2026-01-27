@@ -158,6 +158,8 @@
   /* Ensure content can scroll and doesn't get cut off */
   overflow: visible;
   position: relative;
+  /* Ensure proper spacing for buttons inside content */
+  gap: 0;
 }
 
 .step-icon-wrapper {
@@ -416,16 +418,30 @@
   width: 100%;
   max-width: 500px;
   margin-top: 32px;
-  margin-bottom: 24px;
+  margin-bottom: 20px;
   overflow-x: hidden;
   overflow-y: visible;
   /* Ensure form content is visible */
   position: relative;
   z-index: 0;
+  /* Ensure advanced options are visible */
+  display: flex;
+  flex-direction: column;
+  gap: 0;
 }
 
 .step-form .form-group {
-  margin-bottom: 24px;
+  margin-bottom: 20px;
+}
+
+/* Reduce spacing for the data directory field to keep advanced options visible */
+.step-form > .form-group:first-of-type {
+  margin-bottom: 16px;
+}
+
+/* Ensure form groups have consistent spacing */
+.step-form .form-group:last-child {
+  margin-bottom: 0;
 }
 
 .step-form label {
@@ -525,12 +541,18 @@
   display: flex;
   justify-content: center;
   gap: 12px;
-  margin-top: auto;
-  padding-top: 32px;
+  margin-top: 32px;
+  padding-top: 0;
   padding-bottom: 0;
   flex-shrink: 0;
   position: relative;
   z-index: 1;
+}
+
+/* Step Actions inside step-content (for natural flow) */
+.step-content .step-actions {
+  margin-top: 32px;
+  margin-bottom: 0;
 }
 
 .step-button {
@@ -614,16 +636,16 @@
     margin-bottom: 20px;
   }
 
-  .step-form {
-    margin-top: 24px;
-    margin-bottom: 32px;
-    max-width: 100%;
-    /* Ensure form is scrollable and visible */
-    padding-bottom: 20px;
+.step-form {
+  margin-top: 24px;
+  margin-bottom: 24px;
+  max-width: 100%;
+  /* Ensure form is scrollable and visible */
+  padding-bottom: 20px;
   }
   
   .advanced-options-section {
-    margin-bottom: 24px;
+    margin-bottom: 16px;
   }
   
   .advanced-options-content {
@@ -726,10 +748,15 @@
 
   .step-form {
     margin-top: 16px;
+    margin-bottom: 16px;
   }
 
   .step-form .form-group {
     margin-bottom: 16px;
+  }
+  
+  .step-form .form-group:first-of-type {
+    margin-bottom: 20px;
   }
 
   .step-actions {
@@ -748,12 +775,8 @@
     z-index: 10;
   }
   
-  .step-form {
-    margin-bottom: 24px;
-  }
-  
   .advanced-options-section {
-    margin-bottom: 20px;
+    margin-bottom: 12px;
   }
 
   .step-button {
@@ -1200,13 +1223,15 @@
 
 /* Advanced Options Section */
 .advanced-options-section {
-  margin-top: 8px;
+  margin-top: 0;
   margin-bottom: 16px;
   width: 100%;
   /* Ensure advanced options are visible */
   position: relative;
   z-index: 0;
   overflow: visible;
+  /* Ensure it's always visible in the viewport */
+  scroll-margin-top: 20px;
 }
 
 .advanced-options-toggle {

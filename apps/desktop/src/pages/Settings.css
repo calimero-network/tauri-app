@@ -382,3 +382,53 @@
   transform: translateY(-1px);
   box-shadow: var(--shadow-md);
 }
+
+.reset-confirm-form {
+  margin-top: 12px;
+  padding: 16px;
+  background: var(--bg-tertiary, rgba(0, 0, 0, 0.1));
+  border-radius: 8px;
+  border: 1px solid var(--border-color, #333);
+}
+
+.reset-confirm-warning {
+  margin: 0 0 16px 0;
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.reset-confirm-path {
+  margin: 0 0 16px 0;
+  padding: 8px 12px;
+  background: var(--bg-secondary, rgba(0, 0, 0, 0.2));
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+.reset-confirm-path code {
+  font-family: monospace;
+  word-break: break-all;
+}
+
+.reset-confirm-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+  cursor: pointer;
+  font-size: 14px;
+  color: var(--text-primary);
+}
+
+.reset-confirm-checkbox input {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+
+.reset-confirm-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+}

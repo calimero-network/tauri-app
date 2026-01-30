@@ -91,3 +91,19 @@ export async function getMerodLogs(
 ): Promise<string> {
   return await invoke('get_merod_logs', { nodeName, homeDir, lines });
 }
+
+/**
+ * Kill all merod processes on the system. Call before total nuke.
+ */
+export async function killAllMerodProcesses(): Promise<string> {
+  return await invoke('kill_all_merod_processes');
+}
+
+/**
+ * Delete the Calimero data directory and all its contents (total nuke).
+ * Path must be under the user's home directory.
+ * Call killAllMerodProcesses() first.
+ */
+export async function deleteCalimeroDataDir(dataDir: string): Promise<string> {
+  return await invoke('delete_calimero_data_dir', { dataDir });
+}

@@ -127,9 +127,38 @@ function App() {
       console.log('✅ Returning user - onboarding completed, loading main app');
       setCheckingOnboarding(true);
 
+      // One-time: enable start-at-login by default for existing users who didn't have it set
+      if (!localStorage.getItem("calimero-autostart-default-applied")) {
+        try {
+          await invoke("autostart_enable");
+          localStorage.setItem("calimero-autostart-default-applied", "1");
+        } catch {
+          // Autostart may not be available
+        }
+      }
+
       try {
-        const { detectRunningMerodNodes } = await import('./utils/merod');
-        const runningNodes = await detectRunningMerodNodes();
+        const { detectRunningMerodNodes, startMerod } = await import('./utils/merod');
+        let runningNodes = await detectRunningMerodNodes();
+
+        // Auto-start merod if user has embedded node configured and no node is running
+        if (
+          settings.useEmbeddedNode &&
+          settings.embeddedNodeName &&
+          runningNodes.length === 0
+        ) {
+          const dataDir = settings.embeddedNodeDataDir || '~/.calimero';
+          const serverPort = settings.embeddedNodePort ?? 2528;
+          const swarmPort = 2428; // default swarm port
+          console.log('🔄 Auto-starting merod node (configured for startup)');
+          try {
+            await startMerod(serverPort, swarmPort, dataDir, settings.embeddedNodeName);
+            await new Promise((r) => setTimeout(r, 2000)); // give merod time to start
+            runningNodes = await detectRunningMerodNodes();
+          } catch (startErr) {
+            console.warn('Auto-start merod failed:', startErr);
+          }
+        }
 
         // Auto-update nodeUrl if we detect a running local node and user has localhost or no URL
         if (runningNodes.length > 0) {
@@ -340,9 +369,15 @@ function App() {
   if (showOnboarding) {
     return (
       <Onboarding
-        onComplete={() => {
+        onComplete={async () => {
           const settings = getSettings();
           saveSettings({ ...settings, onboardingCompleted: true });
+          try {
+            await invoke("autostart_enable");
+            localStorage.setItem("calimero-autostart-default-applied", "1");
+          } catch {
+            // Autostart may not be available
+          }
           setShowOnboarding(false);
           setConnected(true);
           setError(null);

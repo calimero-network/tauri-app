@@ -104,4 +104,23 @@ export function saveSettings(settings: AppSettings): void {
   }
 }
 
+/**
+ * Clear app settings. Use to reset onboarding and start from scratch.
+ * Caller should reload the app after this.
+ */
+export function clearSettings(): void {
+  localStorage.removeItem(SETTINGS_KEY);
+}
+
+const THEME_KEY = 'calimero-desktop-theme';
+
+/**
+ * Clear all app data (settings + theme). Use with stopMerod() for full reset.
+ * Caller should reload the app after this.
+ */
+export function clearAllAppData(): void {
+  localStorage.removeItem(SETTINGS_KEY);
+  localStorage.removeItem(THEME_KEY);
+}
+
 

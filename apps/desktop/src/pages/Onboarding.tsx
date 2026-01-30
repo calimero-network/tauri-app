@@ -4,6 +4,7 @@ import { apiClient, setAccessToken, setRefreshToken } from "@calimero-network/me
 import { initMerodNode, startMerod, listMerodNodes, detectRunningMerodNodes } from "../utils/merod";
 import { invoke } from "@tauri-apps/api/tauri";
 import { saveSettings, getSettings } from "../utils/settings";
+import { saveOnboardingProgress, loadOnboardingProgress } from "../utils/onboardingProgress";
 import { fetchAppsFromAllRegistries, fetchAppManifest, type AppSummary } from "../utils/registry";
 import { useToast } from "../contexts/ToastContext";
 import { useTheme } from "../contexts/ThemeContext";
@@ -198,7 +199,10 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
   const { setTheme } = useTheme();
   const [state, setState] = useState<OnboardingState | null>(null);
   const [loading, setLoading] = useState(true);
-  const [currentStep, setCurrentStep] = useState<OnboardingStep>('welcome'); // Start with welcome screen
+  const [currentStep, setCurrentStep] = useState<OnboardingStep>(() => {
+    const saved = loadOnboardingProgress();
+    return saved?.currentStep ?? 'welcome';
+  });
 
   // Force dark mode during onboarding - override any theme changes
   useEffect(() => {
@@ -242,11 +246,11 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
   const [installedAppIds, setInstalledAppIds] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState("");
 
-  // Node setup state
-  const [dataDir, setDataDir] = useState("~/.calimero");
-  const [nodeName, setNodeName] = useState("default");
-  const [serverPort, setServerPort] = useState(2528);
-  const [swarmPort, setSwarmPort] = useState(2428);
+  // Node setup state - restore from saved progress if available
+  const [dataDir, setDataDir] = useState(() => loadOnboardingProgress()?.dataDir ?? "~/.calimero");
+  const [nodeName, setNodeName] = useState(() => loadOnboardingProgress()?.nodeName ?? "default");
+  const [serverPort, setServerPort] = useState(() => loadOnboardingProgress()?.serverPort ?? 2528);
+  const [swarmPort, setSwarmPort] = useState(() => loadOnboardingProgress()?.swarmPort ?? 2428);
       const [creatingNode, setCreatingNode] = useState(false);
       const [nodeError, setNodeError] = useState<string | null>(null);
       const [nodeCreated, setNodeCreated] = useState(false);
@@ -254,10 +258,10 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
       const [showAdvancedOptions, setShowAdvancedOptions] = useState(false);
       const [loginLoading, setLoginLoading] = useState(false);
   const [existingNodes, setExistingNodes] = useState<string[]>([]);
-  const [useExistingNode, setUseExistingNode] = useState<string | null>(null);
+  const [useExistingNode, setUseExistingNode] = useState<string | null>(() => loadOnboardingProgress()?.useExistingNode ?? null);
   const [loadingExistingNodes, setLoadingExistingNodes] = useState(false);
   // 'choose' = show path selection, 'use-existing' = minimal form, 'create-new' = full form
-  const [nodeSetupMode, setNodeSetupMode] = useState<'choose' | 'use-existing' | 'create-new'>('choose');
+  const [nodeSetupMode, setNodeSetupMode] = useState<'choose' | 'use-existing' | 'create-new'>(() => loadOnboardingProgress()?.nodeSetupMode ?? 'choose');
   const stepContainerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -274,6 +278,21 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
     }
     loadState();
   }, []);
+
+  // Persist onboarding progress so user can resume after accidental close
+  useEffect(() => {
+    saveOnboardingProgress({
+      currentStep,
+      dataDir,
+      nodeName,
+      serverPort,
+      swarmPort,
+      nodeSetupMode,
+      useExistingNode,
+      nodeCreated,
+      nodeStarted,
+    });
+  }, [currentStep, dataDir, nodeName, serverPort, swarmPort, nodeSetupMode, useExistingNode, nodeCreated, nodeStarted]);
 
   // Load existing nodes when on node-setup step - auto-continue if found (skip auth)
   useEffect(() => {
@@ -297,6 +316,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
               saveSettings({
                 ...getSettings(),
                 nodeUrl: `http://localhost:${alreadyRunning.port}`,
+                useEmbeddedNode: true,
                 embeddedNodeDataDir: dataDir,
                 embeddedNodeName: nodeToUse,
                 embeddedNodePort: alreadyRunning.port,
@@ -306,6 +326,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
               saveSettings({
                 ...getSettings(),
                 nodeUrl: `http://localhost:${serverPort}`,
+                useEmbeddedNode: true,
                 embeddedNodeDataDir: dataDir,
                 embeddedNodeName: nodeToUse,
                 embeddedNodePort: serverPort,
@@ -411,6 +432,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
           saveSettings({
             ...getSettings(),
             nodeUrl,
+            useEmbeddedNode: true,
             embeddedNodeDataDir: dataDir,
             embeddedNodeName: useExistingNode,
             embeddedNodePort: alreadyRunning.port,
@@ -428,6 +450,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
         saveSettings({
           ...getSettings(),
           nodeUrl,
+          useEmbeddedNode: true,
           embeddedNodeDataDir: dataDir,
           embeddedNodeName: useExistingNode,
           embeddedNodePort: serverPort,
@@ -454,6 +477,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
         saveSettings({
           ...getSettings(),
           nodeUrl: `http://localhost:${serverPort}`,
+          useEmbeddedNode: true,
           embeddedNodeDataDir: dataDir,
           embeddedNodeName: targetNodeName,
           embeddedNodePort: serverPort,

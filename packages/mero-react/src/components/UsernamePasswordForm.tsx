@@ -19,11 +19,25 @@ function validatePassword(value: string): string | null {
   return null;
 }
 
+const DARK = {
+  bgCard: '#1e293b',
+  bgInput: '#0f172a',
+  bgButton: '#334155',
+  bgButtonPrimary: '#818cf8',
+  text: '#f1f5f9',
+  textMuted: '#94a3b8',
+  border: '#334155',
+  error: '#f87171',
+};
+
 export interface UsernamePasswordFormProps {
   onSubmit: (username: string, password: string) => void;
   onBack?: () => void;
   loading?: boolean;
   error?: string | null;
+  containerClassName?: string;
+  cardClassName?: string;
+  variant?: 'light' | 'dark';
 }
 
 export function UsernamePasswordForm({
@@ -31,11 +45,16 @@ export function UsernamePasswordForm({
   onBack,
   loading = false,
   error = null,
+  containerClassName,
+  cardClassName,
+  variant = 'light',
 }: UsernamePasswordFormProps) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [usernameError, setUsernameError] = useState<string | null>(null);
   const [passwordError, setPasswordError] = useState<string | null>(null);
+
+  const isDark = variant === 'dark';
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -59,34 +78,39 @@ export function UsernamePasswordForm({
   const displayError = usernameError || passwordError || error;
 
   const containerStyle: React.CSSProperties = {
-    position: 'fixed',
-    top: '50%',
-    left: '50%',
-    transform: 'translate(-50%, -50%)',
     maxWidth: 420,
     width: '100%',
-    padding: '0 24px',
   };
 
-  const cardStyle: React.CSSProperties = {
-    background: 'var(--bg-secondary)',
-    borderRadius: '12px',
-    padding: '32px',
-    boxShadow: 'var(--shadow-lg)',
-    border: '1px solid var(--border-color)',
-  };
+  const cardStyle: React.CSSProperties = isDark
+    ? {
+        background: DARK.bgCard,
+        borderRadius: '16px',
+        padding: '32px',
+        boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)',
+        border: `1px solid ${DARK.border}`,
+      }
+    : {
+        background: 'var(--bg-secondary)',
+        borderRadius: '12px',
+        padding: '32px',
+        boxShadow: 'var(--shadow-lg)',
+        border: '1px solid var(--border-color)',
+      };
+
+  const containerClass = containerClassName ? `username-password-form-container ${containerClassName}` : 'username-password-form-container';
 
   return (
-    <div style={containerStyle}>
-      <div style={cardStyle}>
+    <div className={containerClass} style={containerStyle}>
+      <div className={cardClassName ? `username-password-form-card ${cardClassName}` : 'username-password-form-card'} style={cardStyle}>
         <h2 style={{
           marginTop: 0,
           marginBottom: '24px',
-          fontSize: '22px',
+          fontSize: '18px',
           fontWeight: 600,
-          color: 'var(--text-primary)',
+          color: isDark ? DARK.text : 'var(--text-primary)',
         }}>
-          Sign In
+          Sign in
         </h2>
 
         <form onSubmit={handleSubmit}>
@@ -96,10 +120,10 @@ export function UsernamePasswordForm({
                 style={{
                   padding: '12px 16px',
                   background: 'rgba(248, 113, 113, 0.15)',
-                  color: 'var(--error)',
+                  color: isDark ? DARK.error : 'var(--error)',
                   borderRadius: '8px',
                   fontSize: '14px',
-                  border: '1px solid var(--error)',
+                  border: `1px solid ${isDark ? DARK.error : 'var(--error)'}`,
                 }}
               >
                 {displayError}
@@ -112,12 +136,12 @@ export function UsernamePasswordForm({
                 style={{
                   display: 'block',
                   marginBottom: '8px',
-                  fontSize: '14px',
-                  fontWeight: 600,
-                  color: 'var(--text-primary)',
+                  fontSize: '13px',
+                  fontWeight: 500,
+                  color: isDark ? '#e2e8f0' : 'var(--text-primary)',
                 }}
               >
-                Username <span style={{ color: 'var(--error)' }}>*</span>
+                Username <span style={{ color: isDark ? DARK.error : 'var(--error)' }}>*</span>
               </label>
               <input
                 id="username"
@@ -133,17 +157,17 @@ export function UsernamePasswordForm({
                 autoComplete="username"
                 style={{
                   width: '100%',
-                  padding: '12px 16px',
-                  border: `1px solid ${usernameError ? 'var(--error)' : 'var(--border-color)'}`,
-                  borderRadius: '8px',
+                  padding: '14px 16px',
+                  border: `1px solid ${usernameError ? (isDark ? DARK.error : 'var(--error)') : isDark ? DARK.border : 'var(--border-color)'}`,
+                  borderRadius: '10px',
                   fontSize: '15px',
                   boxSizing: 'border-box',
-                  background: 'var(--bg-tertiary)',
-                  color: 'var(--text-primary)',
+                  background: isDark ? DARK.bgInput : 'var(--bg-tertiary)',
+                  color: isDark ? DARK.text : 'var(--text-primary)',
                 }}
               />
               {usernameError && (
-                <p style={{ margin: '6px 0 0 0', fontSize: '12px', color: 'var(--error)' }}>{usernameError}</p>
+                <p style={{ margin: '6px 0 0 0', fontSize: '12px', color: isDark ? DARK.error : 'var(--error)' }}>{usernameError}</p>
               )}
             </div>
 
@@ -153,12 +177,12 @@ export function UsernamePasswordForm({
                 style={{
                   display: 'block',
                   marginBottom: '8px',
-                  fontSize: '14px',
-                  fontWeight: 600,
-                  color: 'var(--text-primary)',
+                  fontSize: '13px',
+                  fontWeight: 500,
+                  color: isDark ? '#e2e8f0' : 'var(--text-primary)',
                 }}
               >
-                Password <span style={{ color: 'var(--error)' }}>*</span>
+                Password <span style={{ color: isDark ? DARK.error : 'var(--error)' }}>*</span>
               </label>
               <input
                 id="password"
@@ -174,17 +198,17 @@ export function UsernamePasswordForm({
                 autoComplete="current-password"
                 style={{
                   width: '100%',
-                  padding: '12px 16px',
-                  border: `1px solid ${passwordError ? 'var(--error)' : 'var(--border-color)'}`,
-                  borderRadius: '8px',
+                  padding: '14px 16px',
+                  border: `1px solid ${passwordError ? (isDark ? DARK.error : 'var(--error)') : isDark ? DARK.border : 'var(--border-color)'}`,
+                  borderRadius: '10px',
                   fontSize: '15px',
                   boxSizing: 'border-box',
-                  background: 'var(--bg-tertiary)',
-                  color: 'var(--text-primary)',
+                  background: isDark ? DARK.bgInput : 'var(--bg-tertiary)',
+                  color: isDark ? DARK.text : 'var(--text-primary)',
                 }}
               />
               {passwordError && (
-                <p style={{ margin: '6px 0 0 0', fontSize: '12px', color: 'var(--error)' }}>{passwordError}</p>
+                <p style={{ margin: '6px 0 0 0', fontSize: '12px', color: isDark ? DARK.error : 'var(--error)' }}>{passwordError}</p>
               )}
             </div>
 
@@ -203,10 +227,10 @@ export function UsernamePasswordForm({
                   disabled={loading}
                   style={{
                     padding: '12px 24px',
-                    background: 'var(--bg-tertiary)',
-                    color: 'var(--text-primary)',
-                    border: '1px solid var(--border-color)',
-                    borderRadius: '8px',
+                    background: isDark ? DARK.bgButton : 'var(--bg-tertiary)',
+                    color: isDark ? DARK.text : 'var(--text-primary)',
+                    border: `1px solid ${isDark ? '#475569' : 'var(--border-color)'}`,
+                    borderRadius: '10px',
                     fontSize: '15px',
                     fontWeight: 500,
                     cursor: loading ? 'not-allowed' : 'pointer',
@@ -221,10 +245,14 @@ export function UsernamePasswordForm({
                 disabled={loading || !!validateUsername(username) || !!validatePassword(password)}
                 style={{
                   padding: '12px 24px',
-                  background: loading || !!validateUsername(username) || !!validatePassword(password) ? 'var(--bg-tertiary)' : 'var(--accent-primary)',
-                  color: loading || !!validateUsername(username) || !!validatePassword(password) ? 'var(--text-tertiary)' : 'white',
+                  background: loading || !!validateUsername(username) || !!validatePassword(password)
+                    ? (isDark ? DARK.bgButton : 'var(--bg-tertiary)')
+                    : (isDark ? DARK.bgButtonPrimary : 'var(--accent-primary)'),
+                  color: loading || !!validateUsername(username) || !!validatePassword(password)
+                    ? (isDark ? DARK.textMuted : 'var(--text-tertiary)')
+                    : 'white',
                   border: 'none',
-                  borderRadius: '8px',
+                  borderRadius: '10px',
                   fontSize: '15px',
                   fontWeight: 600,
                   cursor: loading || !!validateUsername(username) || !!validatePassword(password) ? 'not-allowed' : 'pointer',

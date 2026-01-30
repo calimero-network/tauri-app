@@ -40,13 +40,13 @@ export function decodeMetadata(metadata: any): any {
  * @param frontendUrl - The URL of the frontend to open
  * @param appName - Optional name of the app for the window title
  * @param onError - Optional error callback
- * @returns Promise that resolves when the window is created
+ * @returns Promise that resolves with the window label when the window is created (for focusing)
  */
 export async function openAppFrontend(
   frontendUrl: string,
   appName?: string,
   onError?: (error: Error) => void
-): Promise<void> {
+): Promise<string | void> {
   try {
     const settings = getSettings();
     
@@ -64,6 +64,7 @@ export async function openAppFrontend(
     });
     
     console.log('Opened app frontend in new window:', frontendUrl, 'with label:', windowLabel);
+    return windowLabel;
   } catch (error) {
     const err = error instanceof Error ? error : new Error(String(error));
     console.error("Failed to open frontend:", err);

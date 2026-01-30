@@ -114,7 +114,34 @@
   }
 }
 
-/* Compact variant for smaller screens */
+/* Compact variant - denser rows for Contexts and Installed Apps */
+.data-table-compact .data-table {
+  font-size: 13px;
+}
+
+.data-table-compact .data-table th {
+  padding: 8px 12px;
+  font-size: 11px;
+}
+
+.data-table-compact .data-table td {
+  padding: 8px 12px;
+}
+
+.data-table-compact .table-cell-primary {
+  font-size: 13px;
+}
+
+.data-table-compact .table-cell-secondary {
+  font-size: 12px;
+}
+
+.data-table-compact .button-small {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+/* Responsive compact for smaller screens */
 @media (max-width: 640px) {
   .data-table {
     font-size: 11px;
@@ -122,6 +149,11 @@
 
   .data-table th,
   .data-table td {
+    padding: 6px 8px;
+  }
+
+  .data-table-compact .data-table th,
+  .data-table-compact .data-table td {
     padding: 6px 8px;
   }
 }

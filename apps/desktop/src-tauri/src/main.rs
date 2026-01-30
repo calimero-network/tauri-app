@@ -1429,6 +1429,176 @@ async fn pick_directory(default_path: Option<String>) -> Result<Option<String>, 
     }
 }
 
+#[cfg(feature = "autostart")]
+#[tauri::command]
+async fn autostart_enable(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri_plugin_autostart::ManagerExt;
+    app.autolaunch().enable().map_err(|e| e.to_string())
+}
+
+#[cfg(feature = "autostart")]
+#[tauri::command]
+async fn autostart_disable(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri_plugin_autostart::ManagerExt;
+    app.autolaunch().disable().map_err(|e| e.to_string())
+}
+
+#[cfg(feature = "autostart")]
+#[tauri::command]
+async fn autostart_is_enabled(app: tauri::AppHandle) -> Result<bool, String> {
+    use tauri_plugin_autostart::ManagerExt;
+    app.autolaunch().is_enabled().map_err(|e| e.to_string())
+}
+
+#[cfg(not(feature = "autostart"))]
+#[tauri::command]
+async fn autostart_enable(_app: tauri::AppHandle) -> Result<(), String> {
+    Err("Autostart is not available".to_string())
+}
+
+#[cfg(not(feature = "autostart"))]
+#[tauri::command]
+async fn autostart_disable(_app: tauri::AppHandle) -> Result<(), String> {
+    Err("Autostart is not available".to_string())
+}
+
+#[cfg(not(feature = "autostart"))]
+#[tauri::command]
+async fn autostart_is_enabled(_app: tauri::AppHandle) -> Result<bool, String> {
+    Ok(false)
+}
+
+/// Kill all merod processes on the system. Used before total nuke to ensure no process
+/// has the data directory open. Clears MerodState and waits for processes to fully exit.
+#[tauri::command]
+async fn kill_all_merod_processes(merod_state: tauri::State<'_, MerodState>) -> Result<String, String> {
+    let pids: Vec<u32> = {
+        #[cfg(unix)]
+        {
+            let output = std::process::Command::new("ps")
+                .arg("ax")
+                .arg("-o")
+                .arg("pid,command")
+                .output()
+                .map_err(|e| format!("Failed to run ps: {}", e))?;
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let mut pids = Vec::new();
+            for line in stdout.lines() {
+                if line.contains("merod") && line.contains("run") {
+                    if let Some(pid_str) = line.split_whitespace().next() {
+                        if let Ok(pid) = pid_str.parse::<u32>() {
+                            pids.push(pid);
+                        }
+                    }
+                }
+            }
+            pids
+        }
+        #[cfg(windows)]
+        {
+            let output = std::process::Command::new("tasklist")
+                .arg("/FO").arg("CSV")
+                .output()
+                .map_err(|e| format!("Failed to run tasklist: {}", e))?;
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let mut pids = Vec::new();
+            for line in stdout.lines().skip(1) {
+                if line.contains("merod") {
+                    let parts: Vec<&str> = line.split(',').collect();
+                    if parts.len() >= 2 {
+                        if let Ok(pid) = parts[1].trim_matches('"').parse::<u32>() {
+                            pids.push(pid);
+                        }
+                    }
+                }
+            }
+            pids
+        }
+    };
+
+    for pid in &pids {
+        #[cfg(unix)]
+        {
+            let _ = std::process::Command::new("kill").arg("-TERM").arg(pid.to_string()).output();
+        }
+        #[cfg(windows)]
+        {
+            let _ = std::process::Command::new("taskkill")
+                .arg("/PID").arg(pid.to_string()).arg("/F")
+                .output();
+        }
+    }
+
+    if !pids.is_empty() {
+        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+        #[cfg(unix)]
+        for pid in &pids {
+            let check = std::process::Command::new("ps").arg("-p").arg(pid.to_string()).output();
+            if let Ok(out) = check {
+                if out.status.success() {
+                    let _ = std::process::Command::new("kill").arg("-9").arg(pid.to_string()).output();
+                }
+            }
+        }
+        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+    }
+
+    {
+        let mut state = merod_state.lock().unwrap();
+        *state = None;
+    }
+
+    info!("[Calimero] Killed {} merod process(es)", pids.len());
+    Ok(format!("Stopped {} merod process(es)", pids.len()))
+}
+
+/// Delete the Calimero data directory and all its contents. Used for "total nuke" reset.
+/// Path must be under the user's home directory for safety.
+/// Call kill_all_merod_processes first to ensure no process has the directory open.
+#[tauri::command]
+async fn delete_calimero_data_dir(data_dir: String) -> Result<String, String> {
+    let expanded = if data_dir.starts_with("~") {
+        if let Some(home) = dirs::home_dir() {
+            data_dir.replacen("~", &home.to_string_lossy(), 1)
+        } else {
+            return Err("Could not resolve home directory".to_string());
+        }
+    } else {
+        data_dir
+    };
+
+    let path = std::path::PathBuf::from(&expanded);
+
+    // If path doesn't exist, nothing to delete
+    if !path.exists() {
+        return Ok("Directory did not exist (nothing to delete)".to_string());
+    }
+
+    let path_canonical = path.canonicalize().map_err(|e| {
+        format!("Invalid path: {}", e)
+    })?;
+
+    // Safety: only allow deleting paths under the user's home directory
+    if let Some(home) = dirs::home_dir() {
+        if let Ok(home_canonical) = home.canonicalize() {
+            if !path_canonical.starts_with(&home_canonical) {
+                return Err("Path must be under your home directory".to_string());
+            }
+        }
+    }
+
+    if !path_canonical.is_dir() {
+        return Err("Path is not a directory".to_string());
+    }
+
+    std::fs::remove_dir_all(&path_canonical).map_err(|e| {
+        format!("Failed to delete directory: {}", e)
+    })?;
+
+    info!("[Calimero] Deleted data directory: {:?}", path_canonical);
+    Ok(format!("Deleted {}", path_canonical.display()))
+}
+
 fn main() {
     // Initialize logger - reads from RUST_LOG environment variable
     // Default: info level in release, debug level in debug builds
@@ -1546,7 +1716,12 @@ fn main() {
             init_merod_node,
             detect_running_merod_nodes,
             get_merod_logs,
-            set_tray_icon_connected
+            set_tray_icon_connected,
+            delete_calimero_data_dir,
+            kill_all_merod_processes,
+            autostart_enable,
+            autostart_disable,
+            autostart_is_enabled
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { getSettings, saveSettings } from "../utils/settings";
 import { 
   listMerodNodes, 
@@ -6,14 +6,15 @@ import {
   startMerod, 
   stopMerod, 
   stopMerodByPid,
-  getMerodStatus,
   detectRunningMerodNodes,
+  getMerodLogs,
   type RunningMerodNode,
-  type MerodStatus
 } from "../utils/merod";
 import { invoke } from "@tauri-apps/api/tauri";
 import { useToast } from "../contexts/ToastContext";
-import { Play, Square, RefreshCw, Check } from "lucide-react";
+import { Play, Square, RefreshCw, Check, FileText } from "lucide-react";
+import { LogsViewer } from "../components/LogsViewer";
+import { ScrollHint } from "../components/ScrollHint";
 import "./NodeManagement.css";
 
 export default function NodeManagement() {
@@ -26,7 +27,6 @@ export default function NodeManagement() {
   const [selectedNode, setSelectedNode] = useState<string>("");
   const [newNodeName, setNewNodeName] = useState("");
   const [loading, setLoading] = useState(false);
-  const [status, setStatus] = useState<MerodStatus>({ running: false });
   const [serverPort, setServerPort] = useState<number>(2528);
   const [swarmPort, setSwarmPort] = useState<number>(2428);
   
@@ -34,6 +34,11 @@ export default function NodeManagement() {
   const [nodeUrl, setNodeUrl] = useState("");
   const [authUrl, setAuthUrl] = useState("");
   const [saved, setSaved] = useState(false);
+  const mainScrollRef = useRef<HTMLElement>(null);
+  const [showLogsModal, setShowLogsModal] = useState(false);
+  const [logsContent, setLogsContent] = useState("");
+  const [logsLoading, setLogsLoading] = useState(false);
+  const developerMode = getSettings().developerMode ?? false;
 
   useEffect(() => {
     const settings = getSettings();
@@ -45,15 +50,9 @@ export default function NodeManagement() {
   useEffect(() => {
     loadNodes();
     detectRunning();
-    checkStatus();
     
-    const runningInterval = setInterval(detectRunning, 3000);
-    const statusInterval = setInterval(checkStatus, 2000);
-    
-    return () => {
-      clearInterval(runningInterval);
-      clearInterval(statusInterval);
-    };
+    const interval = setInterval(detectRunning, 3000);
+    return () => clearInterval(interval);
   }, [homeDir]);
 
   const loadNodes = async () => {
@@ -74,15 +73,6 @@ export default function NodeManagement() {
       setRunningNodes(running);
     } catch (error) {
       console.error("Failed to detect running nodes:", error);
-    }
-  };
-
-  const checkStatus = async () => {
-    try {
-      const currentStatus = await getMerodStatus();
-      setStatus(currentStatus);
-    } catch (error) {
-      console.error("Failed to check status:", error);
     }
   };
 
@@ -137,7 +127,6 @@ export default function NodeManagement() {
       await startMerod(serverPort, swarmPort, homeDir, selectedNode);
       toast.success(`Node "${selectedNode}" started successfully`);
       await detectRunning();
-      await checkStatus();
     } catch (error: any) {
       console.error("Failed to start node:", error);
       toast.error(`Failed to start node: ${error.message || error}`);
@@ -165,7 +154,6 @@ export default function NodeManagement() {
         toast.success(`Node "${selectedNode}" stopped successfully`);
       }
       await detectRunning();
-      await checkStatus();
     } catch (error: any) {
       console.error("Failed to stop node:", error);
       toast.error(`Failed to stop node: ${error.message || error}`);
@@ -178,6 +166,40 @@ export default function NodeManagement() {
     if (!nodeName) return { running: false };
     const runningNode = runningNodes.find(n => n.node_name === nodeName);
     return runningNode ? { running: true, port: runningNode.port } : { running: false };
+  };
+
+  const handleViewLogs = async () => {
+    if (!selectedNode) return;
+    setShowLogsModal(true);
+    setLogsLoading(true);
+    setLogsContent("");
+    try {
+      const logs = await getMerodLogs(selectedNode, homeDir, 500);
+      setLogsContent(logs || "(No log output yet)");
+    } catch (err: any) {
+      const msg = err?.message || "Failed to load logs";
+      setLogsContent(
+        msg.includes("No log file")
+          ? `${msg}\n\nTip: Restart the node from this app to start capturing logs.`
+          : msg
+      );
+    } finally {
+      setLogsLoading(false);
+    }
+  };
+
+  const handleRefreshLogs = async () => {
+    if (!selectedNode) return;
+    setLogsLoading(true);
+    try {
+      const logs = await getMerodLogs(selectedNode, homeDir, 500);
+      setLogsContent(logs || "(No log output yet)");
+    } catch (err: any) {
+      setLogsContent(err?.message || "Failed to load logs");
+      toast.error("Failed to refresh logs");
+    } finally {
+      setLogsLoading(false);
+    }
   };
 
   const handleSaveNodeConfig = () => {
@@ -201,195 +223,218 @@ export default function NodeManagement() {
     <div className="node-management-page">
       <header className="node-management-header">
         <h1>Nodes</h1>
-        <p className="page-subtitle">Create and manage your Calimero nodes</p>
+        <p className="page-subtitle">Configure which node the app connects to. Create and manage local nodes below.</p>
       </header>
 
-      <main className="node-management-main">
-        <div className="node-management-card">
-          <h2>Node Configuration</h2>
-          
-          <div className="form-field">
-            <label htmlFor="node-url">Node URL</label>
-            <input
-              id="node-url"
-              type="text"
-              value={nodeUrl}
-              onChange={(e) => setNodeUrl(e.target.value)}
-              placeholder="http://localhost:2528"
-            />
-            <p className="field-hint">
-              Base URL for your merod node. Admin API will be accessed at:{" "}
-              <code>{nodeUrl ? `${nodeUrl.replace(/\/$/, '')}/admin-api` : ''}</code>
-            </p>
-          </div>
-
-          <div className="form-field">
-            <label htmlFor="auth-url">Auth URL (optional)</label>
-            <input
-              id="auth-url"
-              type="text"
-              value={authUrl}
-              onChange={(e) => setAuthUrl(e.target.value)}
-              placeholder="Leave empty to use Node URL"
-            />
-            <p className="field-hint">
-              Base URL for authentication service. If empty, uses Node URL.
-            </p>
-          </div>
-
-          <div className="node-actions" style={{ marginTop: '24px' }}>
-            <button onClick={handleSaveNodeConfig} className="button button-primary">
-              Save Configuration
-            </button>
-            {saved && (
-              <span className="saved-indicator">
-                <Check size={14} style={{ marginRight: '4px', verticalAlign: 'middle' }} />
-                Saved
-              </span>
-            )}
-          </div>
-        </div>
-
-        <div className="node-management-card">
-          <h2>Create Node</h2>
-          
-          <div className="form-field">
-            <label htmlFor="home-dir">Data Directory</label>
-            <div className="input-group">
-              <input
-                id="home-dir"
-                type="text"
-                value={homeDir}
-                onChange={(e) => setHomeDir(e.target.value)}
-                placeholder="~/.calimero"
-              />
-              <button onClick={handlePickHomeDir} className="button button-secondary">
-                Browse
-              </button>
-            </div>
-            <p className="field-hint">Directory where nodes will be stored</p>
-          </div>
-
-          <div className="form-field">
-            <label htmlFor="new-node-name">Node Name</label>
-            <div className="input-group">
-              <input
-                id="new-node-name"
-                type="text"
-                value={newNodeName}
-                onChange={(e) => setNewNodeName(e.target.value)}
-                placeholder="node1, node2, etc."
-                onKeyPress={(e) => e.key === 'Enter' && handleCreateNode()}
-              />
-              <button
-                onClick={handleCreateNode}
-                className="button button-primary"
-                disabled={!newNodeName.trim() || loading}
-              >
-                {loading ? 'Creating...' : 'Create'}
-              </button>
-            </div>
-          </div>
-        </div>
-
-        {availableNodes.length > 0 && (
-          <div className="node-management-card">
-            <h2>Available Nodes</h2>
-            
+      <main ref={mainScrollRef} className="node-management-main">
+        {/* Section 1: Connection - what the app uses */}
+        <section className="node-section">
+          <h2 className="node-section-title">Connection</h2>
+          <p className="node-section-desc">The app connects to this node URL. Use a local node or a remote one.</p>
+          <div className="node-management-card node-config-card">
             <div className="form-field">
-              <label htmlFor="node-select">Select Node</label>
-              <select
-                id="node-select"
-                value={selectedNode}
-                onChange={(e) => setSelectedNode(e.target.value)}
-                disabled={loading}
-              >
+              <label htmlFor="node-url">Node URL</label>
+              <input
+                id="node-url"
+                type="text"
+                value={nodeUrl}
+                onChange={(e) => setNodeUrl(e.target.value)}
+                placeholder="http://localhost:2528"
+              />
+              <p className="field-hint">
+                Admin API: <code>{nodeUrl ? `${nodeUrl.replace(/\/$/, '')}/admin-api` : '—'}</code>
+              </p>
+            </div>
+            <div className="form-field">
+              <label htmlFor="auth-url">Auth URL (optional)</label>
+              <input
+                id="auth-url"
+                type="text"
+                value={authUrl}
+                onChange={(e) => setAuthUrl(e.target.value)}
+                placeholder="Leave empty to use Node URL"
+              />
+            </div>
+            <div className="node-actions">
+              <button onClick={handleSaveNodeConfig} className="button button-primary">
+                Save Configuration
+              </button>
+              {saved && (
+                <span className="saved-indicator">
+                  <Check size={14} style={{ marginRight: '4px', verticalAlign: 'middle' }} />
+                  Saved
+                </span>
+              )}
+            </div>
+          </div>
+        </section>
+
+        {/* Section 2: Local nodes - create & manage */}
+        <section className="node-section">
+          <h2 className="node-section-title">Local Nodes</h2>
+          <p className="node-section-desc">Create and run merod nodes on this machine.</p>
+
+          <div className="node-management-card">
+            <h3 className="node-card-title">Create New Node</h3>
+            <div className="form-field">
+              <label htmlFor="home-dir">Data Directory</label>
+              <div className="input-group">
+                <input
+                  id="home-dir"
+                  type="text"
+                  value={homeDir}
+                  onChange={(e) => setHomeDir(e.target.value)}
+                  placeholder="~/.calimero"
+                />
+                <button onClick={handlePickHomeDir} className="button button-secondary">
+                  Browse
+                </button>
+              </div>
+            </div>
+            <div className="form-field">
+              <label htmlFor="new-node-name">Node Name</label>
+              <div className="input-group">
+                <input
+                  id="new-node-name"
+                  type="text"
+                  value={newNodeName}
+                  onChange={(e) => setNewNodeName(e.target.value)}
+                  placeholder="default, node1, etc."
+                  onKeyPress={(e) => e.key === 'Enter' && handleCreateNode()}
+                />
+                <button
+                  onClick={handleCreateNode}
+                  className="button button-primary"
+                  disabled={!newNodeName.trim() || loading}
+                >
+                  {loading ? 'Creating...' : 'Create'}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {availableNodes.length > 0 && (
+            <div className="node-management-card">
+              <h3 className="node-card-title">Manage Nodes</h3>
+              <div className="form-field">
+                <label>Select node</label>
+                <select
+                  value={selectedNode}
+                  onChange={(e) => setSelectedNode(e.target.value)}
+                  disabled={loading}
+                >
+                  {availableNodes.map((node) => {
+                    const nodeInfo = getRunningNodeInfo(node);
+                    return (
+                      <option key={node} value={node}>
+                        {node} {nodeInfo.running ? `• Port ${nodeInfo.port}` : '• Stopped'}
+                      </option>
+                    );
+                  })}
+                </select>
+              </div>
+              <div className="form-row">
+                <div className="form-field">
+                  <label htmlFor="server-port">Server Port</label>
+                  <input
+                    id="server-port"
+                    type="number"
+                    value={serverPort}
+                    onChange={(e) => setServerPort(parseInt(e.target.value) || 2528)}
+                    min={1024}
+                    max={65535}
+                    disabled={loading}
+                  />
+                </div>
+                <div className="form-field">
+                  <label htmlFor="swarm-port">Swarm Port</label>
+                  <input
+                    id="swarm-port"
+                    type="number"
+                    value={swarmPort}
+                    onChange={(e) => setSwarmPort(parseInt(e.target.value) || 2428)}
+                    min={1024}
+                    max={65535}
+                    disabled={loading}
+                  />
+                </div>
+              </div>
+              <div className="node-status-cards">
                 {availableNodes.map((node) => {
                   const nodeInfo = getRunningNodeInfo(node);
                   return (
-                    <option key={node} value={node}>
-                      {node} {nodeInfo.running ? `(running on ${nodeInfo.port})` : ''}
-                    </option>
+                    <div
+                      key={node}
+                      className={`node-status-card ${nodeInfo.running ? 'running' : 'stopped'}`}
+                    >
+                      <div className="node-status-card-header">
+                        <span className="node-status-dot" />
+                        <span className="node-status-name">{node}</span>
+                        <span className="node-status-badge">
+                          {nodeInfo.running ? `Port ${nodeInfo.port}` : 'Stopped'}
+                        </span>
+                      </div>
+                    </div>
                   );
                 })}
-              </select>
-            </div>
-
-            <div className="form-row">
-              <div className="form-field">
-                <label htmlFor="server-port">Server Port</label>
-                <input
-                  id="server-port"
-                  type="number"
-                  value={serverPort}
-                  onChange={(e) => setServerPort(parseInt(e.target.value) || 2528)}
-                  min="1024"
-                  max="65535"
-                  disabled={loading}
-                />
               </div>
-
-              <div className="form-field">
-                <label htmlFor="swarm-port">Swarm Port</label>
-                <input
-                  id="swarm-port"
-                  type="number"
-                  value={swarmPort}
-                  onChange={(e) => setSwarmPort(parseInt(e.target.value) || 2428)}
-                  min="1024"
-                  max="65535"
+              <div className="node-actions">
+                <button
+                  onClick={handleStartNode}
+                  className="button button-primary"
+                  disabled={loading || !selectedNode || getRunningNodeInfo(selectedNode).running}
+                >
+                  <Play size={16} />
+                  Start Node
+                </button>
+                <button
+                  onClick={handleStopNode}
+                  className="button button-secondary"
+                  disabled={loading || !selectedNode || !getRunningNodeInfo(selectedNode).running}
+                >
+                  <Square size={16} />
+                  Stop Node
+                </button>
+                <button
+                  onClick={() => { loadNodes(); detectRunning(); }}
+                  className="button button-secondary"
                   disabled={loading}
-                />
-              </div>
-            </div>
-
-            <div className="node-actions">
-              <button
-                onClick={handleStartNode}
-                className="button button-primary"
-                disabled={loading || !selectedNode || getRunningNodeInfo(selectedNode).running}
-              >
-                <Play size={16} />
-                Start Node
-              </button>
-              <button
-                onClick={handleStopNode}
-                className="button button-secondary"
-                disabled={loading || !selectedNode || !getRunningNodeInfo(selectedNode).running}
-              >
-                <Square size={16} />
-                Stop Node
-              </button>
-              <button
-                onClick={() => {
-                  loadNodes();
-                  detectRunning();
-                  checkStatus();
-                }}
-                className="button button-secondary"
-                disabled={loading}
-              >
-                <RefreshCw size={16} />
-                Refresh
-              </button>
-            </div>
-
-            {status.running && (
-              <div className="status-info">
-                <p><strong>Status:</strong> Running</p>
-                {runningNodes.length > 0 && runningNodes[0].port && (
-                  <p><strong>Port:</strong> {runningNodes[0].port}</p>
+                >
+                  <RefreshCw size={16} />
+                  Refresh
+                </button>
+                {developerMode && (
+                  <button
+                    onClick={handleViewLogs}
+                    className="button button-secondary"
+                    disabled={loading || !selectedNode}
+                    title="View node logs (developer mode)"
+                  >
+                    <FileText size={16} />
+                    View Logs
+                  </button>
                 )}
               </div>
-            )}
-          </div>
-        )}
+            </div>
+          )}
 
-        {availableNodes.length === 0 && (
-          <div className="empty-state">
-            <p>No nodes found. Create your first node above.</p>
-          </div>
+          {availableNodes.length === 0 && (
+            <div className="empty-state">
+              <p>No nodes found. Create your first node above.</p>
+            </div>
+          )}
+        </section>
+
+        {showLogsModal && (
+          <LogsViewer
+            content={logsContent}
+            title={selectedNode}
+            loading={logsLoading}
+            onRefresh={handleRefreshLogs}
+            onClose={() => setShowLogsModal(false)}
+          />
         )}
+        <ScrollHint containerRef={mainScrollRef} />
       </main>
     </div>
   );

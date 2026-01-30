@@ -80,3 +80,14 @@ export async function initMerodNode(nodeName: string, homeDir?: string): Promise
 export async function detectRunningMerodNodes(): Promise<RunningMerodNode[]> {
   return await invoke('detect_running_merod_nodes');
 }
+
+/**
+ * Get merod logs for a node. Only available for nodes started by the app.
+ */
+export async function getMerodLogs(
+  nodeName: string,
+  homeDir?: string,
+  lines?: number
+): Promise<string> {
+  return await invoke('get_merod_logs', { nodeName, homeDir, lines });
+}

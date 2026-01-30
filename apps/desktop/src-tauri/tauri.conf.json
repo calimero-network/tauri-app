@@ -8,7 +8,7 @@
   },
   "package": {
     "productName": "Calimero Desktop",
-    "version": "0.0.1"
+    "version": "0.0.9"
   },
   "tauri": {
     "allowlist": {
@@ -100,6 +100,10 @@
       ],
       "dangerousDisableAssetCspModification": true
     },
+    "systemTray": {
+      "iconPath": "icons/tray-icon.png",
+      "iconAsTemplate": false
+    },
     "updater": {
       "active": true,
       "dialog": false,
@@ -110,6 +114,7 @@
     },
     "windows": [
       {
+        "label": "main",
         "fullscreen": false,
         "resizable": true,
         "title": "Calimero Desktop",

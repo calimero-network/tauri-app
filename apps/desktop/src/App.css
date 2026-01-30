@@ -7,6 +7,20 @@
   overflow: hidden;
 }
 
+.login-screen {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  background: var(--bg-primary);
+}
+
+.login-screen-header {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  z-index: 1000;
+}
+
 .app-layout {
   display: flex;
   height: 100vh;
@@ -350,12 +364,36 @@
 }
 
 .status-error {
-  margin-top: 12px;
+  margin: 0;
   padding: 12px;
   background: rgba(248, 113, 113, 0.1);
   border: 1px solid var(--error);
   border-radius: 8px;
   color: var(--error);
+  font-size: 13px;
+}
+
+.status-error-block {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.status-error-block .status-error {
+  margin-top: 0;
+}
+
+.status-error-hint {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.status-error-block .button-small {
+  align-self: flex-start;
+  padding: 8px 16px;
   font-size: 13px;
 }
 

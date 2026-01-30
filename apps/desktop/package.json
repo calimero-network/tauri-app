@@ -1,6 +1,6 @@
 {
   "name": "desktop",
-  "version": "0.0.1",
+  "version": "0.0.9",
   "description": "Calimero Desktop Application",
   "type": "module",
   "scripts": {
@@ -12,12 +12,15 @@
     "tauri:dev:devtools": "TAURI_OPEN_DEVTOOLS=true tauri dev",
     "tauri:dev:no-devtools": "TAURI_OPEN_DEVTOOLS=false tauri dev",
     "tauri:build": "tauri build",
+    "icon": "node scripts/svg-to-icon.js && pnpm tauri icon src-tauri/icons/icon-1024.png",
     "clean": "rm -rf dist src-tauri/target"
   },
   "dependencies": {
     "@calimero-network/mero-js": "workspace:*",
     "@calimero-network/mero-react": "workspace:*",
     "@tauri-apps/api": "^1.5.0",
+    "@tauri-apps/plugin-autostart": "^2.5.1",
+    "ansi-to-html": "^0.7.2",
     "bs58": "^6.0.0",
     "lucide-react": "^0.563.0",
     "react": "^19.2.0",
@@ -28,6 +31,7 @@
     "@types/react": "^19.2.2",
     "@types/react-dom": "^19.2.2",
     "@vitejs/plugin-react": "^3.1.0",
+    "sharp": "^0.34.5",
     "typescript": "^5.8.3",
     "vite": "^4.1.0"
   }

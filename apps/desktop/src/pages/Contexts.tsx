@@ -1,7 +1,8 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { apiClient } from "@calimero-network/mero-react";
 import { useToast } from "../contexts/ToastContext";
 import DataTable from "../components/DataTable";
+import ContextMenu from "../components/ContextMenu";
 import { SkeletonTable } from "../components/Skeleton";
 import { decodeMetadata } from "../utils/appUtils";
 import { X } from "lucide-react";
@@ -32,9 +33,12 @@ export interface ContextsProps {
   onConfirmDelete?: (contextId: string, contextName: string, onConfirm: () => Promise<void>) => void;
 }
 
+type ContextWithApp = Context & { appAlias: string };
+
 const Contexts: React.FC<ContextsProps> = ({ onAuthRequired, onConfirmDelete }) => {
   const toast = useToast();
   const [contexts, setContexts] = useState<Context[]>([]);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; context: ContextWithApp } | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showCreateForm, setShowCreateForm] = useState(false);
@@ -195,12 +199,18 @@ const Contexts: React.FC<ContextsProps> = ({ onAuthRequired, onConfirmDelete }) 
   };
 
   // Prepare contexts for table with app names
-  const contextsWithAppNames = useMemo(() => {
+  const contextsWithAppNames = useMemo((): ContextWithApp[] => {
     return contexts.map(context => ({
       ...context,
       appAlias: getAppAlias(context.applicationId || context.application_id || 'unknown'),
     }));
   }, [contexts, installedApps]);
+
+  const handleRowContextMenu = useCallback((e: React.MouseEvent, context: ContextWithApp) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setContextMenu({ x: e.clientX, y: e.clientY, context });
+  }, []);
 
   const handleDeleteContext = async (contextId: string, contextName: string) => {
     if (onConfirmDelete) {
@@ -381,11 +391,28 @@ const Contexts: React.FC<ContextsProps> = ({ onAuthRequired, onConfirmDelete }) 
           </div>
         )}
 
+        {contextMenu && (
+          <ContextMenu
+            x={contextMenu.x}
+            y={contextMenu.y}
+            items={[
+              {
+                label: 'Delete',
+                onClick: () => handleDeleteContext(contextMenu.context.id, contextMenu.context.name || contextMenu.context.id.substring(0, 16) + '...'),
+                danger: true,
+              },
+            ]}
+            onClose={() => setContextMenu(null)}
+          />
+        )}
+
         {loading ? (
           <SkeletonTable rows={5} columns={6} showHeader={true} />
         ) : (
           <DataTable
             data={contextsWithAppNames}
+            compact
+            onRowContextMenu={handleRowContextMenu}
             columns={[
               {
                 key: 'name',

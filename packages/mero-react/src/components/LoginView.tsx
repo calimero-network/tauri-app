@@ -7,9 +7,10 @@ import { UsernamePasswordForm } from './UsernamePasswordForm';
 export interface LoginViewProps {
   onSuccess?: () => void;
   onError?: (error: string) => void;
+  variant?: 'light' | 'dark';
 }
 
-export function LoginView({ onSuccess, onError }: LoginViewProps) {
+export function LoginView({ onSuccess, onError, variant = 'light' }: LoginViewProps) {
   const [providers, setProviders] = useState<Provider[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -126,6 +127,9 @@ export function LoginView({ onSuccess, onError }: LoginViewProps) {
         onProviderSelect={handleProviderSelect}
         loading={loading}
         error={error}
+        containerClassName="login-provider-container"
+        cardClassName="login-provider-card"
+        variant={variant}
       />
     );
   }
@@ -138,6 +142,9 @@ export function LoginView({ onSuccess, onError }: LoginViewProps) {
         onBack={handleBack}
         loading={usernamePasswordLoading}
         error={error}
+        containerClassName="login-form-container"
+        cardClassName="login-form-card"
+        variant={variant}
       />
     );
   }

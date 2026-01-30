@@ -1,9 +1,11 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { apiClient } from "@calimero-network/mero-react";
 import { useToast } from "../contexts/ToastContext";
 import DataTable from "../components/DataTable";
+import ContextMenu from "../components/ContextMenu";
 import { SkeletonTable } from "../components/Skeleton";
 import { decodeMetadata, openAppFrontend } from "../utils/appUtils";
+import { invoke } from "@tauri-apps/api/tauri";
 import "./InstalledApps.css";
 
 interface InstalledApplication {
@@ -29,6 +31,7 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
   const [apps, setApps] = useState<InstalledApplication[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; app: InstalledApplication } | null>(null);
 
   useEffect(() => {
     loadInstalledApps();
@@ -122,6 +125,24 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
     });
   };
 
+  const handleCreateDesktopShortcut = async (appName: string, frontendUrl: string) => {
+    try {
+      await invoke<string>("create_desktop_shortcut", {
+        appName,
+        frontendUrl,
+      });
+      toast.success("Desktop shortcut created on your Desktop");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to create desktop shortcut");
+    }
+  };
+
+  const handleRowContextMenu = useCallback((e: React.MouseEvent, app: InstalledApplication) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setContextMenu({ x: e.clientX, y: e.clientY, app });
+  }, []);
+
   return (
     <div className="installed-apps-page">
       <header className="installed-apps-header">
@@ -138,11 +159,43 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
           </div>
         )}
 
+        {contextMenu && (() => {
+          const metadata = decodeMetadata(contextMenu.app.metadata);
+          const appName = metadata?.name || contextMenu.app.name || contextMenu.app.id;
+          const frontendUrl = metadata?.links?.frontend;
+          const items = [];
+          if (frontendUrl) {
+            items.push({
+              label: 'Open',
+              onClick: () => handleOpenFrontend(frontendUrl, appName),
+            });
+            items.push({
+              label: 'Create desktop shortcut',
+              onClick: () => handleCreateDesktopShortcut(appName, frontendUrl),
+            });
+          }
+          items.push({
+            label: 'Uninstall',
+            onClick: () => handleUninstall(contextMenu.app.id, appName),
+            danger: true,
+          });
+          return (
+            <ContextMenu
+              x={contextMenu.x}
+              y={contextMenu.y}
+              items={items}
+              onClose={() => setContextMenu(null)}
+            />
+          );
+        })()}
+
         {loading ? (
           <SkeletonTable rows={5} columns={5} showHeader={true} />
         ) : (
           <DataTable
             data={apps}
+            compact
+            onRowContextMenu={handleRowContextMenu}
             columns={[
               {
                 key: 'name',
@@ -224,16 +277,28 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
               return (
                     <div className="table-cell-actions">
                     {frontendUrl && (
-                      <button
+                      <>
+                        <button
                           onClick={(e) => {
                             e.stopPropagation();
                             handleOpenFrontend(frontendUrl, appName);
                           }}
                           className="button button-primary button-small"
-                        title={`Open ${appName} frontend`}
-                      >
+                          title={`Open ${appName} frontend`}
+                        >
                           Open
-                      </button>
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleCreateDesktopShortcut(appName, frontendUrl);
+                          }}
+                          className="button button-secondary button-small"
+                          title="Create a desktop shortcut that opens this app"
+                        >
+                          Shortcut
+                        </button>
+                      </>
                     )}
                     <button
                         onClick={(e) => {

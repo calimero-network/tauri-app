@@ -21,6 +21,31 @@ struct HttpResponse {
     body: String,
 }
 
+/// Parses --open-app-url and --open-app-name from CLI args (used when launched from a desktop shortcut).
+fn parse_open_app_args() -> Option<(String, String)> {
+    let args: Vec<String> = std::env::args().collect();
+    let mut url = None;
+    let mut name = None;
+    let mut i = 0;
+    while i < args.len() {
+        if args[i] == "--open-app-url" && i + 1 < args.len() {
+            url = Some(args[i + 1].clone());
+            i += 2;
+            continue;
+        }
+        if args[i] == "--open-app-name" && i + 1 < args.len() {
+            name = Some(args[i + 1].clone());
+            i += 2;
+            continue;
+        }
+        i += 1;
+    }
+    url.map(|u| (u, name.unwrap_or_else(|| "Application".to_string())))
+}
+
+/// State for app to open when launched from a desktop shortcut (read by frontend on load).
+pub struct PendingOpenApp(pub std::sync::Mutex<Option<(String, String)>>);
+
 /// Validates that a URL is allowed for proxying
 /// 
 /// Allowed URLs:
@@ -292,6 +317,168 @@ async fn proxy_http_request(request: HttpRequest, configured_node_url: Option<St
 }
 
 #[tauri::command]
+fn get_pending_open_app(state: tauri::State<'_, PendingOpenApp>) -> Option<(String, String)> {
+    state.0.lock().ok().and_then(|g| g.clone())
+}
+
+#[tauri::command]
+fn clear_pending_open_app(state: tauri::State<'_, PendingOpenApp>) {
+    if let Ok(mut g) = state.0.lock() {
+        *g = None;
+    }
+}
+
+#[tauri::command]
+fn hide_main_window(app_handle: tauri::AppHandle) -> Result<(), String> {
+    if let Some(window) = app_handle.get_window("main") {
+        window.hide().map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn focus_window(app_handle: tauri::AppHandle, window_label: String) -> Result<(), String> {
+    if let Some(window) = app_handle.get_window(&window_label) {
+        window.set_focus().map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+#[allow(unused_variables)]
+fn create_desktop_shortcut(
+    app_handle: tauri::AppHandle,
+    app_name: String,
+    frontend_url: String,
+) -> Result<String, String> {
+    let exe = std::env::current_exe()
+        .map_err(|e| format!("Could not get executable path: {}", e))?;
+    let exe_str = exe
+        .to_str()
+        .ok_or_else(|| "Executable path is not valid UTF-8".to_string())?;
+
+    let safe_name: String = app_name
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' || c == '_' { c } else { '_' })
+        .collect();
+    let shortcut_name = safe_name.trim().trim_matches('_');
+    let shortcut_name = if shortcut_name.is_empty() { "Calimero App" } else { shortcut_name };
+
+    #[cfg(windows)]
+    {
+        let desktop = dirs::desktop_dir()
+            .ok_or_else(|| "Could not find Desktop folder".to_string())?;
+        let lnk_path = desktop.join(format!("{}.lnk", shortcut_name));
+        let url_esc = frontend_url.replace('"', "\\\"");
+        let name_esc = app_name.replace('"', "\\\"");
+        let args = format!("--open-app-url \"{}\" --open-app-name \"{}\"", url_esc, name_esc);
+        let ps = format!(
+            "$WshShell = New-Object -ComObject WScript.Shell; $s = $WshShell.CreateShortcut('{}'); $s.TargetPath = '{}'; $s.Arguments = '{}'; $s.Save()",
+            lnk_path.display(),
+            exe_str.replace('\'', "''"),
+            args.replace('\'', "''")
+        );
+        let output = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &ps])
+            .output()
+            .map_err(|e| format!("Failed to run PowerShell: {}", e))?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("Failed to create shortcut: {}", stderr));
+        }
+        return Ok(lnk_path.to_string_lossy().into_owned());
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let desktop = dirs::desktop_dir()
+            .ok_or_else(|| "Could not find Desktop folder".to_string())?;
+        // Run the binary directly with args so the process always receives --open-app-url/--open-app-name.
+        // (open -a "App" --args ... often just activates the existing process without passing args.)
+        let exe_esc = exe_str.replace('\\', "\\\\").replace('"', "\\\"");
+        let app_bundle = format!("{}.app", shortcut_name);
+        let app_path = desktop.join(&app_bundle);
+        let macos_dir = app_path.join("Contents/MacOS");
+        std::fs::create_dir_all(&macos_dir).map_err(|e| format!("Failed to create .app bundle: {}", e))?;
+        let launcher_path = macos_dir.join(shortcut_name);
+        let script = format!(
+            "#!/bin/bash\nexec \"{}\" --open-app-url \"{}\" --open-app-name \"{}\"\n",
+            exe_esc,
+            frontend_url.replace('\\', "\\\\").replace('"', "\\\""),
+            app_name.replace('\\', "\\\\").replace('"', "\\\"")
+        );
+        std::fs::write(&launcher_path, script).map_err(|e| format!("Failed to write launcher script: {}", e))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&launcher_path).map_err(|e| format!("Failed to stat launcher: {}", e))?.permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&launcher_path, perms).map_err(|e| format!("Failed to chmod launcher: {}", e))?;
+        }
+        let plist = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleExecutable</key>
+    <string>{}</string>
+    <key>CFBundleIdentifier</key>
+    <string>network.calimero.desktop.shortcut.{}</string>
+    <key>CFBundleName</key>
+    <string>{}</string>
+    <key>LSUIElement</key>
+    <true/>
+</dict>
+</plist>
+"#,
+            shortcut_name.replace('<', "&lt;").replace('>', "&gt;").replace('&', "&amp;"),
+            shortcut_name.replace(|c: char| !c.is_alphanumeric(), "_"),
+            shortcut_name.replace('<', "&lt;").replace('>', "&gt;").replace('&', "&amp;")
+        );
+        let plist_path = app_path.join("Contents/Info.plist");
+        std::fs::write(&plist_path, plist).map_err(|e| format!("Failed to write Info.plist: {}", e))?;
+        return Ok(app_path.to_string_lossy().into_owned());
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let desktop = std::env::var("XDG_DESKTOP_DIR")
+            .map(std::path::PathBuf::from)
+            .or_else(|_| dirs::desktop_dir().ok_or_else(|| "Could not find Desktop folder".to_string()))?;
+        let path = desktop.join(format!("{}.desktop", shortcut_name));
+        let exe_esc = exe_str.replace('\\', "\\\\").replace('"', "\\\"");
+        let url_esc = frontend_url.replace('\\', "\\\\").replace('"', "\\\"");
+        let name_esc = app_name.replace('\\', "\\\\").replace('"', "\\\"");
+        let content = format!(
+            "[Desktop Entry]\n\
+             Type=Application\n\
+             Name={}\n\
+             Exec=\"{}\" --open-app-url \"{}\" --open-app-name \"{}\"\n\
+             Terminal=false\n",
+            name_esc,
+            exe_esc,
+            url_esc,
+            name_esc
+        );
+        std::fs::write(&path, content).map_err(|e| format!("Failed to write shortcut file: {}", e))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&path).map_err(|e| format!("Failed to stat file: {}", e))?.permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&path, perms).map_err(|e| format!("Failed to chmod: {}", e))?;
+        }
+        return Ok(path.to_string_lossy().into_owned());
+    }
+
+    #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
+    {
+        let _ = (app_handle, app_name, frontend_url);
+        Err("Desktop shortcuts are not supported on this platform".to_string())
+    }
+}
+
+#[tauri::command]
 async fn create_app_window(
     app_handle: tauri::AppHandle,
     window_label: String,
@@ -346,7 +533,9 @@ async fn create_app_window(
     
     // Show the window AFTER IPC scope is configured
     window.show().map_err(|e| format!("Failed to display window '{}': {}. The window may have been closed or there may be a system issue.", title, e))?;
-    
+    // Bring app window to front so user sees it instead of the main dashboard
+    let _ = window.set_focus();
+
     // Open devtools if flag is set (defaults to debug mode only, or TAURI_OPEN_DEVTOOLS env var)
     // IMPORTANT: Release builds NEVER enable devtools, even if env var is set
     let should_open_devtools = {
@@ -1651,15 +1840,35 @@ fn main() {
             }
         })
         .on_window_event(|event| {
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event.event() {
-                // Only minimize to tray for main window; close child windows normally
-                if event.window().label() == "main" {
+            if event.window().label() != "main" {
+                return;
+            }
+            match event.event() {
+                tauri::WindowEvent::CloseRequested { api, .. } => {
                     event.window().hide().unwrap();
                     api.prevent_close();
                 }
+                // When launched from shortcut, main window is shown first; hide it immediately so only app window is visible
+                tauri::WindowEvent::Focused(focused) if *focused => {
+                    if let Some(state) = event.window().app_handle().try_state::<PendingOpenApp>() {
+                        if state.0.lock().map_or(false, |g| g.is_some()) {
+                            let _ = event.window().hide();
+                        }
+                    }
+                }
+                _ => {}
             }
         })
         .setup(|app| {
+            let pending = parse_open_app_args();
+            app.manage(PendingOpenApp(std::sync::Mutex::new(pending.clone())));
+            // When launched from a desktop shortcut, hide the main window so only the app window is shown
+            if pending.is_some() {
+                if let Some(window) = app.get_window("main") {
+                    let _ = window.hide();
+                }
+            }
+
             #[cfg(feature = "autostart")]
             {
                 let _ = app.handle().plugin(
@@ -1703,6 +1912,11 @@ fn main() {
         })
         .manage(MerodState::default())
         .invoke_handler(tauri::generate_handler![
+            get_pending_open_app,
+            clear_pending_open_app,
+            hide_main_window,
+            focus_window,
+            create_desktop_shortcut,
             create_app_window,
             open_devtools,
             proxy_http_request,

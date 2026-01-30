@@ -1,6 +1,9 @@
 import { useState, useEffect, useCallback } from "react";
 import { createClient, apiClient, LoginView, getAccessToken } from "@calimero-network/mero-react";
 import { getSettings, getAuthUrl, saveSettings } from "./utils/settings";
+import { clearOnboardingProgress } from "./utils/onboardingProgress";
+import { startMerod } from "./utils/merod";
+import { useToast } from "./contexts/ToastContext";
 import { checkOnboardingState, type OnboardingState } from "./utils/onboarding";
 import { decodeMetadata, openAppFrontend } from "./utils/appUtils";
 import Settings from "./pages/Settings";
@@ -17,9 +20,13 @@ import ToastContainer from "./components/ToastContainer";
 import { getCurrentVersion } from "./utils/updater";
 import { invoke } from "@tauri-apps/api/tauri";
 import { Settings as SettingsIcon, ArrowRight, Package, ShoppingCart } from "lucide-react";
+import calimeroLogo from "./assets/calimero-logo.svg";
+import { useTheme } from "./contexts/ThemeContext";
 import "./App.css";
 
 function App() {
+  const toast = useToast();
+  const { theme } = useTheme();
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
@@ -142,8 +149,8 @@ function App() {
         let runningNodes = await detectRunningMerodNodes();
 
         // Auto-start merod if user has embedded node configured and no node is running
+        // (embeddedNodeName indicates they set up a node via our app; useEmbeddedNode may not be set)
         if (
-          settings.useEmbeddedNode &&
           settings.embeddedNodeName &&
           runningNodes.length === 0
         ) {
@@ -153,7 +160,7 @@ function App() {
           console.log('🔄 Auto-starting merod node (configured for startup)');
           try {
             await startMerod(serverPort, swarmPort, dataDir, settings.embeddedNodeName);
-            await new Promise((r) => setTimeout(r, 2000)); // give merod time to start
+            await new Promise((r) => setTimeout(r, 4000)); // give merod time to start (longer when app launches at login)
             runningNodes = await detectRunningMerodNodes();
           } catch (startErr) {
             console.warn('Auto-start merod failed:', startErr);
@@ -301,6 +308,24 @@ function App() {
     }
   }, [loadContexts, loadInstalledApps, updateTrayIcon]);
 
+  const handleRestartNode = useCallback(async () => {
+    const settings = getSettings();
+    if (settings.embeddedNodeName) {
+      try {
+        const dataDir = settings.embeddedNodeDataDir || '~/.calimero';
+        const serverPort = settings.embeddedNodePort ?? 2528;
+        await startMerod(serverPort, 2428, dataDir, settings.embeddedNodeName);
+        toast.success("Starting node...");
+        await new Promise((r) => setTimeout(r, 3000));
+        await checkConnection();
+      } catch (err) {
+        toast.error(`Failed to start node: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    } else {
+      setCurrentPage('nodes');
+    }
+  }, [checkConnection, toast]);
+
   // Open app frontend in a new window
   const handleOpenAppFrontend = useCallback(async (frontendUrl: string, appName?: string) => {
     try {
@@ -310,6 +335,15 @@ function App() {
       setCurrentPage('installed');
     }
   }, []);
+
+  const handleCreateDesktopShortcut = useCallback(async (appName: string, frontendUrl: string) => {
+    try {
+      await invoke("create_desktop_shortcut", { appName, frontendUrl });
+      toast.success("Desktop shortcut created on your Desktop");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to create desktop shortcut");
+    }
+  }, [toast]);
 
   // Auto-check node status every 5 seconds (runs on all main app pages for global indicator)
   useEffect(() => {
@@ -324,6 +358,31 @@ function App() {
     // Cleanup interval on unmount
     return () => clearInterval(interval);
   }, [checkConnection]);
+
+  // When launched from a desktop shortcut (--open-app-url / --open-app-name): open app, focus it, then hide main window
+  useEffect(() => {
+    if (checkingOnboarding) return;
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      try {
+        const pending = await invoke<[string, string] | null>("get_pending_open_app");
+        if (cancelled || !pending) return;
+        const [url, name] = pending;
+        const windowLabel = await openAppFrontend(url, name);
+        if (windowLabel) {
+          await invoke("focus_window", { windowLabel });
+        }
+        await invoke("hide_main_window");
+        await invoke("clear_pending_open_app");
+      } catch (e) {
+        console.warn("Failed to open app from shortcut:", e);
+      }
+    }, 300);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [checkingOnboarding]);
 
   // Show onboarding if needed
   if (checkingOnboarding) {
@@ -370,6 +429,7 @@ function App() {
     return (
       <Onboarding
         onComplete={async () => {
+          clearOnboardingProgress();
           const settings = getSettings();
           saveSettings({ ...settings, onboardingCompleted: true });
           try {
@@ -396,7 +456,10 @@ function App() {
   if (showLogin) {
     return (
       <div className="app login-screen">
-        <div className="login-screen-header">
+        <header className="login-screen-header">
+          <div className="login-screen-brand">
+            <img src={calimeroLogo} alt="Calimero" className="login-screen-logo" />
+          </div>
           <button 
             onClick={() => { 
               setShowLogin(false); 
@@ -407,8 +470,10 @@ function App() {
             <SettingsIcon size={16} style={{ marginRight: '6px', verticalAlign: 'middle' }} />
             Settings
           </button>
-        </div>
+        </header>
+        <main className="login-screen-main">
         <LoginView
+          variant={theme}
           onSuccess={() => {
             console.log('✅ Login successful');
             setShowLogin(false);
@@ -421,6 +486,7 @@ function App() {
             console.error('❌ Login failed:', error);
           }}
         />
+        </main>
       </div>
     );
   }
@@ -492,6 +558,7 @@ function App() {
   if (currentPage === 'marketplace') {
     return (
       <div className="app">
+        <ToastContainer />
         <div className="app-layout">
           <Sidebar 
             currentPage={currentPage} 
@@ -507,7 +574,7 @@ function App() {
               <NodeStatusIndicator
                 connected={connected}
                 error={error}
-                onClick={() => setCurrentPage('nodes')}
+                onClick={handleRestartNode}
               />
             </header>
             <main className="main">
@@ -523,6 +590,7 @@ function App() {
   if (currentPage === 'installed') {
     return (
       <div className="app">
+        <ToastContainer />
         <div className="app-layout">
           <Sidebar 
             currentPage={currentPage} 
@@ -538,7 +606,7 @@ function App() {
               <NodeStatusIndicator
                 connected={connected}
                 error={error}
-                onClick={() => setCurrentPage('nodes')}
+                onClick={handleRestartNode}
               />
             </header>
             <main className="main">
@@ -575,6 +643,7 @@ function App() {
   if (currentPage === 'nodes') {
     return (
       <div className="app">
+        <ToastContainer />
         <div className="app-layout">
           <Sidebar 
             currentPage="nodes" 
@@ -596,7 +665,7 @@ function App() {
               <NodeStatusIndicator
                 connected={connected}
                 error={error}
-                onClick={() => setCurrentPage('nodes')}
+                onClick={handleRestartNode}
               />
             </header>
             <main className="main">
@@ -612,6 +681,7 @@ function App() {
   if (currentPage === 'contexts') {
     return (
       <div className="app">
+        <ToastContainer />
         <div className="app-layout">
           <Sidebar 
             currentPage={currentPage} 
@@ -627,7 +697,7 @@ function App() {
               <NodeStatusIndicator
                 connected={connected}
                 error={error}
-                onClick={() => setCurrentPage('nodes')}
+                onClick={handleRestartNode}
               />
             </header>
             <main className="main">
@@ -664,6 +734,7 @@ function App() {
   if (currentPage === 'confirm' && confirmAction) {
     return (
       <div className="app">
+        <ToastContainer />
         <ConfirmAction
           title={confirmAction.title}
           message={confirmAction.message}
@@ -719,7 +790,7 @@ function App() {
             <NodeStatusIndicator
               connected={connected}
               error={error}
-              onClick={() => setCurrentPage('nodes')}
+              onClick={handleRestartNode}
             />
       </header>
 
@@ -746,13 +817,13 @@ function App() {
               <div className="status-error-block">
                 <p className="status-error">{error}</p>
                 <p className="status-error-hint">
-                  Your node may have stopped (e.g. after your computer slept). Go to Nodes to restart it.
+                  Your node may have stopped (e.g. after your computer slept). Click Restart Node to start it again.
                 </p>
                 <button
-                  onClick={() => setCurrentPage('nodes')}
+                  onClick={handleRestartNode}
                   className="button button-primary button-small"
                 >
-                  Open Nodes
+                  Restart Node
                 </button>
               </div>
             )}
@@ -787,21 +858,36 @@ function App() {
                 }
                 
                 return (
-                  <button
-                    key={app.id}
-                    onClick={() => {
-                      if (frontendUrl) {
-                        handleOpenAppFrontend(frontendUrl, appName);
-                      } else {
-                        setCurrentPage('installed');
-                      }
-                    }}
-                    className="app-card-mini"
-                    title={frontendUrl ? `Open ${appName}` : `View ${appName} details`}
-                  >
-                    <Package className="app-icon" size={20} />
-                    <span className="app-name">{appName}</span>
-                  </button>
+                  <div key={app.id} className="app-card-mini-wrapper">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (frontendUrl) {
+                          handleOpenAppFrontend(frontendUrl, appName);
+                        } else {
+                          setCurrentPage('installed');
+                        }
+                      }}
+                      className="app-card-mini"
+                      title={frontendUrl ? `Open ${appName}` : `View ${appName} details`}
+                    >
+                      <Package className="app-icon" size={20} />
+                      <span className="app-name">{appName}</span>
+                    </button>
+                    {frontendUrl && (
+                      <button
+                        type="button"
+                        className="app-card-shortcut-link"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleCreateDesktopShortcut(appName, frontendUrl);
+                        }}
+                        title="Create desktop shortcut"
+                      >
+                        Shortcut
+                      </button>
+                    )}
+                  </div>
                 );
               })}
             </div>

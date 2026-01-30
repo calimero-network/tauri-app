@@ -22,7 +22,7 @@ export function NodeStatusIndicator({
       onClick={isClickable ? onClick : undefined}
       title={
         hasError
-          ? `${error} Click to open Nodes and restart.`
+          ? `${error} Click to restart node.`
           : connected
           ? "Node connected"
           : "Node disconnected"
@@ -33,7 +33,7 @@ export function NodeStatusIndicator({
       <span className="node-status-label">
         {connected ? "Connected" : "Disconnected"}
       </span>
-      {hasError && <span className="node-status-action">Open Nodes →</span>}
+      {hasError && <span className="node-status-action">Restart Node →</span>}
     </button>
   );
 }

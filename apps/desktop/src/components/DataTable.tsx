@@ -18,6 +18,8 @@ interface DataTableProps<T> {
   keyExtractor: (item: T) => string;
   emptyMessage?: string | React.ReactNode;
   onRowClick?: (item: T) => void;
+  compact?: boolean;
+  onRowContextMenu?: (e: React.MouseEvent, item: T) => void;
 }
 
 export default function DataTable<T>({
@@ -26,6 +28,8 @@ export default function DataTable<T>({
   keyExtractor,
   emptyMessage = 'No data available',
   onRowClick,
+  compact = false,
+  onRowContextMenu,
 }: DataTableProps<T>) {
   const [sortColumn, setSortColumn] = useState<string | null>(null);
   const [sortDirection, setSortDirection] = useState<SortDirection>(null);
@@ -90,7 +94,7 @@ export default function DataTable<T>({
   }
 
   return (
-    <div className="data-table-container">
+    <div className={`data-table-container ${compact ? 'data-table-compact' : ''}`}>
       <table className="data-table">
         <thead>
           <tr>
@@ -122,6 +126,7 @@ export default function DataTable<T>({
             <tr
               key={keyExtractor(item)}
               onClick={() => onRowClick?.(item)}
+              onContextMenu={(e) => onRowContextMenu?.(e, item)}
               className={onRowClick ? 'clickable' : ''}
             >
               {columns.map((column) => (

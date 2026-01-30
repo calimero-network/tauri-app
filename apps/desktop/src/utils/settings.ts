@@ -7,6 +7,7 @@ export interface AppSettings {
   embeddedNodeDataDir?: string; // Data directory for embedded node (default: ~/.calimero)
   embeddedNodeName?: string; // Node name for embedded node
   developerMode?: boolean; // Developer mode - shows advanced features like multiple nodes and contexts
+  onboardingCompleted?: boolean; // True once user has completed first-time setup - never show onboarding again
 }
 
 const SETTINGS_KEY = 'calimero-desktop-settings';
@@ -77,6 +78,7 @@ export function getSettings(): AppSettings {
         embeddedNodeDataDir: rawSettings.embeddedNodeDataDir,
         embeddedNodeName: rawSettings.embeddedNodeName,
         developerMode: rawSettings.developerMode ?? false, // Default to false
+        onboardingCompleted: rawSettings.onboardingCompleted ?? false,
       };
     }
   } catch (error) {

@@ -12,8 +12,10 @@ import NodeManagement from "./pages/NodeManagement";
 import ConfirmAction from "./pages/ConfirmAction";
 import UpdateNotification from "./components/UpdateNotification";
 import Sidebar from "./components/Sidebar";
+import { NodeStatusIndicator } from "./components/NodeStatusIndicator";
 import ToastContainer from "./components/ToastContainer";
 import { getCurrentVersion } from "./utils/updater";
+import { invoke } from "@tauri-apps/api/tauri";
 import { Settings as SettingsIcon, ArrowRight, Package, ShoppingCart } from "lucide-react";
 import "./App.css";
 
@@ -97,108 +99,67 @@ function App() {
 
   useEffect(() => {
     async function initializeApp() {
-      // Check if settings have been saved (user has completed setup)
       const hasCustomSettings = localStorage.getItem('calimero-desktop-settings') !== null;
-      
-      // If no settings saved, show onboarding immediately
-      if (!hasCustomSettings) {
-        console.log('📋 No settings found - showing onboarding immediately');
+      const settings = getSettings();
+      let onboardingCompleted = settings.onboardingCompleted ?? false;
+
+      // Migrate: existing users before onboardingCompleted existed - treat as completed if they have nodeUrl
+      if (hasCustomSettings && settings.onboardingCompleted === undefined && settings.nodeUrl) {
+        saveSettings({ ...settings, onboardingCompleted: true });
+        onboardingCompleted = true;
+      }
+
+      // First-time install: no settings or never completed onboarding
+      if (!hasCustomSettings || !onboardingCompleted) {
+        if (!hasCustomSettings) {
+          console.log('📋 No settings found - first install, showing onboarding');
+        } else {
+          console.log('📋 Onboarding not completed - showing onboarding');
+        }
         setNeedsNodeConfig(true);
         setShowOnboarding(true);
         setCheckingOnboarding(false);
         return;
       }
-      
-      // Load settings on startup
-      const settings = getSettings();
-      
-      // Always check for nodes first
-      console.log('🔍 Checking for existing nodes...');
+
+      // Returning user - onboarding was completed. Never show onboarding again.
+      // Initialize client and go to main app (with login if needed, disconnected if node down).
+      console.log('✅ Returning user - onboarding completed, loading main app');
       setCheckingOnboarding(true);
-      
+
       try {
-        const { listMerodNodes, detectRunningMerodNodes } = await import('./utils/merod');
-        const defaultDataDir = settings.embeddedNodeDataDir || '~/.calimero';
-        const existingNodes = await listMerodNodes(defaultDataDir);
-        
-        // Check if any nodes are running
+        const { detectRunningMerodNodes } = await import('./utils/merod');
         const runningNodes = await detectRunningMerodNodes();
-        
-        // If no nodes exist at all, show onboarding
-        if (existingNodes.length === 0 && runningNodes.length === 0) {
-          console.log('📋 No nodes found - showing onboarding');
-          setNeedsNodeConfig(true);
-          setShowOnboarding(true);
-          setCheckingOnboarding(false);
-          return;
-        }
-        
-        // If nodes exist but none are running, show onboarding to start one
-        if (existingNodes.length > 0 && runningNodes.length === 0) {
-          console.log('📋 Nodes exist but none running - showing onboarding');
-          setNeedsNodeConfig(true);
-          setShowOnboarding(true);
-          setCheckingOnboarding(false);
-          return;
-        }
-        
-        // If we have running nodes, use the first one
+
+        // Auto-update nodeUrl if we detect a running local node and user has localhost or no URL
         if (runningNodes.length > 0) {
           const node = runningNodes[0];
           const nodeUrl = `http://localhost:${node.port}`;
-          
-          // Only auto-update if:
-          // 1. No nodeUrl is configured, OR
-          // 2. The configured nodeUrl is also localhost (user likely wants local node)
-          // Don't overwrite if user has explicitly configured a remote node
           const currentUrl = settings.nodeUrl;
           const isLocalhostUrl = currentUrl && (
-            currentUrl.startsWith('http://localhost:') || 
+            currentUrl.startsWith('http://localhost:') ||
             currentUrl.startsWith('http://127.0.0.1:')
           );
-          
-          if (!currentUrl || isLocalhostUrl) {
-            // Only update if URL actually differs
-            if (!currentUrl || currentUrl !== nodeUrl) {
-              saveSettings({ ...settings, nodeUrl });
-              // Reload to continue with normal flow
-              window.location.reload();
-              return;
-            }
-          } else {
-            // User has configured a remote node - don't overwrite, just continue with their config
-            console.log('ℹ️ Remote node configured, skipping local node auto-detection');
+          if ((!currentUrl || isLocalhostUrl) && currentUrl !== nodeUrl) {
+            saveSettings({ ...settings, nodeUrl });
+            window.location.reload();
+            return;
           }
         }
-        
-        // We have a node URL configured - continue with normal initialization
-        console.log('✅ Node URL configured, continuing with normal flow');
       } catch (error) {
-        console.error('Failed to check for existing nodes:', error);
-        // On error, show onboarding
-        setNeedsNodeConfig(true);
-        setShowOnboarding(true);
-        setCheckingOnboarding(false);
-        return;
+        console.error('Failed to check nodes:', error);
       }
-      
+
       const adminApiUrl = `${settings.nodeUrl.replace(/\/$/, '')}/admin-api`;
       const authUrl = getAuthUrl(settings);
       const authBaseUrl = authUrl.replace(/\/$/, '');
-
-      // Initialize mero-react client
       createClient({
         baseUrl: adminApiUrl,
         authBaseUrl: authBaseUrl,
         requestCredentials: 'omit',
       });
 
-      // First, quickly check if the node is running at the configured URL
-      setCheckingOnboarding(true);
-      console.log('🔍 Checking if node is running at:', settings.nodeUrl);
-      
       try {
-        // Quick health check with short timeout (3 seconds)
         const healthCheck = await Promise.race([
           apiClient.node.healthCheck(),
           new Promise<{ error: { message: string; code?: string } }>((resolve) =>
@@ -207,19 +168,23 @@ function App() {
         ]);
 
         if (healthCheck.error) {
-          // Node is not running - show onboarding to configure/start node
-          console.log('⚠️ Node not running or not accessible, showing onboarding');
+          // Node down - show main app with disconnected indicator (user can click Open Nodes)
+          console.log('⚠️ Node not running - showing main app with disconnected status');
+          setConnected(false);
+          setError(healthCheck.error.message);
+          setNeedsNodeConfig(false);
+          loadContexts().catch(() => {});
+          loadInstalledApps().catch(() => {});
           setCheckingOnboarding(false);
-          setNeedsNodeConfig(true);
-          setShowOnboarding(true);
+          invoke("set_tray_icon_connected", { connected: false }).catch(() => {});
           return;
         }
 
-        // Node is running - clear needsNodeConfig since we have a working node
+        setConnected(true);
+        invoke("set_tray_icon_connected", { connected: true }).catch(() => {});
+        setError(null);
         setNeedsNodeConfig(false);
-        
-        // Proceed with onboarding/auth checks
-        console.log('✅ Node is running, checking onboarding state...');
+
         const onboardingState = await Promise.race([
           checkOnboardingState(),
           new Promise<OnboardingState>((resolve) =>
@@ -230,60 +195,33 @@ function App() {
                 providersAvailable: false,
                 providersConfigured: false,
                 hasConfiguredProviders: false,
-                error: 'Connection timeout. Please check if the node is running at ' + settings.nodeUrl,
+                error: 'Connection timeout.',
               });
             }, 10000)
           ),
         ]);
-        // Onboarding state checked
 
-        // Debug logging
-        console.log('🔍 Onboarding State:', {
-          isFirstTime: onboardingState.isFirstTime,
-          authAvailable: onboardingState.authAvailable,
-          providersAvailable: onboardingState.providersAvailable,
-          hasConfiguredProviders: onboardingState.hasConfiguredProviders,
-          error: onboardingState.error,
-        });
-
-        // Flow logic:
-        // 1. If auth is NOT configured (no users) → Onboarding (first time, create account)
-        // 2. If auth IS configured (has users) → Check if logged in
-        //    - Not logged in → Login screen
-        //    - Logged in → Main app
-        // 3. If auth service unavailable → Show error in onboarding
-        
-        if (!onboardingState.authAvailable) {
-          // Auth service not available - show onboarding with error
-          // But don't redirect back to Nodes page if node is running
-          console.log('⚠️ Auth service not available, showing onboarding with error');
-          setNeedsNodeConfig(false); // Clear needsNodeConfig since node is running
-          setShowOnboarding(true);
-        } else if (!onboardingState.hasConfiguredProviders) {
-          // Auth available but no users configured - show onboarding (first time)
-          console.log('📋 No users configured, showing onboarding screen');
-          setShowOnboarding(true);
+        if (!onboardingState.authAvailable || !onboardingState.hasConfiguredProviders) {
+          // Auth not ready - show main app (user can use Nodes/Settings to fix)
+          console.log('⚠️ Auth not configured - showing main app');
+          loadContexts().catch(() => {});
+          loadInstalledApps().catch(() => {});
         } else {
-          // Auth is configured (has users) - check if user is logged in
           const hasToken = getAccessToken();
-          console.log('🔑 Token check:', hasToken ? 'EXISTS' : 'NONE');
           if (!hasToken) {
-            console.log('🔐 Showing login screen');
             setShowLogin(true);
           } else {
-            // User has token, try to load contexts and apps
-            console.log('✅ User logged in, loading contexts and apps');
             loadContexts();
             loadInstalledApps();
           }
         }
       } catch (err) {
-        console.error('Failed to check node connection:', err);
-        // On error, show onboarding to allow configuration
-        setCheckingOnboarding(false);
-        setNeedsNodeConfig(true);
-        setShowOnboarding(true);
-        return;
+        console.error('Failed to check node:', err);
+        setConnected(false);
+        setError(err instanceof Error ? err.message : String(err));
+        loadContexts().catch(() => {});
+        loadInstalledApps().catch(() => {});
+        invoke("set_tray_icon_connected", { connected: false }).catch(() => {});
       } finally {
         setCheckingOnboarding(false);
       }
@@ -291,6 +229,12 @@ function App() {
 
     initializeApp();
   }, [loadContexts]);
+
+  const updateTrayIcon = useCallback((connected: boolean) => {
+    invoke("set_tray_icon_connected", { connected }).catch((err) => {
+      console.warn("Failed to update tray icon:", err);
+    });
+  }, []);
 
   const checkConnection = useCallback(async () => {
     try {
@@ -303,15 +247,18 @@ function App() {
         if (healthResponse.error.code === '401') {
           setShowLogin(true);
           setConnected(false);
+          updateTrayIcon(false);
           return;
         }
         setError(healthResponse.error.message);
         setConnected(false);
+        updateTrayIcon(false);
         return;
       }
       
       setConnected(true);
       setError(null);
+      updateTrayIcon(true);
 
       // Load contexts and apps after successful connection
         await loadContexts();
@@ -321,8 +268,9 @@ function App() {
       const errorMessage = err instanceof Error ? err.message : String(err);
       setError(errorMessage);
       console.error("Connection error:", err);
+      updateTrayIcon(false);
     }
-  }, [loadContexts, loadInstalledApps]);
+  }, [loadContexts, loadInstalledApps, updateTrayIcon]);
 
   // Open app frontend in a new window
   const handleOpenAppFrontend = useCallback(async (frontendUrl: string, appName?: string) => {
@@ -334,13 +282,8 @@ function App() {
     }
   }, []);
 
-  // Auto-check node status every 5 seconds when on home page
+  // Auto-check node status every 5 seconds (runs on all main app pages for global indicator)
   useEffect(() => {
-    // Only run on home page
-    if (currentPage !== 'home') {
-      return;
-    }
-
     // Initial check
     checkConnection();
 
@@ -349,11 +292,9 @@ function App() {
       checkConnection();
     }, 5000);
 
-    // Cleanup interval on unmount or page change
-    return () => {
-      clearInterval(interval);
-    };
-  }, [currentPage, checkConnection]); // Re-run when page changes or checkConnection changes
+    // Cleanup interval on unmount
+    return () => clearInterval(interval);
+  }, [checkConnection]);
 
   // Show onboarding if needed
   if (checkingOnboarding) {
@@ -400,19 +341,13 @@ function App() {
     return (
       <Onboarding
         onComplete={() => {
+          const settings = getSettings();
+          saveSettings({ ...settings, onboardingCompleted: true });
           setShowOnboarding(false);
-          // After onboarding, user is already logged in, just load data
-          // Don't call checkConnection() as it might trigger login screen
-          // Set connected to true since user just authenticated
           setConnected(true);
           setError(null);
-          // Load data but don't show login on 401 errors since user just authenticated
-          loadContexts().catch(() => {
-            // Silently fail - user can retry later if needed
-          });
-          loadInstalledApps().catch(() => {
-            // Silently fail - user can retry later if needed
-          });
+          loadContexts().catch(() => {});
+          loadInstalledApps().catch(() => {});
         }}
         onSettings={() => {
           setShowOnboarding(false);
@@ -425,17 +360,16 @@ function App() {
   // Show login if needed
   if (showLogin) {
     return (
-      <div className="app">
-        <div style={{ position: 'absolute', top: '16px', right: '16px', display: 'flex', gap: '8px', zIndex: 1000 }}>
+      <div className="app login-screen">
+        <div className="login-screen-header">
           <button 
             onClick={() => { 
               setShowLogin(false); 
               setShowSettings(true); 
             }} 
-            className="button" 
-            style={{ background: '#f0f0f0', padding: '8px 16px' }}
+            className="button button-secondary"
           >
-            <SettingsIcon size={16} style={{ marginRight: '4px', verticalAlign: 'middle' }} />
+            <SettingsIcon size={16} style={{ marginRight: '6px', verticalAlign: 'middle' }} />
             Settings
           </button>
         </div>
@@ -528,12 +462,18 @@ function App() {
             currentPage={currentPage} 
             onNavigate={setCurrentPage}
             onOpenSettings={() => setShowSettings(true)}
+            nodeDisconnected={!connected && !!error}
           />
           <div className="app-content">
         <header className="header">
               <div className="header-title">
                 <h1>Marketplace</h1>
               </div>
+              <NodeStatusIndicator
+                connected={connected}
+                error={error}
+                onClick={() => setCurrentPage('nodes')}
+              />
             </header>
             <main className="main">
               <Marketplace />
@@ -553,13 +493,19 @@ function App() {
             currentPage={currentPage} 
             onNavigate={setCurrentPage}
             onOpenSettings={() => setShowSettings(true)}
+            nodeDisconnected={!connected && !!error}
           />
           <div className="app-content">
         <header className="header">
               <div className="header-title">
                 <h1>Applications</h1>
-          </div>
-        </header>
+              </div>
+              <NodeStatusIndicator
+                connected={connected}
+                error={error}
+                onClick={() => setCurrentPage('nodes')}
+              />
+            </header>
             <main className="main">
         <InstalledApps 
           onAuthRequired={() => setShowLogin(true)}
@@ -605,12 +551,18 @@ function App() {
               else if (p === 'home') setCurrentPage('home');
             }}
             onOpenSettings={() => setShowSettings(true)}
+            nodeDisconnected={!connected && !!error}
           />
           <div className="app-content">
             <header className="header">
               <div className="header-title">
                 <h1>Nodes</h1>
               </div>
+              <NodeStatusIndicator
+                connected={connected}
+                error={error}
+                onClick={() => setCurrentPage('nodes')}
+              />
             </header>
             <main className="main">
               <NodeManagement />
@@ -630,13 +582,19 @@ function App() {
             currentPage={currentPage} 
             onNavigate={setCurrentPage}
             onOpenSettings={() => setShowSettings(true)}
+            nodeDisconnected={!connected && !!error}
           />
           <div className="app-content">
         <header className="header">
               <div className="header-title">
-            <h1>Contexts</h1>
-          </div>
-        </header>
+                <h1>Contexts</h1>
+              </div>
+              <NodeStatusIndicator
+                connected={connected}
+                error={error}
+                onClick={() => setCurrentPage('nodes')}
+              />
+            </header>
             <main className="main">
         <Contexts 
           onAuthRequired={() => setShowLogin(true)}
@@ -712,16 +670,22 @@ function App() {
             else if (p === 'home') setCurrentPage('home');
           }}
           onOpenSettings={() => setShowSettings(true)}
+          nodeDisconnected={!connected && !!error}
         />
         
         <div className="app-content">
       <header className="header">
             <div className="header-title">
               <h1>{pageTitle}</h1>
-          {appVersion && (
+              {appVersion && (
                 <span className="version-badge">v{appVersion}</span>
-          )}
-        </div>
+              )}
+            </div>
+            <NodeStatusIndicator
+              connected={connected}
+              error={error}
+              onClick={() => setCurrentPage('nodes')}
+            />
       </header>
 
       <main className="main">
@@ -744,7 +708,18 @@ function App() {
               </div>
             </div>
             {!connected && error && (
-              <p className="status-error">{error}</p>
+              <div className="status-error-block">
+                <p className="status-error">{error}</p>
+                <p className="status-error-hint">
+                  Your node may have stopped (e.g. after your computer slept). Go to Nodes to restart it.
+                </p>
+                <button
+                  onClick={() => setCurrentPage('nodes')}
+                  className="button button-primary button-small"
+                >
+                  Open Nodes
+                </button>
+              </div>
             )}
           </div>
           </div>

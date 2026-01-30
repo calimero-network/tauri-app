@@ -1,5 +1,24 @@
 import React, { useState } from 'react';
 
+// Username validation: alphanumeric + underscore only, no spaces
+const USERNAME_REGEX = /^[a-zA-Z0-9_]+$/;
+const MIN_PASSWORD_LENGTH = 8;
+
+function validateUsername(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return 'Username is required';
+  if (value !== trimmed) return 'Username cannot contain leading or trailing spaces';
+  if (/\s/.test(value)) return 'Username cannot contain spaces';
+  if (!USERNAME_REGEX.test(trimmed)) return 'Username can only contain letters, numbers, and underscores';
+  return null;
+}
+
+function validatePassword(value: string): string | null {
+  if (!value) return 'Password is required';
+  if (value.length < MIN_PASSWORD_LENGTH) return `Password must be at least ${MIN_PASSWORD_LENGTH} characters`;
+  return null;
+}
+
 export interface UsernamePasswordFormProps {
   onSubmit: (username: string, password: string) => void;
   onBack?: () => void;
@@ -15,68 +34,72 @@ export function UsernamePasswordForm({
 }: UsernamePasswordFormProps) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [validationError, setValidationError] = useState<string | null>(null);
+  const [usernameError, setUsernameError] = useState<string | null>(null);
+  const [passwordError, setPasswordError] = useState<string | null>(null);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    setValidationError(null);
+    setUsernameError(null);
+    setPasswordError(null);
 
-    // Basic validation
-    if (!username.trim()) {
-      setValidationError('Username is required');
+    const userErr = validateUsername(username);
+    const passErr = validatePassword(password);
+    if (userErr) {
+      setUsernameError(userErr);
       return;
     }
-
-    if (!password.trim()) {
-      setValidationError('Password is required');
-      return;
-    }
-
-    if (password.length < 1) {
-      setValidationError('Password must be at least 1 character long');
+    if (passErr) {
+      setPasswordError(passErr);
       return;
     }
 
     onSubmit(username.trim(), password);
   };
 
-  const displayError = validationError || error;
+  const displayError = usernameError || passwordError || error;
+
+  const containerStyle: React.CSSProperties = {
+    position: 'fixed',
+    top: '50%',
+    left: '50%',
+    transform: 'translate(-50%, -50%)',
+    maxWidth: 420,
+    width: '100%',
+    padding: '0 24px',
+  };
+
+  const cardStyle: React.CSSProperties = {
+    background: 'var(--bg-secondary)',
+    borderRadius: '12px',
+    padding: '32px',
+    boxShadow: 'var(--shadow-lg)',
+    border: '1px solid var(--border-color)',
+  };
 
   return (
-    <div
-      style={{
-        position: 'fixed',
-        top: '50%',
-        left: '50%',
-        transform: 'translate(-50%, -50%)',
-        maxWidth: 420,
-        width: '100%',
-        padding: '0 16px',
-      }}
-    >
-      <div
-        style={{
-          background: 'white',
-          borderRadius: '8px',
-          padding: '24px',
-          boxShadow: '0 2px 8px rgba(0, 0, 0, 0.1)',
-          border: '1px solid #e0e0e0',
-        }}
-      >
-        <h2 style={{ marginTop: 0, marginBottom: '20px', fontSize: '20px', fontWeight: 600 }}>
+    <div style={containerStyle}>
+      <div style={cardStyle}>
+        <h2 style={{
+          marginTop: 0,
+          marginBottom: '24px',
+          fontSize: '22px',
+          fontWeight: 600,
+          color: 'var(--text-primary)',
+        }}>
           Sign In
         </h2>
 
         <form onSubmit={handleSubmit}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
             {displayError && (
               <div
                 style={{
-                  padding: '12px',
-                  background: '#ffebee',
-                  color: '#c62828',
-                  borderRadius: '4px',
+                  padding: '12px 16px',
+                  background: 'rgba(248, 113, 113, 0.15)',
+                  color: 'var(--error)',
+                  borderRadius: '8px',
                   fontSize: '14px',
+                  border: '1px solid var(--error)',
                 }}
               >
                 {displayError}
@@ -90,28 +113,38 @@ export function UsernamePasswordForm({
                   display: 'block',
                   marginBottom: '8px',
                   fontSize: '14px',
-                  fontWeight: 500,
+                  fontWeight: 600,
+                  color: 'var(--text-primary)',
                 }}
               >
-                Username <span style={{ color: '#ef4444' }}>*</span>
+                Username <span style={{ color: 'var(--error)' }}>*</span>
               </label>
               <input
                 id="username"
                 type="text"
                 value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                placeholder="Enter your username"
+                onChange={(e) => {
+                  setUsername(e.target.value);
+                  setUsernameError(null);
+                }}
+                onBlur={() => setUsernameError(validateUsername(username))}
+                placeholder="Letters, numbers, underscores only"
                 disabled={loading}
                 autoComplete="username"
                 style={{
                   width: '100%',
-                  padding: '10px 12px',
-                  border: '1px solid #ccc',
-                  borderRadius: '4px',
-                  fontSize: '14px',
+                  padding: '12px 16px',
+                  border: `1px solid ${usernameError ? 'var(--error)' : 'var(--border-color)'}`,
+                  borderRadius: '8px',
+                  fontSize: '15px',
                   boxSizing: 'border-box',
+                  background: 'var(--bg-tertiary)',
+                  color: 'var(--text-primary)',
                 }}
               />
+              {usernameError && (
+                <p style={{ margin: '6px 0 0 0', fontSize: '12px', color: 'var(--error)' }}>{usernameError}</p>
+              )}
             </div>
 
             <div>
@@ -121,35 +154,45 @@ export function UsernamePasswordForm({
                   display: 'block',
                   marginBottom: '8px',
                   fontSize: '14px',
-                  fontWeight: 500,
+                  fontWeight: 600,
+                  color: 'var(--text-primary)',
                 }}
               >
-                Password <span style={{ color: '#ef4444' }}>*</span>
+                Password <span style={{ color: 'var(--error)' }}>*</span>
               </label>
               <input
                 id="password"
                 type="password"
                 value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="Enter your password"
+                onChange={(e) => {
+                  setPassword(e.target.value);
+                  setPasswordError(null);
+                }}
+                onBlur={() => setPasswordError(validatePassword(password))}
+                placeholder={`At least ${MIN_PASSWORD_LENGTH} characters`}
                 disabled={loading}
                 autoComplete="current-password"
                 style={{
                   width: '100%',
-                  padding: '10px 12px',
-                  border: '1px solid #ccc',
-                  borderRadius: '4px',
-                  fontSize: '14px',
+                  padding: '12px 16px',
+                  border: `1px solid ${passwordError ? 'var(--error)' : 'var(--border-color)'}`,
+                  borderRadius: '8px',
+                  fontSize: '15px',
                   boxSizing: 'border-box',
+                  background: 'var(--bg-tertiary)',
+                  color: 'var(--text-primary)',
                 }}
               />
+              {passwordError && (
+                <p style={{ margin: '6px 0 0 0', fontSize: '12px', color: 'var(--error)' }}>{passwordError}</p>
+              )}
             </div>
 
             <div
               style={{
                 display: 'flex',
                 justifyContent: 'flex-end',
-                gap: '8px',
+                gap: '12px',
                 marginTop: '8px',
               }}
             >
@@ -159,12 +202,13 @@ export function UsernamePasswordForm({
                   onClick={onBack}
                   disabled={loading}
                   style={{
-                    padding: '10px 20px',
-                    background: '#f0f0f0',
-                    color: '#333',
-                    border: '1px solid #ccc',
-                    borderRadius: '4px',
-                    fontSize: '14px',
+                    padding: '12px 24px',
+                    background: 'var(--bg-tertiary)',
+                    color: 'var(--text-primary)',
+                    border: '1px solid var(--border-color)',
+                    borderRadius: '8px',
+                    fontSize: '15px',
+                    fontWeight: 500,
                     cursor: loading ? 'not-allowed' : 'pointer',
                     opacity: loading ? 0.6 : 1,
                   }}
@@ -174,16 +218,16 @@ export function UsernamePasswordForm({
               )}
               <button
                 type="submit"
-                disabled={loading || !username.trim() || !password.trim()}
+                disabled={loading || !!validateUsername(username) || !!validatePassword(password)}
                 style={{
-                  padding: '10px 20px',
-                  background: loading || !username.trim() || !password.trim() ? '#ccc' : '#2196f3',
-                  color: 'white',
+                  padding: '12px 24px',
+                  background: loading || !!validateUsername(username) || !!validatePassword(password) ? 'var(--bg-tertiary)' : 'var(--accent-primary)',
+                  color: loading || !!validateUsername(username) || !!validatePassword(password) ? 'var(--text-tertiary)' : 'white',
                   border: 'none',
-                  borderRadius: '4px',
-                  fontSize: '14px',
-                  fontWeight: 500,
-                  cursor: loading || !username.trim() || !password.trim() ? 'not-allowed' : 'pointer',
+                  borderRadius: '8px',
+                  fontSize: '15px',
+                  fontWeight: 600,
+                  cursor: loading || !!validateUsername(username) || !!validatePassword(password) ? 'not-allowed' : 'pointer',
                   opacity: loading ? 0.6 : 1,
                 }}
               >

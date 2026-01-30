@@ -1,0 +1,64 @@
+.node-status-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  cursor: default;
+  transition: all 0.15s;
+}
+
+.node-status-indicator.clickable {
+  cursor: pointer;
+}
+
+.node-status-indicator.clickable:hover {
+  background: var(--bg-tertiary);
+  border-color: var(--error);
+  color: var(--error);
+}
+
+.node-status-indicator.connected {
+  border-color: var(--success);
+  color: var(--success);
+}
+
+.node-status-indicator.connected .node-status-dot {
+  background: var(--success);
+  box-shadow: 0 0 0 2px rgba(52, 211, 153, 0.3);
+}
+
+.node-status-indicator.disconnected .node-status-dot {
+  background: var(--text-tertiary);
+}
+
+.node-status-indicator.clickable.disconnected .node-status-dot {
+  background: var(--error);
+}
+
+.node-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.node-status-icon {
+  flex-shrink: 0;
+  opacity: 0.8;
+}
+
+.node-status-label {
+  white-space: nowrap;
+}
+
+.node-status-action {
+  margin-left: 4px;
+  font-size: 12px;
+  opacity: 0.9;
+}

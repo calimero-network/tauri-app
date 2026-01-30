@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use tauri::Manager;
+use tauri::{CustomMenuItem, SystemTray, SystemTrayEvent, SystemTrayMenu};
 use serde::{Deserialize, Serialize};
 use log::{debug, info, warn};
 
@@ -588,30 +589,55 @@ async fn start_merod(
         }
     }
     
+    // Node name required
+    let node_name_str = node_name.as_ref().ok_or("Node name is required")?.clone();
+
+    // Create logs directory and open log file - redirect merod stdout/stderr here
+    let log_dir = home_dir_path.join(&node_name_str).join("logs");
+    std::fs::create_dir_all(&log_dir)
+        .map_err(|e| format!("Failed to create logs directory: {}", e))?;
+    let log_path = log_dir.join("merod.log");
+
+    // Open log file for append - use separate handles for stdout and stderr
+    let log_file_stdout = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .map_err(|e| format!("Failed to create log file: {}", e))?;
+    let log_file_stderr = log_file_stdout
+        .try_clone()
+        .or_else(|_| {
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&log_path)
+        })
+        .map_err(|e| format!("Failed to open log file for stderr: {}", e))?;
+
     // Build command - global options come BEFORE subcommand
     // Merod expects: merod --home ~/.calimero --node-name node1 run
     let mut cmd = Command::new(&merod_binary);
+    // Force ANSI colors in output so the log viewer can display them
+    cmd.env("CLICOLOR_FORCE", "1");
+    cmd.env("FORCE_COLOR", "1");
     
     // Set home directory (global option, before subcommand)
     cmd.arg("--home").arg(&home_dir_path);
     
     // Set node name (global option, before subcommand)
-    if let Some(name) = node_name {
-        cmd.arg("--node-name").arg(name);
-    } else {
-        return Err("Node name is required".to_string());
-    }
+    cmd.arg("--node-name").arg(&node_name_str);
     
     // Add 'run' subcommand last
     cmd.arg("run");
     
-    cmd.stdout(Stdio::piped());
-    cmd.stderr(Stdio::piped());
+    // Redirect stdout/stderr to log file - merod output goes directly to disk
+    cmd.stdout(Stdio::from(log_file_stdout));
+    cmd.stderr(Stdio::from(log_file_stderr));
     cmd.stdin(Stdio::null());
     
     // Log the command being run
     let cmd_str = format!("{:?}", cmd);
-    info!("[Merod] Running command: {}", cmd_str);
+    info!("[Merod] Running command: {}, logs at {:?}", cmd_str, log_path);
     
     // Start the process
     let mut child = cmd.spawn()
@@ -619,47 +645,6 @@ async fn start_merod(
     
     let pid = child.id().unwrap();
     info!("[Merod] Started with PID: {}", pid);
-    
-    // Take ownership of stdout and stderr to drain them
-    let stdout = child.stdout.take();
-    let stderr = child.stderr.take();
-    
-    // Spawn tasks to drain stdout and stderr to prevent process hang
-    if let Some(mut stdout_handle) = stdout {
-        tokio::spawn(async move {
-            use tokio::io::AsyncReadExt;
-            let mut buffer = [0u8; 1024];
-            loop {
-                match stdout_handle.read(&mut buffer).await {
-                    Ok(0) => break, // EOF
-                    Ok(_) => {
-                        // Optionally log stdout if needed for debugging
-                        // let output = String::from_utf8_lossy(&buffer[..n]);
-                        // debug!("[Merod stdout] {}", output);
-                    }
-                    Err(_) => break, // Error reading
-                }
-            }
-        });
-    }
-    
-    if let Some(mut stderr_handle) = stderr {
-        tokio::spawn(async move {
-            use tokio::io::AsyncReadExt;
-            let mut buffer = [0u8; 1024];
-            loop {
-                match stderr_handle.read(&mut buffer).await {
-                    Ok(0) => break, // EOF
-                    Ok(_) => {
-                        // Optionally log stderr if needed for debugging
-                        // let output = String::from_utf8_lossy(&buffer[..n]);
-                        // debug!("[Merod stderr] {}", output);
-                    }
-                    Err(_) => break, // Error reading
-                }
-            }
-        });
-    }
     
     // Wait a brief moment to check if process is still alive
     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
@@ -1348,6 +1333,65 @@ async fn detect_running_merod_nodes() -> Result<Vec<serde_json::Value>, String> 
     }
 }
 
+/// Read merod logs for a node. Logs are only available for nodes started by the app.
+#[tauri::command]
+async fn get_merod_logs(
+    node_name: String,
+    home_dir: Option<String>,
+    lines: Option<u32>,
+) -> Result<String, String> {
+    let lines = lines.unwrap_or(500).min(10_000);
+    
+    let home_dir_path = if let Some(dir) = home_dir {
+        let expanded = if dir.starts_with("~") {
+            if let Some(home) = dirs::home_dir() {
+                dir.replacen("~", &home.to_string_lossy(), 1)
+            } else {
+                dir
+            }
+        } else {
+            dir
+        };
+        std::path::PathBuf::from(expanded)
+    } else {
+        dirs::home_dir()
+            .ok_or("Failed to get home directory")?
+            .join(".calimero")
+    };
+    
+    let log_path = home_dir_path.join(&node_name).join("logs").join("merod.log");
+    
+    if !log_path.exists() {
+        return Err(format!(
+            "No log file found for node '{}'. Logs are only available for nodes started by the app.",
+            node_name
+        ));
+    }
+    
+    let content = tokio::fs::read_to_string(&log_path)
+        .await
+        .map_err(|e| format!("Failed to read log file: {}", e))?;
+    
+    let all_lines: Vec<&str> = content.lines().collect();
+    let start = all_lines.len().saturating_sub(lines as usize);
+    let last_lines = &all_lines[start..];
+    
+    Ok(last_lines.join("\n"))
+}
+
+#[tauri::command]
+async fn set_tray_icon_connected(connected: bool, app_handle: tauri::AppHandle) -> Result<(), String> {
+    let icon_bytes: Vec<u8> = if connected {
+        include_bytes!("../icons/tray-icon-connected.png").to_vec()
+    } else {
+        include_bytes!("../icons/tray-icon.png").to_vec()
+    };
+    app_handle
+        .tray_handle()
+        .set_icon(tauri::Icon::Raw(icon_bytes))
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 async fn pick_directory(default_path: Option<String>) -> Result<Option<String>, String> {
     use tauri::api::dialog::blocking::FileDialogBuilder;
@@ -1400,9 +1444,63 @@ fn main() {
             }
         })
         .init();
+
+    // System tray with context menu
+    let show = CustomMenuItem::new("show".to_string(), "Show Calimero");
+    let quit = CustomMenuItem::new("quit".to_string(), "Quit");
+    let tray_menu = SystemTrayMenu::new()
+        .add_item(show)
+        .add_item(quit);
+    let system_tray = SystemTray::new().with_menu(tray_menu);
     
     tauri::Builder::default()
+        .system_tray(system_tray)
+        .on_system_tray_event(|app, event| {
+            match event {
+                SystemTrayEvent::LeftClick { .. } => {
+                    if let Some(window) = app.get_window("main") {
+                        let _ = window.show();
+                        let _ = window.set_focus();
+                    }
+                }
+                SystemTrayEvent::MenuItemClick { id, .. } => {
+                    match id.as_str() {
+                        "show" => {
+                            if let Some(window) = app.get_window("main") {
+                                let _ = window.show();
+                                let _ = window.set_focus();
+                            }
+                        }
+                        "quit" => {
+                            std::process::exit(0);
+                        }
+                        _ => {}
+                    }
+                }
+                _ => {}
+            }
+        })
+        .on_window_event(|event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event.event() {
+                // Only minimize to tray for main window; close child windows normally
+                if event.window().label() == "main" {
+                    event.window().hide().unwrap();
+                    api.prevent_close();
+                }
+            }
+        })
         .setup(|app| {
+            #[cfg(feature = "autostart")]
+            {
+                let _ = app.handle().plugin(
+                    tauri_plugin_autostart::init(
+                        tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+                        None,
+                    ),
+                );
+            }
+
+
             // Enable devtools for main window based on TAURI_OPEN_DEVTOOLS env var
             // IMPORTANT: Release builds NEVER enable devtools, even if env var is set
             // Debug builds also default to false - only open if explicitly requested
@@ -1446,7 +1544,9 @@ fn main() {
             check_merod_health,
             pick_directory,
             init_merod_node,
-            detect_running_merod_nodes
+            detect_running_merod_nodes,
+            get_merod_logs,
+            set_tray_icon_connected
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -47,11 +47,99 @@
   box-shadow: var(--shadow-md);
 }
 
-.node-management-card h2 {
-  margin: 0 0 24px 0;
-  font-size: 20px;
+.node-management-card h2,
+.node-management-card h3 {
+  margin: 0 0 20px 0;
+  font-size: 18px;
   font-weight: 600;
   color: var(--text-primary);
+}
+
+.node-section {
+  margin-bottom: 32px;
+}
+
+.node-section-title {
+  margin: 0 0 8px 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.node-section-desc {
+  margin: 0 0 16px 0;
+  font-size: 14px;
+  color: var(--text-secondary);
+}
+
+.node-card-title {
+  font-size: 16px !important;
+  margin-bottom: 16px !important;
+}
+
+.node-status-cards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 16px 0;
+}
+
+.node-status-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  min-width: 140px;
+}
+
+.node-status-card.running {
+  border-color: var(--success);
+  background: rgba(52, 211, 153, 0.08);
+}
+
+.node-status-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.node-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--text-tertiary);
+}
+
+.node-status-card.running .node-status-dot {
+  background: var(--success);
+  box-shadow: 0 0 0 2px rgba(52, 211, 153, 0.3);
+}
+
+.node-status-name {
+  font-weight: 500;
+  color: var(--text-primary);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.node-status-badge {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  background: var(--bg-secondary);
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+.node-status-card.running .node-status-badge {
+  color: var(--success);
+  background: rgba(52, 211, 153, 0.15);
 }
 
 .form-field {
@@ -206,3 +294,4 @@
   background: var(--bg-tertiary);
   border-color: var(--border-hover);
 }
+

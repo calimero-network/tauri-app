@@ -1,13 +1,14 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { checkOnboardingState, getOnboardingMessage, type OnboardingState } from "../utils/onboarding";
 import { apiClient, setAccessToken, setRefreshToken } from "@calimero-network/mero-react";
-import { initMerodNode, startMerod } from "../utils/merod";
+import { initMerodNode, startMerod, listMerodNodes, detectRunningMerodNodes } from "../utils/merod";
 import { invoke } from "@tauri-apps/api/tauri";
 import { saveSettings, getSettings } from "../utils/settings";
 import { fetchAppsFromAllRegistries, fetchAppManifest, type AppSummary } from "../utils/registry";
 import { useToast } from "../contexts/ToastContext";
 import { useTheme } from "../contexts/ThemeContext";
 import { ArrowLeft, ArrowRight, Check, Package, Download, CheckCircle2, ChevronDown, ChevronUp, Search, AlertTriangle } from "lucide-react";
+import { ScrollHint } from "../components/ScrollHint";
 import calimeroLogo from "../assets/calimero-logo.svg";
 import bs58 from "bs58";
 import "./Onboarding.css";
@@ -27,44 +28,64 @@ interface UsernamePasswordFormProps {
   loading: boolean;
 }
 
+// Username validation: alphanumeric + underscore only, no spaces
+const USERNAME_REGEX = /^[a-zA-Z0-9_]+$/;
+const MIN_PASSWORD_LENGTH = 8;
+
+function validateUsername(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return 'Username is required';
+  if (value !== trimmed) return 'Username cannot contain leading or trailing spaces';
+  if (/\s/.test(value)) return 'Username cannot contain spaces';
+  if (!USERNAME_REGEX.test(trimmed)) return 'Username can only contain letters, numbers, and underscores';
+  return null;
+}
+
+function validatePassword(value: string): string | null {
+  if (!value) return 'Password is required';
+  if (value.length < MIN_PASSWORD_LENGTH) return `Password must be at least ${MIN_PASSWORD_LENGTH} characters`;
+  return null;
+}
+
 // Username/Password Form Component - defined outside to prevent re-creation on each render
 const UsernamePasswordForm: React.FC<UsernamePasswordFormProps> = ({ onSuccess, onError, loading: parentLoading }) => {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [usernameError, setUsernameError] = useState<string | null>(null);
+  const [passwordError, setPasswordError] = useState<string | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    setUsernameError(null);
+    setPasswordError(null);
 
-    // Basic validation
-    if (!username.trim()) {
-      setError('Username is required');
+    const userErr = validateUsername(username);
+    const passErr = validatePassword(password);
+    if (userErr) {
+      setUsernameError(userErr);
+      return;
+    }
+    if (passErr) {
+      setPasswordError(passErr);
       return;
     }
 
-    if (!password.trim()) {
-      setError('Password is required');
-      return;
-    }
-
-    if (password.length < 1) {
-      setError('Password must be at least 1 character long');
-      return;
-    }
+    const trimmedUsername = username.trim();
 
     try {
       setLoading(true);
 
       const tokenPayload = {
         auth_method: 'user_password',
-        public_key: username.trim(), // Use username as public key for user_password provider
+        public_key: trimmedUsername, // Use username as public key for user_password provider
         client_name: 'calimero-desktop',
         timestamp: Date.now(),
         permissions: [],
         provider_data: {
-          username: username.trim(),
+          username: trimmedUsername,
           password: password
         }
       };
@@ -97,6 +118,8 @@ const UsernamePasswordForm: React.FC<UsernamePasswordFormProps> = ({ onSuccess, 
 
   const isLoading = loading || parentLoading;
 
+  const isValid = !validateUsername(username) && !validatePassword(password);
+
   return (
     <form onSubmit={handleSubmit} className="username-password-form">
       <div className="form-group">
@@ -105,15 +128,24 @@ const UsernamePasswordForm: React.FC<UsernamePasswordFormProps> = ({ onSuccess, 
           id="username"
           type="text"
           value={username}
-          onChange={(e) => setUsername(e.target.value)}
-          placeholder="Enter your username"
+          onChange={(e) => {
+            setUsername(e.target.value);
+            setUsernameError(null);
+          }}
+          onBlur={() => setUsernameError(validateUsername(username))}
+          placeholder="Letters, numbers, underscores only"
           disabled={isLoading}
           autoComplete="off"
           autoCapitalize="none"
           autoCorrect="off"
           spellCheck="false"
           required
+          aria-invalid={!!usernameError}
+          aria-describedby={usernameError ? 'username-error' : undefined}
         />
+        {usernameError && (
+          <p id="username-error" className="field-error">{usernameError}</p>
+        )}
       </div>
 
       <div className="form-group">
@@ -122,15 +154,24 @@ const UsernamePasswordForm: React.FC<UsernamePasswordFormProps> = ({ onSuccess, 
           id="password"
           type="password"
           value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          placeholder="Enter your password"
+          onChange={(e) => {
+            setPassword(e.target.value);
+            setPasswordError(null);
+          }}
+          onBlur={() => setPasswordError(validatePassword(password))}
+          placeholder={`At least ${MIN_PASSWORD_LENGTH} characters`}
           disabled={isLoading}
           autoComplete="off"
           autoCapitalize="none"
           autoCorrect="off"
           spellCheck="false"
           required
+          aria-invalid={!!passwordError}
+          aria-describedby={passwordError ? 'password-error' : undefined}
         />
+        {passwordError && (
+          <p id="password-error" className="field-error">{passwordError}</p>
+        )}
       </div>
 
       {error && (
@@ -143,7 +184,7 @@ const UsernamePasswordForm: React.FC<UsernamePasswordFormProps> = ({ onSuccess, 
         <button
           type="submit"
           className="button button-primary"
-          disabled={isLoading || !username.trim() || !password.trim()}
+          disabled={isLoading || !isValid}
         >
           {isLoading ? 'Signing In...' : 'Sign In'}
         </button>
@@ -212,6 +253,12 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
       const [nodeStarted, setNodeStarted] = useState(false);
       const [showAdvancedOptions, setShowAdvancedOptions] = useState(false);
       const [loginLoading, setLoginLoading] = useState(false);
+  const [existingNodes, setExistingNodes] = useState<string[]>([]);
+  const [useExistingNode, setUseExistingNode] = useState<string | null>(null);
+  const [loadingExistingNodes, setLoadingExistingNodes] = useState(false);
+  // 'choose' = show path selection, 'use-existing' = minimal form, 'create-new' = full form
+  const [nodeSetupMode, setNodeSetupMode] = useState<'choose' | 'use-existing' | 'create-new'>('choose');
+  const stepContainerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     async function loadState() {
@@ -227,6 +274,66 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
     }
     loadState();
   }, []);
+
+  // Load existing nodes when on node-setup step - auto-continue if found (skip auth)
+  useEffect(() => {
+    if (currentStep !== 'node-setup' || creatingNode || nodeCreated) return;
+    
+    async function loadAndContinueIfExisting() {
+      setLoadingExistingNodes(true);
+      try {
+        const nodes = await listMerodNodes(dataDir);
+        setExistingNodes(nodes);
+        
+        if (nodes.length > 0) {
+          const nodeToUse = nodes[0];
+          setUseExistingNode(nodeToUse);
+          setCreatingNode(true);
+          try {
+            const running = await detectRunningMerodNodes();
+            const alreadyRunning = running.find(n => n.node_name === nodeToUse);
+            
+            if (alreadyRunning) {
+              saveSettings({
+                ...getSettings(),
+                nodeUrl: `http://localhost:${alreadyRunning.port}`,
+                embeddedNodeDataDir: dataDir,
+                embeddedNodeName: nodeToUse,
+                embeddedNodePort: alreadyRunning.port,
+              });
+            } else {
+              await startMerod(serverPort, swarmPort, dataDir, nodeToUse);
+              saveSettings({
+                ...getSettings(),
+                nodeUrl: `http://localhost:${serverPort}`,
+                embeddedNodeDataDir: dataDir,
+                embeddedNodeName: nodeToUse,
+                embeddedNodePort: serverPort,
+              });
+            }
+            setTheme('dark');
+            onComplete();
+            return;
+          } catch (err) {
+            console.error('Failed to use existing node:', err);
+            setNodeError(err instanceof Error ? err.message : 'Failed to start node');
+            setNodeSetupMode('choose');
+          }
+          setCreatingNode(false);
+          setLoadingExistingNodes(false);
+        } else {
+          setNodeSetupMode('create-new');
+          setLoadingExistingNodes(false);
+        }
+      } catch (e) {
+        console.warn('Could not list existing nodes:', e);
+        setExistingNodes([]);
+        setNodeSetupMode('create-new');
+        setLoadingExistingNodes(false);
+      }
+    }
+    loadAndContinueIfExisting();
+  }, [currentStep, dataDir, creatingNode, nodeCreated, onComplete, setTheme]);
 
   // Disable autocomplete and autocapitalize on login form inputs
   useEffect(() => {
@@ -269,8 +376,9 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
   };
 
   const handleCreateNode = async () => {
-    if (!nodeName.trim()) {
-      setNodeError("Please enter a node name");
+    const targetNodeName = useExistingNode || nodeName.trim();
+    if (!targetNodeName) {
+      setNodeError(useExistingNode ? "Please select a node" : "Please enter a node name");
       return;
     }
 
@@ -278,44 +386,82 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
     setNodeError(null);
     
     try {
-      console.log("Starting node creation...");
-      // Create the node
-      console.log("Initializing merod node...");
-      await initMerodNode(nodeName.trim(), dataDir);
-      console.log("Node initialized successfully");
-      setNodeCreated(true);
-      
-      // Start the node
-      console.log("Starting merod node...");
-      await startMerod(serverPort, swarmPort, dataDir, nodeName.trim());
-      console.log("Node started successfully");
-      setNodeStarted(true);
-      
-      // Save settings with the new node URL
-      const nodeUrl = `http://localhost:${serverPort}`;
-      saveSettings({
-        ...getSettings(),
-        nodeUrl,
-        embeddedNodeDataDir: dataDir,
-        embeddedNodeName: nodeName.trim(),
-        embeddedNodePort: serverPort,
-      });
-      
-      // Wait a moment for node to be ready, then move to login
-      setTimeout(async () => {
-        try {
-          const onboardingState = await checkOnboardingState();
-          setState(onboardingState);
-          // Automatically advance to login step
-          setCurrentStep('login');
-        } catch (err) {
-          console.error("Failed to check onboarding state:", err);
-          // Still advance to login even if check fails
-          setCurrentStep('login');
+      const advanceToLogin = () => {
+        setTimeout(async () => {
+          try {
+            const onboardingState = await checkOnboardingState();
+            setState(onboardingState);
+            setCurrentStep('login');
+          } catch (err) {
+            console.error("Failed to check onboarding state:", err);
+            setCurrentStep('login');
+          }
+        }, 2000);
+      };
+
+      if (useExistingNode) {
+        // Using existing node - check if already running
+        const running = await detectRunningMerodNodes();
+        const alreadyRunning = running.find(n => n.node_name === useExistingNode);
+        
+        if (alreadyRunning) {
+          setNodeCreated(true);
+          setNodeStarted(true);
+          const nodeUrl = `http://localhost:${alreadyRunning.port}`;
+          saveSettings({
+            ...getSettings(),
+            nodeUrl,
+            embeddedNodeDataDir: dataDir,
+            embeddedNodeName: useExistingNode,
+            embeddedNodePort: alreadyRunning.port,
+          });
+          advanceToLogin();
+          return;
         }
-      }, 2000);
+        
+        // Start the existing node
+        console.log("Starting existing node:", useExistingNode);
+        await startMerod(serverPort, swarmPort, dataDir, useExistingNode);
+        setNodeCreated(true);
+        setNodeStarted(true);
+        const nodeUrl = `http://localhost:${serverPort}`;
+        saveSettings({
+          ...getSettings(),
+          nodeUrl,
+          embeddedNodeDataDir: dataDir,
+          embeddedNodeName: useExistingNode,
+          embeddedNodePort: serverPort,
+        });
+        advanceToLogin();
+      } else {
+        // Create new node
+        try {
+          await initMerodNode(targetNodeName, dataDir);
+        } catch (initError: any) {
+          const msg = initError?.message || initError?.toString() || "";
+          if (msg.toLowerCase().includes("exist") || msg.toLowerCase().includes("already")) {
+            setNodeError(`Node "${targetNodeName}" already exists. Choose "Use existing node" above or pick a different name.`);
+          } else {
+            throw initError;
+          }
+          setCreatingNode(false);
+          return;
+        }
+        
+        await startMerod(serverPort, swarmPort, dataDir, targetNodeName);
+        setNodeCreated(true);
+        setNodeStarted(true);
+        saveSettings({
+          ...getSettings(),
+          nodeUrl: `http://localhost:${serverPort}`,
+          embeddedNodeDataDir: dataDir,
+          embeddedNodeName: targetNodeName,
+          embeddedNodePort: serverPort,
+        });
+        advanceToLogin();
+      }
     } catch (error: any) {
-      console.error("Failed to create node:", error);
+      console.error("Failed to create/start node:", error);
       const errorMessage = error?.message || error?.toString() || "Failed to create node";
       setNodeError(errorMessage);
       setCreatingNode(false);
@@ -565,7 +711,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
     return (
       <div className="onboarding-page">
         <ProgressIndicator />
-        <div className="onboarding-step-container">
+        <div ref={stepContainerRef} className="onboarding-step-container">
           <div className="step-content">
             <div className="step-logo-wrapper">
               <img src={calimeroLogo} alt="Calimero" className="calimero-logo" />
@@ -585,6 +731,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
               <ArrowRight size={18} />
             </button>
           </div>
+          <ScrollHint containerRef={stepContainerRef} />
         </div>
       </div>
     );
@@ -595,7 +742,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
     return (
       <div className="onboarding-page">
         <ProgressIndicator />
-        <div className="onboarding-step-container">
+        <div ref={stepContainerRef} className="onboarding-step-container">
           <button 
             onClick={() => setCurrentStep('welcome')} 
             className="step-back-button"
@@ -640,6 +787,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
               </button>
             </div>
           </div>
+          <ScrollHint containerRef={stepContainerRef} />
         </div>
       </div>
     );
@@ -647,12 +795,19 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
 
   // Node setup step
   if (currentStep === 'node-setup') {
+    const showChoice = !loadingExistingNodes && existingNodes.length > 0 && nodeSetupMode === 'choose';
+    const showUseExisting = nodeSetupMode === 'use-existing';
+    const showCreateNew = nodeSetupMode === 'create-new';
+
     return (
       <div className="onboarding-page">
         <ProgressIndicator />
-        <div className="onboarding-step-container">
+        <div ref={stepContainerRef} className="onboarding-step-container">
           <button 
-            onClick={() => setCurrentStep('what-is')} 
+            onClick={() => {
+              setCurrentStep('what-is');
+              if (nodeSetupMode !== 'choose') setNodeSetupMode('choose');
+            }} 
             className="step-back-button"
             aria-label="Go back"
           >
@@ -660,9 +815,6 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
           </button>
           <div className="step-content">
             <h1 className="step-title">Set Up Your Node</h1>
-            <p className="step-description">
-              Create your first Calimero node to get started. This will store your data and run applications.
-            </p>
 
             {nodeCreated && nodeStarted && (
               <div className="step-message step-message-success">
@@ -677,7 +829,118 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
               </div>
             )}
 
+            {(loadingExistingNodes || (creatingNode && existingNodes.length > 0)) && (
+              <p className="step-description">
+                {creatingNode && existingNodes.length > 0
+                  ? 'Using your existing node...'
+                  : 'Checking for existing nodes. If found, we\'ll continue automatically.'}
+              </p>
+            )}
+
+            {/* Choice: Use existing vs Create new */}
+            {showChoice && (
+              <>
+                <p className="step-description">
+                  We found existing node(s) in {dataDir}. Choose how to continue:
+                </p>
+                <div className="node-setup-choice-cards">
+                  <button
+                    type="button"
+                    className="node-setup-choice-card"
+                    onClick={() => setNodeSetupMode('use-existing')}
+                  >
+                    <strong>Use existing node</strong>
+                    <p>Start one of your existing nodes ({existingNodes.length} found)</p>
+                  </button>
+                  <button
+                    type="button"
+                    className="node-setup-choice-card"
+                    onClick={() => setNodeSetupMode('create-new')}
+                  >
+                    <strong>Create new node</strong>
+                    <p>Set up a fresh node with custom configuration</p>
+                  </button>
+                </div>
+              </>
+            )}
+
+            {/* Use existing: minimal form */}
+            {showUseExisting && (
+              <div className="step-form">
+                <p className="step-description" style={{ marginBottom: '20px' }}>
+                  Select the node to start and continue.
+                </p>
+                <div className="form-group">
+                  <label htmlFor="data-dir">Data Directory</label>
+                  <div className="input-group">
+                    <input
+                      id="data-dir"
+                      type="text"
+                      value={dataDir}
+                      onChange={(e) => setDataDir(e.target.value)}
+                      placeholder="~/.calimero"
+                      disabled={creatingNode || nodeCreated}
+                    />
+                    <button 
+                      onClick={handlePickDataDir} 
+                      className="button button-secondary"
+                      disabled={creatingNode || nodeCreated}
+                    >
+                      Browse
+                    </button>
+                  </div>
+                </div>
+                <div className="form-group">
+                  <label>Select node</label>
+                  <select
+                    value={useExistingNode || ''}
+                    onChange={(e) => setUseExistingNode(e.target.value || null)}
+                    disabled={creatingNode || nodeCreated}
+                    className="existing-node-select"
+                  >
+                    {existingNodes.map(n => (
+                      <option key={n} value={n}>{n}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="step-actions" style={{ marginTop: '24px', justifyContent: 'flex-start' }}>
+                  <button
+                    type="button"
+                    onClick={() => setNodeSetupMode('choose')}
+                    className="step-button step-button-secondary"
+                  >
+                    <ArrowLeft size={18} />
+                    Back
+                  </button>
+                  <button
+                    onClick={handleCreateNode}
+                    className="step-button step-button-primary"
+                    disabled={creatingNode || nodeCreated || !useExistingNode}
+                  >
+                    {creatingNode ? 'Starting Node...' : 'Start Node & Continue'}
+                    {!creatingNode && !nodeCreated && <ArrowRight size={18} />}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Create new: full form */}
+            {showCreateNew && (
             <div className="step-form">
+              <p className="step-description" style={{ marginBottom: '20px' }}>
+                Create your first Calimero node. This will store your data and run applications.
+              </p>
+              {existingNodes.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setNodeSetupMode('choose')}
+                  className="link-button"
+                  style={{ marginBottom: '16px' }}
+                >
+                  ← Use existing node instead
+                </button>
+              )}
+
               <div className="form-group">
                 <label htmlFor="data-dir">Data Directory</label>
                 <div className="input-group">
@@ -762,18 +1025,20 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
                 )}
               </div>
 
+              <div className="step-actions">
+                <button
+                  onClick={handleCreateNode}
+                  className="step-button step-button-primary"
+                  disabled={creatingNode || nodeCreated || !nodeName.trim()}
+                >
+                  {creatingNode ? 'Creating Node...' : nodeCreated && nodeStarted ? 'Setting Up...' : 'Create Node & Continue'}
+                  {!creatingNode && !nodeCreated && <ArrowRight size={18} />}
+                </button>
+              </div>
             </div>
+            )}
           </div>
-          <div className="step-actions">
-            <button
-              onClick={handleCreateNode}
-              className="step-button step-button-primary"
-              disabled={creatingNode || nodeCreated || !nodeName.trim()}
-            >
-              {creatingNode ? 'Creating Node...' : nodeCreated && nodeStarted ? 'Setting Up...' : 'Create Node & Continue'}
-              {!creatingNode && !nodeCreated && <ArrowRight size={18} />}
-            </button>
-          </div>
+          <ScrollHint containerRef={stepContainerRef} />
         </div>
       </div>
     );
@@ -784,7 +1049,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
       return (
         <div className="onboarding-page">
         <ProgressIndicator />
-          <div className="onboarding-step-container">
+          <div ref={stepContainerRef} className="onboarding-step-container">
             <div className="step-content">
               <h1 className="step-title">Set Up Authentication</h1>
               <p className="step-description">
@@ -817,6 +1082,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
                 />
               </div>
             </div>
+            <ScrollHint containerRef={stepContainerRef} />
           </div>
         </div>
       );
@@ -827,7 +1093,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
     return (
       <div className="onboarding-page">
         <ProgressIndicator />
-        <div className="onboarding-step-container">
+        <div ref={stepContainerRef} className="onboarding-step-container">
           <div className="step-content">
             <h1 className="step-title">Install Your First App</h1>
             <p className="step-description">
@@ -931,6 +1197,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
               </>
             )}
           </div>
+          <ScrollHint containerRef={stepContainerRef} />
         </div>
       </div>
     );

@@ -26,6 +26,33 @@ export interface TokenData {
 }
 
 /**
+ * Parse the expiry time from a JWT token's exp claim
+ * @param token - The JWT access token
+ * @returns The expiry time in milliseconds, or null if parsing fails
+ */
+export function parseJwtExpiry(token: string): number | null {
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) {
+      return null;
+    }
+    // Decode the payload (second part) using base64url decoding
+    const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    const payload = JSON.parse(atob(base64));
+    if (typeof payload.exp === 'number') {
+      // JWT exp is in seconds, convert to milliseconds
+      return payload.exp * 1000;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/** Default token expiry duration (24 hours in milliseconds) */
+const DEFAULT_TOKEN_EXPIRY_MS = 24 * 60 * 60 * 1000;
+
+/**
  * Main MeroJs SDK class that manages all API clients and authentication
  */
 export class MeroJs {
@@ -119,10 +146,12 @@ export class MeroJs {
 
       const response = await this.authClient.generateTokens(requestBody);
 
+      // Parse actual expiry from JWT, fall back to default 24 hours if not available
+      const jwtExpiry = parseJwtExpiry(response.data.access_token);
       this.tokenData = {
         access_token: response.data.access_token,
         refresh_token: response.data.refresh_token,
-        expires_at: Date.now() + 24 * 60 * 60 * 1000, // Default to 24 hours
+        expires_at: jwtExpiry ?? Date.now() + DEFAULT_TOKEN_EXPIRY_MS,
       };
 
       return this.tokenData;
@@ -183,10 +212,12 @@ export class MeroJs {
         refresh_token: this.tokenData!.refresh_token,
       });
 
+      // Parse actual expiry from JWT, fall back to default 24 hours if not available
+      const jwtExpiry = parseJwtExpiry(response.data.access_token);
       this.tokenData = {
         access_token: response.data.access_token,
         refresh_token: response.data.refresh_token,
-        expires_at: Date.now() + 24 * 60 * 60 * 1000, // Default to 24 hours
+        expires_at: jwtExpiry ?? Date.now() + DEFAULT_TOKEN_EXPIRY_MS,
       };
 
       return this.tokenData;

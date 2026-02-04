@@ -1843,7 +1843,7 @@ fn secure_delete_token(key: String) -> Result<(), String> {
     let entry = keyring::Entry::new(KEYRING_SERVICE, &key)
         .map_err(|e| format!("Failed to create keyring entry: {}", e))?;
 
-    match entry.delete_credential() {
+    match entry.delete_password() {
         Ok(()) => {
             info!("[SecureStorage] Deleted token for key: {}", key);
             Ok(())

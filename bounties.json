@@ -1,0 +1,492 @@
+{
+  "bounties": [
+    {
+      "title": "Critical: Remove dangerousRemoteDomainIpcAccess wildcard and tighten IPC scope",
+      "description": "In tauri.conf.json, dangerousRemoteDomainIpcAccess is configured with domain: \"*\" and enableTauriAPI: true, allowing ANY domain to access ALL Tauri IPC commands including process management and filesystem operations. This is a severe security vulnerability that could allow malicious websites loaded in app windows to execute arbitrary code. Replace with explicit domain whitelist for known app domains, and implement per-window IPC scope restrictions in create_app_window.",
+      "pathHint": "apps/desktop/src-tauri/tauri.conf.json",
+      "estimatedMinutes": 60,
+      "category": "security",
+      "severity": "critical"
+    },
+    {
+      "title": "Critical: Remove unsafe-inline and unsafe-eval from CSP policy",
+      "description": "The CSP in tauri.conf.json includes 'unsafe-inline' and 'unsafe-eval' in script-src, completely negating XSS protection. Combined with dangerousDisableAssetCspModification: true, this allows arbitrary script execution. Refactor to use nonces or hashes for inline scripts, remove unsafe-eval by eliminating eval() usage, and enable proper asset CSP modification. This requires auditing all inline scripts in the frontend.",
+      "pathHint": "apps/desktop/src-tauri/tauri.conf.json",
+      "estimatedMinutes": 90,
+      "category": "security",
+      "severity": "critical"
+    },
+    {
+      "title": "High: Secure token storage using platform keychain instead of localStorage",
+      "description": "In token-storage.ts, JWT access and refresh tokens are stored in plaintext localStorage, which is accessible to any JavaScript running in the context and persists across sessions without encryption. Implement secure token storage using tauri-plugin-stronghold or the system keychain (Keychain on macOS, Credential Manager on Windows, libsecret on Linux) to protect sensitive authentication tokens.",
+      "pathHint": "packages/mero-react/src/client/token-storage.ts",
+      "estimatedMinutes": 75,
+      "category": "security",
+      "severity": "high"
+    },
+    {
+      "title": "High: Prevent command injection in create_desktop_shortcut PowerShell execution",
+      "description": "In main.rs create_desktop_shortcut, user-provided app_name and frontend_url are interpolated into PowerShell commands with only basic escaping. Malicious inputs could escape the escaping (e.g., using backticks or special Unicode chars). Use PowerShell's -EncodedCommand with base64 encoding, or better yet, use Rust's COM bindings to create shortcuts directly without shell execution. Similar issues exist in bash scripts for macOS/Linux.",
+      "pathHint": "apps/desktop/src-tauri/src/main.rs",
+      "estimatedMinutes": 60,
+      "category": "security",
+      "severity": "high"
+    },
+    {
+      "title": "High: Add input validation for node names to prevent path traversal and injection",
+      "description": "In start_merod, init_merod_node, and related functions, node_name is used directly in filesystem paths and command arguments without validation. A malicious node name like '../../../etc' or 'node; rm -rf /' could cause path traversal or command injection. Add strict validation: alphanumeric + hyphen/underscore only, length limit, no path separators, and validate against a whitelist pattern.",
+      "pathHint": "apps/desktop/src-tauri/src/main.rs",
+      "estimatedMinutes": 45,
+      "category": "security",
+      "severity": "high"
+    },
+    {
+      "title": "High: Fix potential panic while holding Mutex lock in merod state management",
+      "description": "Multiple functions in main.rs call .unwrap() on child.id() and other operations while holding merod_state.lock().unwrap(). If any of these panic, the Mutex becomes poisoned, breaking all subsequent merod operations until app restart. Refactor to use proper error handling, release locks before potentially-panicking operations, and use try_lock() where appropriate with timeout-based retry.",
+      "pathHint": "apps/desktop/src-tauri/src/main.rs",
+      "estimatedMinutes": 60,
+      "category": "concurrency",
+      "severity": "high"
+    },
+    {
+      "title": "High: Implement proper token expiry from JWT claims instead of hardcoded 24h",
+      "description": "In mero-js.ts, token expiry is hardcoded to 24 hours (expires_at: Date.now() + 24 * 60 * 60 * 1000) regardless of actual JWT expiration. This can cause tokens to be considered valid when they're expired, or refreshed unnecessarily. Parse the actual exp claim from the JWT access_token to determine real expiry, and handle the case where exp is missing gracefully.",
+      "pathHint": "packages/mero-js/src/mero-js.ts",
+      "estimatedMinutes": 45,
+      "category": "bug",
+      "severity": "high"
+    },
+    {
+      "title": "High: Add rate limiting and backoff for proxy_http_request to prevent DoS",
+      "description": "The proxy_http_request Tauri command has no rate limiting, allowing a malicious page to flood the local node with requests. While validate_allowed_url restricts targets, an attacker could still DoS the node or exhaust system resources. Implement per-window rate limiting (e.g., 100 requests/second), add request queuing with backpressure, and track request counts per window label.",
+      "pathHint": "apps/desktop/src-tauri/src/main.rs",
+      "estimatedMinutes": 60,
+      "category": "security",
+      "severity": "high"
+    },
+    {
+      "title": "Fix SSRF via URL validation bypass using IPv6 addresses",
+      "description": "validate_allowed_url in main.rs checks for 'localhost' and '127.0.0.1' but doesn't properly handle IPv6 equivalents like [::1], 0:0:0:0:0:0:0:1, or IPv4-mapped IPv6 addresses like [::ffff:127.0.0.1]. Add comprehensive IP address validation that resolves and checks the actual target address, and consider using a URL-safe allowlist approach with DNS resolution checks.",
+      "pathHint": "apps/desktop/src-tauri/src/main.rs",
+      "estimatedMinutes": 45,
+      "category": "security",
+      "severity": "high"
+    },
+    {
+      "title": "Remove sensitive debug logging that may leak tokens and passwords",
+      "description": "Multiple places log potentially sensitive data: proxy_http_request logs Authorization header prefix, Onboarding.tsx sends password in provider_data that gets logged, client.ts has multiple console.log statements with full API responses. Audit and remove all console.log statements in production code, implement structured logging with automatic secret redaction, and ensure tokens are never logged even partially.",
+      "pathHint": "apps/desktop/src-tauri/src/main.rs",
+      "estimatedMinutes": 60,
+      "category": "security",
+      "severity": "high"
+    },
+    {
+      "title": "Implement graceful shutdown with in-flight request draining",
+      "description": "When the app closes via system tray 'quit' (std::process::exit(0) in main.rs), running merod processes are orphaned and in-flight HTTP requests are dropped. Implement proper shutdown: send SIGTERM to managed merod processes, wait for graceful termination with timeout, drain any pending proxy requests, and save app state before exit.",
+      "pathHint": "apps/desktop/src-tauri/src/main.rs",
+      "estimatedMinutes": 75,
+      "category": "design-flaw",
+      "severity": "high"
+    },
+    {
+      "title": "Fix race condition in merod process state management",
+      "description": "In start_merod, there's a TOCTOU race between checking existing_pid, stopping the old process, and starting a new one. Another call could start a process between these operations. The monitoring task also accesses merod_state without coordination. Refactor to use a single atomic operation pattern, possibly with a state machine (Starting, Running, Stopping, Stopped) and proper synchronization.",
+      "pathHint": "apps/desktop/src-tauri/src/main.rs",
+      "estimatedMinutes": 60,
+      "category": "concurrency",
+      "severity": "high"
+    },
+    {
+      "title": "Introduce typed error enum for Tauri commands instead of String errors",
+      "description": "All Tauri commands return Result<T, String> with ad-hoc error messages, making error handling in the frontend inconsistent and error-prone. Define a proper error enum (MerodError, ProxyError, etc.) with structured error codes, implement proper From/Into conversions, and serialize to a consistent JSON format that the frontend can handle programmatically.",
+      "pathHint": "apps/desktop/src-tauri/src/main.rs",
+      "estimatedMinutes": 90,
+      "category": "design-flaw",
+      "severity": "high"
+    },
+    {
+      "title": "Add request timeout configuration and proper AbortSignal handling",
+      "description": "In web-client.ts, AbortSignal is completely disabled in Tauri environments due to HTTP 0 errors. This means requests can hang indefinitely. Investigate the root cause (likely the proxy interception), implement proper signal handling in the proxy script, and add configurable timeouts that work correctly in both browser and Tauri contexts.",
+      "pathHint": "packages/mero-js/src/http-client/web-client.ts",
+      "estimatedMinutes": 60,
+      "category": "design-flaw",
+      "severity": "medium"
+    },
+    {
+      "title": "Implement proper cleanup of spawned merod processes on app crash",
+      "description": "If the Tauri app crashes or is force-killed, spawned merod processes continue running as orphans. Implement a cleanup mechanism: write PID files to a known location, add startup cleanup that kills stale processes from previous runs, and consider using process groups or supervisor patterns for better process management.",
+      "pathHint": "apps/desktop/src-tauri/src/main.rs",
+      "estimatedMinutes": 60,
+      "category": "design-flaw",
+      "severity": "medium"
+    },
+    {
+      "title": "Add validation for registry URLs before fetching",
+      "description": "In registry.ts, registry URLs are used directly without validation. A malicious registry URL could point to internal services (SSRF) or use unexpected protocols. Add URL validation: ensure HTTPS only for non-localhost, validate URL format, implement allowlist/blocklist patterns, and add timeout handling for slow/malicious registries.",
+      "pathHint": "apps/desktop/src/utils/registry.ts",
+      "estimatedMinutes": 45,
+      "category": "security",
+      "severity": "medium"
+    },
+    {
+      "title": "Fix inconsistent API response handling across NodeApi methods",
+      "description": "In client.ts NodeApi class, response parsing is inconsistent: listApplications checks for response.data?.apps, response.apps, response.data array, and direct array; getContexts checks different paths. Standardize response handling with a single extraction helper, add proper type guards, and document the expected response formats from the server.",
+      "pathHint": "packages/mero-react/src/client/client.ts",
+      "estimatedMinutes": 45,
+      "category": "design-flaw",
+      "severity": "medium"
+    },
+    {
+      "title": "Add comprehensive test coverage for validate_allowed_url security function",
+      "description": "The validate_allowed_url function is critical for SSRF prevention but tests don't cover all edge cases: IPv6 addresses, URL encoding variations, Unicode normalization attacks, DNS rebinding scenarios, or redirect handling. Add property-based tests using proptest, fuzzing with cargo-fuzz, and explicit test cases for known URL parsing vulnerabilities.",
+      "pathHint": "apps/desktop/src-tauri/src/main.rs",
+      "estimatedMinutes": 75,
+      "category": "tests",
+      "severity": "medium"
+    },
+    {
+      "title": "Extract proxy script into testable module with proper error handling",
+      "description": "proxy_script.js is embedded as a string and lacks error handling - if proxyRequest throws, the catch block falls back to original fetch which will fail with mixed content errors. Extract into a proper TypeScript module, add comprehensive error handling, implement proper logging, and add unit tests for the interception logic.",
+      "pathHint": "apps/desktop/src-tauri/src/proxy_script.js",
+      "estimatedMinutes": 60,
+      "category": "design-flaw",
+      "severity": "medium"
+    },
+    {
+      "title": "Add integration tests for Tauri commands using tauri-driver",
+      "description": "The Rust backend has no integration tests - only unit tests for validate_allowed_url. Critical commands like start_merod, proxy_http_request, and create_desktop_shortcut are untested. Set up tauri-driver based integration tests, mock external dependencies, and add CI workflow to run tests on all platforms.",
+      "pathHint": "apps/desktop/src-tauri",
+      "estimatedMinutes": 90,
+      "category": "tests",
+      "severity": "medium"
+    },
+    {
+      "title": "Implement proper state management instead of module-level apiClient singleton",
+      "description": "In mero-react singleton.ts, the API client is stored as a module-level variable that's set asynchronously via dynamic import. This creates timing issues and makes testing difficult. Refactor to use React Context properly, implement proper initialization lifecycle, and ensure the client is available before any component tries to use it.",
+      "pathHint": "packages/mero-react/src/client/singleton.ts",
+      "estimatedMinutes": 60,
+      "category": "design-flaw",
+      "severity": "medium"
+    },
+    {
+      "title": "Fix memory leak from setInterval in App.tsx connection check",
+      "description": "In App.tsx, useEffect sets up a 5-second interval for checkConnection but the cleanup only runs on unmount. If the component re-renders due to state changes, multiple intervals could accumulate. Ensure proper cleanup, consider using a more robust polling solution like react-query, and add logic to pause polling when the app is backgrounded.",
+      "pathHint": "apps/desktop/src/App.tsx",
+      "estimatedMinutes": 30,
+      "category": "bug",
+      "severity": "medium"
+    },
+    {
+      "title": "Add size limits and depth limits to JSON parsing to prevent DoS",
+      "description": "Multiple places parse JSON from untrusted sources without limits: registry responses, app manifests, and proxy responses. Large or deeply nested JSON could cause memory exhaustion or stack overflow. Add size limits (e.g., 10MB max), depth limits for parsing, and streaming parsers for large responses.",
+      "pathHint": "apps/desktop/src/utils/registry.ts",
+      "estimatedMinutes": 45,
+      "category": "security",
+      "severity": "medium"
+    },
+    {
+      "title": "Implement retry with exponential backoff for merod health checks",
+      "description": "check_merod_health has a simple 5-second timeout but no retry logic. Network glitches or node startup delays can cause false negatives. Implement configurable retry with exponential backoff, jitter, and proper timeout handling. Consider adding a circuit breaker pattern for repeated failures.",
+      "pathHint": "apps/desktop/src-tauri/src/main.rs",
+      "estimatedMinutes": 45,
+      "category": "design-flaw",
+      "severity": "medium"
+    },
+    {
+      "title": "Add proper TypeScript types for all Tauri invoke calls",
+      "description": "Throughout the frontend (merod.ts, appUtils.ts, Settings.tsx, etc.), Tauri invoke calls use generic types or any. Create a centralized type definition file that matches the Rust command signatures, use code generation from Rust types if possible, and add compile-time type checking for all IPC calls.",
+      "pathHint": "apps/desktop/src/utils/merod.ts",
+      "estimatedMinutes": 60,
+      "category": "design-flaw",
+      "severity": "medium"
+    },
+    {
+      "title": "Extract merod process management into separate Rust module",
+      "description": "main.rs is over 2000 lines with merod process management, proxy handling, and window management all mixed together. Extract merod management into a dedicated module with proper error types, separate the proxy logic, and use dependency injection for testability. This improves maintainability and enables proper unit testing.",
+      "pathHint": "apps/desktop/src-tauri/src/main.rs",
+      "estimatedMinutes": 90,
+      "category": "design-flaw",
+      "severity": "medium"
+    },
+    {
+      "title": "Add structured logging with log levels and context",
+      "description": "Current logging uses info!, warn!, debug! without consistent format, context (request IDs, window labels), or structured fields. Implement structured logging with tracing crate, add span-based context for request tracking, configure proper log levels for release vs debug, and add log rotation for merod logs.",
+      "pathHint": "apps/desktop/src-tauri/src/main.rs",
+      "estimatedMinutes": 60,
+      "category": "design-flaw",
+      "severity": "medium"
+    },
+    {
+      "title": "Implement proper error boundaries in React components",
+      "description": "React components throughout the app (App.tsx, Onboarding.tsx, InstalledApps.tsx) have try-catch blocks but no Error Boundary components. Unhandled errors in render methods crash the entire app. Add Error Boundary components with proper fallback UI, implement error reporting, and add recovery mechanisms.",
+      "pathHint": "apps/desktop/src/App.tsx",
+      "estimatedMinutes": 45,
+      "category": "design-flaw",
+      "severity": "medium"
+    },
+    {
+      "title": "Add WASM hash verification for installed applications",
+      "description": "In Onboarding.tsx handleInstallApp, the hash is converted to base58 and passed to installApplication but there's no verification that the downloaded WASM actually matches. The node may or may not verify - this should be explicit. Add client-side hash verification before installation, and display verification status to users.",
+      "pathHint": "apps/desktop/src/pages/Onboarding.tsx",
+      "estimatedMinutes": 45,
+      "category": "security",
+      "severity": "medium"
+    },
+    {
+      "title": "Fix potential XSS in app metadata display",
+      "description": "In InstalledApps.tsx and elsewhere, app metadata from registries (name, description, version) is rendered directly without sanitization. While React escapes by default, there are places using dangerouslySetInnerHTML patterns indirectly. Audit all metadata rendering, add explicit sanitization with DOMPurify, and add CSP to prevent inline script execution.",
+      "pathHint": "apps/desktop/src/pages/InstalledApps.tsx",
+      "estimatedMinutes": 45,
+      "category": "security",
+      "severity": "medium"
+    },
+    {
+      "title": "Add unit tests for mero-react client and token management",
+      "description": "The mero-react client.ts has complex token management, API wrapping, and response transformation logic with zero test coverage. Add comprehensive unit tests mocking the underlying HTTP client, test token refresh flows, test error transformation, and ensure proper handling of all API response variants.",
+      "pathHint": "packages/mero-react/src/client/client.ts",
+      "estimatedMinutes": 75,
+      "category": "tests",
+      "severity": "medium"
+    },
+    {
+      "title": "Implement proper form validation in Settings and NodeManagement",
+      "description": "Settings.tsx and NodeManagement.tsx have form inputs without proper validation - port numbers accept any value, URLs aren't validated, node names aren't checked for invalid characters. Add Zod or yup validation schemas, show validation errors inline, prevent form submission with invalid data.",
+      "pathHint": "apps/desktop/src/pages/Settings.tsx",
+      "estimatedMinutes": 45,
+      "category": "design-flaw",
+      "severity": "medium"
+    },
+    {
+      "title": "Add proper loading states and optimistic updates",
+      "description": "Many operations (loadInstalledApps, handleUninstall, handleCreateNode) set loading=true but don't handle race conditions or provide optimistic updates. If a user clicks multiple times or navigates away, state can become inconsistent. Implement proper request cancellation, optimistic updates with rollback, and debouncing.",
+      "pathHint": "apps/desktop/src/pages/InstalledApps.tsx",
+      "estimatedMinutes": 45,
+      "category": "design-flaw",
+      "severity": "medium"
+    },
+    {
+      "title": "Add e2e tests for onboarding flow",
+      "description": "The onboarding flow in Onboarding.tsx is complex with multiple steps, state persistence, and node creation. There are no e2e tests to verify the flow works correctly. Add Playwright or Cypress tests that verify the complete onboarding flow, including node creation, authentication, and app installation.",
+      "pathHint": "apps/desktop/src/pages/Onboarding.tsx",
+      "estimatedMinutes": 90,
+      "category": "tests",
+      "severity": "medium"
+    },
+    {
+      "title": "Extract reusable form components from page components",
+      "description": "Form patterns (input + label + hint + error) are duplicated across Settings.tsx, NodeManagement.tsx, Onboarding.tsx with slight variations. Extract reusable FormField, FormInput, FormSelect components with consistent styling, validation integration, and accessibility attributes (aria-invalid, aria-describedby).",
+      "pathHint": "apps/desktop/src/components",
+      "estimatedMinutes": 60,
+      "category": "design-flaw",
+      "severity": "low"
+    },
+    {
+      "title": "Add accessibility improvements throughout the app",
+      "description": "Multiple accessibility issues: buttons without accessible names, missing form labels, no keyboard navigation for context menus, color contrast issues in some themes. Add comprehensive ARIA attributes, implement keyboard navigation, run axe-core audits, and fix color contrast to meet WCAG AA standards.",
+      "pathHint": "apps/desktop/src",
+      "estimatedMinutes": 75,
+      "category": "design-flaw",
+      "severity": "low"
+    },
+    {
+      "title": "Add proper TypeScript strict mode and fix type errors",
+      "description": "TypeScript is configured without strict mode in some packages. Multiple uses of 'any' type, missing return types, and loose null checks exist throughout. Enable strict mode in all tsconfig.json files, fix resulting type errors, add explicit return types to all functions, and eliminate 'any' usage.",
+      "pathHint": "packages/mero-js/tsconfig.json",
+      "estimatedMinutes": 75,
+      "category": "design-flaw",
+      "severity": "low"
+    },
+    {
+      "title": "Document API contracts between frontend and Tauri backend",
+      "description": "There's no documentation of the Tauri command interfaces, expected parameters, return types, or error conditions. Add JSDoc/TSDoc comments to all invoke wrappers in merod.ts, appUtils.ts, etc., create a type definition file that's shared or generated, and add integration contract tests.",
+      "pathHint": "apps/desktop/src/utils/merod.ts",
+      "estimatedMinutes": 45,
+      "category": "docs",
+      "severity": "low"
+    },
+    {
+      "title": "Add proper error messages with user-actionable guidance",
+      "description": "Error messages throughout the app are technical (HTTP 401, Network Error, Failed to parse). Replace with user-friendly messages that explain what went wrong and what the user can do. Add error codes for technical debugging while showing friendly messages to users.",
+      "pathHint": "packages/mero-js/src/http-client/web-client.ts",
+      "estimatedMinutes": 60,
+      "category": "design-flaw",
+      "severity": "low"
+    },
+    {
+      "title": "Implement proper date/time handling with timezone support",
+      "description": "Several places use Date.now() or new Date() without timezone consideration. Token expiry comparisons, log timestamps, and signature timestamps may behave incorrectly across timezones. Use a proper date library like date-fns, handle timezone explicitly, and ensure all timestamps are in UTC.",
+      "pathHint": "packages/mero-js/src/mero-js.ts",
+      "estimatedMinutes": 45,
+      "category": "bug",
+      "severity": "low"
+    },
+    {
+      "title": "Add health check polling with adaptive intervals",
+      "description": "App.tsx polls for connection status every 5 seconds regardless of state. When connected, this wastes resources; when disconnected, users wait too long for reconnection detection. Implement adaptive polling: longer intervals when healthy, shorter when recovering, with exponential backoff on failures.",
+      "pathHint": "apps/desktop/src/App.tsx",
+      "estimatedMinutes": 30,
+      "category": "design-flaw",
+      "severity": "low"
+    },
+    {
+      "title": "Remove debug console.log statements from production code",
+      "description": "Multiple files contain console.log with emoji debugging (📦, 🔍, ✅, ❌) that should not be in production: client.ts, InstalledApps.tsx, admin-client.ts, App.tsx. Remove or replace with proper logging infrastructure that can be disabled in production builds.",
+      "pathHint": "packages/mero-react/src/client/client.ts",
+      "estimatedMinutes": 30,
+      "category": "design-flaw",
+      "severity": "low"
+    },
+    {
+      "title": "Add CONTRIBUTING.md with development setup instructions",
+      "description": "The README has basic setup instructions but lacks contributor guidelines: code style, commit conventions, PR process, testing requirements, and architecture overview. Add a comprehensive CONTRIBUTING.md covering all aspects of contributing to the project.",
+      "pathHint": "CONTRIBUTING.md",
+      "estimatedMinutes": 45,
+      "category": "docs",
+      "severity": "low"
+    },
+    {
+      "title": "Create .cursorrules file with project conventions for AI assistance",
+      "description": "The repo lacks .cursorrules or .cursor/rules files that help AI coding assistants understand project conventions. Create rules covering: TypeScript/React patterns, Rust coding style, Tauri IPC patterns, error handling conventions, and testing requirements.",
+      "pathHint": ".cursorrules",
+      "estimatedMinutes": 30,
+      "category": "config",
+      "severity": "low"
+    },
+    {
+      "title": "Add pre-commit hooks for linting and formatting",
+      "description": "No pre-commit hooks exist to enforce code quality before commits. Add husky for git hooks, lint-staged for incremental linting, configure ESLint for TypeScript files, rustfmt check for Rust files, and prevent commits with linting errors.",
+      "pathHint": "package.json",
+      "estimatedMinutes": 30,
+      "category": "config",
+      "severity": "low"
+    },
+    {
+      "title": "Document environment variables and configuration options",
+      "description": "The app uses environment variables (TAURI_OPEN_DEVTOOLS, RUST_LOG, etc.) and settings (nodeUrl, registries, etc.) without centralized documentation. Create a configuration reference document listing all options, their defaults, valid values, and effects.",
+      "pathHint": "docs/CONFIGURATION.md",
+      "estimatedMinutes": 45,
+      "category": "docs",
+      "severity": "low"
+    },
+    {
+      "title": "Add bundle size analysis and optimization",
+      "description": "No bundle analysis is configured for the frontend build. Add rollup-plugin-visualizer or similar to analyze bundle size, identify large dependencies (bs58 is imported just for hash encoding), and implement code splitting for routes.",
+      "pathHint": "apps/desktop/vite.config.ts",
+      "estimatedMinutes": 45,
+      "category": "design-flaw",
+      "severity": "low"
+    },
+    {
+      "title": "Implement consistent date formatting across the app",
+      "description": "Dates and times are formatted inconsistently or not at all. Some places use toISOString(), others use Date.now(). Add a centralized date formatting utility using the user's locale, implement relative time display (5 minutes ago), and ensure consistent formatting throughout.",
+      "pathHint": "apps/desktop/src/utils",
+      "estimatedMinutes": 30,
+      "category": "design-flaw",
+      "severity": "low"
+    },
+    {
+      "title": "Add retry logic for registry API calls",
+      "description": "fetchAppsFromRegistry and fetchAppManifest make single attempts without retry. Network issues cause immediate failure. Implement the withRetry pattern already in mero-js for registry calls, with proper error handling for different failure modes.",
+      "pathHint": "apps/desktop/src/utils/registry.ts",
+      "estimatedMinutes": 30,
+      "category": "design-flaw",
+      "severity": "low"
+    },
+    {
+      "title": "Add proper cleanup in useEffect hooks",
+      "description": "Several useEffect hooks in Onboarding.tsx, App.tsx, and Settings.tsx don't return cleanup functions or don't properly cancel async operations. This can cause state updates on unmounted components. Add proper cleanup with AbortController for fetch calls and clearTimeout/clearInterval.",
+      "pathHint": "apps/desktop/src/pages/Onboarding.tsx",
+      "estimatedMinutes": 45,
+      "category": "bug",
+      "severity": "low"
+    },
+    {
+      "title": "Implement proper keyboard shortcuts and navigation",
+      "description": "The app lacks keyboard shortcuts for common actions (refresh, open settings, navigate between pages). Implement keyboard shortcuts using a library like react-hotkeys-hook, add visual hints for shortcuts, and ensure all actions are keyboard-accessible.",
+      "pathHint": "apps/desktop/src/App.tsx",
+      "estimatedMinutes": 45,
+      "category": "design-flaw",
+      "severity": "low"
+    },
+    {
+      "title": "Add loading skeletons for all async data loading",
+      "description": "SkeletonTable is implemented but not used consistently. Many loading states show simple 'Loading...' text. Add skeleton components for all loading states: app cards, context lists, node status cards, and registry app listings.",
+      "pathHint": "apps/desktop/src/components/Skeleton.tsx",
+      "estimatedMinutes": 45,
+      "category": "design-flaw",
+      "severity": "low"
+    },
+    {
+      "title": "Add proper empty states for all list views",
+      "description": "Empty states are inconsistent - some show helpful messages with actions, others show plain text. Create a reusable EmptyState component with icon, title, description, and optional action button. Apply consistently across InstalledApps, Contexts, Nodes, and Marketplace.",
+      "pathHint": "apps/desktop/src/components",
+      "estimatedMinutes": 30,
+      "category": "design-flaw",
+      "severity": "low"
+    },
+    {
+      "title": "Add CI check for unused dependencies",
+      "description": "No automated check exists for unused dependencies in package.json or Cargo.toml. Add depcheck for npm packages and cargo-udeps for Rust dependencies as CI steps, and remove any identified unused dependencies.",
+      "pathHint": ".github/workflows",
+      "estimatedMinutes": 30,
+      "category": "ci",
+      "severity": "low"
+    },
+    {
+      "title": "Implement proper version display and update notification improvements",
+      "description": "UpdateNotification component checks for updates but the UX could be improved: no release notes display, no progress indicator during download, no rollback option. Enhance to show changelog, download progress, and handle update failures gracefully.",
+      "pathHint": "apps/desktop/src/components/UpdateNotification.tsx",
+      "estimatedMinutes": 45,
+      "category": "design-flaw",
+      "severity": "low"
+    },
+    {
+      "title": "Add proper window state persistence (size, position)",
+      "description": "Window size and position are hardcoded in tauri.conf.json and not persisted between sessions. Implement state persistence using Tauri's window state plugin or localStorage, restore window state on launch, and handle multi-monitor scenarios.",
+      "pathHint": "apps/desktop/src-tauri/tauri.conf.json",
+      "estimatedMinutes": 45,
+      "category": "design-flaw",
+      "severity": "low"
+    },
+    {
+      "title": "Add telemetry opt-in with privacy-respecting defaults",
+      "description": "No telemetry exists to understand how users interact with the app, making it hard to prioritize features and identify issues. Add opt-in telemetry with clear disclosure, privacy-respecting data collection (no PII), and ability to view/export collected data.",
+      "pathHint": "apps/desktop/src/utils",
+      "estimatedMinutes": 60,
+      "category": "design-flaw",
+      "severity": "low"
+    },
+    {
+      "title": "Add proper handling of network offline state",
+      "description": "The app doesn't detect or handle offline state properly - it just shows errors. Add offline detection using navigator.onLine, show appropriate UI when offline, queue operations for retry when online, and sync state on reconnection.",
+      "pathHint": "apps/desktop/src/App.tsx",
+      "estimatedMinutes": 45,
+      "category": "design-flaw",
+      "severity": "low"
+    },
+    {
+      "title": "Implement app-specific context menus in native style",
+      "description": "ContextMenu.tsx implements a custom context menu but it doesn't match native OS styling. Use Tauri's native menu APIs where possible, implement proper keyboard navigation, handle edge cases (menu near screen edge), and add proper animations.",
+      "pathHint": "apps/desktop/src/components/ContextMenu.tsx",
+      "estimatedMinutes": 45,
+      "category": "design-flaw",
+      "severity": "low"
+    },
+    {
+      "title": "Add documentation for mero-js SDK package",
+      "description": "The mero-js package has a minimal README without API documentation, examples, or usage patterns. Add comprehensive documentation: getting started guide, API reference for all clients (auth, admin), code examples, and TypeScript type documentation.",
+      "pathHint": "packages/mero-js/README.md",
+      "estimatedMinutes": 60,
+      "category": "docs",
+      "severity": "low"
+    },
+    {
+      "title": "Add architecture decision records (ADRs)",
+      "description": "Key architectural decisions (why Tauri, why the proxy pattern, why localStorage for tokens) are not documented. Create an ADR folder with records explaining key decisions, their context, alternatives considered, and consequences.",
+      "pathHint": "docs/adr",
+      "estimatedMinutes": 60,
+      "category": "docs",
+      "severity": "low"
+    }
+  ]
+}

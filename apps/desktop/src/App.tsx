@@ -17,6 +17,7 @@ import UpdateNotification from "./components/UpdateNotification";
 import Sidebar from "./components/Sidebar";
 import { NodeStatusIndicator } from "./components/NodeStatusIndicator";
 import ToastContainer from "./components/ToastContainer";
+import ErrorBoundary from "./components/ErrorBoundary";
 import { getCurrentVersion } from "./utils/updater";
 import { invoke } from "@tauri-apps/api/tauri";
 import { Settings as SettingsIcon, ArrowRight, Package, ShoppingCart } from "lucide-react";
@@ -427,130 +428,148 @@ function App() {
 
   if (showOnboarding) {
     return (
-      <Onboarding
-        onComplete={async () => {
-          clearOnboardingProgress();
-          const settings = getSettings();
-          saveSettings({ ...settings, onboardingCompleted: true });
-          try {
-            await invoke("autostart_enable");
-            localStorage.setItem("calimero-autostart-default-applied", "1");
-          } catch {
-            // Autostart may not be available
-          }
-          setShowOnboarding(false);
-          setConnected(true);
-          setError(null);
-          loadContexts().catch(() => {});
-          loadInstalledApps().catch(() => {});
+      <ErrorBoundary 
+        componentName="Onboarding"
+        onReset={() => {
+          // Reset to welcome state on error
+          setShowOnboarding(true);
         }}
-        onSettings={() => {
-          setShowOnboarding(false);
-          setShowSettings(true);
-        }}
-      />
+      >
+        <Onboarding
+          onComplete={async () => {
+            clearOnboardingProgress();
+            const settings = getSettings();
+            saveSettings({ ...settings, onboardingCompleted: true });
+            try {
+              await invoke("autostart_enable");
+              localStorage.setItem("calimero-autostart-default-applied", "1");
+            } catch {
+              // Autostart may not be available
+            }
+            setShowOnboarding(false);
+            setConnected(true);
+            setError(null);
+            loadContexts().catch(() => {});
+            loadInstalledApps().catch(() => {});
+          }}
+          onSettings={() => {
+            setShowOnboarding(false);
+            setShowSettings(true);
+          }}
+        />
+      </ErrorBoundary>
     );
   }
 
   // Show login if needed
   if (showLogin) {
     return (
-      <div className="app login-screen">
-        <header className="login-screen-header">
-          <div className="login-screen-brand">
-            <img src={calimeroLogo} alt="Calimero" className="login-screen-logo" />
-          </div>
-          <button 
-            onClick={() => { 
-              setShowLogin(false); 
-              setShowSettings(true); 
-            }} 
-            className="button button-secondary"
-          >
-            <SettingsIcon size={16} style={{ marginRight: '6px', verticalAlign: 'middle' }} />
-            Settings
-          </button>
-        </header>
-        <main className="login-screen-main">
-        <LoginView
-          variant={theme}
-          onSuccess={() => {
-            console.log('✅ Login successful');
-            setShowLogin(false);
-            // Reload contexts after login
-            loadContexts();
-            loadInstalledApps();
-            checkConnection();
-          }}
-          onError={(error) => {
-            console.error('❌ Login failed:', error);
-          }}
-        />
-        </main>
-      </div>
+      <ErrorBoundary 
+        componentName="Login"
+        onReset={() => setShowLogin(true)}
+      >
+        <div className="app login-screen">
+          <header className="login-screen-header">
+            <div className="login-screen-brand">
+              <img src={calimeroLogo} alt="Calimero" className="login-screen-logo" />
+            </div>
+            <button 
+              onClick={() => { 
+                setShowLogin(false); 
+                setShowSettings(true); 
+              }} 
+              className="button button-secondary"
+            >
+              <SettingsIcon size={16} style={{ marginRight: '6px', verticalAlign: 'middle' }} />
+              Settings
+            </button>
+          </header>
+          <main className="login-screen-main">
+            <LoginView
+              variant={theme}
+              onSuccess={() => {
+                console.log('✅ Login successful');
+                setShowLogin(false);
+                // Reload contexts after login
+                loadContexts();
+                loadInstalledApps();
+                checkConnection();
+              }}
+              onError={(error) => {
+                console.error('❌ Login failed:', error);
+              }}
+            />
+          </main>
+        </div>
+      </ErrorBoundary>
     );
   }
 
 
   if (showSettings) {
     return (
-      <Settings
-        onBack={async () => {
-          setShowSettings(false);
-          
-          // Always reload client when returning from Settings (settings may have changed)
-          const settings = getSettings();
-          const adminApiUrl = `${settings.nodeUrl.replace(/\/$/, '')}/admin-api`;
-          const authUrl = getAuthUrl(settings);
-          const authBaseUrl = authUrl.replace(/\/$/, '');
+      <ErrorBoundary 
+        componentName="Settings"
+        onReset={() => setShowSettings(true)}
+      >
+        <Settings
+          onBack={async () => {
+            setShowSettings(false);
+            
+            // Always reload client when returning from Settings (settings may have changed)
+            const settings = getSettings();
+            const adminApiUrl = `${settings.nodeUrl.replace(/\/$/, '')}/admin-api`;
+            const authUrl = getAuthUrl(settings);
+            const authBaseUrl = authUrl.replace(/\/$/, '');
 
-          // Reload client with new settings
-          createClient({
-            baseUrl: adminApiUrl,
-            authBaseUrl: authBaseUrl,
-            requestCredentials: 'omit',
-          });
-          
-          if (needsNodeConfig) {
-            // After first-time settings, continue with app initialization
-            setNeedsNodeConfig(false);
+            // Reload client with new settings
+            createClient({
+              baseUrl: adminApiUrl,
+              authBaseUrl: authBaseUrl,
+              requestCredentials: 'omit',
+            });
+            
+            if (needsNodeConfig) {
+              // After first-time settings, continue with app initialization
+              setNeedsNodeConfig(false);
 
-            // Check onboarding state
-            setCheckingOnboarding(true);
-            try {
-              const state = await checkOnboardingState();
-              // Onboarding state checked
+              // Check onboarding state
+              setCheckingOnboarding(true);
+              try {
+                const state = await checkOnboardingState();
+                // Onboarding state checked
 
-              // Determine what to show
-              if (!state.authAvailable) {
-                setShowOnboarding(true);
-              } else if (!state.hasConfiguredProviders) {
-                setShowOnboarding(true);
-              } else {
-                const hasToken = getAccessToken();
-                if (!hasToken) {
-                  setShowLogin(true);
+                // Determine what to show
+                if (!state.authAvailable) {
+                  setShowOnboarding(true);
+                } else if (!state.hasConfiguredProviders) {
+                  setShowOnboarding(true);
                 } else {
-                  loadContexts();
-            loadInstalledApps();
+                  const hasToken = getAccessToken();
+                  if (!hasToken) {
+                    setShowLogin(true);
+                  } else {
+                    loadContexts();
+                    loadInstalledApps();
+                  }
                 }
+              } catch (err) {
+                console.error('Failed to check onboarding state:', err);
+                setShowOnboarding(true);
+              } finally {
+                setCheckingOnboarding(false);
               }
-            } catch (err) {
-              console.error('Failed to check onboarding state:', err);
-              setShowOnboarding(true);
-            } finally {
-              setCheckingOnboarding(false);
+            } else {
+              // Settings changed, reload contexts if logged in
+              const hasToken = getAccessToken();
+              if (hasToken) {
+                loadContexts();
+                loadInstalledApps();
+              }
             }
-          } else {
-            // Settings changed, reload contexts if logged in
-            const hasToken = getAccessToken();
-            if (hasToken) {
-              loadContexts();
-            loadInstalledApps();
-            }
-          }
-        }}
-      />
+          }}
+        />
+      </ErrorBoundary>
     );
   }
 
@@ -567,7 +586,7 @@ function App() {
             nodeDisconnected={!connected && !!error}
           />
           <div className="app-content">
-        <header className="header">
+            <header className="header">
               <div className="header-title">
                 <h1>Marketplace</h1>
               </div>
@@ -578,7 +597,9 @@ function App() {
               />
             </header>
             <main className="main">
-              <Marketplace />
+              <ErrorBoundary componentName="Marketplace" minimal={false}>
+                <Marketplace />
+              </ErrorBoundary>
             </main>
           </div>
         </div>
@@ -599,7 +620,7 @@ function App() {
             nodeDisconnected={!connected && !!error}
           />
           <div className="app-content">
-        <header className="header">
+            <header className="header">
               <div className="header-title">
                 <h1>Applications</h1>
               </div>
@@ -610,28 +631,30 @@ function App() {
               />
             </header>
             <main className="main">
-        <InstalledApps 
-          onAuthRequired={() => setShowLogin(true)}
-          onConfirmUninstall={(_appId, appName, onConfirm) => {
-            setConfirmAction({
-              title: "Uninstall Application",
-              message: "Are you sure you want to uninstall this application? This action cannot be undone.",
-              itemName: appName,
-              actionLabel: "Uninstall",
-              onConfirm: async () => {
-                await onConfirm();
-                setCurrentPage('installed');
-                setConfirmAction(null);
-              },
-              breadcrumbs: [
-                { label: "Home", onClick: () => setCurrentPage('home') },
-                { label: "Applications", onClick: () => setCurrentPage('installed') },
-                { label: "Uninstall Application" },
-              ],
-            });
-            setCurrentPage('confirm');
-          }}
-        />
+              <ErrorBoundary componentName="Installed Applications" minimal={false}>
+                <InstalledApps 
+                  onAuthRequired={() => setShowLogin(true)}
+                  onConfirmUninstall={(_appId, appName, onConfirm) => {
+                    setConfirmAction({
+                      title: "Uninstall Application",
+                      message: "Are you sure you want to uninstall this application? This action cannot be undone.",
+                      itemName: appName,
+                      actionLabel: "Uninstall",
+                      onConfirm: async () => {
+                        await onConfirm();
+                        setCurrentPage('installed');
+                        setConfirmAction(null);
+                      },
+                      breadcrumbs: [
+                        { label: "Home", onClick: () => setCurrentPage('home') },
+                        { label: "Applications", onClick: () => setCurrentPage('installed') },
+                        { label: "Uninstall Application" },
+                      ],
+                    });
+                    setCurrentPage('confirm');
+                  }}
+                />
+              </ErrorBoundary>
             </main>
           </div>
         </div>
@@ -669,7 +692,9 @@ function App() {
               />
             </header>
             <main className="main">
-              <NodeManagement />
+              <ErrorBoundary componentName="Node Management" minimal={false}>
+                <NodeManagement />
+              </ErrorBoundary>
             </main>
           </div>
         </div>
@@ -690,7 +715,7 @@ function App() {
             nodeDisconnected={!connected && !!error}
           />
           <div className="app-content">
-        <header className="header">
+            <header className="header">
               <div className="header-title">
                 <h1>Contexts</h1>
               </div>
@@ -701,28 +726,30 @@ function App() {
               />
             </header>
             <main className="main">
-        <Contexts 
-          onAuthRequired={() => setShowLogin(true)}
-          onConfirmDelete={(_contextId, contextName, onConfirm) => {
-            setConfirmAction({
-              title: "Delete Context",
-              message: "Are you sure you want to delete this context? This action cannot be undone.",
-              itemName: contextName,
-              actionLabel: "Delete",
-              onConfirm: async () => {
-                await onConfirm();
-                setCurrentPage('contexts');
-                setConfirmAction(null);
-              },
-              breadcrumbs: [
-                { label: "Home", onClick: () => setCurrentPage('home') },
-                { label: "Contexts", onClick: () => setCurrentPage('contexts') },
-                { label: "Delete Context" },
-              ],
-            });
-            setCurrentPage('confirm');
-          }}
-        />
+              <ErrorBoundary componentName="Contexts" minimal={false}>
+                <Contexts 
+                  onAuthRequired={() => setShowLogin(true)}
+                  onConfirmDelete={(_contextId, contextName, onConfirm) => {
+                    setConfirmAction({
+                      title: "Delete Context",
+                      message: "Are you sure you want to delete this context? This action cannot be undone.",
+                      itemName: contextName,
+                      actionLabel: "Delete",
+                      onConfirm: async () => {
+                        await onConfirm();
+                        setCurrentPage('contexts');
+                        setConfirmAction(null);
+                      },
+                      breadcrumbs: [
+                        { label: "Home", onClick: () => setCurrentPage('home') },
+                        { label: "Contexts", onClick: () => setCurrentPage('contexts') },
+                        { label: "Delete Context" },
+                      ],
+                    });
+                    setCurrentPage('confirm');
+                  }}
+                />
+              </ErrorBoundary>
             </main>
           </div>
         </div>
@@ -735,23 +762,32 @@ function App() {
     return (
       <div className="app">
         <ToastContainer />
-        <ConfirmAction
-          title={confirmAction.title}
-          message={confirmAction.message}
-          itemName={confirmAction.itemName}
-          actionLabel={confirmAction.actionLabel}
-          onConfirm={confirmAction.onConfirm}
-          onCancel={() => {
-            // Go back to the previous page (contexts or installed)
-            if (confirmAction.breadcrumbs[1]?.onClick) {
-              confirmAction.breadcrumbs[1].onClick();
-            } else {
-              setCurrentPage('home');
-            }
+        <ErrorBoundary 
+          componentName="Confirm Action"
+          onReset={() => {
+            // Go back to home on error
+            setCurrentPage('home');
             setConfirmAction(null);
           }}
-          breadcrumbs={confirmAction.breadcrumbs}
-        />
+        >
+          <ConfirmAction
+            title={confirmAction.title}
+            message={confirmAction.message}
+            itemName={confirmAction.itemName}
+            actionLabel={confirmAction.actionLabel}
+            onConfirm={confirmAction.onConfirm}
+            onCancel={() => {
+              // Go back to the previous page (contexts or installed)
+              if (confirmAction.breadcrumbs[1]?.onClick) {
+                confirmAction.breadcrumbs[1].onClick();
+              } else {
+                setCurrentPage('home');
+              }
+              setConfirmAction(null);
+            }}
+            breadcrumbs={confirmAction.breadcrumbs}
+          />
+        </ErrorBoundary>
       </div>
     );
   }

@@ -1,10 +1,10 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use log::{debug, info, warn};
+use serde::{Deserialize, Serialize};
 use tauri::Manager;
 use tauri::{CustomMenuItem, SystemTray, SystemTrayEvent, SystemTrayMenu};
-use serde::{Deserialize, Serialize};
-use log::{debug, info, warn};
 
 #[derive(Debug, Serialize, Deserialize)]
 struct HttpRequest {
@@ -47,19 +47,26 @@ fn parse_open_app_args() -> Option<(String, String)> {
 pub struct PendingOpenApp(pub std::sync::Mutex<Option<(String, String)>>);
 
 /// Validates that a URL is allowed for proxying
-/// 
+///
 /// Allowed URLs:
 /// - Configured node URL (from settings, typically http://localhost:2528 or custom HTTP localhost)
-/// 
+///
 /// Only HTTP localhost URLs are proxied. HTTPS registries don't need proxying (no mixed content issues).
-/// 
+///
 /// This function prevents hostname spoofing attacks like:
 /// - http://localhost:2528.evil.com (invalid hostname)
 /// - http://localhost:2528@evil.com (invalid URL structure)
-pub(crate) fn validate_allowed_url(url: &str, configured_node_url: Option<&str>) -> Result<(), String> {
-    let parsed = url::Url::parse(url)
-        .map_err(|e| format!("Invalid URL format: {}. Please check that the URL is properly formatted.", e))?;
-    
+pub(crate) fn validate_allowed_url(
+    url: &str,
+    configured_node_url: Option<&str>,
+) -> Result<(), String> {
+    let parsed = url::Url::parse(url).map_err(|e| {
+        format!(
+            "Invalid URL format: {}. Please check that the URL is properly formatted.",
+            e
+        )
+    })?;
+
     // Validate scheme
     let scheme = parsed.scheme();
     if scheme != "http" && scheme != "https" {
@@ -68,21 +75,21 @@ pub(crate) fn validate_allowed_url(url: &str, configured_node_url: Option<&str>)
             scheme
         ));
     }
-    
+
     // Reject URLs with userinfo (e.g., user@host) as a security measure
     if parsed.username() != "" || parsed.password().is_some() {
         return Err(format!(
             "URLs with authentication credentials are not allowed for security reasons. Please use a URL without username/password (e.g., http://localhost:2528 instead of user@localhost:2528)"
         ));
     }
-    
+
     // Validate hostname (must be exact match, no subdomains or spoofing)
     let host = parsed.host_str()
         .ok_or_else(|| "Invalid URL: missing hostname. Please provide a valid URL with a hostname (e.g., localhost or apps.calimero.network)".to_string())?;
-    
+
     // Normalize hostname to lowercase for comparison
     let host_lower = host.to_lowercase();
-    
+
     // Get port (explicit or default based on scheme)
     let port = parsed.port().unwrap_or_else(|| {
         match scheme {
@@ -91,28 +98,30 @@ pub(crate) fn validate_allowed_url(url: &str, configured_node_url: Option<&str>)
             _ => unreachable!(), // Already validated scheme above
         }
     });
-    
+
     // Check if URL matches configured node URL
     if let Some(node_url) = configured_node_url {
         if let Ok(node_parsed) = url::Url::parse(node_url) {
             let node_host = node_parsed.host_str().map(|h| h.to_lowercase());
-            let node_port = node_parsed.port().or_else(|| {
-                match node_parsed.scheme() {
-                    "http" => Some(80),
-                    "https" => Some(443),
-                    _ => None,
-                }
+            let node_port = node_parsed.port().or_else(|| match node_parsed.scheme() {
+                "http" => Some(80),
+                "https" => Some(443),
+                _ => None,
             });
-            
+
             // Check if the request URL matches the configured node URL
-            if node_host.as_ref().map(|h| h == &host_lower).unwrap_or(false) 
+            if node_host
+                .as_ref()
+                .map(|h| h == &host_lower)
+                .unwrap_or(false)
                 && node_port.map(|p| p == port).unwrap_or(false)
-                && node_parsed.scheme() == scheme {
+                && node_parsed.scheme() == scheme
+            {
                 return Ok(());
             }
         }
     }
-    
+
     // If a node URL is configured, only allow that URL (no fallback to defaults)
     if configured_node_url.is_some() {
         return Err(format!(
@@ -120,7 +129,7 @@ pub(crate) fn validate_allowed_url(url: &str, configured_node_url: Option<&str>)
             scheme, host, port
         ));
     }
-    
+
     // Validate allowed combinations with strict hostname matching (fallback defaults)
     match (scheme, host_lower.as_str(), port) {
         // HTTP localhost on port 2528 (default fallback for backwards compatibility)
@@ -130,19 +139,27 @@ pub(crate) fn validate_allowed_url(url: &str, configured_node_url: Option<&str>)
         _ => {
             // Provide helpful error message based on what's wrong
             let mut suggestions = Vec::new();
-            
+
             if scheme == "http" {
                 if host_lower == "localhost" || host_lower == "127.0.0.1" {
                     if port != 2528 {
-                        suggestions.push(format!("For localhost, use port 2528 (e.g., http://localhost:2528)"));
+                        suggestions.push(format!(
+                            "For localhost, use port 2528 (e.g., http://localhost:2528)"
+                        ));
                     }
                 } else {
-                    suggestions.push("For localhost access, use http://localhost:2528 or http://127.0.0.1:2528".to_string());
+                    suggestions.push(
+                        "For localhost access, use http://localhost:2528 or http://127.0.0.1:2528"
+                            .to_string(),
+                    );
                 }
             } else if scheme == "https" {
-                suggestions.push("HTTPS URLs don't need proxying. Only HTTP localhost node URLs are proxied.".to_string());
+                suggestions.push(
+                    "HTTPS URLs don't need proxying. Only HTTP localhost node URLs are proxied."
+                        .to_string(),
+                );
             }
-            
+
             let mut suggestion_text = if suggestions.is_empty() {
                 if let Some(node_url) = configured_node_url {
                     format!("Allowed URLs: {} (configured node URL)", node_url)
@@ -152,13 +169,16 @@ pub(crate) fn validate_allowed_url(url: &str, configured_node_url: Option<&str>)
             } else {
                 suggestions.join(". ")
             };
-            
+
             if configured_node_url.is_some() && !suggestion_text.contains("configured node URL") {
                 if let Some(node_url) = configured_node_url {
-                    suggestion_text = format!("{}. Or use your configured node URL: {}", suggestion_text, node_url);
+                    suggestion_text = format!(
+                        "{}. Or use your configured node URL: {}",
+                        suggestion_text, node_url
+                    );
                 }
             }
-            
+
             Err(format!(
                 "URL not allowed: {}://{}:{}. {}",
                 scheme, host, port, suggestion_text
@@ -168,56 +188,64 @@ pub(crate) fn validate_allowed_url(url: &str, configured_node_url: Option<&str>)
 }
 
 #[tauri::command]
-async fn proxy_http_request(request: HttpRequest, configured_node_url: Option<String>) -> Result<HttpResponse, String> {
+async fn proxy_http_request(
+    request: HttpRequest,
+    configured_node_url: Option<String>,
+) -> Result<HttpResponse, String> {
     use reqwest;
-    
+
     // Validate URL before processing (pass configured node URL if available)
     validate_allowed_url(&request.url, configured_node_url.as_deref())?;
-    
+
     // Parse URL to determine what Host header to use
-    let parsed_original = url::Url::parse(&request.url)
-        .map_err(|e| format!("Failed to parse URL '{}': {}. Please ensure the URL is properly formatted.", request.url, e))?;
-    let original_host = parsed_original.host_str()
-        .ok_or_else(|| format!("Invalid URL '{}': missing hostname. Please provide a URL with a valid hostname.", request.url))?;
+    let parsed_original = url::Url::parse(&request.url).map_err(|e| {
+        format!(
+            "Failed to parse URL '{}': {}. Please ensure the URL is properly formatted.",
+            request.url, e
+        )
+    })?;
+    let original_host = parsed_original.host_str().ok_or_else(|| {
+        format!(
+            "Invalid URL '{}': missing hostname. Please provide a URL with a valid hostname.",
+            request.url
+        )
+    })?;
     // Get port (explicit or default)
-    let original_port = parsed_original.port().or_else(|| {
-        match parsed_original.scheme() {
-            "http" => Some(2528),  // Default for localhost
-            "https" => Some(443),  // Default for HTTPS
-            _ => None,
-        }
-    }).ok_or_else(|| "Could not determine port".to_string())?;
+    let original_port = parsed_original
+        .port()
+        .or_else(|| {
+            match parsed_original.scheme() {
+                "http" => Some(2528), // Default for localhost
+                "https" => Some(443), // Default for HTTPS
+                _ => None,
+            }
+        })
+        .ok_or_else(|| "Could not determine port".to_string())?;
     let host_header = format!("{}:{}", original_host, original_port);
-    
+
     // DON'T normalize - use original URL exactly as Chrome does
     // The issue might be that normalizing breaks something
     let normalized_url = request.url.clone();
-    
-    info!("[Tauri Proxy] Proxying request: {} {}", request.method, request.url);
+
+    info!(
+        "[Tauri Proxy] Proxying request: {} {}",
+        request.method, request.url
+    );
     if let Some(ref headers) = request.headers {
         debug!("[Tauri Proxy] Request headers count: {}", headers.len());
-        // Log Authorization header if present (but don't log the full token)
-        if let Some(auth_header) = headers.get("Authorization").or_else(|| headers.get("authorization")) {
-            // Safely truncate to first 20 characters (UTF-8 safe)
-            let preview: String = auth_header.chars().take(20).collect();
-            debug!("[Tauri Proxy] Authorization header present: {}...", preview);
-        } else {
-            warn!("[Tauri Proxy] No Authorization header found!");
-        }
-        // Log all header keys for debugging
-        debug!("[Tauri Proxy] Header keys: {:?}", headers.keys().collect::<Vec<_>>());
-        debug!("[Tauri Proxy] Request headers: {:?}", headers);
-    } else {
-        warn!("[Tauri Proxy] No headers in request!");
+        // Log only non-sensitive header keys for debugging (never log values of auth headers)
+        let has_auth =
+            headers.contains_key("Authorization") || headers.contains_key("authorization");
+        debug!("[Tauri Proxy] Has Authorization header: {}", has_auth);
     }
-    
+
     // Create HTTP client with proper configuration
     let client = reqwest::Client::builder()
         .danger_accept_invalid_certs(false) // Use proper cert validation
         .timeout(std::time::Duration::from_secs(30))
         .build()
         .map_err(|e| format!("Failed to initialize HTTP client: {}. This may indicate a system configuration issue. Please try again.", e))?;
-    
+
     // Build request (use normalized URL)
     let mut req_builder = match request.method.as_str() {
         "GET" => client.get(&normalized_url),
@@ -232,7 +260,7 @@ async fn proxy_http_request(request: HttpRequest, configured_node_url: Option<St
             request.method
         )),
     };
-    
+
     // Add headers (default to JSON if body is present and no content-type)
     if let Some(headers) = request.headers.as_ref() {
         let mut has_content_type = false;
@@ -245,14 +273,28 @@ async fn proxy_http_request(request: HttpRequest, configured_node_url: Option<St
             if key_lower == "host" {
                 has_host = true;
             }
-            // Log header being added (truncate value for security, UTF-8 safe)
-            let value_preview = if value.len() > 50 {
-                let preview: String = value.chars().take(50).collect();
-                format!("{}...", preview)
+            // Log header being added (redact sensitive headers entirely)
+            let is_sensitive = key_lower == "authorization"
+                || key_lower == "cookie"
+                || key_lower == "x-api-key"
+                || key_lower == "x-auth-token"
+                || key_lower.contains("secret")
+                || key_lower.contains("password")
+                || key_lower.contains("token");
+            if is_sensitive {
+                debug!("[Tauri Proxy] Adding header: '{}' = '[REDACTED]'", key);
             } else {
-                value.clone()
-            };
-            debug!("[Tauri Proxy] Adding header: '{}' = '{}'", key, value_preview);
+                let value_preview = if value.len() > 50 {
+                    let preview: String = value.chars().take(50).collect();
+                    format!("{}...", preview)
+                } else {
+                    value.clone()
+                };
+                debug!(
+                    "[Tauri Proxy] Adding header: '{}' = '{}'",
+                    key, value_preview
+                );
+            }
             // Add header directly - reqwest will handle validation
             req_builder = req_builder.header(key, value);
         }
@@ -265,7 +307,7 @@ async fn proxy_http_request(request: HttpRequest, configured_node_url: Option<St
             // The solution is to NOT normalize the URL
         }
         debug!("[Tauri Proxy] Total headers processed: {}", headers.len());
-        
+
         // Add default Content-Type if body exists but no Content-Type header
         if !has_content_type && request.body.is_some() {
             req_builder = req_builder.header("Content-Type", "application/json");
@@ -274,12 +316,12 @@ async fn proxy_http_request(request: HttpRequest, configured_node_url: Option<St
         // No headers provided but body exists - add default Content-Type
         req_builder = req_builder.header("Content-Type", "application/json");
     }
-    
+
     // Add body
     if let Some(body) = request.body {
         req_builder = req_builder.body(body);
     }
-    
+
     // Send request
     let response = req_builder.send()
         .await
@@ -293,7 +335,7 @@ async fn proxy_http_request(request: HttpRequest, configured_node_url: Option<St
                 format!("Request to {} failed: {}. Please check the URL and try again.", request.url, error_msg)
             }
         })?;
-    
+
     // Extract response
     let status = response.status().as_u16();
     let mut response_headers = std::collections::HashMap::new();
@@ -302,13 +344,13 @@ async fn proxy_http_request(request: HttpRequest, configured_node_url: Option<St
             response_headers.insert(key.to_string(), value_str.to_string());
         }
     }
-    
+
     let body = response.text()
         .await
         .map_err(|e| format!("Failed to read response from {}. The server may have closed the connection unexpectedly. Error: {}", request.url, e))?;
-    
+
     info!("[Tauri Proxy] Response: {} ({} bytes)", status, body.len());
-    
+
     Ok(HttpResponse {
         status,
         headers: response_headers,
@@ -351,27 +393,40 @@ fn create_desktop_shortcut(
     app_name: String,
     frontend_url: String,
 ) -> Result<String, String> {
-    let exe = std::env::current_exe()
-        .map_err(|e| format!("Could not get executable path: {}", e))?;
+    let exe =
+        std::env::current_exe().map_err(|e| format!("Could not get executable path: {}", e))?;
     let exe_str = exe
         .to_str()
         .ok_or_else(|| "Executable path is not valid UTF-8".to_string())?;
 
     let safe_name: String = app_name
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == ' ' || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     let shortcut_name = safe_name.trim().trim_matches('_');
-    let shortcut_name = if shortcut_name.is_empty() { "Calimero App" } else { shortcut_name };
+    let shortcut_name = if shortcut_name.is_empty() {
+        "Calimero App"
+    } else {
+        shortcut_name
+    };
 
     #[cfg(windows)]
     {
-        let desktop = dirs::desktop_dir()
-            .ok_or_else(|| "Could not find Desktop folder".to_string())?;
+        let desktop =
+            dirs::desktop_dir().ok_or_else(|| "Could not find Desktop folder".to_string())?;
         let lnk_path = desktop.join(format!("{}.lnk", shortcut_name));
         let url_esc = frontend_url.replace('"', "\\\"");
         let name_esc = app_name.replace('"', "\\\"");
-        let args = format!("--open-app-url \"{}\" --open-app-name \"{}\"", url_esc, name_esc);
+        let args = format!(
+            "--open-app-url \"{}\" --open-app-name \"{}\"",
+            url_esc, name_esc
+        );
         let ps = format!(
             "$WshShell = New-Object -ComObject WScript.Shell; $s = $WshShell.CreateShortcut('{}'); $s.TargetPath = '{}'; $s.Arguments = '{}'; $s.Save()",
             lnk_path.display(),
@@ -391,15 +446,16 @@ fn create_desktop_shortcut(
 
     #[cfg(target_os = "macos")]
     {
-        let desktop = dirs::desktop_dir()
-            .ok_or_else(|| "Could not find Desktop folder".to_string())?;
+        let desktop =
+            dirs::desktop_dir().ok_or_else(|| "Could not find Desktop folder".to_string())?;
         // Run the binary directly with args so the process always receives --open-app-url/--open-app-name.
         // (open -a "App" --args ... often just activates the existing process without passing args.)
         let exe_esc = exe_str.replace('\\', "\\\\").replace('"', "\\\"");
         let app_bundle = format!("{}.app", shortcut_name);
         let app_path = desktop.join(&app_bundle);
         let macos_dir = app_path.join("Contents/MacOS");
-        std::fs::create_dir_all(&macos_dir).map_err(|e| format!("Failed to create .app bundle: {}", e))?;
+        std::fs::create_dir_all(&macos_dir)
+            .map_err(|e| format!("Failed to create .app bundle: {}", e))?;
         let launcher_path = macos_dir.join(shortcut_name);
         let script = format!(
             "#!/bin/bash\nexec \"{}\" --open-app-url \"{}\" --open-app-name \"{}\"\n",
@@ -407,13 +463,17 @@ fn create_desktop_shortcut(
             frontend_url.replace('\\', "\\\\").replace('"', "\\\""),
             app_name.replace('\\', "\\\\").replace('"', "\\\"")
         );
-        std::fs::write(&launcher_path, script).map_err(|e| format!("Failed to write launcher script: {}", e))?;
+        std::fs::write(&launcher_path, script)
+            .map_err(|e| format!("Failed to write launcher script: {}", e))?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let mut perms = std::fs::metadata(&launcher_path).map_err(|e| format!("Failed to stat launcher: {}", e))?.permissions();
+            let mut perms = std::fs::metadata(&launcher_path)
+                .map_err(|e| format!("Failed to stat launcher: {}", e))?
+                .permissions();
             perms.set_mode(0o755);
-            std::fs::set_permissions(&launcher_path, perms).map_err(|e| format!("Failed to chmod launcher: {}", e))?;
+            std::fs::set_permissions(&launcher_path, perms)
+                .map_err(|e| format!("Failed to chmod launcher: {}", e))?;
         }
         let plist = format!(
             r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -431,12 +491,19 @@ fn create_desktop_shortcut(
 </dict>
 </plist>
 "#,
-            shortcut_name.replace('<', "&lt;").replace('>', "&gt;").replace('&', "&amp;"),
+            shortcut_name
+                .replace('<', "&lt;")
+                .replace('>', "&gt;")
+                .replace('&', "&amp;"),
             shortcut_name.replace(|c: char| !c.is_alphanumeric(), "_"),
-            shortcut_name.replace('<', "&lt;").replace('>', "&gt;").replace('&', "&amp;")
+            shortcut_name
+                .replace('<', "&lt;")
+                .replace('>', "&gt;")
+                .replace('&', "&amp;")
         );
         let plist_path = app_path.join("Contents/Info.plist");
-        std::fs::write(&plist_path, plist).map_err(|e| format!("Failed to write Info.plist: {}", e))?;
+        std::fs::write(&plist_path, plist)
+            .map_err(|e| format!("Failed to write Info.plist: {}", e))?;
         return Ok(app_path.to_string_lossy().into_owned());
     }
 
@@ -444,7 +511,9 @@ fn create_desktop_shortcut(
     {
         let desktop = std::env::var("XDG_DESKTOP_DIR")
             .map(std::path::PathBuf::from)
-            .or_else(|_| dirs::desktop_dir().ok_or_else(|| "Could not find Desktop folder".to_string()))?;
+            .or_else(|_| {
+                dirs::desktop_dir().ok_or_else(|| "Could not find Desktop folder".to_string())
+            })?;
         let path = desktop.join(format!("{}.desktop", shortcut_name));
         let exe_esc = exe_str.replace('\\', "\\\\").replace('"', "\\\"");
         let url_esc = frontend_url.replace('\\', "\\\\").replace('"', "\\\"");
@@ -455,18 +524,19 @@ fn create_desktop_shortcut(
              Name={}\n\
              Exec=\"{}\" --open-app-url \"{}\" --open-app-name \"{}\"\n\
              Terminal=false\n",
-            name_esc,
-            exe_esc,
-            url_esc,
-            name_esc
+            name_esc, exe_esc, url_esc, name_esc
         );
-        std::fs::write(&path, content).map_err(|e| format!("Failed to write shortcut file: {}", e))?;
+        std::fs::write(&path, content)
+            .map_err(|e| format!("Failed to write shortcut file: {}", e))?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let mut perms = std::fs::metadata(&path).map_err(|e| format!("Failed to stat file: {}", e))?.permissions();
+            let mut perms = std::fs::metadata(&path)
+                .map_err(|e| format!("Failed to stat file: {}", e))?
+                .permissions();
             perms.set_mode(0o755);
-            std::fs::set_permissions(&path, perms).map_err(|e| format!("Failed to chmod: {}", e))?;
+            std::fs::set_permissions(&path, perms)
+                .map_err(|e| format!("Failed to chmod: {}", e))?;
         }
         return Ok(path.to_string_lossy().into_owned());
     }
@@ -487,26 +557,34 @@ async fn create_app_window(
     open_devtools: Option<bool>,
     node_url: Option<String>,
 ) -> Result<(), String> {
-    use tauri::{WindowBuilder, Manager};
-    
+    use tauri::{Manager, WindowBuilder};
+
     // Parse URL to get domain for IPC scope configuration
-    let parsed_url = url.parse::<url::Url>()
-        .map_err(|e| format!("Invalid URL '{}': {}. Please provide a valid URL (e.g., https://example.com)", url, e))?;
-    let domain = parsed_url.host_str()
-        .ok_or_else(|| format!("Invalid URL '{}': missing hostname. Please provide a URL with a valid hostname.", url))?;
-    
+    let parsed_url = url.parse::<url::Url>().map_err(|e| {
+        format!(
+            "Invalid URL '{}': {}. Please provide a valid URL (e.g., https://example.com)",
+            url, e
+        )
+    })?;
+    let domain = parsed_url.host_str().ok_or_else(|| {
+        format!(
+            "Invalid URL '{}': missing hostname. Please provide a URL with a valid hostname.",
+            url
+        )
+    })?;
+
     // Inject fetch interceptor to proxy node requests through Tauri
     // Since calimero-client-js now uses fetch instead of Axios, we only need fetch interception
     // CRITICAL: Intercept IMMEDIATELY before React makes any fetch calls
     // Load proxy script from external file and inject configured node URL
     let mut proxy_script = include_str!("proxy_script.js").to_string();
-    
+
     // Inject configured node URL into the proxy script
     // Default to http://localhost:2528 for backwards compatibility
     let node_url_to_use = node_url.as_deref().unwrap_or("http://localhost:2528");
     // Replace placeholder in script with actual node URL
     proxy_script = proxy_script.replace("__CONFIGURED_NODE_URL__", node_url_to_use);
-    
+
     // Create window with proxy script injected BEFORE page loads
     let window = WindowBuilder::new(
         &app_handle,
@@ -521,16 +599,21 @@ async fn create_app_window(
     .initialization_script(&proxy_script) // Inject script with configured node URL
     .build()
     .map_err(|e| format!("Failed to create window '{}' for URL '{}': {}. Please check that the window label is unique and try again.", title, url, e))?;
-    
+
     // Configure IPC scope BEFORE showing window
     // This allows windows with unique labels (domain + timestamp) to access Tauri IPC
     let remote_access = tauri::ipc::RemoteDomainAccessScope::new(domain)
         .add_window(&window_label)
         .enable_tauri_api();
-    app_handle.ipc_scope().configure_remote_access(remote_access);
-    
-    info!("[Tauri] Configured IPC scope for domain: {} on window: {}", domain, window_label);
-    
+    app_handle
+        .ipc_scope()
+        .configure_remote_access(remote_access);
+
+    info!(
+        "[Tauri] Configured IPC scope for domain: {} on window: {}",
+        domain, window_label
+    );
+
     // Show the window AFTER IPC scope is configured
     window.show().map_err(|e| format!("Failed to display window '{}': {}. The window may have been closed or there may be a system issue.", title, e))?;
     // Bring app window to front so user sees it instead of the main dashboard
@@ -558,13 +641,13 @@ async fn create_app_window(
             })
         }
     };
-    
+
     if should_open_devtools {
         // Wait a bit for window to be ready, then open devtools
         tokio::time::sleep(tokio::time::Duration::from_millis(800)).await;
         window.open_devtools();
     }
-    
+
     Ok(())
 }
 
@@ -582,8 +665,8 @@ async fn open_devtools(window_label: String, app_handle: tauri::AppHandle) {
 }
 
 // Merod process management using bundled resource
-use std::sync::{Arc, Mutex};
 use std::process::Stdio;
+use std::sync::{Arc, Mutex};
 use tokio::process::Command;
 
 #[derive(Debug, Clone)]
@@ -601,11 +684,11 @@ fn get_merod_binary_path(app_handle: &tauri::AppHandle) -> Result<std::path::Pat
         .path_resolver()
         .resolve_resource("merod/merod")
         .ok_or("Failed to resolve merod resource")?;
-    
+
     if !resource_path.exists() {
         return Err(format!("Merod resource not found at {:?}", resource_path));
     }
-    
+
     Ok(resource_path)
 }
 
@@ -615,10 +698,10 @@ fn get_app_data_dir(app_handle: &tauri::AppHandle) -> Result<std::path::PathBuf,
         .path_resolver()
         .app_data_dir()
         .ok_or("Failed to get app data directory")?;
-    
+
     std::fs::create_dir_all(&app_data_dir)
         .map_err(|e| format!("Failed to create app data directory: {}", e))?;
-    
+
     Ok(app_data_dir)
 }
 
@@ -633,16 +716,19 @@ async fn start_merod(
 ) -> Result<String, String> {
     let server_port = server_port.unwrap_or(2528);
     let swarm_port = swarm_port.unwrap_or(2428);
-    
+
     // If already running, stop it first before starting a new one
     let existing_pid = {
         let state = merod_state.lock().unwrap();
         state.as_ref().map(|proc| proc.pid)
     };
-    
+
     if let Some(pid) = existing_pid {
         // Stop the existing process
-        info!("[Merod] Stopping existing process (PID: {}) before starting new one", pid);
+        info!(
+            "[Merod] Stopping existing process (PID: {}) before starting new one",
+            pid
+        );
         #[cfg(unix)]
         {
             use std::process::Command;
@@ -651,10 +737,7 @@ async fn start_merod(
                 .arg(pid.to_string())
                 .output();
             tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-            let _ = Command::new("kill")
-                .arg("-9")
-                .arg(pid.to_string())
-                .output();
+            let _ = Command::new("kill").arg("-9").arg(pid.to_string()).output();
         }
         #[cfg(windows)]
         {
@@ -669,10 +752,10 @@ async fn start_merod(
         let mut state = merod_state.lock().unwrap();
         *state = None;
     }
-    
+
     // Get bundled merod binary
     let merod_binary = get_merod_binary_path(&app_handle)?;
-    
+
     // Prepare home directory (where .calimero folder is, e.g., ~/.calimero)
     let home_dir_path = if let Some(dir) = data_dir {
         // Expand ~ if present
@@ -691,30 +774,34 @@ async fn start_merod(
             .ok_or("Failed to get home directory")?
             .join(".calimero")
     };
-    
+
     std::fs::create_dir_all(&home_dir_path)
         .map_err(|e| format!("Failed to create home directory: {}", e))?;
-    
+
     // Update config.toml with the specified ports if node_name is provided
     if let Some(name) = &node_name {
         let node_dir = home_dir_path.join(name);
         let config_path = node_dir.join("config.toml");
-        
+
         if config_path.exists() {
             // Read existing config
             let config_content = std::fs::read_to_string(&config_path)
                 .map_err(|e| format!("Failed to read config.toml: {}", e))?;
-            
-            let mut config: toml::Value = config_content.parse()
+
+            let mut config: toml::Value = config_content
+                .parse()
                 .map_err(|e| format!("Failed to parse config.toml: {}", e))?;
-            
+
             // Update server.listen ports and ensure auth_mode is embedded
             if let Some(server) = config.get_mut("server") {
                 // Set auth_mode to embedded so the node provides auth endpoints
                 if let Some(server_table) = server.as_table_mut() {
-                    server_table.insert("auth_mode".to_string(), toml::Value::String("embedded".to_string()));
+                    server_table.insert(
+                        "auth_mode".to_string(),
+                        toml::Value::String("embedded".to_string()),
+                    );
                 }
-                
+
                 if let Some(listen) = server.get_mut("listen") {
                     if let Some(listen_array) = listen.as_array_mut() {
                         for listen_str in listen_array.iter_mut() {
@@ -739,7 +826,7 @@ async fn start_merod(
                     }
                 }
             }
-            
+
             // Update swarm.listen ports - use regex-like replacement for any port number
             if let Some(swarm) = config.get_mut("swarm") {
                 if let Some(listen) = swarm.get_mut("listen") {
@@ -767,17 +854,20 @@ async fn start_merod(
                     }
                 }
             }
-            
+
             // Write updated config back
             let updated_config = toml::to_string_pretty(&config)
                 .map_err(|e| format!("Failed to serialize config.toml: {}", e))?;
             std::fs::write(&config_path, updated_config)
                 .map_err(|e| format!("Failed to write config.toml: {}", e))?;
-            
-            info!("[Merod] Updated config.toml with server_port={} and swarm_port={}", server_port, swarm_port);
+
+            info!(
+                "[Merod] Updated config.toml with server_port={} and swarm_port={}",
+                server_port, swarm_port
+            );
         }
     }
-    
+
     // Node name required
     let node_name_str = node_name.as_ref().ok_or("Node name is required")?.clone();
 
@@ -809,50 +899,60 @@ async fn start_merod(
     // Force ANSI colors in output so the log viewer can display them
     cmd.env("CLICOLOR_FORCE", "1");
     cmd.env("FORCE_COLOR", "1");
-    
+
     // Set home directory (global option, before subcommand)
     cmd.arg("--home").arg(&home_dir_path);
-    
+
     // Set node name (global option, before subcommand)
     cmd.arg("--node-name").arg(&node_name_str);
-    
+
     // Add 'run' subcommand last
     cmd.arg("run");
-    
+
     // Redirect stdout/stderr to log file - merod output goes directly to disk
     cmd.stdout(Stdio::from(log_file_stdout));
     cmd.stderr(Stdio::from(log_file_stderr));
     cmd.stdin(Stdio::null());
-    
+
     // Log the command being run
     let cmd_str = format!("{:?}", cmd);
-    info!("[Merod] Running command: {}, logs at {:?}", cmd_str, log_path);
-    
+    info!(
+        "[Merod] Running command: {}, logs at {:?}",
+        cmd_str, log_path
+    );
+
     // Start the process
-    let mut child = cmd.spawn()
+    let mut child = cmd
+        .spawn()
         .map_err(|e| format!("Failed to start merod: {}", e))?;
-    
+
     let pid = child.id().unwrap();
     info!("[Merod] Started with PID: {}", pid);
-    
+
     // Wait a brief moment to check if process is still alive
     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-    
+
     // Check if process already exited
     if let Ok(Some(status)) = child.try_wait() {
         if let Some(code) = status.code() {
-            let error_msg = format!("Merod process exited immediately with code: {}. Check merod logs for details.", code);
+            let error_msg = format!(
+                "Merod process exited immediately with code: {}. Check merod logs for details.",
+                code
+            );
             warn!("[Merod] {}", error_msg);
             return Err(error_msg);
         }
     }
-    
+
     // Store process state
     {
         let mut state = merod_state.lock().unwrap();
-        *state = Some(MerodProcess { pid, port: server_port });
+        *state = Some(MerodProcess {
+            pid,
+            port: server_port,
+        });
     }
-    
+
     // Spawn a task to monitor the process
     let merod_state_clone = merod_state.inner().clone();
     let monitored_pid = pid; // Capture PID for verification
@@ -871,7 +971,7 @@ async fn start_merod(
             }
         }
     });
-    
+
     Ok(format!("Merod started successfully with PID: {}", pid))
 }
 
@@ -884,24 +984,21 @@ async fn stop_merod(merod_state: tauri::State<'_, MerodState>) -> Result<String,
             None => return Err("Merod is not running".to_string()),
         }
     };
-    
+
     // Use the same logic as stop_merod_by_pid_command
     #[cfg(unix)]
     {
         use std::process::Command;
-        
+
         // Check if process exists first
-        let check_output = Command::new("ps")
-            .arg("-p")
-            .arg(pid.to_string())
-            .output();
-        
+        let check_output = Command::new("ps").arg("-p").arg(pid.to_string()).output();
+
         let process_exists = if let Ok(output) = &check_output {
             output.status.success()
         } else {
             false
         };
-        
+
         if !process_exists {
             // Process doesn't exist, already stopped
             info!("[Merod] Process with PID {} already stopped", pid);
@@ -911,29 +1008,23 @@ async fn stop_merod(merod_state: tauri::State<'_, MerodState>) -> Result<String,
                 .arg("-TERM")
                 .arg(pid.to_string())
                 .output();
-            
+
             // Wait a bit
             tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-            
+
             // Check if still running before force kill
-            let check_output = Command::new("ps")
-                .arg("-p")
-                .arg(pid.to_string())
-                .output();
-            
+            let check_output = Command::new("ps").arg("-p").arg(pid.to_string()).output();
+
             let still_running = if let Ok(output) = &check_output {
                 output.status.success()
             } else {
                 false
             };
-            
+
             if still_running {
                 // Force kill if still running (SIGKILL)
-                let output = Command::new("kill")
-                    .arg("-9")
-                    .arg(pid.to_string())
-                    .output();
-                
+                let output = Command::new("kill").arg("-9").arg(pid.to_string()).output();
+
                 if let Ok(output) = output {
                     if !output.status.success() {
                         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -946,7 +1037,7 @@ async fn stop_merod(merod_state: tauri::State<'_, MerodState>) -> Result<String,
             }
         }
     }
-    
+
     #[cfg(windows)]
     {
         use std::process::Command;
@@ -955,7 +1046,7 @@ async fn stop_merod(merod_state: tauri::State<'_, MerodState>) -> Result<String,
             .arg(pid.to_string())
             .arg("/F")
             .output();
-        
+
         if let Ok(output) = output {
             if !output.status.success() {
                 let stderr = String::from_utf8_lossy(&output.stderr);
@@ -966,35 +1057,35 @@ async fn stop_merod(merod_state: tauri::State<'_, MerodState>) -> Result<String,
             }
         }
     }
-    
+
     // Clear state
     {
         let mut state = merod_state.lock().unwrap();
         *state = None;
     }
-    
+
     info!("[Merod] Stopped process with PID: {}", pid);
     Ok("Merod stopped successfully".to_string())
 }
 
 #[tauri::command]
-async fn stop_merod_by_pid_command(pid: u32, merod_state: tauri::State<'_, MerodState>) -> Result<String, String> {
+async fn stop_merod_by_pid_command(
+    pid: u32,
+    merod_state: tauri::State<'_, MerodState>,
+) -> Result<String, String> {
     #[cfg(unix)]
     {
         use std::process::Command;
-        
+
         // Check if process exists first
-        let check_output = Command::new("ps")
-            .arg("-p")
-            .arg(pid.to_string())
-            .output();
-        
+        let check_output = Command::new("ps").arg("-p").arg(pid.to_string()).output();
+
         let process_exists = if let Ok(output) = &check_output {
             output.status.success()
         } else {
             false
         };
-        
+
         if !process_exists {
             // Process doesn't exist, already stopped
             info!("[Merod] Process with PID {} already stopped", pid);
@@ -1004,29 +1095,23 @@ async fn stop_merod_by_pid_command(pid: u32, merod_state: tauri::State<'_, Merod
                 .arg("-TERM")
                 .arg(pid.to_string())
                 .output();
-            
+
             // Wait a bit
             tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-            
+
             // Check if still running before force kill
-            let check_output = Command::new("ps")
-                .arg("-p")
-                .arg(pid.to_string())
-                .output();
-            
+            let check_output = Command::new("ps").arg("-p").arg(pid.to_string()).output();
+
             let still_running = if let Ok(output) = &check_output {
                 output.status.success()
             } else {
                 false
             };
-            
+
             if still_running {
                 // Force kill if still running (SIGKILL)
-                let output = Command::new("kill")
-                    .arg("-9")
-                    .arg(pid.to_string())
-                    .output();
-                
+                let output = Command::new("kill").arg("-9").arg(pid.to_string()).output();
+
                 if let Ok(output) = output {
                     if !output.status.success() {
                         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1039,7 +1124,7 @@ async fn stop_merod_by_pid_command(pid: u32, merod_state: tauri::State<'_, Merod
             }
         }
     }
-    
+
     #[cfg(windows)]
     {
         use std::process::Command;
@@ -1048,7 +1133,7 @@ async fn stop_merod_by_pid_command(pid: u32, merod_state: tauri::State<'_, Merod
             .arg(pid.to_string())
             .arg("/F")
             .output();
-        
+
         if let Ok(output) = output {
             if !output.status.success() {
                 let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1059,7 +1144,7 @@ async fn stop_merod_by_pid_command(pid: u32, merod_state: tauri::State<'_, Merod
             }
         }
     }
-    
+
     // Clear state if this was the tracked process
     {
         let mut state = merod_state.lock().unwrap();
@@ -1069,13 +1154,15 @@ async fn stop_merod_by_pid_command(pid: u32, merod_state: tauri::State<'_, Merod
             }
         }
     }
-    
+
     info!("[Merod] Stopped process with PID: {}", pid);
     Ok(format!("Merod stopped successfully (PID: {})", pid))
 }
 
 #[tauri::command]
-async fn get_merod_status(merod_state: tauri::State<'_, MerodState>) -> Result<serde_json::Value, String> {
+async fn get_merod_status(
+    merod_state: tauri::State<'_, MerodState>,
+) -> Result<serde_json::Value, String> {
     let state = merod_state.lock().unwrap();
     match state.as_ref() {
         Some(proc) => {
@@ -1087,9 +1174,9 @@ async fn get_merod_status(merod_state: tauri::State<'_, MerodState>) -> Result<s
                     .arg("-0")
                     .arg(proc.pid.to_string())
                     .output();
-                
+
                 let running = output.is_ok() && output.unwrap().status.success();
-                
+
                 if !running {
                     // Process died, clear state
                     drop(state);
@@ -1100,7 +1187,7 @@ async fn get_merod_status(merod_state: tauri::State<'_, MerodState>) -> Result<s
                     }));
                 }
             }
-            
+
             #[cfg(windows)]
             {
                 use std::process::Command;
@@ -1108,7 +1195,7 @@ async fn get_merod_status(merod_state: tauri::State<'_, MerodState>) -> Result<s
                     .arg("/FI")
                     .arg(format!("PID eq {}", proc.pid))
                     .output();
-                
+
                 // tasklist returns exit code 0 even when no process exists
                 // We need to check the output string instead
                 let running = if let Ok(output) = output {
@@ -1116,12 +1203,12 @@ async fn get_merod_status(merod_state: tauri::State<'_, MerodState>) -> Result<s
                     // If the process exists, stdout will contain the PID in a table row
                     // If not, it will say "No tasks are running which match the specified criteria"
                     // Check that we don't have the "no tasks" message AND that PID appears in output
-                    !stdout.contains("No tasks are running") && 
-                    stdout.contains(&proc.pid.to_string())
+                    !stdout.contains("No tasks are running")
+                        && stdout.contains(&proc.pid.to_string())
                 } else {
                     false
                 };
-                
+
                 if !running {
                     drop(state);
                     let mut state = merod_state.lock().unwrap();
@@ -1131,7 +1218,7 @@ async fn get_merod_status(merod_state: tauri::State<'_, MerodState>) -> Result<s
                     }));
                 }
             }
-            
+
             Ok(serde_json::json!({
                 "running": true,
                 "pid": proc.pid,
@@ -1164,25 +1251,27 @@ async fn list_merod_nodes(home_dir: Option<String>) -> Result<Vec<String>, Strin
             .ok_or("Failed to get home directory")?
             .join(".calimero")
     };
-    
+
     if !calimero_home.exists() {
         return Ok(vec![]);
     }
-    
+
     let entries = std::fs::read_dir(&calimero_home)
         .map_err(|e| format!("Failed to read calimero directory: {}", e))?;
-    
+
     let mut nodes = Vec::new();
     for entry in entries {
         let entry = entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
-        let file_type = entry.file_type().map_err(|e| format!("Failed to get file type: {}", e))?;
+        let file_type = entry
+            .file_type()
+            .map_err(|e| format!("Failed to get file type: {}", e))?;
         if file_type.is_dir() {
             if let Some(name) = entry.file_name().to_str() {
                 // Skip hidden directories
                 if !name.starts_with('.') {
                     let node_path = entry.path();
                     let config_path = node_path.join("config.toml");
-                    
+
                     // Check if config.toml exists and is valid TOML
                     // Include nodes with valid config.toml even if they don't have bootstrap nodes yet
                     // Bootstrap nodes are only required when starting the node, not for listing
@@ -1192,10 +1281,16 @@ async fn list_merod_nodes(home_dir: Option<String>) -> Result<Vec<String>, Strin
                                 // Valid config.toml found, include the node
                                 nodes.push(name.to_string());
                             } else {
-                                debug!("[Merod] Skipping node '{}': invalid TOML in config.toml", name);
+                                debug!(
+                                    "[Merod] Skipping node '{}': invalid TOML in config.toml",
+                                    name
+                                );
                             }
                         } else {
-                            debug!("[Merod] Skipping node '{}': failed to read config.toml", name);
+                            debug!(
+                                "[Merod] Skipping node '{}': failed to read config.toml",
+                                name
+                            );
                         }
                     } else {
                         debug!("[Merod] Skipping node '{}': config.toml not found", name);
@@ -1204,45 +1299,43 @@ async fn list_merod_nodes(home_dir: Option<String>) -> Result<Vec<String>, Strin
             }
         }
     }
-    
+
     // Sort nodes alphabetically
     nodes.sort();
-    
+
     Ok(nodes)
 }
 
 #[tauri::command]
 async fn check_merod_health(node_url: String) -> Result<serde_json::Value, String> {
     let health_url = format!("{}/health", node_url.trim_end_matches('/'));
-    
+
     info!("[Merod] Checking health at: {}", health_url);
-    
+
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
         .build()
         .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
-    
+
     let response = client.get(&health_url).send().await;
-    
+
     match response {
         Ok(resp) => {
             let status = resp.status().as_u16();
             let body = resp.text().await.unwrap_or_default();
             let healthy = status >= 200 && status < 300;
-            
+
             Ok(serde_json::json!({
                 "status": status,
                 "healthy": healthy,
                 "body": body
             }))
         }
-        Err(e) => {
-            Ok(serde_json::json!({
-                "status": 0,
-                "healthy": false,
-                "body": format!("Request failed: {}", e)
-            }))
-        }
+        Err(e) => Ok(serde_json::json!({
+            "status": 0,
+            "healthy": false,
+            "body": format!("Request failed: {}", e)
+        })),
     }
 }
 
@@ -1254,7 +1347,7 @@ async fn init_merod_node(
 ) -> Result<String, String> {
     // Get bundled merod binary
     let merod_binary = get_merod_binary_path(&app_handle)?;
-    
+
     // Prepare home directory (where .calimero folder will be)
     let home_dir_path = if let Some(dir) = home_dir {
         // Expand ~ if present
@@ -1273,20 +1366,20 @@ async fn init_merod_node(
             .ok_or("Failed to get home directory")?
             .join(".calimero")
     };
-    
+
     std::fs::create_dir_all(&home_dir_path)
         .map_err(|e| format!("Failed to create home directory: {}", e))?;
-    
+
     // Run merod init command - global options come BEFORE subcommand
     let mut cmd = Command::new(&merod_binary);
     cmd.arg("--home").arg(&home_dir_path);
     cmd.arg("--node-name").arg(&node_name);
     cmd.arg("init");
-    
+
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
     cmd.stdin(Stdio::null());
-    
+
     // Add timeout to prevent hanging (30 seconds should be enough for init)
     let output = tokio::time::timeout(
         tokio::time::Duration::from_secs(30),
@@ -1295,41 +1388,48 @@ async fn init_merod_node(
         .await
     .map_err(|_| "Merod init command timed out after 30 seconds. Please check if the merod binary is working correctly.")?
         .map_err(|e| format!("Failed to execute merod init: {}", e))?;
-    
+
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(format!("Merod init failed: {}", stderr));
     }
-    
+
     // Update config.toml to use embedded auth mode
     let node_dir = home_dir_path.join(&node_name);
     let config_path = node_dir.join("config.toml");
-    
+
     if config_path.exists() {
         // Read existing config
         let config_content = std::fs::read_to_string(&config_path)
             .map_err(|e| format!("Failed to read config.toml: {}", e))?;
-        
-        let mut config: toml::Value = config_content.parse()
+
+        let mut config: toml::Value = config_content
+            .parse()
             .map_err(|e| format!("Failed to parse config.toml: {}", e))?;
-        
+
         // Set auth_mode to "embedded" so the node provides auth endpoints
         if let Some(server) = config.get_mut("server") {
             if let Some(server_table) = server.as_table_mut() {
-                server_table.insert("auth_mode".to_string(), toml::Value::String("embedded".to_string()));
+                server_table.insert(
+                    "auth_mode".to_string(),
+                    toml::Value::String("embedded".to_string()),
+                );
             }
         }
-        
+
         // Write updated config back
         let updated_config = toml::to_string_pretty(&config)
             .map_err(|e| format!("Failed to serialize config.toml: {}", e))?;
         std::fs::write(&config_path, updated_config)
             .map_err(|e| format!("Failed to write config.toml: {}", e))?;
-        
+
         info!("[Merod] Updated config.toml to use embedded auth mode");
     }
-    
-    info!("[Merod] Initialized node '{}' in {:?}", node_name, home_dir_path);
+
+    info!(
+        "[Merod] Initialized node '{}' in {:?}",
+        node_name, home_dir_path
+    );
     Ok(format!("Node '{}' initialized successfully", node_name))
 }
 
@@ -1338,7 +1438,7 @@ async fn detect_running_merod_nodes() -> Result<Vec<serde_json::Value>, String> 
     #[cfg(unix)]
     {
         use std::process::Command;
-        
+
         // Use ps to find merod processes
         let output = Command::new("ps")
             .arg("ax")
@@ -1346,10 +1446,10 @@ async fn detect_running_merod_nodes() -> Result<Vec<serde_json::Value>, String> 
             .arg("pid,command")
             .output()
             .map_err(|e| format!("Failed to run ps: {}", e))?;
-        
+
         let stdout = String::from_utf8_lossy(&output.stdout);
         let mut running_nodes = Vec::new();
-        
+
         for line in stdout.lines() {
             if line.contains("merod") && line.contains("run") {
                 // Parse PID and extract node name and home directory from command
@@ -1359,7 +1459,7 @@ async fn detect_running_merod_nodes() -> Result<Vec<serde_json::Value>, String> 
                         // Try to extract node name and home directory from arguments
                         let mut node_name = None;
                         let mut home_dir = None;
-                        
+
                         for (i, part) in parts.iter().enumerate() {
                             if part == &"--node-name" && i + 1 < parts.len() {
                                 node_name = Some(parts[i + 1].to_string());
@@ -1368,12 +1468,14 @@ async fn detect_running_merod_nodes() -> Result<Vec<serde_json::Value>, String> 
                                 home_dir = Some(parts[i + 1].to_string());
                             }
                         }
-                        
+
                         // Try to read ports from config.toml
                         let mut server_port = 2528; // Default
                         let mut swarm_port = 2428; // Default
                         if let (Some(name), Some(home)) = (&node_name, &home_dir) {
-                            let config_path = std::path::PathBuf::from(home).join(name).join("config.toml");
+                            let config_path = std::path::PathBuf::from(home)
+                                .join(name)
+                                .join("config.toml");
                             if config_path.exists() {
                                 if let Ok(config_content) = std::fs::read_to_string(&config_path) {
                                     if let Ok(config) = config_content.parse::<toml::Value>() {
@@ -1384,14 +1486,23 @@ async fn detect_running_merod_nodes() -> Result<Vec<serde_json::Value>, String> 
                                                     for listen_str in listen_array {
                                                         if let Some(addr) = listen_str.as_str() {
                                                             // Extract port from /ip4/127.0.0.1/tcp/2528
-                                                            if let Some(tcp_pos) = addr.find("/tcp/") {
+                                                            if let Some(tcp_pos) =
+                                                                addr.find("/tcp/")
+                                                            {
                                                                 let port_str = &addr[tcp_pos + 5..];
-                                                                if let Some(slash_pos) = port_str.find('/') {
-                                                                    if let Ok(p) = port_str[..slash_pos].parse::<u16>() {
+                                                                if let Some(slash_pos) =
+                                                                    port_str.find('/')
+                                                                {
+                                                                    if let Ok(p) = port_str
+                                                                        [..slash_pos]
+                                                                        .parse::<u16>()
+                                                                    {
                                                                         server_port = p;
                                                                         break;
                                                                     }
-                                                                } else if let Ok(p) = port_str.parse::<u16>() {
+                                                                } else if let Ok(p) =
+                                                                    port_str.parse::<u16>()
+                                                                {
                                                                     server_port = p;
                                                                     break;
                                                                 }
@@ -1401,7 +1512,7 @@ async fn detect_running_merod_nodes() -> Result<Vec<serde_json::Value>, String> 
                                                 }
                                             }
                                         }
-                                        
+
                                         // Try to extract swarm port from swarm.listen
                                         if let Some(swarm) = config.get("swarm") {
                                             if let Some(listen) = swarm.get("listen") {
@@ -1409,25 +1520,43 @@ async fn detect_running_merod_nodes() -> Result<Vec<serde_json::Value>, String> 
                                                     for listen_str in listen_array {
                                                         if let Some(addr) = listen_str.as_str() {
                                                             // Extract port from /ip4/0.0.0.0/tcp/2428 or /ip4/0.0.0.0/udp/2428/quic-v1
-                                                            if let Some(tcp_pos) = addr.find("/tcp/") {
+                                                            if let Some(tcp_pos) =
+                                                                addr.find("/tcp/")
+                                                            {
                                                                 let port_str = &addr[tcp_pos + 5..];
-                                                                if let Some(slash_pos) = port_str.find('/') {
-                                                                    if let Ok(p) = port_str[..slash_pos].parse::<u16>() {
+                                                                if let Some(slash_pos) =
+                                                                    port_str.find('/')
+                                                                {
+                                                                    if let Ok(p) = port_str
+                                                                        [..slash_pos]
+                                                                        .parse::<u16>()
+                                                                    {
                                                                         swarm_port = p;
                                                                         break;
                                                                     }
-                                                                } else if let Ok(p) = port_str.parse::<u16>() {
+                                                                } else if let Ok(p) =
+                                                                    port_str.parse::<u16>()
+                                                                {
                                                                     swarm_port = p;
                                                                     break;
                                                                 }
-                                                            } else if let Some(udp_pos) = addr.find("/udp/") {
+                                                            } else if let Some(udp_pos) =
+                                                                addr.find("/udp/")
+                                                            {
                                                                 let port_str = &addr[udp_pos + 5..];
-                                                                if let Some(slash_pos) = port_str.find('/') {
-                                                                    if let Ok(p) = port_str[..slash_pos].parse::<u16>() {
+                                                                if let Some(slash_pos) =
+                                                                    port_str.find('/')
+                                                                {
+                                                                    if let Ok(p) = port_str
+                                                                        [..slash_pos]
+                                                                        .parse::<u16>()
+                                                                    {
                                                                         swarm_port = p;
                                                                         break;
                                                                     }
-                                                                } else if let Ok(p) = port_str.parse::<u16>() {
+                                                                } else if let Ok(p) =
+                                                                    port_str.parse::<u16>()
+                                                                {
                                                                     swarm_port = p;
                                                                     break;
                                                                 }
@@ -1441,7 +1570,7 @@ async fn detect_running_merod_nodes() -> Result<Vec<serde_json::Value>, String> 
                                 }
                             }
                         }
-                        
+
                         running_nodes.push(serde_json::json!({
                             "pid": pid,
                             "node_name": node_name.unwrap_or_else(|| format!("node_{}", pid)),
@@ -1453,24 +1582,24 @@ async fn detect_running_merod_nodes() -> Result<Vec<serde_json::Value>, String> 
                 }
             }
         }
-        
+
         Ok(running_nodes)
     }
-    
+
     #[cfg(windows)]
     {
         use std::process::Command;
-        
+
         // Use tasklist and wmic on Windows
         let output = Command::new("tasklist")
             .arg("/FO")
             .arg("CSV")
             .output()
             .map_err(|e| format!("Failed to run tasklist: {}", e))?;
-        
+
         let stdout = String::from_utf8_lossy(&output.stdout);
         let mut running_nodes = Vec::new();
-        
+
         // Parse CSV output and find merod processes
         for line in stdout.lines().skip(1) {
             if line.contains("merod") {
@@ -1486,13 +1615,13 @@ async fn detect_running_merod_nodes() -> Result<Vec<serde_json::Value>, String> 
                             .arg("get")
                             .arg("CommandLine")
                             .output();
-                        
+
                         if let Ok(cmd_out) = cmd_output {
                             let cmd_line = String::from_utf8_lossy(&cmd_out.stdout);
                             // Parse node name and port from command line
                             let mut node_name = None;
                             let mut port = None;
-                            
+
                             let cmd_parts: Vec<&str> = cmd_line.split_whitespace().collect();
                             for (i, part) in cmd_parts.iter().enumerate() {
                                 if part == &"--node-name" && i + 1 < cmd_parts.len() {
@@ -1504,9 +1633,9 @@ async fn detect_running_merod_nodes() -> Result<Vec<serde_json::Value>, String> 
                                     }
                                 }
                             }
-                            
+
                             let port = port.unwrap_or(2528);
-                            
+
                             running_nodes.push(serde_json::json!({
                                 "pid": pid,
                                 "node_name": node_name.unwrap_or_else(|| format!("node_{}", pid)),
@@ -1517,7 +1646,7 @@ async fn detect_running_merod_nodes() -> Result<Vec<serde_json::Value>, String> 
                 }
             }
         }
-        
+
         Ok(running_nodes)
     }
 }
@@ -1530,7 +1659,7 @@ async fn get_merod_logs(
     lines: Option<u32>,
 ) -> Result<String, String> {
     let lines = lines.unwrap_or(500).min(10_000);
-    
+
     let home_dir_path = if let Some(dir) = home_dir {
         let expanded = if dir.starts_with("~") {
             if let Some(home) = dirs::home_dir() {
@@ -1547,29 +1676,35 @@ async fn get_merod_logs(
             .ok_or("Failed to get home directory")?
             .join(".calimero")
     };
-    
-    let log_path = home_dir_path.join(&node_name).join("logs").join("merod.log");
-    
+
+    let log_path = home_dir_path
+        .join(&node_name)
+        .join("logs")
+        .join("merod.log");
+
     if !log_path.exists() {
         return Err(format!(
             "No log file found for node '{}'. Logs are only available for nodes started by the app.",
             node_name
         ));
     }
-    
+
     let content = tokio::fs::read_to_string(&log_path)
         .await
         .map_err(|e| format!("Failed to read log file: {}", e))?;
-    
+
     let all_lines: Vec<&str> = content.lines().collect();
     let start = all_lines.len().saturating_sub(lines as usize);
     let last_lines = &all_lines[start..];
-    
+
     Ok(last_lines.join("\n"))
 }
 
 #[tauri::command]
-async fn set_tray_icon_connected(connected: bool, app_handle: tauri::AppHandle) -> Result<(), String> {
+async fn set_tray_icon_connected(
+    connected: bool,
+    app_handle: tauri::AppHandle,
+) -> Result<(), String> {
     let icon_bytes: Vec<u8> = if connected {
         include_bytes!("../icons/tray-icon-connected.png").to_vec()
     } else {
@@ -1584,9 +1719,9 @@ async fn set_tray_icon_connected(connected: bool, app_handle: tauri::AppHandle) 
 #[tauri::command]
 async fn pick_directory(default_path: Option<String>) -> Result<Option<String>, String> {
     use tauri::api::dialog::blocking::FileDialogBuilder;
-    
+
     let mut dialog = FileDialogBuilder::new();
-    
+
     // Set default directory if provided
     if let Some(path_str) = default_path {
         // Expand ~ to home directory
@@ -1599,7 +1734,7 @@ async fn pick_directory(default_path: Option<String>) -> Result<Option<String>, 
         } else {
             path_str
         };
-        
+
         let path_buf = std::path::PathBuf::from(&expanded_path);
         if path_buf.exists() && path_buf.is_dir() {
             dialog = dialog.set_directory(path_buf);
@@ -1609,9 +1744,9 @@ async fn pick_directory(default_path: Option<String>) -> Result<Option<String>, 
             }
         }
     }
-    
+
     let result = dialog.pick_folder();
-    
+
     match result {
         Some(path) => Ok(Some(path.to_string_lossy().to_string())),
         None => Ok(None),
@@ -1660,7 +1795,9 @@ async fn autostart_is_enabled(_app: tauri::AppHandle) -> Result<bool, String> {
 /// Kill all merod processes on the system. Used before total nuke to ensure no process
 /// has the data directory open. Clears MerodState and waits for processes to fully exit.
 #[tauri::command]
-async fn kill_all_merod_processes(merod_state: tauri::State<'_, MerodState>) -> Result<String, String> {
+async fn kill_all_merod_processes(
+    merod_state: tauri::State<'_, MerodState>,
+) -> Result<String, String> {
     let pids: Vec<u32> = {
         #[cfg(unix)]
         {
@@ -1686,7 +1823,8 @@ async fn kill_all_merod_processes(merod_state: tauri::State<'_, MerodState>) -> 
         #[cfg(windows)]
         {
             let output = std::process::Command::new("tasklist")
-                .arg("/FO").arg("CSV")
+                .arg("/FO")
+                .arg("CSV")
                 .output()
                 .map_err(|e| format!("Failed to run tasklist: {}", e))?;
             let stdout = String::from_utf8_lossy(&output.stdout);
@@ -1708,12 +1846,17 @@ async fn kill_all_merod_processes(merod_state: tauri::State<'_, MerodState>) -> 
     for pid in &pids {
         #[cfg(unix)]
         {
-            let _ = std::process::Command::new("kill").arg("-TERM").arg(pid.to_string()).output();
+            let _ = std::process::Command::new("kill")
+                .arg("-TERM")
+                .arg(pid.to_string())
+                .output();
         }
         #[cfg(windows)]
         {
             let _ = std::process::Command::new("taskkill")
-                .arg("/PID").arg(pid.to_string()).arg("/F")
+                .arg("/PID")
+                .arg(pid.to_string())
+                .arg("/F")
                 .output();
         }
     }
@@ -1722,10 +1865,16 @@ async fn kill_all_merod_processes(merod_state: tauri::State<'_, MerodState>) -> 
         tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
         #[cfg(unix)]
         for pid in &pids {
-            let check = std::process::Command::new("ps").arg("-p").arg(pid.to_string()).output();
+            let check = std::process::Command::new("ps")
+                .arg("-p")
+                .arg(pid.to_string())
+                .output();
             if let Ok(out) = check {
                 if out.status.success() {
-                    let _ = std::process::Command::new("kill").arg("-9").arg(pid.to_string()).output();
+                    let _ = std::process::Command::new("kill")
+                        .arg("-9")
+                        .arg(pid.to_string())
+                        .output();
                 }
             }
         }
@@ -1763,9 +1912,9 @@ async fn delete_calimero_data_dir(data_dir: String) -> Result<String, String> {
         return Ok("Directory did not exist (nothing to delete)".to_string());
     }
 
-    let path_canonical = path.canonicalize().map_err(|e| {
-        format!("Invalid path: {}", e)
-    })?;
+    let path_canonical = path
+        .canonicalize()
+        .map_err(|e| format!("Invalid path: {}", e))?;
 
     // Safety: only allow deleting paths under the user's home directory
     if let Some(home) = dirs::home_dir() {
@@ -1780,9 +1929,8 @@ async fn delete_calimero_data_dir(data_dir: String) -> Result<String, String> {
         return Err("Path is not a directory".to_string());
     }
 
-    std::fs::remove_dir_all(&path_canonical).map_err(|e| {
-        format!("Failed to delete directory: {}", e)
-    })?;
+    std::fs::remove_dir_all(&path_canonical)
+        .map_err(|e| format!("Failed to delete directory: {}", e))?;
 
     info!("[Calimero] Deleted data directory: {:?}", path_canonical);
     Ok(format!("Deleted {}", path_canonical.display()))
@@ -1807,37 +1955,31 @@ fn main() {
     // System tray with context menu
     let show = CustomMenuItem::new("show".to_string(), "Show Calimero");
     let quit = CustomMenuItem::new("quit".to_string(), "Quit");
-    let tray_menu = SystemTrayMenu::new()
-        .add_item(show)
-        .add_item(quit);
+    let tray_menu = SystemTrayMenu::new().add_item(show).add_item(quit);
     let system_tray = SystemTray::new().with_menu(tray_menu);
-    
+
     tauri::Builder::default()
         .system_tray(system_tray)
-        .on_system_tray_event(|app, event| {
-            match event {
-                SystemTrayEvent::LeftClick { .. } => {
+        .on_system_tray_event(|app, event| match event {
+            SystemTrayEvent::LeftClick { .. } => {
+                if let Some(window) = app.get_window("main") {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+            }
+            SystemTrayEvent::MenuItemClick { id, .. } => match id.as_str() {
+                "show" => {
                     if let Some(window) = app.get_window("main") {
                         let _ = window.show();
                         let _ = window.set_focus();
                     }
                 }
-                SystemTrayEvent::MenuItemClick { id, .. } => {
-                    match id.as_str() {
-                        "show" => {
-                            if let Some(window) = app.get_window("main") {
-                                let _ = window.show();
-                                let _ = window.set_focus();
-                            }
-                        }
-                        "quit" => {
-                            std::process::exit(0);
-                        }
-                        _ => {}
-                    }
+                "quit" => {
+                    std::process::exit(0);
                 }
                 _ => {}
-            }
+            },
+            _ => {}
         })
         .on_window_event(|event| {
             if event.window().label() != "main" {
@@ -1871,14 +2013,11 @@ fn main() {
 
             #[cfg(feature = "autostart")]
             {
-                let _ = app.handle().plugin(
-                    tauri_plugin_autostart::init(
-                        tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-                        None,
-                    ),
-                );
+                let _ = app.handle().plugin(tauri_plugin_autostart::init(
+                    tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+                    None,
+                ));
             }
-
 
             // Enable devtools for main window based on TAURI_OPEN_DEVTOOLS env var
             // IMPORTANT: Release builds NEVER enable devtools, even if env var is set
@@ -1900,14 +2039,14 @@ fn main() {
                     }
                 }
             };
-            
+
             if should_open_main_devtools {
                 use tauri::Manager;
                 if let Some(window) = app.get_window("main") {
                     window.open_devtools();
                 }
             }
-            
+
             Ok(())
         })
         .manage(MerodState::default())
@@ -1967,11 +2106,23 @@ mod tests {
     #[test]
     fn test_configured_node_url() {
         // Test with configured node URL
-        assert!(validate_allowed_url("http://localhost:8080/", Some("http://localhost:8080")).is_ok());
-        assert!(validate_allowed_url("http://192.168.1.100:2528/", Some("http://192.168.1.100:2528")).is_ok());
-        assert!(validate_allowed_url("http://node.example.com:2528/", Some("http://node.example.com:2528")).is_ok());
+        assert!(
+            validate_allowed_url("http://localhost:8080/", Some("http://localhost:8080")).is_ok()
+        );
+        assert!(validate_allowed_url(
+            "http://192.168.1.100:2528/",
+            Some("http://192.168.1.100:2528")
+        )
+        .is_ok());
+        assert!(validate_allowed_url(
+            "http://node.example.com:2528/",
+            Some("http://node.example.com:2528")
+        )
+        .is_ok());
         // Should still reject wrong URLs even with configured node URL
-        assert!(validate_allowed_url("http://localhost:2528/", Some("http://localhost:8080")).is_err());
+        assert!(
+            validate_allowed_url("http://localhost:2528/", Some("http://localhost:8080")).is_err()
+        );
     }
 
     #[test]
@@ -1981,7 +2132,6 @@ mod tests {
         assert!(validate_allowed_url("http://localhost:8080/", None).is_err());
         assert!(validate_allowed_url("http://127.0.0.1:80/", None).is_err());
         assert!(validate_allowed_url("http://127.0.0.1:8080/", None).is_err());
-        
     }
 
     #[test]

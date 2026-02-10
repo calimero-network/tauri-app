@@ -154,6 +154,9 @@ jobs:
             echo "No TAURI_PUBLIC_KEY provided, using default pubkey"
           fi
 
+      - name: Download merod binary
+        run: bash apps/desktop/src-tauri/scripts/download-merod.sh
+
       - name: Build Tauri app for Linux
         working-directory: apps/desktop
         env:

@@ -346,7 +346,11 @@ function App() {
   }, [toast]);
 
   // Auto-check node status every 5 seconds (runs on all main app pages for global indicator)
+  // Skip when on login or settings - those screens don't need the periodic check, and it would
+  // redirect back to login on 401 while user is intentionally on Settings (e.g. to configure node)
   useEffect(() => {
+    if (showLogin || showSettings) return;
+
     // Initial check
     checkConnection();
 
@@ -357,7 +361,7 @@ function App() {
 
     // Cleanup interval on unmount
     return () => clearInterval(interval);
-  }, [checkConnection]);
+  }, [checkConnection, showLogin, showSettings]);
 
   // When launched from a desktop shortcut (--open-app-url / --open-app-name): open app, focus it, then hide main window
   useEffect(() => {

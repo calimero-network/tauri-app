@@ -804,7 +804,7 @@ async fn start_merod(
         .map_err(|e| format!("Failed to open log file for stderr: {}", e))?;
 
     // Build command - global options come BEFORE subcommand
-    // Merod expects: merod --home ~/.calimero --node-name node1 run
+    // Merod expects: merod --home ~/.calimero --node node1 run
     let mut cmd = Command::new(&merod_binary);
     // Force ANSI colors in output so the log viewer can display them
     cmd.env("CLICOLOR_FORCE", "1");
@@ -814,7 +814,7 @@ async fn start_merod(
     cmd.arg("--home").arg(&home_dir_path);
     
     // Set node name (global option, before subcommand)
-    cmd.arg("--node-name").arg(&node_name_str);
+    cmd.arg("--node").arg(&node_name_str);
     
     // Add 'run' subcommand last
     cmd.arg("run");
@@ -1280,7 +1280,7 @@ async fn init_merod_node(
     // Run merod init command - global options come BEFORE subcommand
     let mut cmd = Command::new(&merod_binary);
     cmd.arg("--home").arg(&home_dir_path);
-    cmd.arg("--node-name").arg(&node_name);
+    cmd.arg("--node").arg(&node_name);
     cmd.arg("init");
     
     cmd.stdout(Stdio::piped());
@@ -1361,7 +1361,7 @@ async fn detect_running_merod_nodes() -> Result<Vec<serde_json::Value>, String> 
                         let mut home_dir = None;
                         
                         for (i, part) in parts.iter().enumerate() {
-                            if part == &"--node-name" && i + 1 < parts.len() {
+                            if (part == &"--node" || part == &"-n") && i + 1 < parts.len() {
                                 node_name = Some(parts[i + 1].to_string());
                             }
                             if part == &"--home" && i + 1 < parts.len() {
@@ -1495,7 +1495,7 @@ async fn detect_running_merod_nodes() -> Result<Vec<serde_json::Value>, String> 
                             
                             let cmd_parts: Vec<&str> = cmd_line.split_whitespace().collect();
                             for (i, part) in cmd_parts.iter().enumerate() {
-                                if part == &"--node-name" && i + 1 < cmd_parts.len() {
+                                if (part == &"--node" || part == &"-n") && i + 1 < cmd_parts.len() {
                                     node_name = Some(cmd_parts[i + 1].to_string());
                                 }
                                 if part == &"--port" && i + 1 < cmd_parts.len() {

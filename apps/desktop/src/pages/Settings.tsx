@@ -4,7 +4,7 @@ import { invoke } from "@tauri-apps/api/tauri";
 import { killAllMerodProcesses, deleteCalimeroDataDir, stopMerod } from "../utils/merod";
 import { useTheme } from "../contexts/ThemeContext";
 import { useToast } from "../contexts/ToastContext";
-import { Check, ArrowLeft, RotateCcw, Trash2 } from "lucide-react";
+import { ArrowLeft, RotateCcw, Trash2 } from "lucide-react";
 import "./Settings.css";
 
 interface SettingsProps {
@@ -16,7 +16,6 @@ export default function Settings({ onBack }: SettingsProps) {
   const toast = useToast();
   const [registries, setRegistries] = useState<string[]>([]);
   const [newRegistryUrl, setNewRegistryUrl] = useState("");
-  const [saved, setSaved] = useState(false);
   
   // Node management state (removed - now in NodeManagement page)
   const [activeTab, setActiveTab] = useState<'general' | 'registries'>('general');
@@ -77,32 +76,27 @@ export default function Settings({ onBack }: SettingsProps) {
     toast.success(`Developer mode ${newValue ? 'enabled' : 'disabled'}`);
   };
 
-  const handleSave = () => {
-    try {
-      const settings = getSettings();
-      saveSettings({ 
-        ...settings,
-        registries: registries.filter(url => url.trim() !== ''),
-        developerMode,
-      });
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
-      toast.success("Settings saved successfully");
-    } catch (error) {
-      console.error("Failed to save settings:", error);
-      toast.error("Failed to save settings");
-    }
-  };
 
   const handleAddRegistry = () => {
-    if (newRegistryUrl.trim() && !registries.includes(newRegistryUrl.trim())) {
-      setRegistries([...registries, newRegistryUrl.trim()]);
+    const url = newRegistryUrl.trim();
+    if (url && !registries.includes(url)) {
+      const updated = [...registries, url];
+      setRegistries(updated);
       setNewRegistryUrl("");
+      // Auto-save so the new registry persists immediately
+      const settings = getSettings();
+      saveSettings({ ...settings, registries: updated });
+      toast.success("Registry added");
     }
   };
 
   const handleRemoveRegistry = (index: number) => {
-    setRegistries(registries.filter((_, i) => i !== index));
+    const updated = registries.filter((_, i) => i !== index);
+    setRegistries(updated);
+    // Auto-save so the removal persists immediately
+    const settings = getSettings();
+    saveSettings({ ...settings, registries: updated });
+    toast.success("Registry removed");
   };
 
 
@@ -318,9 +312,15 @@ export default function Settings({ onBack }: SettingsProps) {
                             setNuking(false);
                             return;
                           }
-                          const dataDir = getSettings().embeddedNodeDataDir || "~/.calimero";
+                          // Delete both the settings path and default ~/.calimero.
+                          // After clearAllAppData(), onboarding uses ~/.calimero, so we must remove it.
+                          const settingsDataDir = getSettings().embeddedNodeDataDir || "~/.calimero";
+                          const defaultDataDir = "~/.calimero";
+                          const dirsToDelete = [...new Set([settingsDataDir, defaultDataDir])];
                           try {
-                            await deleteCalimeroDataDir(dataDir);
+                            for (const dir of dirsToDelete) {
+                              await deleteCalimeroDataDir(dir);
+                            }
                           } catch (err: unknown) {
                             toast.error(String(err));
                             setNuking(false);
@@ -391,17 +391,9 @@ export default function Settings({ onBack }: SettingsProps) {
             </div>
           )}
 
-          <div className="settings-actions">
-            <button onClick={handleSave} className="button button-primary">
-              Save Settings
-            </button>
-                {saved && (
-                  <span className="saved-indicator">
-                    <Check size={14} style={{ marginRight: '4px', verticalAlign: 'middle' }} />
-                    Saved
-                  </span>
-                )}
-              </div>
+          <p className="field-hint" style={{ marginTop: '8px', fontStyle: 'italic' }}>
+            Changes are saved automatically.
+          </p>
             </div>
           </div>
         )}

@@ -48,14 +48,8 @@ echo "Downloading merod from: $URL"
 # Create merod directory if it doesn't exist
 mkdir -p "$MEROD_DIR"
 
-# Check if binary already exists and is recent (less than 1 day old)
-if [ -f "$MEROD_BINARY" ]; then
-  FILE_AGE=$(find "$MEROD_BINARY" -mtime -1 2>/dev/null)
-  if [ -n "$FILE_AGE" ]; then
-    echo "Merod binary already exists and is recent, skipping download"
-    exit 0
-  fi
-fi
+# Remove old binary so we always get the configured VERSION
+rm -f "$MEROD_BINARY"
 
 # Download and extract
 TEMP_TAR="$MEROD_DIR/temp.tar.gz"

@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from "react";
 import { getSettings } from "../utils/settings";
 import { fetchAppsFromAllRegistries, type AppSummary } from "../utils/registry";
 import { apiClient } from "@calimero-network/mero-react";
+import { decodeMetadata } from "../utils/appUtils";
 import { useToast } from "../contexts/ToastContext";
 import Skeleton from "../components/Skeleton";
 import { Search, RefreshCw, Package, Download, CheckCircle2, X } from "lucide-react";
@@ -23,55 +24,83 @@ export default function Marketplace() {
   const [filterInstalled, setFilterInstalled] = useState<'all' | 'installed' | 'not-installed'>('all');
   const [installingAppId, setInstallingAppId] = useState<string | null>(null);
 
-  // Load installed applications
+  // Load installed apps first, then marketplace apps (sequential to avoid stale closure)
   useEffect(() => {
-    loadInstalledApps();
+    const init = async () => {
+      const installed = await loadInstalledApps();
+      await loadMarketplaceApps(installed);
+    };
+    init();
   }, []);
 
-  // Load marketplace applications on mount
+  // Sync installed status whenever installedAppIds changes (e.g. after installing an app)
+  // installedAppIds now contains app names (from metadata), not node-assigned IDs
   useEffect(() => {
-    loadMarketplaceApps();
-  }, []);
+    setApps((prev) => {
+      if (prev.length === 0) return prev;
+      const updated = prev.map((app) => ({
+        ...app,
+        installed: installedAppIds.has(app.name) || installedAppIds.has(app.id),
+      }));
+      const hasChanged = updated.some((app, i) => app.installed !== prev[i].installed);
+      return hasChanged ? updated : prev;
+    });
+  }, [installedAppIds]);
 
-  // Load apps on mount and when registries change
-  // Note: Search filtering is now done client-side for better UX
-  // We still load all apps and filter them locally
-
-  const loadInstalledApps = async () => {
+  const loadInstalledApps = async (): Promise<Set<string>> => {
     try {
       const response = await apiClient.node.listApplications();
       if (response.error) {
-        // If 401, trigger login redirect
         if (response.error.code === '401') {
           console.warn("📦 Marketplace: 401 Unauthorized - token may be expired");
           window.location.reload();
-          return;
+          return new Set();
         }
         console.error("Failed to load installed apps:", response.error.message);
-        return;
+        return new Set();
       }
       
       if (response.data) {
         const apps = Array.isArray(response.data) ? response.data : [];
-        const installed = new Set<string>(
-          apps.map((app: any) => app.id as string)
-        );
-        setInstalledAppIds(installed);
+        // Build a set of installed app names from decoded metadata.
+        // The node-assigned app.id (a hash) does NOT match the registry package id,
+        // so we extract the name from metadata (set during install) to correlate.
+        const installedNames = new Set<string>();
+        for (const app of apps as any[]) {
+          const meta = decodeMetadata(app.metadata);
+          if (meta?.name) {
+            installedNames.add(meta.name);
+          }
+          // Also add the direct name field if the backend provides it
+          if (app.name) {
+            installedNames.add(app.name);
+          }
+          // Also add source if it might be a package identifier
+          if (app.source) {
+            installedNames.add(app.source);
+          }
+        }
+        console.log("📦 Marketplace: Installed app names:", [...installedNames]);
+        setInstalledAppIds(installedNames);
+        return installedNames;
       }
     } catch (err: any) {
-      // Check for 401 in error object
       if (err?.status === 401 || err?.code === '401') {
         console.warn("📦 Marketplace: 401 Unauthorized - reloading to trigger login");
         window.location.reload();
-        return;
+        return new Set();
       }
       console.error("Failed to load installed apps:", err);
     }
+    return new Set();
   };
 
-  const loadMarketplaceApps = async () => {
+  const loadMarketplaceApps = async (knownInstalled?: Set<string>) => {
     setLoading(true);
     setError(null);
+
+    // Use the passed-in set, or fall back to current state
+    const installed = knownInstalled ?? installedAppIds;
 
     try {
       const settings = getSettings();
@@ -91,12 +120,10 @@ export default function Marketplace() {
       const allApps: MarketplaceApp[] = [];
       results.forEach(({ registry, apps: registryApps }) => {
         registryApps.forEach((app) => {
-          // Use the app.id from the registry
-          const appId = app.id;
           allApps.push({
             ...app,
             registry,
-            installed: installedAppIds.has(appId),
+            installed: installed.has(app.name) || installed.has(app.id),
           });
         });
       });
@@ -121,10 +148,12 @@ export default function Marketplace() {
         const appName = (app.alias || app.name || '').toLowerCase();
         const appDescription = (app.description || '').toLowerCase();
         const appId = (app.id || '').toLowerCase();
-        // Match if query appears in name, description, or id
-        return appName.includes(query) || 
-               appDescription.includes(query) || 
-               appId.includes(query);
+        const appAuthor = (app.author || app.developer_pubkey || '').toLowerCase();
+        // Match if query appears in name, description, id, or author
+        return appName.includes(query) ||
+               appDescription.includes(query) ||
+               appId.includes(query) ||
+               appAuthor.includes(query);
       });
     }
 
@@ -262,14 +291,14 @@ export default function Marketplace() {
       }
 
       console.log("📦 Marketplace: Installation successful:", response.data);
-      toast.success(`Application installed successfully! ID: ${response.data?.applicationId || 'unknown'}`);
+      toast.success(`${app.alias || app.name} installed successfully!`);
 
-      // Reload installed apps
+      // Reload installed apps (this updates installedAppIds which triggers sync useEffect)
       await loadInstalledApps();
-      // Update the app's installed status
+      // Also explicitly mark this app as installed immediately for instant UI feedback
       setApps((prevApps) =>
         prevApps.map((a) =>
-          a.id === app.id
+          a.id === app.id || a.name === app.name
             ? { ...a, installed: true }
             : a
         )
@@ -324,7 +353,7 @@ export default function Marketplace() {
             </select>
             
             <button 
-              onClick={loadMarketplaceApps} 
+              onClick={() => loadMarketplaceApps()} 
               className="button button-secondary"
               disabled={loading}
               title="Refresh applications"
@@ -404,15 +433,21 @@ export default function Marketplace() {
                       <p>{app.description}</p>
                     </div>
                   )}
-                  
+
                   <div className="app-card-footer">
-                    {shortPubkey && shortPubkey !== 'unknown' && (
-                      <div className="app-developer">
-                        <span className="app-developer-label">Developer:</span>
-                        <span className="app-developer-value">{shortPubkey}</span>
-                </div>
-                    )}
-                </div>
+                    <div className="app-meta">
+                      <div className="app-meta-row">
+                        <span className="app-meta-label">Package:</span>
+                        <span className="app-meta-value" title={app.id}>{app.id}</span>
+                      </div>
+                      <div className="app-meta-row">
+                        <span className="app-meta-label">Author:</span>
+                        <span className="app-meta-value">
+                          {app.author || (shortPubkey && shortPubkey !== 'unknown' ? shortPubkey : '—')}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
                   
                 <div className="app-card-actions">
                   {app.installed ? (

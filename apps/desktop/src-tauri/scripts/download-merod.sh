@@ -40,7 +40,7 @@ case "$ARCH" in
     ;;
 esac
 
-VERSION="0.10.0-rc.33"
+VERSION="0.10.0-rc.40"
 URL="https://github.com/calimero-network/core/releases/download/$VERSION/$ASSET_NAME"
 
 echo "Downloading merod from: $URL"

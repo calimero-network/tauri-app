@@ -10,6 +10,7 @@ export interface AppSummary {
   latest_cid: string;
   alias?: string;
   description?: string;
+  author?: string;
 }
 
 export interface VersionInfo {
@@ -105,6 +106,7 @@ export async function fetchAppsFromRegistry(
       latest_cid: bundle.wasm?.hash || bundle.wasm?.path || '',
       alias: bundle.metadata?.name,
       description: bundle.metadata?.description,
+      author: bundle.metadata?.author,
     }));
   } catch (error) {
     console.error(`Failed to fetch apps from registry ${registryUrl}:`, error);

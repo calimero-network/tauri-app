@@ -699,8 +699,17 @@ async fn start_merod(
     if let Some(name) = &node_name {
         let node_dir = home_dir_path.join(name);
         let config_path = node_dir.join("config.toml");
-        
-        if config_path.exists() {
+
+        // Verify the node is initialized (config.toml exists)
+        if !config_path.exists() {
+            return Err(format!(
+                "Node '{}' is not initialized. config.toml not found at {:?}. Please run init first.",
+                name, config_path
+            ));
+        }
+
+        // Config exists, proceed with port updates
+        {
             // Read existing config
             let config_content = std::fs::read_to_string(&config_path)
                 .map_err(|e| format!("Failed to read config.toml: {}", e))?;
@@ -708,13 +717,8 @@ async fn start_merod(
             let mut config: toml::Value = config_content.parse()
                 .map_err(|e| format!("Failed to parse config.toml: {}", e))?;
             
-            // Update server.listen ports and ensure auth_mode is embedded
+            // Update server.listen ports (auth_mode comes from merod init --auth-mode embedded)
             if let Some(server) = config.get_mut("server") {
-                // Set auth_mode to embedded so the node provides auth endpoints
-                if let Some(server_table) = server.as_table_mut() {
-                    server_table.insert("auth_mode".to_string(), toml::Value::String("embedded".to_string()));
-                }
-                
                 if let Some(listen) = server.get_mut("listen") {
                     if let Some(listen_array) = listen.as_array_mut() {
                         for listen_str in listen_array.iter_mut() {
@@ -1278,10 +1282,11 @@ async fn init_merod_node(
         .map_err(|e| format!("Failed to create home directory: {}", e))?;
     
     // Run merod init command - global options come BEFORE subcommand
+    // Use --auth-mode embedded so merod creates the full embedded_auth config
     let mut cmd = Command::new(&merod_binary);
     cmd.arg("--home").arg(&home_dir_path);
     cmd.arg("--node").arg(&node_name);
-    cmd.arg("init");
+    cmd.arg("init").arg("--auth-mode").arg("embedded");
     
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
@@ -1299,34 +1304,6 @@ async fn init_merod_node(
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(format!("Merod init failed: {}", stderr));
-    }
-    
-    // Update config.toml to use embedded auth mode
-    let node_dir = home_dir_path.join(&node_name);
-    let config_path = node_dir.join("config.toml");
-    
-    if config_path.exists() {
-        // Read existing config
-        let config_content = std::fs::read_to_string(&config_path)
-            .map_err(|e| format!("Failed to read config.toml: {}", e))?;
-        
-        let mut config: toml::Value = config_content.parse()
-            .map_err(|e| format!("Failed to parse config.toml: {}", e))?;
-        
-        // Set auth_mode to "embedded" so the node provides auth endpoints
-        if let Some(server) = config.get_mut("server") {
-            if let Some(server_table) = server.as_table_mut() {
-                server_table.insert("auth_mode".to_string(), toml::Value::String("embedded".to_string()));
-            }
-        }
-        
-        // Write updated config back
-        let updated_config = toml::to_string_pretty(&config)
-            .map_err(|e| format!("Failed to serialize config.toml: {}", e))?;
-        std::fs::write(&config_path, updated_config)
-            .map_err(|e| format!("Failed to write config.toml: {}", e))?;
-        
-        info!("[Merod] Updated config.toml to use embedded auth mode");
     }
     
     info!("[Merod] Initialized node '{}' in {:?}", node_name, home_dir_path);

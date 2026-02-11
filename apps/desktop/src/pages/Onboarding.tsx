@@ -263,6 +263,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
   // 'choose' = show path selection, 'use-existing' = minimal form, 'create-new' = full form
   const [nodeSetupMode, setNodeSetupMode] = useState<'choose' | 'use-existing' | 'create-new'>(() => loadOnboardingProgress()?.nodeSetupMode ?? 'choose');
   const stepContainerRef = useRef<HTMLDivElement>(null);
+  const hasAttemptedAutoContinue = useRef(false);
 
   useEffect(() => {
     async function loadState() {
@@ -295,9 +296,19 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
   }, [currentStep, dataDir, nodeName, serverPort, swarmPort, nodeSetupMode, useExistingNode, nodeCreated, nodeStarted]);
 
   // Load existing nodes when on node-setup step - auto-continue if found (skip auth)
+  const prevDataDirRef = useRef(dataDir);
   useEffect(() => {
-    if (currentStep !== 'node-setup' || creatingNode || nodeCreated) return;
-    
+    if (currentStep !== 'node-setup') {
+      hasAttemptedAutoContinue.current = false;
+      return;
+    }
+    // Reset when dataDir changes so we retry for the new directory
+    if (prevDataDirRef.current !== dataDir) {
+      prevDataDirRef.current = dataDir;
+      hasAttemptedAutoContinue.current = false;
+    }
+    if (creatingNode || nodeCreated || hasAttemptedAutoContinue.current) return;
+
     async function loadAndContinueIfExisting() {
       setLoadingExistingNodes(true);
       try {
@@ -305,6 +316,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
         setExistingNodes(nodes);
         
         if (nodes.length > 0) {
+          hasAttemptedAutoContinue.current = true;
           const nodeToUse = nodes[0];
           setUseExistingNode(nodeToUse);
           setCreatingNode(true);
@@ -354,7 +366,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
       }
     }
     loadAndContinueIfExisting();
-  }, [currentStep, dataDir, creatingNode, nodeCreated, onComplete, setTheme]);
+  }, [currentStep, dataDir, creatingNode, nodeCreated, onComplete, setTheme, serverPort, swarmPort]);
 
   // Disable autocomplete and autocapitalize on login form inputs
   useEffect(() => {
@@ -1220,6 +1232,19 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
                 )}
               </>
             )}
+
+            <div className="step-actions" style={{ marginTop: '24px' }}>
+              <button
+                onClick={() => {
+                  setTheme('dark');
+                  onComplete();
+                }}
+                className="step-button step-button-secondary"
+                disabled={installingAppId !== null}
+              >
+                Skip for now
+              </button>
+            </div>
           </div>
           <ScrollHint containerRef={stepContainerRef} />
         </div>

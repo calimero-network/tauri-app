@@ -261,7 +261,6 @@ export default function Marketplace() {
   }, [apps, filterInstalled, searchQuery]);
 
   const handleInstall = async (app: MarketplaceApp) => {
-    console.log("📦 Marketplace: Install button clicked for app:", app);
     setInstallingAppId(app.id);
     try {
       // Fetch the manifest to get the WASM artifact URL
@@ -276,7 +275,6 @@ export default function Marketplace() {
       
       if (manifest.artifact) {
         // V1 format: single artifact object
-        console.log("📦 Marketplace: Using v1 format");
         if (!manifest.artifact.uri) {
           toast.error("Invalid manifest: artifact URI is missing");
           return;
@@ -286,31 +284,26 @@ export default function Marketplace() {
         wasmHashHex = manifest.artifact.digest?.replace('sha256:', '') || null;
       } else if (manifest.artifacts && manifest.artifacts.length > 0) {
         // V2 format: artifacts array
-        console.log("📦 Marketplace: Using v2 format, artifacts:", manifest.artifacts);
         // V2 bundles use MPK files, but also check for WASM for backward compatibility
         const mpkArtifact = manifest.artifacts.find(a => a.type === 'mpk');
         const wasmArtifact = manifest.artifacts.find(a => a.type === 'wasm');
         
         if (mpkArtifact) {
           // V2 bundle: MPK file
-          console.log("📦 Marketplace: Found MPK artifact:", mpkArtifact);
           wasmUrl = mpkArtifact.mirrors?.[0] || `https://ipfs.io/ipfs/${mpkArtifact.cid}`;
           wasmHashHex = mpkArtifact.sha256?.replace('sha256:', '') || null;
           // If no sha256, try using cid if it looks like a hex hash (64 chars)
           if (!wasmHashHex && mpkArtifact.cid && /^[0-9a-f]{64}$/i.test(mpkArtifact.cid)) {
             wasmHashHex = mpkArtifact.cid;
           }
-          console.log("📦 Marketplace: MPK URL:", wasmUrl, "Hash (hex):", wasmHashHex);
         } else if (wasmArtifact) {
           // Fallback: WASM artifact (v1 or legacy v2)
-          console.log("📦 Marketplace: Found WASM artifact:", wasmArtifact);
           wasmUrl = wasmArtifact.mirrors?.[0] || `https://ipfs.io/ipfs/${wasmArtifact.cid}`;
           wasmHashHex = wasmArtifact.sha256?.replace('sha256:', '') || null;
           // If no sha256, try using cid if it looks like a hex hash (64 chars)
           if (!wasmHashHex && wasmArtifact.cid && /^[0-9a-f]{64}$/i.test(wasmArtifact.cid)) {
             wasmHashHex = wasmArtifact.cid;
           }
-          console.log("📦 Marketplace: WASM URL:", wasmUrl, "Hash (hex):", wasmHashHex);
         } else {
           console.error("📦 Marketplace: No MPK or WASM artifact found in:", manifest.artifacts);
           toast.error("No MPK or WASM artifact found in application manifest");
@@ -343,10 +336,12 @@ export default function Marketplace() {
         description: manifest.metadata?.description || "",
         version: app.latest_version,
         developer: app.developer_pubkey,
+        minRuntimeVersion: manifest.minRuntimeVersion,
       };
       // Convert metadata JSON string to byte array (Vec<u8> in Rust)
       // serde_json expects Vec<u8> as an array of numbers [1, 2, 3]
       const metadataJson = JSON.stringify(metadata);
+      console.log("JEBENA METADATA", metadataJson);
       const metadataBytes = Array.from(new TextEncoder().encode(metadataJson));
 
       // Install the application
@@ -366,11 +361,9 @@ export default function Marketplace() {
       // For MPK files, don't provide hash until we have the actual MPK file hash
       // The node will compute it during download
       
-      console.log("📦 Marketplace: Installing with request:", { ...request, metadata: `[${metadataBytes.length} bytes]` });
       
       const response = await apiClient.node.installApplication(request);
       
-      console.log("📦 Marketplace: Install response:", response);
 
       if (response.error) {
         console.error("📦 Marketplace: Install error:", response.error);
@@ -378,7 +371,6 @@ export default function Marketplace() {
         return;
       }
 
-      console.log("📦 Marketplace: Installation successful:", response.data);
       toast.success(`${app.alias || app.name} installed successfully!`);
 
       // Reload installed apps (this updates installedAppIds which triggers sync useEffect)

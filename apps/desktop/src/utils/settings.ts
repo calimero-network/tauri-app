@@ -115,13 +115,15 @@ export function clearSettings(): void {
 const THEME_KEY = 'calimero-desktop-theme';
 
 /**
- * Clear all app data (settings + theme + onboarding progress). Use with stopMerod() for full reset.
+ * Clear all app data (settings + theme + onboarding progress + cache). Use with stopMerod() for full reset.
  * Caller should reload the app after this.
  */
 export function clearAllAppData(): void {
   localStorage.removeItem(SETTINGS_KEY);
   localStorage.removeItem(THEME_KEY);
   localStorage.removeItem('calimero-onboarding-progress');
+  localStorage.removeItem('calimero-autostart-default-applied');
+  localStorage.removeItem('calimero-marketplace-cache');
 }
 
 

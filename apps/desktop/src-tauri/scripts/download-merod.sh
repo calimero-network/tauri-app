@@ -40,10 +40,16 @@ case "$ARCH" in
     ;;
 esac
 
-VERSION="0.10.0-rc.40"
+# Fetch latest release tag from GitHub (includes pre-releases)
+VERSION=$(curl -sL "https://api.github.com/repos/calimero-network/core/releases?per_page=1" | grep -o '"tag_name": *"[^"]*"' | head -1 | cut -d'"' -f4)
+if [ -z "$VERSION" ]; then
+  echo "Failed to fetch latest release version from GitHub"
+  exit 1
+fi
+
 URL="https://github.com/calimero-network/core/releases/download/$VERSION/$ASSET_NAME"
 
-echo "Downloading merod from: $URL"
+echo "Downloading merod $VERSION from: $URL"
 
 # Create merod directory if it doesn't exist
 mkdir -p "$MEROD_DIR"

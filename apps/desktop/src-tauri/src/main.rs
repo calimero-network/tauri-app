@@ -592,7 +592,7 @@ struct MerodProcess {
     port: u16,
 }
 
-type MerodState = Arc<Mutex<Option<MerodProcess>>>;
+type MerodState = Arc<Mutex<Vec<MerodProcess>>>;
 
 /// Get the path to the bundled merod binary
 fn get_merod_binary_path(app_handle: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
@@ -634,15 +634,14 @@ async fn start_merod(
     let server_port = server_port.unwrap_or(2528);
     let swarm_port = swarm_port.unwrap_or(2428);
     
-    // If already running, stop it first before starting a new one
-    let existing_pid = {
+    // Only stop a process that uses the same server_port (port conflict)
+    let existing_on_port: Option<u32> = {
         let state = merod_state.lock().unwrap();
-        state.as_ref().map(|proc| proc.pid)
+        state.iter().find(|p| p.port == server_port).map(|p| p.pid)
     };
-    
-    if let Some(pid) = existing_pid {
-        // Stop the existing process
-        info!("[Merod] Stopping existing process (PID: {}) before starting new one", pid);
+
+    if let Some(pid) = existing_on_port {
+        info!("[Merod] Stopping existing process on port {} (PID: {}) before starting new one", server_port, pid);
         #[cfg(unix)]
         {
             use std::process::Command;
@@ -665,9 +664,8 @@ async fn start_merod(
                 .arg("/F")
                 .output();
         }
-        // Clear state
         let mut state = merod_state.lock().unwrap();
-        *state = None;
+        state.retain(|p| p.pid != pid);
     }
     
     // Get bundled merod binary
@@ -854,7 +852,7 @@ async fn start_merod(
     // Store process state
     {
         let mut state = merod_state.lock().unwrap();
-        *state = Some(MerodProcess { pid, port: server_port });
+        state.push(MerodProcess { pid, port: server_port });
     }
     
     // Spawn a task to monitor the process
@@ -863,17 +861,12 @@ async fn start_merod(
     tokio::spawn(async move {
         let status = child.wait().await;
         let mut state = merod_state_clone.lock().unwrap();
-        // Only clear state if the PID matches (prevent race condition)
-        if let Some(proc) = state.as_ref() {
-            if proc.pid == monitored_pid {
-                if let Ok(exit_status) = status {
-                    if let Some(code) = exit_status.code() {
-                        warn!("[Merod] Process exited with code: {}", code);
-                    }
-                }
-                *state = None;
+        if let Ok(exit_status) = status {
+            if let Some(code) = exit_status.code() {
+                warn!("[Merod] Process {} exited with code: {}", monitored_pid, code);
             }
         }
+        state.retain(|p| p.pid != monitored_pid);
     });
     
     Ok(format!("Merod started successfully with PID: {}", pid))
@@ -881,103 +874,97 @@ async fn start_merod(
 
 #[tauri::command]
 async fn stop_merod(merod_state: tauri::State<'_, MerodState>) -> Result<String, String> {
-    let pid = {
+    let pids: Vec<u32> = {
         let state = merod_state.lock().unwrap();
-        match state.as_ref() {
-            Some(proc) => proc.pid,
-            None => return Err("Merod is not running".to_string()),
-        }
+        state.iter().map(|p| p.pid).collect()
     };
-    
-    // Use the same logic as stop_merod_by_pid_command
-    #[cfg(unix)]
-    {
-        use std::process::Command;
-        
-        // Check if process exists first
-        let check_output = Command::new("ps")
-            .arg("-p")
-            .arg(pid.to_string())
-            .output();
-        
-        let process_exists = if let Ok(output) = &check_output {
-            output.status.success()
-        } else {
-            false
-        };
-        
-        if !process_exists {
-            // Process doesn't exist, already stopped
-            info!("[Merod] Process with PID {} already stopped", pid);
-        } else {
-            // Try graceful shutdown first (SIGTERM)
-            let _ = Command::new("kill")
-                .arg("-TERM")
-                .arg(pid.to_string())
-                .output();
-            
-            // Wait a bit
-            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-            
-            // Check if still running before force kill
+
+    if pids.is_empty() {
+        return Err("Merod is not running".to_string());
+    }
+
+    for pid in &pids {
+        #[cfg(unix)]
+        {
+            use std::process::Command;
+
             let check_output = Command::new("ps")
                 .arg("-p")
                 .arg(pid.to_string())
                 .output();
-            
-            let still_running = if let Ok(output) = &check_output {
+
+            let process_exists = if let Ok(output) = &check_output {
                 output.status.success()
             } else {
                 false
             };
-            
-            if still_running {
-                // Force kill if still running (SIGKILL)
-                let output = Command::new("kill")
-                    .arg("-9")
+
+            if !process_exists {
+                info!("[Merod] Process with PID {} already stopped", pid);
+            } else {
+                let _ = Command::new("kill")
+                    .arg("-TERM")
                     .arg(pid.to_string())
                     .output();
-                
-                if let Ok(output) = output {
-                    if !output.status.success() {
-                        let stderr = String::from_utf8_lossy(&output.stderr);
-                        // If process doesn't exist, that's fine - it's already stopped
-                        if !stderr.contains("No such process") {
-                            return Err(format!("Failed to stop merod process: {}", stderr));
+
+                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+
+                let check_output = Command::new("ps")
+                    .arg("-p")
+                    .arg(pid.to_string())
+                    .output();
+
+                let still_running = if let Ok(output) = &check_output {
+                    output.status.success()
+                } else {
+                    false
+                };
+
+                if still_running {
+                    let output = Command::new("kill")
+                        .arg("-9")
+                        .arg(pid.to_string())
+                        .output();
+
+                    if let Ok(output) = output {
+                        if !output.status.success() {
+                            let stderr = String::from_utf8_lossy(&output.stderr);
+                            if !stderr.contains("No such process") {
+                                return Err(format!("Failed to stop merod process: {}", stderr));
+                            }
                         }
                     }
                 }
             }
         }
-    }
-    
-    #[cfg(windows)]
-    {
-        use std::process::Command;
-        let output = Command::new("taskkill")
-            .arg("/PID")
-            .arg(pid.to_string())
-            .arg("/F")
-            .output();
-        
-        if let Ok(output) = output {
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                // If process doesn't exist, that's fine - it's already stopped
-                if !stderr.contains("not found") && !stderr.contains("does not exist") {
-                    return Err(format!("Failed to stop merod process: {}", stderr));
+
+        #[cfg(windows)]
+        {
+            use std::process::Command;
+            let output = Command::new("taskkill")
+                .arg("/PID")
+                .arg(pid.to_string())
+                .arg("/F")
+                .output();
+
+            if let Ok(output) = output {
+                if !output.status.success() {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    if !stderr.contains("not found") && !stderr.contains("does not exist") {
+                        return Err(format!("Failed to stop merod process: {}", stderr));
+                    }
                 }
             }
         }
+
+        info!("[Merod] Stopped process with PID: {}", pid);
     }
-    
-    // Clear state
+
     {
         let mut state = merod_state.lock().unwrap();
-        *state = None;
+        state.clear();
     }
-    
-    info!("[Merod] Stopped process with PID: {}", pid);
+
     Ok("Merod stopped successfully".to_string())
 }
 
@@ -1064,88 +1051,60 @@ async fn stop_merod_by_pid_command(pid: u32, merod_state: tauri::State<'_, Merod
         }
     }
     
-    // Clear state if this was the tracked process
+    // Remove this process from state
     {
         let mut state = merod_state.lock().unwrap();
-        if let Some(proc) = state.as_ref() {
-            if proc.pid == pid {
-                *state = None;
-            }
-        }
+        state.retain(|p| p.pid != pid);
     }
     
     info!("[Merod] Stopped process with PID: {}", pid);
     Ok(format!("Merod stopped successfully (PID: {})", pid))
 }
 
+fn is_process_running(pid: u32) -> bool {
+    #[cfg(unix)]
+    {
+        use std::process::Command;
+        let output = Command::new("kill").arg("-0").arg(pid.to_string()).output();
+        output.is_ok() && output.unwrap().status.success()
+    }
+    #[cfg(windows)]
+    {
+        use std::process::Command;
+        let output = Command::new("tasklist")
+            .arg("/FI")
+            .arg(format!("PID eq {}", pid))
+            .output();
+        if let Ok(out) = output {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            !stdout.contains("No tasks are running") && stdout.contains(&pid.to_string())
+        } else {
+            false
+        }
+    }
+}
+
 #[tauri::command]
 async fn get_merod_status(merod_state: tauri::State<'_, MerodState>) -> Result<serde_json::Value, String> {
-    let state = merod_state.lock().unwrap();
-    match state.as_ref() {
-        Some(proc) => {
-            // Check if process is still running
-            #[cfg(unix)]
-            {
-                use std::process::Command;
-                let output = Command::new("kill")
-                    .arg("-0")
-                    .arg(proc.pid.to_string())
-                    .output();
-                
-                let running = output.is_ok() && output.unwrap().status.success();
-                
-                if !running {
-                    // Process died, clear state
-                    drop(state);
-                    let mut state = merod_state.lock().unwrap();
-                    *state = None;
-                    return Ok(serde_json::json!({
-                        "running": false
-                    }));
-                }
-            }
-            
-            #[cfg(windows)]
-            {
-                use std::process::Command;
-                let output = Command::new("tasklist")
-                    .arg("/FI")
-                    .arg(format!("PID eq {}", proc.pid))
-                    .output();
-                
-                // tasklist returns exit code 0 even when no process exists
-                // We need to check the output string instead
-                let running = if let Ok(output) = output {
-                    let stdout = String::from_utf8_lossy(&output.stdout);
-                    // If the process exists, stdout will contain the PID in a table row
-                    // If not, it will say "No tasks are running which match the specified criteria"
-                    // Check that we don't have the "no tasks" message AND that PID appears in output
-                    !stdout.contains("No tasks are running") && 
-                    stdout.contains(&proc.pid.to_string())
-                } else {
-                    false
-                };
-                
-                if !running {
-                    drop(state);
-                    let mut state = merod_state.lock().unwrap();
-                    *state = None;
-                    return Ok(serde_json::json!({
-                        "running": false
-                    }));
-                }
-            }
-            
-            Ok(serde_json::json!({
-                "running": true,
-                "pid": proc.pid,
-                "port": proc.port
-            }))
-        }
-        None => Ok(serde_json::json!({
-            "running": false
-        })),
+    let mut state = merod_state.lock().unwrap();
+    if state.is_empty() {
+        return Ok(serde_json::json!({ "running": false, "nodes": [] }));
     }
+    // Filter out dead processes
+    state.retain(|p| is_process_running(p.pid));
+    if state.is_empty() {
+        return Ok(serde_json::json!({ "running": false, "nodes": [] }));
+    }
+    let nodes: Vec<_> = state.iter()
+        .map(|p| serde_json::json!({ "pid": p.pid, "port": p.port }))
+        .collect();
+    let first = &state[0];
+    Ok(serde_json::json!({
+        "running": true,
+        "nodes": nodes,
+        "pid": first.pid,
+        "port": first.port
+    }))
 }
 
 #[tauri::command]
@@ -1711,7 +1670,7 @@ async fn kill_all_merod_processes(merod_state: tauri::State<'_, MerodState>) -> 
 
     {
         let mut state = merod_state.lock().unwrap();
-        *state = None;
+        state.clear();
     }
 
     info!("[Calimero] Killed {} merod process(es)", pids.len());

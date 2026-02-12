@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { createClient, apiClient, LoginView, getAccessToken } from "@calimero-network/mero-react";
 import { getSettings, getAuthUrl, saveSettings } from "./utils/settings";
 import { clearOnboardingProgress } from "./utils/onboardingProgress";
-import { startMerod } from "./utils/merod";
+import { startMerod, detectRunningMerodNodes, type RunningMerodNode } from "./utils/merod";
 import { useToast } from "./contexts/ToastContext";
 import { checkOnboardingState, type OnboardingState } from "./utils/onboarding";
 import { decodeMetadata, openAppFrontend } from "./utils/appUtils";
@@ -46,6 +46,13 @@ function App() {
     breadcrumbs: Array<{ label: string; onClick?: () => void }>;
   } | null>(null);
   const [appVersion, setAppVersion] = useState<string>("");
+  const [runningNodes, setRunningNodes] = useState<RunningMerodNode[]>([]);
+
+  const handleSelectNode = useCallback((nodeUrl: string) => {
+    const settings = getSettings();
+    saveSettings({ ...settings, nodeUrl });
+    window.location.reload();
+  }, []);
 
   // Load app version
   useEffect(() => {
@@ -145,8 +152,9 @@ function App() {
       }
 
       try {
-        const { detectRunningMerodNodes, startMerod } = await import('./utils/merod');
+        const { startMerod } = await import('./utils/merod');
         let runningNodes = await detectRunningMerodNodes();
+        setRunningNodes(runningNodes);
 
         // Auto-start merod if user has embedded node configured and no node is running
         // (embeddedNodeName indicates they set up a node via our app; useEmbeddedNode may not be set)
@@ -162,13 +170,15 @@ function App() {
             await startMerod(serverPort, swarmPort, dataDir, settings.embeddedNodeName);
             await new Promise((r) => setTimeout(r, 4000)); // give merod time to start (longer when app launches at login)
             runningNodes = await detectRunningMerodNodes();
+            setRunningNodes(runningNodes);
           } catch (startErr) {
             console.warn('Auto-start merod failed:', startErr);
           }
         }
 
-        // Auto-update nodeUrl if we detect a running local node and user has localhost or no URL
-        if (runningNodes.length > 0) {
+        // Auto-update nodeUrl if we detect a running local node and user has localhost or no URL.
+        // When developer mode + multiple nodes, skip auto-select so user can choose from dropdown.
+        if (runningNodes.length > 0 && !(settings.developerMode && runningNodes.length > 1)) {
           const node = runningNodes[0];
           const nodeUrl = `http://localhost:${node.port}`;
           const currentUrl = settings.nodeUrl;
@@ -579,6 +589,10 @@ function App() {
                 connected={connected}
                 error={error}
                 onClick={handleRestartNode}
+                developerMode={getSettings().developerMode}
+                runningNodes={runningNodes}
+                currentNodeUrl={getSettings().nodeUrl}
+                onSelectNode={handleSelectNode}
               />
             </header>
             <main className="main">
@@ -611,6 +625,10 @@ function App() {
                 connected={connected}
                 error={error}
                 onClick={handleRestartNode}
+                developerMode={getSettings().developerMode}
+                runningNodes={runningNodes}
+                currentNodeUrl={getSettings().nodeUrl}
+                onSelectNode={handleSelectNode}
               />
             </header>
             <main className="main">
@@ -670,6 +688,10 @@ function App() {
                 connected={connected}
                 error={error}
                 onClick={handleRestartNode}
+                developerMode={getSettings().developerMode}
+                runningNodes={runningNodes}
+                currentNodeUrl={getSettings().nodeUrl}
+                onSelectNode={handleSelectNode}
               />
             </header>
             <main className="main">
@@ -702,6 +724,10 @@ function App() {
                 connected={connected}
                 error={error}
                 onClick={handleRestartNode}
+                developerMode={getSettings().developerMode}
+                runningNodes={runningNodes}
+                currentNodeUrl={getSettings().nodeUrl}
+                onSelectNode={handleSelectNode}
               />
             </header>
             <main className="main">
@@ -795,6 +821,10 @@ function App() {
               connected={connected}
               error={error}
               onClick={handleRestartNode}
+              developerMode={getSettings().developerMode}
+              runningNodes={runningNodes}
+              currentNodeUrl={getSettings().nodeUrl}
+              onSelectNode={handleSelectNode}
             />
       </header>
 

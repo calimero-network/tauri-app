@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from "react";
 import { checkOnboardingState, getOnboardingMessage, type OnboardingState } from "../utils/onboarding";
 import { apiClient, setAccessToken, setRefreshToken } from "@calimero-network/mero-react";
-import { initMerodNode, startMerod, listMerodNodes, detectRunningMerodNodes } from "../utils/merod";
+import { HTTPError } from "@calimero-network/mero-js";
+import { initMerodNode, startMerod, listMerodNodes, detectRunningMerodNodes, waitForNodeHealthy } from "../utils/merod";
 import { invoke } from "@tauri-apps/api/tauri";
 import { saveSettings, getSettings } from "../utils/settings";
 import { saveOnboardingProgress, loadOnboardingProgress } from "../utils/onboardingProgress";
@@ -109,7 +110,12 @@ const UsernamePasswordForm: React.FC<UsernamePasswordFormProps> = ({ onSuccess, 
       }
     } catch (err) {
       console.error('Authentication error:', err);
-      const errorMessage = err instanceof Error ? err.message : 'Authentication failed';
+      let errorMessage: string;
+      if (err instanceof HTTPError && err.status === 0) {
+        errorMessage = 'Node is not responding. It may have crashed—check the logs.';
+      } else {
+        errorMessage = err instanceof Error ? err.message : 'Authentication failed';
+      }
       setError(errorMessage);
       onError(err instanceof Error ? err : new Error(errorMessage));
     } finally {
@@ -449,6 +455,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
             embeddedNodeName: useExistingNode,
             embeddedNodePort: alreadyRunning.port,
           });
+          await waitForNodeHealthy(nodeUrl, 5000);
           advanceToLogin();
           return;
         }
@@ -467,6 +474,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
           embeddedNodeName: useExistingNode,
           embeddedNodePort: serverPort,
         });
+        await waitForNodeHealthy(nodeUrl, 20000);
         advanceToLogin();
       } else {
         // Create new node
@@ -486,14 +494,16 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
         await startMerod(serverPort, swarmPort, dataDir, targetNodeName);
         setNodeCreated(true);
         setNodeStarted(true);
+        const nodeUrl = `http://localhost:${serverPort}`;
         saveSettings({
           ...getSettings(),
-          nodeUrl: `http://localhost:${serverPort}`,
+          nodeUrl,
           useEmbeddedNode: true,
           embeddedNodeDataDir: dataDir,
           embeddedNodeName: targetNodeName,
           embeddedNodePort: serverPort,
         });
+        await waitForNodeHealthy(nodeUrl, 20000);
         advanceToLogin();
       }
     } catch (error: any) {

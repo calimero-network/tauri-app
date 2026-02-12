@@ -65,6 +65,22 @@ export default function Nodes({ onBack }: NodesProps) {
     };
   }, [homeDir]);
 
+  // When selected node is not running and current ports conflict with running nodes, auto-suggest next free ports
+  useEffect(() => {
+    if (!selectedNode || runningNodes.length === 0) return;
+    const nodeInfo = getRunningNodeInfo(selectedNode);
+    if (nodeInfo.running) return;
+
+    const serverPortInUse = runningNodes.some(n => n.port === serverPort);
+    const swarmPortInUse = runningNodes.some(n => (n.swarm_port ?? 2428) === swarmPort);
+    if (!serverPortInUse && !swarmPortInUse) return; // No conflict, keep user's choice
+
+    const maxServerPort = Math.max(2528, ...runningNodes.map(n => n.port));
+    const maxSwarmPort = Math.max(2428, ...runningNodes.map(n => n.swarm_port ?? 2428));
+    setServerPort(maxServerPort + 1);
+    setSwarmPort(maxSwarmPort + 1);
+  }, [selectedNode, runningNodes, serverPort, swarmPort]);
+
   const loadNodes = async () => {
     try {
       const nodes = await listMerodNodes(homeDir);
@@ -388,8 +404,8 @@ export default function Nodes({ onBack }: NodesProps) {
                   {loading ? 'Starting...' : 'Start Node'}
                 </button>
                 {status.running && (
-                  <p className="field-hint" style={{ marginTop: '8px', color: '#ef4444' }}>
-                    A node is already running. Starting a new node will stop the current one.
+                  <p className="field-hint" style={{ marginTop: '8px' }}>
+                    One or more nodes are running. You can start additional nodes on different ports.
                   </p>
                 )}
               </div>

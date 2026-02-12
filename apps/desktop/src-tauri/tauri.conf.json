@@ -1,7 +1,7 @@
 {
   "build": {
     "beforeDevCommand": "pnpm dev",
-    "beforeBuildCommand": "bash src-tauri/scripts/download-merod.sh && pnpm build",
+    "beforeBuildCommand": "pnpm build",
     "devPath": "http://localhost:1420",
     "distDir": "../dist",
     "withGlobalTauri": false

@@ -11,7 +11,7 @@
     "tauri:dev": "tauri dev",
     "tauri:dev:devtools": "TAURI_OPEN_DEVTOOLS=true tauri dev",
     "tauri:dev:no-devtools": "TAURI_OPEN_DEVTOOLS=false tauri dev",
-    "tauri:build": "bash src-tauri/scripts/download-merod.sh && tauri build",
+    "tauri:build": "tauri build",
     "tauri:build:app": "tauri build --bundles app",
     "icon": "node scripts/svg-to-icon.js && pnpm tauri icon src-tauri/icons/icon-1024.png",
     "clean": "rm -rf dist src-tauri/target"

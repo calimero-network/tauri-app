@@ -125,11 +125,6 @@ function App() {
 
       // First-time install: no settings or never completed onboarding
       if (!hasCustomSettings || !onboardingCompleted) {
-        if (!hasCustomSettings) {
-          console.log('📋 No settings found - first install, showing onboarding');
-        } else {
-          console.log('📋 Onboarding not completed - showing onboarding');
-        }
         setNeedsNodeConfig(true);
         setShowOnboarding(true);
         setCheckingOnboarding(false);
@@ -138,7 +133,6 @@ function App() {
 
       // Returning user - onboarding was completed. Never show onboarding again.
       // Initialize client and go to main app (with login if needed, disconnected if node down).
-      console.log('✅ Returning user - onboarding completed, loading main app');
       setCheckingOnboarding(true);
 
       // One-time: enable start-at-login by default for existing users who didn't have it set
@@ -165,7 +159,6 @@ function App() {
           const dataDir = settings.embeddedNodeDataDir || '~/.calimero';
           const serverPort = settings.embeddedNodePort ?? 2528;
           const swarmPort = 2428; // default swarm port
-          console.log('🔄 Auto-starting merod node (configured for startup)');
           try {
             await startMerod(serverPort, swarmPort, dataDir, settings.embeddedNodeName);
             await new Promise((r) => setTimeout(r, 4000)); // give merod time to start (longer when app launches at login)
@@ -215,7 +208,6 @@ function App() {
 
         if (healthCheck.error) {
           // Node down - show main app with disconnected indicator (user can click Open Nodes)
-          console.log('⚠️ Node not running - showing main app with disconnected status');
           setConnected(false);
           setError(healthCheck.error.message);
           setNeedsNodeConfig(false);
@@ -249,7 +241,6 @@ function App() {
 
         if (!onboardingState.authAvailable || !onboardingState.hasConfiguredProviders) {
           // Auth not ready - show main app (user can use Nodes/Settings to fix)
-          console.log('⚠️ Auth not configured - showing main app');
           loadContexts().catch(() => {});
           loadInstalledApps().catch(() => {});
         } else {
@@ -489,7 +480,6 @@ function App() {
         <LoginView
           variant={theme}
           onSuccess={() => {
-            console.log('✅ Login successful');
             setShowLogin(false);
             // Reload contexts after login
             loadContexts();

@@ -43,7 +43,6 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
 
     try {
       const response = await apiClient.node.listApplications();
-      console.log("📦 listApplications response:", JSON.stringify(response, null, 2));
       
       if (response.error) {
         // If 401, trigger login redirect
@@ -62,7 +61,6 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
         const appsList = Array.isArray(response.data) 
           ? response.data 
           : [];
-        console.log("📦 Apps list:", appsList);
         setApps(appsList);
       } else {
         console.warn("📦 No data in response");

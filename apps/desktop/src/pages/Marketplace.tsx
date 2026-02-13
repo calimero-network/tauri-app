@@ -93,7 +93,6 @@ export default function Marketplace() {
             installedNames.add(app.source);
           }
         }
-        console.log("📦 Marketplace: Installed app names:", [...installedNames]);
         if (mountedRef.current) setInstalledAppIds(installedNames);
         return installedNames;
       }
@@ -151,7 +150,6 @@ export default function Marketplace() {
 
         // If stale, do a background refresh (no skeleton)
         if (cached.isStale) {
-          console.log("📦 Marketplace: Cache stale, background refresh...");
           if (mountedRef.current) setRefreshing(true);
           try {
             const freshApps = await fetchMarketplaceApps(registries, installed);
@@ -267,7 +265,6 @@ export default function Marketplace() {
       const { fetchAppManifest } = await import("../utils/registry");
       const manifest = await fetchAppManifest(app.registry, app.id, app.latest_version);
       
-      console.log("📦 Marketplace: Fetched manifest:", manifest);
       
       // Handle both v1 format (artifact) and v2 format (artifacts array)
       let wasmUrl: string;
@@ -341,7 +338,6 @@ export default function Marketplace() {
       // Convert metadata JSON string to byte array (Vec<u8> in Rust)
       // serde_json expects Vec<u8> as an array of numbers [1, 2, 3]
       const metadataJson = JSON.stringify(metadata);
-      console.log("JEBENA METADATA", metadataJson);
       const metadataBytes = Array.from(new TextEncoder().encode(metadataJson));
 
       // Install the application

@@ -63,7 +63,6 @@ export async function openAppFrontend(
       nodeUrl: settings.nodeUrl,
     });
     
-    console.log('Opened app frontend in new window:', frontendUrl, 'with label:', windowLabel);
     return windowLabel;
   } catch (error) {
     const err = error instanceof Error ? error : new Error(String(error));

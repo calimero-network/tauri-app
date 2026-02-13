@@ -84,7 +84,6 @@ export default function Nodes({ onBack }: NodesProps) {
   const loadNodes = async () => {
     try {
       const nodes = await listMerodNodes(homeDir);
-      console.log("Loaded nodes:", nodes, "from homeDir:", homeDir);
       setAvailableNodes(nodes);
       if (nodes.length > 0 && !selectedNode) {
         setSelectedNode(nodes[0]);

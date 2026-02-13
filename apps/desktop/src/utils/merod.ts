@@ -60,6 +60,24 @@ export async function checkMerodHealth(nodeUrl: string): Promise<MerodHealth> {
   return await invoke('check_merod_health', { nodeUrl });
 }
 
+const HEALTH_POLL_INTERVAL_MS = 500;
+
+/**
+ * Poll until the node reports healthy or timeout. Use after startMerod to ensure
+ * the node is actually ready before advancing to login/auth steps.
+ */
+export async function waitForNodeHealthy(nodeUrl: string, timeoutMs: number): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const health = await checkMerodHealth(nodeUrl);
+    if (health.healthy) return;
+    await new Promise((r) => setTimeout(r, HEALTH_POLL_INTERVAL_MS));
+  }
+  throw new Error(
+    'Node did not become healthy in time. The node process may have crashed—check the logs.'
+  );
+}
+
 export interface RunningMerodNode {
   pid: number;
   node_name: string;

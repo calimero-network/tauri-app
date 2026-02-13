@@ -155,6 +155,9 @@ export function UsernamePasswordForm({
                 placeholder="Letters, numbers, underscores only"
                 disabled={loading}
                 autoComplete="username"
+                autoCorrect="off"
+                autoCapitalize="off"
+                spellCheck={false}
                 style={{
                   width: '100%',
                   padding: '14px 16px',
@@ -196,6 +199,9 @@ export function UsernamePasswordForm({
                 placeholder={`At least ${MIN_PASSWORD_LENGTH} characters`}
                 disabled={loading}
                 autoComplete="current-password"
+                autoCorrect="off"
+                autoCapitalize="off"
+                spellCheck={false}
                 style={{
                   width: '100%',
                   padding: '14px 16px',

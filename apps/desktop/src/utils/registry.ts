@@ -10,6 +10,7 @@ export interface AppSummary {
   latest_cid: string;
   alias?: string;
   description?: string;
+  author?: string;
 }
 
 export interface VersionInfo {
@@ -20,6 +21,7 @@ export interface VersionInfo {
 
 export interface AppManifest {
   manifest_version: string;
+  minRuntimeVersion: string;
   // V1 format fields
   id?: string;
   name?: string;
@@ -105,6 +107,8 @@ export async function fetchAppsFromRegistry(
       latest_cid: bundle.wasm?.hash || bundle.wasm?.path || '',
       alias: bundle.metadata?.name,
       description: bundle.metadata?.description,
+      author: bundle.metadata?.author,
+      minRuntimeVersion: bundle.minRuntimeVersion,
     }));
   } catch (error) {
     console.error(`Failed to fetch apps from registry ${registryUrl}:`, error);
@@ -198,6 +202,7 @@ export async function fetchAppManifest(
         id: bundle.package,
         alias: bundle.metadata?.name,
       },
+      minRuntimeVersion: bundle.minRuntimeVersion,
       version: {
         semver: bundle.appVersion,
       },

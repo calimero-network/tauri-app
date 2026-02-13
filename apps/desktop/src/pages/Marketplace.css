@@ -264,6 +264,38 @@
   border-top: 1px solid var(--border-color);
 }
 
+.app-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-bottom: 1px solid var(--border-color);
+  padding-bottom: 2px;
+  margin-bottom: 2px;
+}
+
+.app-meta-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 12px;
+  min-width: 0;
+}
+
+.app-meta-label {
+  color: var(--text-tertiary);
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
+.app-meta-value {
+  color: var(--text-secondary);
+  font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .app-developer {
   display: flex;
   align-items: center;
@@ -317,7 +349,7 @@
 .app-card-actions {
   display: flex;
   gap: 8px;
-  margin-top: auto;
+  margin-top: 8px;
 }
 
 .app-card-actions .button {

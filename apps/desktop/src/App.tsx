@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { createClient, apiClient, LoginView, getAccessToken } from "@calimero-network/mero-react";
 import { getSettings, getAuthUrl, saveSettings } from "./utils/settings";
 import { clearOnboardingProgress } from "./utils/onboardingProgress";
-import { startMerod } from "./utils/merod";
+import { startMerod, detectRunningMerodNodes, type RunningMerodNode } from "./utils/merod";
 import { useToast } from "./contexts/ToastContext";
 import { checkOnboardingState, type OnboardingState } from "./utils/onboarding";
 import { decodeMetadata, openAppFrontend } from "./utils/appUtils";
@@ -46,6 +46,13 @@ function App() {
     breadcrumbs: Array<{ label: string; onClick?: () => void }>;
   } | null>(null);
   const [appVersion, setAppVersion] = useState<string>("");
+  const [runningNodes, setRunningNodes] = useState<RunningMerodNode[]>([]);
+
+  const handleSelectNode = useCallback((nodeUrl: string) => {
+    const settings = getSettings();
+    saveSettings({ ...settings, nodeUrl });
+    window.location.reload();
+  }, []);
 
   // Load app version
   useEffect(() => {
@@ -118,11 +125,6 @@ function App() {
 
       // First-time install: no settings or never completed onboarding
       if (!hasCustomSettings || !onboardingCompleted) {
-        if (!hasCustomSettings) {
-          console.log('📋 No settings found - first install, showing onboarding');
-        } else {
-          console.log('📋 Onboarding not completed - showing onboarding');
-        }
         setNeedsNodeConfig(true);
         setShowOnboarding(true);
         setCheckingOnboarding(false);
@@ -131,7 +133,6 @@ function App() {
 
       // Returning user - onboarding was completed. Never show onboarding again.
       // Initialize client and go to main app (with login if needed, disconnected if node down).
-      console.log('✅ Returning user - onboarding completed, loading main app');
       setCheckingOnboarding(true);
 
       // One-time: enable start-at-login by default for existing users who didn't have it set
@@ -145,8 +146,9 @@ function App() {
       }
 
       try {
-        const { detectRunningMerodNodes, startMerod } = await import('./utils/merod');
+        const { startMerod } = await import('./utils/merod');
         let runningNodes = await detectRunningMerodNodes();
+        setRunningNodes(runningNodes);
 
         // Auto-start merod if user has embedded node configured and no node is running
         // (embeddedNodeName indicates they set up a node via our app; useEmbeddedNode may not be set)
@@ -157,18 +159,19 @@ function App() {
           const dataDir = settings.embeddedNodeDataDir || '~/.calimero';
           const serverPort = settings.embeddedNodePort ?? 2528;
           const swarmPort = 2428; // default swarm port
-          console.log('🔄 Auto-starting merod node (configured for startup)');
           try {
             await startMerod(serverPort, swarmPort, dataDir, settings.embeddedNodeName);
             await new Promise((r) => setTimeout(r, 4000)); // give merod time to start (longer when app launches at login)
             runningNodes = await detectRunningMerodNodes();
+            setRunningNodes(runningNodes);
           } catch (startErr) {
             console.warn('Auto-start merod failed:', startErr);
           }
         }
 
-        // Auto-update nodeUrl if we detect a running local node and user has localhost or no URL
-        if (runningNodes.length > 0) {
+        // Auto-update nodeUrl if we detect a running local node and user has localhost or no URL.
+        // When developer mode + multiple nodes, skip auto-select so user can choose from dropdown.
+        if (runningNodes.length > 0 && !(settings.developerMode && runningNodes.length > 1)) {
           const node = runningNodes[0];
           const nodeUrl = `http://localhost:${node.port}`;
           const currentUrl = settings.nodeUrl;
@@ -205,7 +208,6 @@ function App() {
 
         if (healthCheck.error) {
           // Node down - show main app with disconnected indicator (user can click Open Nodes)
-          console.log('⚠️ Node not running - showing main app with disconnected status');
           setConnected(false);
           setError(healthCheck.error.message);
           setNeedsNodeConfig(false);
@@ -239,7 +241,6 @@ function App() {
 
         if (!onboardingState.authAvailable || !onboardingState.hasConfiguredProviders) {
           // Auth not ready - show main app (user can use Nodes/Settings to fix)
-          console.log('⚠️ Auth not configured - showing main app');
           loadContexts().catch(() => {});
           loadInstalledApps().catch(() => {});
         } else {
@@ -346,7 +347,11 @@ function App() {
   }, [toast]);
 
   // Auto-check node status every 5 seconds (runs on all main app pages for global indicator)
+  // Skip when on login or settings - those screens don't need the periodic check, and it would
+  // redirect back to login on 401 while user is intentionally on Settings (e.g. to configure node)
   useEffect(() => {
+    if (showLogin || showSettings) return;
+
     // Initial check
     checkConnection();
 
@@ -357,7 +362,7 @@ function App() {
 
     // Cleanup interval on unmount
     return () => clearInterval(interval);
-  }, [checkConnection]);
+  }, [checkConnection, showLogin, showSettings]);
 
   // When launched from a desktop shortcut (--open-app-url / --open-app-name): open app, focus it, then hide main window
   useEffect(() => {
@@ -475,7 +480,6 @@ function App() {
         <LoginView
           variant={theme}
           onSuccess={() => {
-            console.log('✅ Login successful');
             setShowLogin(false);
             // Reload contexts after login
             loadContexts();
@@ -575,6 +579,10 @@ function App() {
                 connected={connected}
                 error={error}
                 onClick={handleRestartNode}
+                developerMode={getSettings().developerMode}
+                runningNodes={runningNodes}
+                currentNodeUrl={getSettings().nodeUrl}
+                onSelectNode={handleSelectNode}
               />
             </header>
             <main className="main">
@@ -607,6 +615,10 @@ function App() {
                 connected={connected}
                 error={error}
                 onClick={handleRestartNode}
+                developerMode={getSettings().developerMode}
+                runningNodes={runningNodes}
+                currentNodeUrl={getSettings().nodeUrl}
+                onSelectNode={handleSelectNode}
               />
             </header>
             <main className="main">
@@ -666,6 +678,10 @@ function App() {
                 connected={connected}
                 error={error}
                 onClick={handleRestartNode}
+                developerMode={getSettings().developerMode}
+                runningNodes={runningNodes}
+                currentNodeUrl={getSettings().nodeUrl}
+                onSelectNode={handleSelectNode}
               />
             </header>
             <main className="main">
@@ -698,6 +714,10 @@ function App() {
                 connected={connected}
                 error={error}
                 onClick={handleRestartNode}
+                developerMode={getSettings().developerMode}
+                runningNodes={runningNodes}
+                currentNodeUrl={getSettings().nodeUrl}
+                onSelectNode={handleSelectNode}
               />
             </header>
             <main className="main">
@@ -791,6 +811,10 @@ function App() {
               connected={connected}
               error={error}
               onClick={handleRestartNode}
+              developerMode={getSettings().developerMode}
+              runningNodes={runningNodes}
+              currentNodeUrl={getSettings().nodeUrl}
+              onSelectNode={handleSelectNode}
             />
       </header>
 

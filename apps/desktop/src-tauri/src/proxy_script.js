@@ -104,9 +104,91 @@
         return originalFetch.apply(this, arguments);
     };
     
-    console.log('[Tauri Proxy] Fetch interceptor injected immediately');
+    // Also intercept XMLHttpRequest for libraries that use XHR instead of fetch
+    const OriginalXHR = window.XMLHttpRequest;
+    window.XMLHttpRequest = function() {
+        const xhr = new OriginalXHR();
+        const originalOpen = xhr.open.bind(xhr);
+        const originalSend = xhr.send.bind(xhr);
+        let xhrMethod = 'GET';
+        let xhrUrl = '';
+        let xhrHeaders = {};
+
+        xhr.open = function(method, url) {
+            xhrMethod = method || 'GET';
+            xhrUrl = typeof url === 'string' ? url : url.toString();
+            xhrHeaders = {};
+            return originalOpen.apply(this, arguments);
+        };
+
+        const originalSetRequestHeader = xhr.setRequestHeader.bind(xhr);
+        xhr.setRequestHeader = function(name, value) {
+            xhrHeaders[name] = value;
+            return originalSetRequestHeader.apply(this, arguments);
+        };
+
+        xhr.send = function(body) {
+            const shouldProxy = xhrUrl === nodeUrl || xhrUrl.startsWith(nodeUrl + '/') || xhrUrl.startsWith(nodeUrl + '?') || xhrUrl.startsWith(nodeUrl + '#');
+
+            if (shouldProxy) {
+                console.log('[Tauri Proxy] XHR intercepted:', xhrMethod, xhrUrl);
+
+                proxyRequest(xhrUrl, xhrMethod, xhrHeaders, body ? String(body) : null)
+                    .then(function(response) {
+                        console.log('[Tauri Proxy] XHR proxy response:', response.status, xhrUrl);
+                        Object.defineProperty(xhr, 'status', { value: response.status, writable: false });
+                        Object.defineProperty(xhr, 'statusText', { value: response.status === 200 ? 'OK' : 'Error', writable: false });
+                        Object.defineProperty(xhr, 'responseText', { value: response.body || '', writable: false });
+                        Object.defineProperty(xhr, 'response', { value: response.body || '', writable: false });
+                        Object.defineProperty(xhr, 'readyState', { value: 4, writable: false });
+
+                        var headerStr = '';
+                        if (response.headers) {
+                            Object.keys(response.headers).forEach(function(key) {
+                                headerStr += key + ': ' + response.headers[key] + '\r\n';
+                            });
+                        }
+                        xhr.getAllResponseHeaders = function() { return headerStr; };
+                        xhr.getResponseHeader = function(name) {
+                            return response.headers ? (response.headers[name] || response.headers[name.toLowerCase()] || null) : null;
+                        };
+
+                        if (typeof xhr.onreadystatechange === 'function') {
+                            xhr.onreadystatechange(new Event('readystatechange'));
+                        }
+                        xhr.dispatchEvent(new Event('readystatechange'));
+                        if (typeof xhr.onload === 'function') {
+                            xhr.onload(new ProgressEvent('load'));
+                        }
+                        xhr.dispatchEvent(new ProgressEvent('load'));
+                        xhr.dispatchEvent(new ProgressEvent('loadend'));
+                    })
+                    .catch(function(error) {
+                        console.error('[Tauri Proxy] XHR proxy failed:', error, 'URL:', xhrUrl);
+                        if (typeof xhr.onerror === 'function') {
+                            xhr.onerror(new ProgressEvent('error'));
+                        }
+                        xhr.dispatchEvent(new ProgressEvent('error'));
+                        xhr.dispatchEvent(new ProgressEvent('loadend'));
+                    });
+                return;
+            }
+
+            return originalSend.apply(this, arguments);
+        };
+
+        return xhr;
+    };
+    window.XMLHttpRequest.prototype = OriginalXHR.prototype;
+    window.XMLHttpRequest.UNSENT = 0;
+    window.XMLHttpRequest.OPENED = 1;
+    window.XMLHttpRequest.HEADERS_RECEIVED = 2;
+    window.XMLHttpRequest.LOADING = 3;
+    window.XMLHttpRequest.DONE = 4;
+
+    console.log('[Tauri Proxy] Fetch + XHR interceptors injected');
     console.log('[Tauri Proxy] Original fetch stored:', typeof originalFetch);
-    
+
     // Check Tauri API availability - it might not be ready immediately
     function checkTauriAPI() {
         if (typeof window.__TAURI_INVOKE__ === 'function') {

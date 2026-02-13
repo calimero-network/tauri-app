@@ -1,7 +1,14 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { getSettings } from "../utils/settings";
 import { fetchAppsFromAllRegistries, type AppSummary } from "../utils/registry";
 import { apiClient } from "@calimero-network/mero-react";
+import { decodeMetadata } from "../utils/appUtils";
+import {
+  getMarketplaceCache,
+  setMarketplaceCache,
+  touchMarketplaceCache,
+  invalidateMarketplaceCache,
+} from "../utils/marketplaceCache";
 import { useToast } from "../contexts/ToastContext";
 import Skeleton from "../components/Skeleton";
 import { Search, RefreshCw, Package, Download, CheckCircle2, X } from "lucide-react";
@@ -22,93 +29,199 @@ export default function Marketplace() {
   const [installedAppIds, setInstalledAppIds] = useState<Set<string>>(new Set());
   const [filterInstalled, setFilterInstalled] = useState<'all' | 'installed' | 'not-installed'>('all');
   const [installingAppId, setInstallingAppId] = useState<string | null>(null);
+  // Track whether a background refresh is in progress (no skeleton shown)
+  const [refreshing, setRefreshing] = useState(false);
+  const mountedRef = useRef(true);
 
-  // Load installed applications
+  // Cleanup on unmount
   useEffect(() => {
-    loadInstalledApps();
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
   }, []);
 
-  // Load marketplace applications on mount
-  useEffect(() => {
-    loadMarketplaceApps();
-  }, []);
-
-  // Load apps on mount and when registries change
-  // Note: Search filtering is now done client-side for better UX
-  // We still load all apps and filter them locally
-
-  const loadInstalledApps = async () => {
-    try {
-      const response = await apiClient.node.listApplications();
-      if (response.error) {
-        // If 401, trigger login redirect
-        if (response.error.code === '401') {
-          console.warn("📦 Marketplace: 401 Unauthorized - token may be expired");
-          window.location.reload();
-          return;
-        }
-        console.error("Failed to load installed apps:", response.error.message);
-        return;
-      }
-      
-      if (response.data) {
-        const apps = Array.isArray(response.data) ? response.data : [];
-        const installed = new Set<string>(
-          apps.map((app: any) => app.id as string)
-        );
-        setInstalledAppIds(installed);
-      }
-    } catch (err: any) {
-      // Check for 401 in error object
-      if (err?.status === 401 || err?.code === '401') {
-        console.warn("📦 Marketplace: 401 Unauthorized - reloading to trigger login");
-        window.location.reload();
-        return;
-      }
-      console.error("Failed to load installed apps:", err);
-    }
-  };
-
-  const loadMarketplaceApps = async () => {
-    setLoading(true);
-    setError(null);
-
-    try {
-      const settings = getSettings();
-      const registries = settings.registries || [];
-
-      if (registries.length === 0) {
-        setError("No registries configured. Please add registries in Settings.");
-        setLoading(false);
-        return;
-      }
-
-      const results = await fetchAppsFromAllRegistries(registries, {
-        name: searchQuery || undefined,
-      });
-
-      // Flatten apps from all registries
+  // -----------------------------------------------------------------------
+  // Helper: build MarketplaceApp[] from raw registry results + installed set
+  // -----------------------------------------------------------------------
+  const buildApps = useCallback(
+    (results: { registry: string; apps: AppSummary[] }[], installed: Set<string>): MarketplaceApp[] => {
       const allApps: MarketplaceApp[] = [];
       results.forEach(({ registry, apps: registryApps }) => {
         registryApps.forEach((app) => {
-          // Use the app.id from the registry
-          const appId = app.id;
           allApps.push({
             ...app,
             registry,
-            installed: installedAppIds.has(appId),
+            installed: installed.has(app.name) || installed.has(app.id),
           });
         });
       });
+      return allApps;
+    },
+    []
+  );
 
-      setApps(allApps);
+  // -----------------------------------------------------------------------
+  // Load installed apps (returns the set of installed names)
+  // -----------------------------------------------------------------------
+  const loadInstalledApps = useCallback(async (): Promise<Set<string>> => {
+    try {
+      const response = await apiClient.node.listApplications();
+      if (response.error) {
+        if (response.error.code === '401') {
+          console.warn("📦 Marketplace: 401 Unauthorized - token may be expired");
+          window.location.reload();
+          return new Set();
+        }
+        console.error("Failed to load installed apps:", response.error.message);
+        return new Set();
+      }
+
+      if (response.data) {
+        const appsList = Array.isArray(response.data) ? response.data : [];
+        // Build a set of installed app names from decoded metadata.
+        // The node-assigned app.id (a hash) does NOT match the registry package id,
+        // so we extract the name from metadata (set during install) to correlate.
+        const installedNames = new Set<string>();
+        for (const app of appsList as any[]) {
+          const meta = decodeMetadata(app.metadata);
+          if (meta?.name) {
+            installedNames.add(meta.name);
+          }
+          if (app.name) {
+            installedNames.add(app.name);
+          }
+          if (app.source) {
+            installedNames.add(app.source);
+          }
+        }
+        if (mountedRef.current) setInstalledAppIds(installedNames);
+        return installedNames;
+      }
+    } catch (err: any) {
+      if (err?.status === 401 || err?.code === '401') {
+        console.warn("📦 Marketplace: 401 Unauthorized - reloading to trigger login");
+        window.location.reload();
+        return new Set();
+      }
+      console.error("Failed to load installed apps:", err);
+    }
+    return new Set();
+  }, []);
+
+  // -----------------------------------------------------------------------
+  // Fetch marketplace apps from registries (network call)
+  // -----------------------------------------------------------------------
+  const fetchMarketplaceApps = useCallback(async (
+    registries: string[],
+    installed: Set<string>
+  ): Promise<MarketplaceApp[]> => {
+    const results = await fetchAppsFromAllRegistries(registries);
+    // Persist to cache
+    setMarketplaceCache(registries, results);
+    return buildApps(results, installed);
+  }, [buildApps]);
+
+  // -----------------------------------------------------------------------
+  // Full load: try cache first, then network
+  // -----------------------------------------------------------------------
+  const loadMarketplaceApps = useCallback(async (
+    knownInstalled?: Set<string>,
+    forceRefresh = false
+  ) => {
+    const installed = knownInstalled ?? installedAppIds;
+    const settings = getSettings();
+    const registries = settings.registries || [];
+
+    if (registries.length === 0) {
+      if (mountedRef.current) {
+        setError("No registries configured. Please add registries in Settings.");
+      }
+      return;
+    }
+
+    // 1. Try serving from cache (instant UI)
+    if (!forceRefresh) {
+      const cached = getMarketplaceCache(registries);
+      if (cached) {
+        const cachedApps = buildApps(cached.results, installed);
+        if (mountedRef.current) {
+          setApps(cachedApps);
+          setError(null);
+        }
+
+        // If stale, do a background refresh (no skeleton)
+        if (cached.isStale) {
+          if (mountedRef.current) setRefreshing(true);
+          try {
+            const freshApps = await fetchMarketplaceApps(registries, installed);
+            if (mountedRef.current) setApps(freshApps);
+          } catch (err) {
+            console.warn("📦 Marketplace: Background refresh failed, using cached data:", err);
+            // Cache data is still valid, just touch timestamp to avoid retry spam
+            touchMarketplaceCache();
+          } finally {
+            if (mountedRef.current) setRefreshing(false);
+          }
+        }
+        return;
+      }
+    }
+
+    // 2. No cache or force refresh → full network fetch with skeleton
+    if (mountedRef.current) {
+      setLoading(true);
+      setError(null);
+    }
+
+    try {
+      const freshApps = await fetchMarketplaceApps(registries, installed);
+      if (mountedRef.current) setApps(freshApps);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load applications");
+      if (mountedRef.current) {
+        setError(err instanceof Error ? err.message : "Failed to load applications");
+      }
       console.error("Failed to load marketplace apps:", err);
     } finally {
-      setLoading(false);
+      if (mountedRef.current) setLoading(false);
     }
-  };
+  }, [installedAppIds, buildApps, fetchMarketplaceApps]);
+
+  // -----------------------------------------------------------------------
+  // Initialization: load installed apps then marketplace apps
+  // -----------------------------------------------------------------------
+  useEffect(() => {
+    const init = async () => {
+      const installed = await loadInstalledApps();
+      await loadMarketplaceApps(installed);
+    };
+    init();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // -----------------------------------------------------------------------
+  // Sync installed status whenever installedAppIds changes
+  // (e.g. after installing/uninstalling an app)
+  // installedAppIds contains app names (from metadata), not node-assigned IDs
+  // -----------------------------------------------------------------------
+  useEffect(() => {
+    setApps((prev) => {
+      if (prev.length === 0) return prev;
+      const updated = prev.map((app) => ({
+        ...app,
+        installed: installedAppIds.has(app.name) || installedAppIds.has(app.id),
+      }));
+      const hasChanged = updated.some((app, i) => app.installed !== prev[i].installed);
+      return hasChanged ? updated : prev;
+    });
+  }, [installedAppIds]);
+
+  // -----------------------------------------------------------------------
+  // Force refresh handler (refresh button)
+  // -----------------------------------------------------------------------
+  const handleForceRefresh = useCallback(async () => {
+    invalidateMarketplaceCache();
+    const installed = await loadInstalledApps();
+    await loadMarketplaceApps(installed, true);
+  }, [loadInstalledApps, loadMarketplaceApps]);
 
   // Filter and sort apps
   const filteredAndSortedApps = useMemo(() => {
@@ -121,10 +234,12 @@ export default function Marketplace() {
         const appName = (app.alias || app.name || '').toLowerCase();
         const appDescription = (app.description || '').toLowerCase();
         const appId = (app.id || '').toLowerCase();
-        // Match if query appears in name, description, or id
-        return appName.includes(query) || 
-               appDescription.includes(query) || 
-               appId.includes(query);
+        const appAuthor = (app.author || app.developer_pubkey || '').toLowerCase();
+        // Match if query appears in name, description, id, or author
+        return appName.includes(query) ||
+               appDescription.includes(query) ||
+               appId.includes(query) ||
+               appAuthor.includes(query);
       });
     }
 
@@ -144,14 +259,12 @@ export default function Marketplace() {
   }, [apps, filterInstalled, searchQuery]);
 
   const handleInstall = async (app: MarketplaceApp) => {
-    console.log("📦 Marketplace: Install button clicked for app:", app);
     setInstallingAppId(app.id);
     try {
       // Fetch the manifest to get the WASM artifact URL
       const { fetchAppManifest } = await import("../utils/registry");
       const manifest = await fetchAppManifest(app.registry, app.id, app.latest_version);
       
-      console.log("📦 Marketplace: Fetched manifest:", manifest);
       
       // Handle both v1 format (artifact) and v2 format (artifacts array)
       let wasmUrl: string;
@@ -159,7 +272,6 @@ export default function Marketplace() {
       
       if (manifest.artifact) {
         // V1 format: single artifact object
-        console.log("📦 Marketplace: Using v1 format");
         if (!manifest.artifact.uri) {
           toast.error("Invalid manifest: artifact URI is missing");
           return;
@@ -169,31 +281,26 @@ export default function Marketplace() {
         wasmHashHex = manifest.artifact.digest?.replace('sha256:', '') || null;
       } else if (manifest.artifacts && manifest.artifacts.length > 0) {
         // V2 format: artifacts array
-        console.log("📦 Marketplace: Using v2 format, artifacts:", manifest.artifacts);
         // V2 bundles use MPK files, but also check for WASM for backward compatibility
         const mpkArtifact = manifest.artifacts.find(a => a.type === 'mpk');
         const wasmArtifact = manifest.artifacts.find(a => a.type === 'wasm');
         
         if (mpkArtifact) {
           // V2 bundle: MPK file
-          console.log("📦 Marketplace: Found MPK artifact:", mpkArtifact);
           wasmUrl = mpkArtifact.mirrors?.[0] || `https://ipfs.io/ipfs/${mpkArtifact.cid}`;
           wasmHashHex = mpkArtifact.sha256?.replace('sha256:', '') || null;
           // If no sha256, try using cid if it looks like a hex hash (64 chars)
           if (!wasmHashHex && mpkArtifact.cid && /^[0-9a-f]{64}$/i.test(mpkArtifact.cid)) {
             wasmHashHex = mpkArtifact.cid;
           }
-          console.log("📦 Marketplace: MPK URL:", wasmUrl, "Hash (hex):", wasmHashHex);
         } else if (wasmArtifact) {
           // Fallback: WASM artifact (v1 or legacy v2)
-          console.log("📦 Marketplace: Found WASM artifact:", wasmArtifact);
           wasmUrl = wasmArtifact.mirrors?.[0] || `https://ipfs.io/ipfs/${wasmArtifact.cid}`;
           wasmHashHex = wasmArtifact.sha256?.replace('sha256:', '') || null;
           // If no sha256, try using cid if it looks like a hex hash (64 chars)
           if (!wasmHashHex && wasmArtifact.cid && /^[0-9a-f]{64}$/i.test(wasmArtifact.cid)) {
             wasmHashHex = wasmArtifact.cid;
           }
-          console.log("📦 Marketplace: WASM URL:", wasmUrl, "Hash (hex):", wasmHashHex);
         } else {
           console.error("📦 Marketplace: No MPK or WASM artifact found in:", manifest.artifacts);
           toast.error("No MPK or WASM artifact found in application manifest");
@@ -226,6 +333,7 @@ export default function Marketplace() {
         description: manifest.metadata?.description || "",
         version: app.latest_version,
         developer: app.developer_pubkey,
+        minRuntimeVersion: manifest.minRuntimeVersion,
       };
       // Convert metadata JSON string to byte array (Vec<u8> in Rust)
       // serde_json expects Vec<u8> as an array of numbers [1, 2, 3]
@@ -249,11 +357,9 @@ export default function Marketplace() {
       // For MPK files, don't provide hash until we have the actual MPK file hash
       // The node will compute it during download
       
-      console.log("📦 Marketplace: Installing with request:", { ...request, metadata: `[${metadataBytes.length} bytes]` });
       
       const response = await apiClient.node.installApplication(request);
       
-      console.log("📦 Marketplace: Install response:", response);
 
       if (response.error) {
         console.error("📦 Marketplace: Install error:", response.error);
@@ -261,15 +367,14 @@ export default function Marketplace() {
         return;
       }
 
-      console.log("📦 Marketplace: Installation successful:", response.data);
-      toast.success(`Application installed successfully! ID: ${response.data?.applicationId || 'unknown'}`);
+      toast.success(`${app.alias || app.name} installed successfully!`);
 
-      // Reload installed apps
+      // Reload installed apps (this updates installedAppIds which triggers sync useEffect)
       await loadInstalledApps();
-      // Update the app's installed status
+      // Also explicitly mark this app as installed immediately for instant UI feedback
       setApps((prevApps) =>
         prevApps.map((a) =>
-          a.id === app.id
+          a.id === app.id || a.name === app.name
             ? { ...a, installed: true }
             : a
         )
@@ -324,12 +429,12 @@ export default function Marketplace() {
             </select>
             
             <button 
-              onClick={loadMarketplaceApps} 
+              onClick={handleForceRefresh} 
               className="button button-secondary"
-              disabled={loading}
+              disabled={loading || refreshing}
               title="Refresh applications"
             >
-              <RefreshCw size={16} className={loading ? 'spinning' : ''} />
+              <RefreshCw size={16} className={loading || refreshing ? 'spinning' : ''} />
           </button>
           </div>
         </div>
@@ -404,15 +509,21 @@ export default function Marketplace() {
                       <p>{app.description}</p>
                     </div>
                   )}
-                  
+
                   <div className="app-card-footer">
-                    {shortPubkey && shortPubkey !== 'unknown' && (
-                      <div className="app-developer">
-                        <span className="app-developer-label">Developer:</span>
-                        <span className="app-developer-value">{shortPubkey}</span>
-                </div>
-                    )}
-                </div>
+                    <div className="app-meta">
+                      <div className="app-meta-row">
+                        <span className="app-meta-label">Package:</span>
+                        <span className="app-meta-value" title={app.id}>{app.id}</span>
+                      </div>
+                      <div className="app-meta-row">
+                        <span className="app-meta-label">Author:</span>
+                        <span className="app-meta-value">
+                          {app.author || (shortPubkey && shortPubkey !== 'unknown' ? shortPubkey : '—')}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
                   
                 <div className="app-card-actions">
                   {app.installed ? (

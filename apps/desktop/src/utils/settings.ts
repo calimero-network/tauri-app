@@ -53,7 +53,6 @@ function migrateRegistries(registries: string[] | undefined, rawSettings: AppSet
   // If we made changes, save them back
   const hasChanges = migrated.some((url, index) => url !== registries[index]);
   if (hasChanges && rawSettings) {
-    console.log('Migrating registries from old default to new default');
     saveSettings({
       ...rawSettings,
       registries: migrated,

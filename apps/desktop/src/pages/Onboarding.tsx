@@ -279,7 +279,6 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
       setState(onboardingState);
       } catch (error) {
         // If we can't check state (no node), that's okay - we'll start with welcome
-        console.log('Could not check onboarding state, starting with welcome screen');
       }
       setLoading(false);
     }
@@ -461,7 +460,6 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
         }
         
         // Start the existing node
-        console.log("Starting existing node:", useExistingNode);
         await startMerod(serverPort, swarmPort, dataDir, useExistingNode);
         setNodeCreated(true);
         setNodeStarted(true);
@@ -1105,7 +1103,6 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
               <div className="onboarding-card">
                 <UsernamePasswordForm
                 onSuccess={async () => {
-                console.log("✅ Onboarding login successful");
                   setLoginLoading(true);
                   try {
                     // Load apps for the install step

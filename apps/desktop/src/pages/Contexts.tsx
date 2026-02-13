@@ -58,7 +58,6 @@ const Contexts: React.FC<ContextsProps> = ({ onAuthRequired, onConfirmDelete }) 
     setLoadingApps(true);
     try {
       const response = await apiClient.node.listApplications();
-      console.log("📦 Contexts: listApplications response:", response);
       
       if (response.error) {
         // If 401, trigger login redirect
@@ -76,7 +75,6 @@ const Contexts: React.FC<ContextsProps> = ({ onAuthRequired, onConfirmDelete }) 
       }
       
       if (response.data && Array.isArray(response.data)) {
-        console.log("📦 Contexts: Setting installed apps:", response.data);
         setInstalledApps(response.data);
       } else {
         console.warn("📦 Contexts: No apps data or not an array:", response.data);
@@ -121,7 +119,6 @@ const Contexts: React.FC<ContextsProps> = ({ onAuthRequired, onConfirmDelete }) 
         const contextsList = Array.isArray(response.data) 
           ? response.data 
           : [];
-        console.log("📦 Contexts loaded:", contextsList);
         setContexts(contextsList);
       }
     } catch (err: any) {
@@ -216,7 +213,6 @@ const Contexts: React.FC<ContextsProps> = ({ onAuthRequired, onConfirmDelete }) 
     if (onConfirmDelete) {
       onConfirmDelete(contextId, contextName, async () => {
         try {
-          console.log(`🗑️ Deleting context: ${contextId}`);
           const response = await apiClient.node.deleteContext(contextId);
           
           if (response.error) {
@@ -224,7 +220,6 @@ const Contexts: React.FC<ContextsProps> = ({ onAuthRequired, onConfirmDelete }) 
             return;
           }
 
-          console.log(`✅ Context deleted successfully: ${response.data?.contextId || contextId}`);
           toast.success(`Context "${contextName}" deleted successfully`);
           // Reload the list
           await loadContexts();
@@ -236,7 +231,6 @@ const Contexts: React.FC<ContextsProps> = ({ onAuthRequired, onConfirmDelete }) 
     } else {
       // Fallback if onConfirmDelete is not provided
       try {
-        console.log(`🗑️ Deleting context: ${contextId}`);
         const response = await apiClient.node.deleteContext(contextId);
         
         if (response.error) {
@@ -244,7 +238,6 @@ const Contexts: React.FC<ContextsProps> = ({ onAuthRequired, onConfirmDelete }) 
           return;
         }
 
-        console.log(`✅ Context deleted successfully: ${response.data?.contextId || contextId}`);
         toast.success(`Context "${contextName}" deleted successfully`);
         await loadContexts();
       } catch (err) {

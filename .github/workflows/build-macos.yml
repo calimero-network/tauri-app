@@ -199,9 +199,6 @@ jobs:
 
           rm -f certificate.p12
 
-      - name: Download merod binary
-        run: bash apps/desktop/src-tauri/scripts/download-merod.sh
-
       - name: Sign merod binary before bundling
         if: steps.build-mode.outputs.mode == 'release'
         env:

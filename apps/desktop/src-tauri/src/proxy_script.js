@@ -7,8 +7,20 @@
     const configuredNodeUrl = '__CONFIGURED_NODE_URL__';
     const defaultNodeUrl = 'http://localhost:2528';
     const nodeUrl = configuredNodeUrl !== '__CONFIGURED_NODE_URL__' ? configuredNodeUrl : defaultNodeUrl;
-    
+
     console.log('[Tauri Proxy] Configured node URL for interception:', nodeUrl);
+
+    // Check if a URL is an HTTP localhost request that needs proxying
+    // Any http://localhost:* or http://127.0.0.1:* request from an HTTPS page
+    // will be blocked by mixed content rules, so we proxy all of them
+    function isHttpLocalhost(urlStr) {
+        try {
+            var u = new URL(urlStr);
+            return u.protocol === 'http:' && (u.hostname === 'localhost' || u.hostname === '127.0.0.1');
+        } catch (e) {
+            return false;
+        }
+    }
     
     // Helper function to proxy HTTP requests through Tauri
     async function proxyRequest(url, method, headers, body) {
@@ -47,10 +59,9 @@
         // Debug: log all fetch calls to see what's happening
         console.log('[Tauri Proxy] Fetch called:', urlStr);
         
-        // Only proxy requests to the configured local node URL (HTTP localhost)
-        // HTTPS registries don't need proxying (no mixed content issues)
-        // Use precise matching to avoid port confusion (e.g., localhost:2528 vs localhost:25280)
-        const shouldProxy = urlStr === nodeUrl || urlStr.startsWith(nodeUrl + '/') || urlStr.startsWith(nodeUrl + '?') || urlStr.startsWith(nodeUrl + '#');
+        // Proxy any HTTP localhost request (any port) to avoid mixed content blocking.
+        // The Rust backend validates the URL before proxying.
+        const shouldProxy = isHttpLocalhost(urlStr);
         console.log('[Tauri Proxy] Should proxy?', shouldProxy, 'for URL:', urlStr);
         if (shouldProxy) {
             try {
@@ -128,7 +139,7 @@
         };
 
         xhr.send = function(body) {
-            const shouldProxy = xhrUrl === nodeUrl || xhrUrl.startsWith(nodeUrl + '/') || xhrUrl.startsWith(nodeUrl + '?') || xhrUrl.startsWith(nodeUrl + '#');
+            const shouldProxy = isHttpLocalhost(xhrUrl);
 
             if (shouldProxy) {
                 console.log('[Tauri Proxy] XHR intercepted:', xhrMethod, xhrUrl);

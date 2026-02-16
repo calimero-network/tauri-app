@@ -12,6 +12,7 @@ import {
 } from "../utils/merod";
 import { invoke } from "@tauri-apps/api/tauri";
 import { getSettings, saveSettings } from "../utils/settings";
+import { clearAccessToken, clearRefreshToken } from "@calimero-network/mero-react";
 import { useToast } from "../contexts/ToastContext";
 import "./Nodes.css";
 
@@ -206,6 +207,14 @@ export default function Nodes({ onBack }: NodesProps) {
     try {
       const nodeUrl = `http://localhost:${node.port}`;
       const settings = getSettings();
+
+      // Clear auth tokens when switching nodes — old tokens are invalid
+      if (settings.nodeUrl !== nodeUrl) {
+        clearAccessToken();
+        clearRefreshToken();
+        localStorage.removeItem('calimero-auth-tokens');
+      }
+
       saveSettings({
         ...settings,
         nodeUrl,

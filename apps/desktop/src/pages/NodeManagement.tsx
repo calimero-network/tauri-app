@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef } from "react";
 import { getSettings, saveSettings } from "../utils/settings";
-import { 
-  listMerodNodes, 
-  initMerodNode, 
-  startMerod, 
-  stopMerod, 
+import { clearAccessToken, clearRefreshToken } from "@calimero-network/mero-react";
+import {
+  listMerodNodes,
+  initMerodNode,
+  startMerod,
+  stopMerod,
   stopMerodByPid,
   detectRunningMerodNodes,
   getMerodLogs,
@@ -50,10 +51,32 @@ export default function NodeManagement() {
   useEffect(() => {
     loadNodes();
     detectRunning();
-    
+
     const interval = setInterval(detectRunning, 3000);
     return () => clearInterval(interval);
   }, [homeDir]);
+
+  // When selected node is not running and current ports conflict with running nodes, auto-assign next free ports
+  const getRunningNodeInfo = (nodeName: string): { running: boolean; port?: number } => {
+    if (!nodeName) return { running: false };
+    const runningNode = runningNodes.find(n => n.node_name === nodeName);
+    return runningNode ? { running: true, port: runningNode.port } : { running: false };
+  };
+
+  useEffect(() => {
+    if (!selectedNode || runningNodes.length === 0) return;
+    const nodeInfo = getRunningNodeInfo(selectedNode);
+    if (nodeInfo.running) return;
+
+    const serverPortInUse = runningNodes.some(n => n.port === serverPort);
+    const swarmPortInUse = runningNodes.some(n => (n.swarm_port ?? 2428) === swarmPort);
+    if (!serverPortInUse && !swarmPortInUse) return;
+
+    const maxServerPort = Math.max(2528, ...runningNodes.map(n => n.port));
+    const maxSwarmPort = Math.max(2428, ...runningNodes.map(n => n.swarm_port ?? 2428));
+    setServerPort(maxServerPort + 1);
+    setSwarmPort(maxSwarmPort + 1);
+  }, [selectedNode, runningNodes, serverPort, swarmPort]);
 
   const loadNodes = async () => {
     try {
@@ -102,12 +125,15 @@ export default function NodeManagement() {
       return;
     }
 
+    const createdName = newNodeName.trim();
     setLoading(true);
     try {
-      await initMerodNode(newNodeName.trim(), homeDir);
-      toast.success(`Node "${newNodeName.trim()}" created successfully`);
+      await initMerodNode(createdName, homeDir);
+      toast.success(`Node "${createdName}" created successfully`);
       setNewNodeName("");
       await loadNodes();
+      await detectRunning(); // Fresh running nodes so port-bump effect uses correct ports
+      setSelectedNode(createdName);
     } catch (error: any) {
       console.error("Failed to create node:", error);
       toast.error(`Failed to create node: ${error.message || error}`);
@@ -122,11 +148,47 @@ export default function NodeManagement() {
       return;
     }
 
+    // Compute port at click time to avoid race with port-bump effect.
+    // If current serverPort is already in use by another node, pick next free port.
+    let portToUse = serverPort;
+    let swarmToUse = swarmPort;
+    const usedServerPorts = runningNodes.map((n) => n.port ?? 2528);
+    const usedSwarmPorts = runningNodes.map((n) => n.swarm_port ?? 2428);
+    if (usedServerPorts.includes(serverPort)) {
+      portToUse = Math.max(2528, ...usedServerPorts) + 1;
+      setServerPort(portToUse);
+    }
+    if (usedSwarmPorts.includes(swarmPort)) {
+      swarmToUse = Math.max(2428, ...usedSwarmPorts) + 1;
+      setSwarmPort(swarmToUse);
+    }
+
     setLoading(true);
     try {
-      await startMerod(serverPort, swarmPort, homeDir, selectedNode);
+      await startMerod(portToUse, swarmToUse, homeDir, selectedNode);
       toast.success(`Node "${selectedNode}" started successfully`);
       await detectRunning();
+
+      // Auto-switch app to use this node's URL so connection works immediately
+      const nodeUrlNew = `http://localhost:${portToUse}`;
+      const settings = getSettings();
+      const urlChanged = settings.nodeUrl !== nodeUrlNew;
+      saveSettings({
+        ...settings,
+        nodeUrl: nodeUrlNew,
+        authUrl: undefined,
+      });
+
+      // Clear auth tokens when switching nodes — old tokens are invalid
+      if (urlChanged) {
+        clearAccessToken();
+        clearRefreshToken();
+        localStorage.removeItem('calimero-auth-tokens');
+      }
+
+      setNodeUrl(nodeUrlNew);
+      toast.success(`Switched to ${nodeUrlNew}. Reloading to connect.`);
+      window.location.reload();
     } catch (error: any) {
       console.error("Failed to start node:", error);
       toast.error(`Failed to start node: ${error.message || error}`);
@@ -160,12 +222,6 @@ export default function NodeManagement() {
     } finally {
       setLoading(false);
     }
-  };
-
-  const getRunningNodeInfo = (nodeName: string): { running: boolean; port?: number } => {
-    if (!nodeName) return { running: false };
-    const runningNode = runningNodes.find(n => n.node_name === nodeName);
-    return runningNode ? { running: true, port: runningNode.port } : { running: false };
   };
 
   const handleViewLogs = async () => {
@@ -205,14 +261,25 @@ export default function NodeManagement() {
   const handleSaveNodeConfig = () => {
     try {
       const settings = getSettings();
+      const newNodeUrl = nodeUrl.trim() || "http://localhost:2528";
+      const urlChanged = settings.nodeUrl !== newNodeUrl;
       saveSettings({
         ...settings,
-        nodeUrl,
+        nodeUrl: newNodeUrl,
         authUrl: authUrl.trim() || undefined,
       });
+
+      // Clear auth tokens when switching to a different node — old tokens are invalid
+      if (urlChanged) {
+        clearAccessToken();
+        clearRefreshToken();
+        localStorage.removeItem('calimero-auth-tokens');
+      }
+
       setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
       toast.success("Node configuration saved successfully");
+      // Reload app so Context, Applications, Marketplace use the new node URL
+      window.location.reload();
     } catch (error) {
       console.error("Failed to save node configuration:", error);
       toast.error("Failed to save node configuration");

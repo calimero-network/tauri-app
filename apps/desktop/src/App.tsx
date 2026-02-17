@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { createClient, apiClient, LoginView, getAccessToken } from "@calimero-network/mero-react";
+import { createClient, apiClient, LoginView, getAccessToken, clearAccessToken, clearRefreshToken } from "@calimero-network/mero-react";
 import { getSettings, getAuthUrl, saveSettings } from "./utils/settings";
 import { clearOnboardingProgress } from "./utils/onboardingProgress";
 import { startMerod, detectRunningMerodNodes, type RunningMerodNode } from "./utils/merod";
@@ -50,6 +50,12 @@ function App() {
 
   const handleSelectNode = useCallback((nodeUrl: string) => {
     const settings = getSettings();
+    if (settings.nodeUrl !== nodeUrl) {
+      // Clear auth tokens — old tokens are invalid for the new node
+      clearAccessToken();
+      clearRefreshToken();
+      localStorage.removeItem('calimero-auth-tokens');
+    }
     saveSettings({ ...settings, nodeUrl });
     window.location.reload();
   }, []);

@@ -121,47 +121,20 @@ pub(crate) fn validate_allowed_url(url: &str, configured_node_url: Option<&str>)
         ));
     }
     
-    // Validate allowed combinations with strict hostname matching (fallback defaults)
-    match (scheme, host_lower.as_str(), port) {
-        // HTTP localhost on port 2528 (default fallback for backwards compatibility)
-        ("http", "localhost", 2528) => Ok(()),
-        ("http", "127.0.0.1", 2528) => Ok(()),
-        // Reject everything else (including HTTPS - no proxying needed)
+    // Allow any HTTP localhost request (any port) - these need proxying to avoid
+    // mixed content blocking when the app is loaded from HTTPS
+    match (scheme, host_lower.as_str()) {
+        ("http", "localhost") | ("http", "127.0.0.1") => Ok(()),
         _ => {
-            // Provide helpful error message based on what's wrong
-            let mut suggestions = Vec::new();
-            
-            if scheme == "http" {
-                if host_lower == "localhost" || host_lower == "127.0.0.1" {
-                    if port != 2528 {
-                        suggestions.push(format!("For localhost, use port 2528 (e.g., http://localhost:2528)"));
-                    }
-                } else {
-                    suggestions.push("For localhost access, use http://localhost:2528 or http://127.0.0.1:2528".to_string());
-                }
-            } else if scheme == "https" {
-                suggestions.push("HTTPS URLs don't need proxying. Only HTTP localhost node URLs are proxied.".to_string());
-            }
-            
-            let mut suggestion_text = if suggestions.is_empty() {
-                if let Some(node_url) = configured_node_url {
-                    format!("Allowed URLs: {} (configured node URL)", node_url)
-                } else {
-                    "Allowed URLs: http://localhost:2528 or http://127.0.0.1:2528".to_string()
-                }
+            let suggestion = if scheme == "https" {
+                "HTTPS URLs don't need proxying. Only HTTP localhost node URLs are proxied.".to_string()
             } else {
-                suggestions.join(". ")
+                "Only HTTP localhost URLs are allowed for proxying (e.g., http://localhost:2528).".to_string()
             };
-            
-            if configured_node_url.is_some() && !suggestion_text.contains("configured node URL") {
-                if let Some(node_url) = configured_node_url {
-                    suggestion_text = format!("{}. Or use your configured node URL: {}", suggestion_text, node_url);
-                }
-            }
-            
+
             Err(format!(
                 "URL not allowed: {}://{}:{}. {}",
-                scheme, host, port, suggestion_text
+                scheme, host, port, suggestion
             ))
         }
     }
@@ -288,7 +261,7 @@ async fn proxy_http_request(request: HttpRequest, configured_node_url: Option<St
             if error_msg.contains("timeout") {
                 format!("Request to {} timed out after 30 seconds. The server may be slow or unreachable. Please check your connection and try again.", request.url)
             } else if error_msg.contains("connection") || error_msg.contains("resolve") {
-                format!("Failed to connect to {}. Please ensure the Calimero node is running on localhost:2528 or check your network connection.", request.url)
+                format!("Failed to connect to {}. Please ensure the Calimero node is running or check your network connection.", request.url)
             } else {
                 format!("Request to {} failed: {}. Please check the URL and try again.", request.url, error_msg)
             }
@@ -1911,13 +1884,14 @@ mod tests {
     }
 
     #[test]
-    fn test_reject_wrong_ports() {
-        // Wrong ports for localhost
-        assert!(validate_allowed_url("http://localhost:80/", None).is_err());
-        assert!(validate_allowed_url("http://localhost:8080/", None).is_err());
-        assert!(validate_allowed_url("http://127.0.0.1:80/", None).is_err());
-        assert!(validate_allowed_url("http://127.0.0.1:8080/", None).is_err());
-        
+    fn test_allow_any_localhost_port() {
+        // Any localhost port should be allowed (needed for multi-node setups)
+        assert!(validate_allowed_url("http://localhost:80/", None).is_ok());
+        assert!(validate_allowed_url("http://localhost:8080/", None).is_ok());
+        assert!(validate_allowed_url("http://localhost:2529/", None).is_ok());
+        assert!(validate_allowed_url("http://127.0.0.1:80/", None).is_ok());
+        assert!(validate_allowed_url("http://127.0.0.1:8080/", None).is_ok());
+        assert!(validate_allowed_url("http://127.0.0.1:2529/", None).is_ok());
     }
 
     #[test]
@@ -1942,7 +1916,7 @@ mod tests {
         // Malformed URLs
         assert!(validate_allowed_url("not-a-url", None).is_err());
         assert!(validate_allowed_url("http://", None).is_err());
-        assert!(validate_allowed_url("http://localhost", None).is_err()); // Missing port
+        assert!(validate_allowed_url("http://localhost", None).is_ok()); // localhost port 80 is valid
         assert!(validate_allowed_url("http://:2528/", None).is_err()); // Missing hostname
     }
 

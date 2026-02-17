@@ -199,6 +199,14 @@ jobs:
 
           rm -f certificate.p12
 
+      - name: Ensure merod binary is executable
+        run: |
+          MEROD_BINARY="apps/desktop/src-tauri/merod/merod"
+          if [ -f "$MEROD_BINARY" ]; then
+            chmod +x "$MEROD_BINARY"
+            echo "Set merod as executable"
+          fi
+
       - name: Sign merod binary before bundling
         if: steps.build-mode.outputs.mode == 'release'
         env:

@@ -16,7 +16,8 @@
     "build:mero-react": "pnpm --filter @calimero-network/mero-react build",
     "dev": "pnpm build:mero-js && pnpm build:mero-react && pnpm dev:desktop",
     "build": "pnpm build:mero-js && pnpm build:mero-react && pnpm build:desktop",
-    "clean": "pnpm -r clean && rm -rf node_modules"
+    "clean": "pnpm -r clean && rm -rf node_modules",
+    "check-runners": "ps aux | grep merod"
   },
   "devDependencies": {
     "typescript": "^5.8.3"

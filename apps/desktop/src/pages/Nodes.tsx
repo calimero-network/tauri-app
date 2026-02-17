@@ -168,7 +168,7 @@ export default function Nodes({ onBack }: NodesProps) {
     
     setLoading(true);
     try {
-      await startMerod(serverPort, swarmPort, homeDir, selectedNode);
+      await startMerod(serverPort, swarmPort, homeDir, selectedNode, getSettings().debugLogs);
       await checkStatus();
       await detectRunning();
       toast.success(`Node '${selectedNode}' started successfully on server port ${serverPort} and swarm port ${swarmPort}`);

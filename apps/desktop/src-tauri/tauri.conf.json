@@ -8,7 +8,7 @@
   },
   "package": {
     "productName": "Calimero Desktop",
-    "version": "0.0.16"
+    "version": "0.0.17"
   },
   "tauri": {
     "allowlist": {
@@ -80,7 +80,7 @@
         "merod/merod"
       ],
       "macOS": {
-        "entitlements": null,
+        "entitlements": "entitlements.plist",
         "exceptionDomain": "",
         "frameworks": [],
         "providerShortName": null,

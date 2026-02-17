@@ -339,7 +339,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
                 embeddedNodePort: alreadyRunning.port,
               });
             } else {
-              await startMerod(serverPort, swarmPort, dataDir, nodeToUse);
+              await startMerod(serverPort, swarmPort, dataDir, nodeToUse, getSettings().debugLogs);
               saveSettings({
                 ...getSettings(),
                 nodeUrl: `http://localhost:${serverPort}`,
@@ -460,7 +460,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
         }
         
         // Start the existing node
-        await startMerod(serverPort, swarmPort, dataDir, useExistingNode);
+        await startMerod(serverPort, swarmPort, dataDir, useExistingNode, getSettings().debugLogs);
         setNodeCreated(true);
         setNodeStarted(true);
         const nodeUrl = `http://localhost:${serverPort}`;
@@ -489,7 +489,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
           return;
         }
         
-        await startMerod(serverPort, swarmPort, dataDir, targetNodeName);
+        await startMerod(serverPort, swarmPort, dataDir, targetNodeName, getSettings().debugLogs);
         setNodeCreated(true);
         setNodeStarted(true);
         const nodeUrl = `http://localhost:${serverPort}`;

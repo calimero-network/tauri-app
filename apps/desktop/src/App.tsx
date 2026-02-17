@@ -166,7 +166,7 @@ function App() {
           const serverPort = settings.embeddedNodePort ?? 2528;
           const swarmPort = 2428; // default swarm port
           try {
-            await startMerod(serverPort, swarmPort, dataDir, settings.embeddedNodeName);
+            await startMerod(serverPort, swarmPort, dataDir, settings.embeddedNodeName, settings.debugLogs);
             await new Promise((r) => setTimeout(r, 4000)); // give merod time to start (longer when app launches at login)
             runningNodes = await detectRunningMerodNodes();
             setRunningNodes(runningNodes);
@@ -321,7 +321,7 @@ function App() {
       try {
         const dataDir = settings.embeddedNodeDataDir || '~/.calimero';
         const serverPort = settings.embeddedNodePort ?? 2528;
-        await startMerod(serverPort, 2428, dataDir, settings.embeddedNodeName);
+        await startMerod(serverPort, 2428, dataDir, settings.embeddedNodeName, settings.debugLogs);
         toast.success("Starting node...");
         await new Promise((r) => setTimeout(r, 3000));
         await checkConnection();

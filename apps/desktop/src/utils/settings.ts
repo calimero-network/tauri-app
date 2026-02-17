@@ -7,6 +7,7 @@ export interface AppSettings {
   embeddedNodeDataDir?: string; // Data directory for embedded node (default: ~/.calimero)
   embeddedNodeName?: string; // Node name for embedded node
   developerMode?: boolean; // Developer mode - shows advanced features like multiple nodes and contexts
+  debugLogs?: boolean; // Enable debug-level logging for the merod node
   onboardingCompleted?: boolean; // True once user has completed first-time setup - never show onboarding again
 }
 
@@ -77,6 +78,7 @@ export function getSettings(): AppSettings {
         embeddedNodeDataDir: rawSettings.embeddedNodeDataDir,
         embeddedNodeName: rawSettings.embeddedNodeName,
         developerMode: rawSettings.developerMode ?? false, // Default to false
+        debugLogs: rawSettings.debugLogs ?? false,
         onboardingCompleted: rawSettings.onboardingCompleted ?? false,
       };
     }

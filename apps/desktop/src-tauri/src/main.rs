@@ -601,6 +601,7 @@ async fn start_merod(
     swarm_port: Option<u16>,
     data_dir: Option<String>,
     node_name: Option<String>,
+    debug_logs: Option<bool>,
     app_handle: tauri::AppHandle,
     merod_state: tauri::State<'_, MerodState>,
 ) -> Result<String, String> {
@@ -784,6 +785,13 @@ async fn start_merod(
     // Force ANSI colors in output so the log viewer can display them
     cmd.env("CLICOLOR_FORCE", "1");
     cmd.env("FORCE_COLOR", "1");
+    // Set log level based on debug_logs setting
+    if debug_logs.unwrap_or(false) {
+        cmd.env("RUST_LOG", "debug");
+        info!("[Merod] Debug logging enabled");
+    } else {
+        cmd.env("RUST_LOG", "info");
+    }
     
     // Set home directory (global option, before subcommand)
     cmd.arg("--home").arg(&home_dir_path);

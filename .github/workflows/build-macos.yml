@@ -211,11 +211,14 @@ jobs:
 
           MEROD_BINARY="apps/desktop/src-tauri/merod/merod"
           
+          ENTITLEMENTS="apps/desktop/src-tauri/merod.entitlements.plist"
+
           if [ -f "$MEROD_BINARY" ]; then
             echo "Signing merod binary before bundling: $MEROD_BINARY"
             codesign --force --sign "$APPLE_SIGNING_IDENTITY" \
               --options runtime \
               --timestamp \
+              --entitlements "$ENTITLEMENTS" \
               "$MEROD_BINARY"
             
             codesign --verify --verbose "$MEROD_BINARY" || {

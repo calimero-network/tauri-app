@@ -20,6 +20,7 @@ export default function Settings({ onBack }: SettingsProps) {
   // Node management state (removed - now in NodeManagement page)
   const [activeTab, setActiveTab] = useState<'general' | 'registries'>('general');
   const [developerMode, setDeveloperMode] = useState(false);
+  const [debugLogs, setDebugLogs] = useState(false);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [resetConfirmed, setResetConfirmed] = useState(false);
   const [resetting, setResetting] = useState(false);
@@ -34,6 +35,7 @@ export default function Settings({ onBack }: SettingsProps) {
     const settings = getSettings();
     setRegistries(settings.registries || []);
     setDeveloperMode(settings.developerMode ?? false);
+    setDebugLogs(settings.debugLogs ?? false);
   }, []);
 
   useEffect(() => {
@@ -76,6 +78,16 @@ export default function Settings({ onBack }: SettingsProps) {
     toast.success(`Developer mode ${newValue ? 'enabled' : 'disabled'}`);
   };
 
+  const handleDebugLogsToggle = () => {
+    const newValue = !debugLogs;
+    setDebugLogs(newValue);
+    const settings = getSettings();
+    saveSettings({
+      ...settings,
+      debugLogs: newValue,
+    });
+    toast.success(`Debug logs ${newValue ? 'enabled' : 'disabled'}. Restart the node for changes to take effect.`);
+  };
 
   const handleAddRegistry = () => {
     const url = newRegistryUrl.trim();
@@ -197,6 +209,27 @@ export default function Settings({ onBack }: SettingsProps) {
             <p className="field-hint">
                   Enable to show advanced features like multiple node management and contexts tab.
                   When disabled, the app uses a simplified single-node mode.
+            </p>
+          </div>
+          <div className="settings-field">
+                <span className="settings-field-label">Debug Logs</span>
+                <div className="toggle-switch">
+            <input
+                    id="debug-logs"
+                    type="checkbox"
+                    checked={debugLogs}
+                    onChange={handleDebugLogsToggle}
+                  />
+                  <label htmlFor="debug-logs" className="toggle-label">
+                    <span className="toggle-slider"></span>
+                    <span className="toggle-text">
+                      {debugLogs ? 'Enabled' : 'Disabled'}
+                    </span>
+                  </label>
+                </div>
+            <p className="field-hint">
+                  Enable debug-level logging for the merod node. Produces more verbose logs useful for troubleshooting.
+                  Restart the node for changes to take effect.
             </p>
           </div>
               <div className="settings-field" style={{ marginTop: '16px', paddingTop: '16px', borderTop: '1px solid var(--border-color, #333)' }}>

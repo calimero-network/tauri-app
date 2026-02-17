@@ -165,7 +165,7 @@ export default function NodeManagement() {
 
     setLoading(true);
     try {
-      await startMerod(portToUse, swarmToUse, homeDir, selectedNode);
+      await startMerod(portToUse, swarmToUse, homeDir, selectedNode, getSettings().debugLogs);
       toast.success(`Node "${selectedNode}" started successfully`);
       await detectRunning();
 

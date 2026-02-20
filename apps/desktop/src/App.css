@@ -33,12 +33,12 @@
   height: 36px;
   width: auto;
   display: block;
-  /* Match theme: black in light mode, white in dark mode */
-  filter: brightness(0);
+  /* White in dark mode (default), black in light mode */
+  filter: brightness(0) invert(1);
 }
 
-[data-theme="dark"] .login-screen-logo {
-  filter: brightness(0) invert(1);
+[data-theme="light"] .login-screen-logo {
+  filter: brightness(0);
 }
 
 .login-screen-main {
@@ -286,7 +286,7 @@
   font-size: 20px;
   font-weight: 600;
   margin-bottom: 16px;
-  color: #333;
+  color: var(--text-primary);
 }
 
 .url {
@@ -323,7 +323,7 @@
 
 .button {
   background: var(--accent-primary);
-  color: white;
+  color: #09090b;
   border: none;
   padding: 8px 16px;
   border-radius: 6px;
@@ -706,8 +706,8 @@
 .loading-spinner-large {
   width: 64px;
   height: 64px;
-  border: 5px solid #e5e7eb;
-  border-top-color: #667eea;
+  border: 5px solid var(--bg-tertiary);
+  border-top-color: var(--accent-primary);
   border-radius: 50%;
   animation: spin 1s linear infinite;
   margin-bottom: 24px;
@@ -716,13 +716,13 @@
 .loading-screen h2 {
   font-size: 24px;
   font-weight: 600;
-  color: #1f2937;
+  color: var(--text-primary);
   margin-bottom: 8px;
 }
 
 .loading-screen p {
   font-size: 16px;
-  color: #6b7280;
+  color: var(--text-secondary);
 }
 
 @keyframes spin {

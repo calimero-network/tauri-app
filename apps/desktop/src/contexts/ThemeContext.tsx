@@ -24,11 +24,8 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     if (!hasCustomSettings) {
       return 'dark';
     }
-    // Check system preference
-    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
-      return 'dark';
-    }
-    return 'light';
+    // Default to dark (Calimero brand)
+    return 'dark';
   });
 
   useEffect(() => {

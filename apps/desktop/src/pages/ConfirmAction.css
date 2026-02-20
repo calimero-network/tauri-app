@@ -7,13 +7,13 @@
 .breadcrumbs {
   margin-bottom: 24px;
   font-size: 14px;
-  color: #666;
+  color: var(--text-secondary);
 }
 
 .breadcrumb-link {
   background: none;
   border: none;
-  color: #007bff;
+  color: var(--accent-primary);
   cursor: pointer;
   padding: 0;
   text-decoration: underline;
@@ -21,30 +21,31 @@
 }
 
 .breadcrumb-link:hover {
-  color: #0056b3;
+  color: var(--accent-hover);
 }
 
 .breadcrumb-separator {
   margin: 0 8px;
-  color: #999;
+  color: var(--text-tertiary);
 }
 
 .breadcrumb-current {
-  color: #333;
+  color: var(--text-primary);
   font-weight: 500;
 }
 
 .confirm-action-content {
-  background: white;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
   border-radius: 8px;
   padding: 32px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  box-shadow: var(--shadow-md);
 }
 
 .confirm-action-content h1 {
   margin: 0 0 24px 0;
   font-size: 24px;
-  color: #333;
+  color: var(--text-primary);
 }
 
 .confirm-message {
@@ -53,13 +54,13 @@
 
 .confirm-message p {
   margin: 0 0 12px 0;
-  color: #666;
+  color: var(--text-secondary);
   line-height: 1.6;
 }
 
 .item-name {
   font-weight: 600;
-  color: #333;
+  color: var(--text-primary);
   font-size: 16px;
 }
 
@@ -71,30 +72,31 @@
 
 .button {
   padding: 10px 20px;
-  border: 1px solid #ddd;
-  border-radius: 4px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
   cursor: pointer;
   font-size: 14px;
-  transition: all 0.2s;
+  font-weight: 500;
+  transition: all 0.15s;
 }
 
 .button-secondary {
-  background: white;
-  color: #333;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
 }
 
 .button-secondary:hover {
-  background: #f5f5f5;
+  background: var(--bg-secondary);
+  border-color: var(--border-hover);
 }
 
 .button-danger {
-  background: #dc3545;
+  background: var(--error);
   color: white;
-  border-color: #dc3545;
+  border-color: var(--error);
 }
 
 .button-danger:hover {
-  background: #c82333;
-  border-color: #bd2130;
+  background: #dc2626;
+  border-color: #dc2626;
 }
-

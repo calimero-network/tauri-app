@@ -274,7 +274,7 @@
 
 .button-primary {
   background: var(--accent-primary);
-  color: white;
+  color: #09090b;
   box-shadow: var(--shadow-sm);
 }
 

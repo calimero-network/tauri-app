@@ -23,7 +23,7 @@
   background: linear-gradient(
     90deg,
     transparent,
-    rgba(255, 255, 255, 0.1),
+    rgba(255, 255, 255, 0.05),
     transparent
   );
   animation: skeleton-wave 1.5s ease-in-out infinite;
@@ -47,14 +47,7 @@
   }
 }
 
-[data-theme="dark"] .skeleton-wave::after {
-  background: linear-gradient(
-    90deg,
-    transparent,
-    rgba(255, 255, 255, 0.05),
-    transparent
-  );
-}
+/* Dark is default — wave shimmer is already tuned for dark backgrounds */
 
 .skeleton-text {
   display: flex;

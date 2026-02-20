@@ -20,14 +20,14 @@ function validatePassword(value: string): string | null {
 }
 
 const DARK = {
-  bgCard: '#1e293b',
-  bgInput: '#0f172a',
-  bgButton: '#334155',
-  bgButtonPrimary: '#818cf8',
-  text: '#f1f5f9',
-  textMuted: '#94a3b8',
-  border: '#334155',
-  error: '#f87171',
+  bgCard: '#18181b',
+  bgInput: '#27272a',
+  bgButton: '#27272a',
+  bgButtonPrimary: '#a5ff11',
+  text: '#f4f4f5',
+  textMuted: '#a1a1aa',
+  border: '#27272a',
+  error: '#ef4444',
 };
 
 export interface UsernamePasswordFormProps {
@@ -256,7 +256,7 @@ export function UsernamePasswordForm({
                     : (isDark ? DARK.bgButtonPrimary : 'var(--accent-primary)'),
                   color: loading || !!validateUsername(username) || !!validatePassword(password)
                     ? (isDark ? DARK.textMuted : 'var(--text-tertiary)')
-                    : 'white',
+                    : (isDark ? '#09090b' : '#09090b'),
                   border: 'none',
                   borderRadius: '10px',
                   fontSize: '15px',

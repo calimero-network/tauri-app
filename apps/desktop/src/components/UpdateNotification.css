@@ -22,10 +22,10 @@
   align-items: center;
   gap: 16px;
   padding: 16px 20px;
-  background: #1a1a2e;
-  border: 1px solid #2d2d44;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-hover);
   border-radius: 12px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+  box-shadow: var(--shadow-xl);
   max-width: 480px;
 }
 
@@ -35,9 +35,9 @@
   justify-content: center;
   width: 40px;
   height: 40px;
-  background: rgba(99, 102, 241, 0.1);
+  background: var(--accent-light);
   border-radius: 10px;
-  color: #6366f1;
+  color: var(--accent-primary);
   flex-shrink: 0;
 }
 
@@ -50,13 +50,13 @@
   margin: 0 0 4px 0;
   font-size: 14px;
   font-weight: 600;
-  color: #ffffff;
+  color: var(--text-primary);
 }
 
 .update-notification-text p {
   margin: 0;
   font-size: 13px;
-  color: #a0a0b8;
+  color: var(--text-secondary);
   line-height: 1.4;
 }
 
@@ -69,7 +69,7 @@
 
 .update-error {
   font-size: 12px;
-  color: #ef4444;
+  color: var(--error);
   margin-right: 8px;
 }
 
@@ -90,49 +90,22 @@
 
 .update-button-secondary {
   background: transparent;
-  color: #a0a0b8;
-  border: 1px solid #2d2d44;
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color) !important;
 }
 
 .update-button-secondary:hover:not(:disabled) {
-  background: #252540;
-  color: #ffffff;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
 }
 
 .update-button-primary {
-  background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
-  color: #ffffff;
+  background: var(--accent-primary);
+  color: #09090b;
 }
 
 .update-button-primary:hover:not(:disabled) {
-  background: linear-gradient(135deg, #818cf8 0%, #6366f1 100%);
-}
-
-/* Light mode support */
-@media (prefers-color-scheme: light) {
-  .update-notification-content {
-    background: #ffffff;
-    border-color: #e5e7eb;
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
-  }
-
-  .update-notification-text h4 {
-    color: #1f2937;
-  }
-
-  .update-notification-text p {
-    color: #6b7280;
-  }
-
-  .update-button-secondary {
-    color: #6b7280;
-    border-color: #e5e7eb;
-  }
-
-  .update-button-secondary:hover:not(:disabled) {
-    background: #f3f4f6;
-    color: #1f2937;
-  }
+  background: var(--accent-hover);
 }
 
 /* Responsive */

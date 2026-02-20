@@ -24,11 +24,10 @@
 }
 
 .error-message {
-  background-color: var(--error);
   background: rgba(239, 68, 68, 0.1);
   color: var(--error);
   padding: 12px 16px;
-  border-radius: 4px;
+  border-radius: 6px;
   margin-bottom: 16px;
   border: 1px solid var(--error);
 }
@@ -50,7 +49,7 @@
 }
 
 .create-context-form {
-  background: var(--bg-primary);
+  background: var(--bg-secondary);
   border: 1px solid var(--border-color);
   border-radius: 8px;
   padding: 24px;
@@ -81,11 +80,12 @@
   width: 100%;
   padding: 8px 12px;
   border: 1px solid var(--border-color);
-  border-radius: 4px;
+  border-radius: 6px;
   font-size: 14px;
   font-family: inherit;
   background: var(--bg-primary);
   color: var(--text-primary);
+  transition: all 0.15s;
 }
 
 .form-group input:focus,
@@ -93,7 +93,7 @@
 .form-group select:focus {
   outline: none;
   border-color: var(--accent-primary);
-  box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.1);
+  box-shadow: 0 0 0 2px var(--accent-light);
 }
 
 .form-group input:disabled,
@@ -127,19 +127,19 @@
   align-items: baseline;
   gap: 12px;
   padding-bottom: 8px;
-  border-bottom: 2px solid #e0e0e0;
+  border-bottom: 2px solid var(--border-color);
 }
 
 .context-group-header h2 {
   margin: 0;
   font-size: 20px;
-  color: #333;
+  color: var(--text-primary);
   font-weight: 600;
 }
 
 .context-count {
   font-size: 14px;
-  color: #666;
+  color: var(--text-secondary);
   font-weight: normal;
 }
 
@@ -150,13 +150,17 @@
 }
 
 .context-card {
-  background: white;
-  border: 1px solid #e0e0e0;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
   border-radius: 8px;
   padding: 20px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
   display: flex;
   flex-direction: column;
+  transition: all 0.15s;
+}
+
+.context-card:hover {
+  border-color: var(--border-hover);
 }
 
 .context-card-header {
@@ -166,7 +170,7 @@
 .context-card-header h3 {
   margin: 0;
   font-size: 18px;
-  color: #333;
+  color: var(--text-primary);
 }
 
 .context-card-body {
@@ -177,7 +181,7 @@
 .context-id {
   font-family: monospace;
   font-size: 12px;
-  color: #666;
+  color: var(--text-secondary);
   margin: 4px 0;
   word-break: break-all;
 }
@@ -185,21 +189,21 @@
 .context-root-hash {
   font-family: monospace;
   font-size: 12px;
-  color: #666;
+  color: var(--text-secondary);
   margin: 4px 0;
   word-break: break-all;
   overflow-wrap: break-word;
 }
 
 .context-description {
-  color: #555;
+  color: var(--text-secondary);
   margin: 8px 0;
   font-size: 14px;
   line-height: 1.4;
 }
 
 .context-date {
-  color: #666;
+  color: var(--text-tertiary);
   margin: 4px 0;
   font-size: 12px;
 }
@@ -207,44 +211,49 @@
 .context-metadata {
   margin-top: 12px;
   padding-top: 12px;
-  border-top: 1px solid #f0f0f0;
+  border-top: 1px solid var(--border-color);
 }
 
 .context-metadata strong {
   display: block;
   margin-bottom: 4px;
   font-size: 12px;
-  color: #666;
+  color: var(--text-tertiary);
 }
 
 .context-metadata pre {
-  background: #f5f5f5;
+  background: var(--bg-primary);
   padding: 8px;
   border-radius: 4px;
   font-size: 11px;
   overflow-x: auto;
   margin: 0;
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color);
 }
 
 .context-card-actions {
   display: flex;
   gap: 8px;
   padding-top: 12px;
-  border-top: 1px solid #f0f0f0;
+  border-top: 1px solid var(--border-color);
 }
 
 .button {
   padding: 8px 16px;
-  border: 1px solid #ddd;
-  border-radius: 4px;
-  background: white;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
   cursor: pointer;
   font-size: 14px;
-  transition: all 0.2s;
+  font-weight: 500;
+  transition: all 0.15s;
 }
 
 .button:hover:not(:disabled) {
-  background: #f5f5f5;
+  background: var(--bg-secondary);
+  border-color: var(--border-hover);
 }
 
 .button:disabled {
@@ -253,48 +262,49 @@
 }
 
 .button-primary {
-  background: #007bff;
-  color: white;
-  border-color: #007bff;
+  background: var(--accent-primary);
+  color: #09090b;
+  border-color: var(--accent-primary);
 }
 
 .button-primary:hover:not(:disabled) {
-  background: #0056b3;
-  border-color: #0056b3;
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
 }
 
 .button-danger {
-  background: #dc3545;
+  background: var(--error);
   color: white;
-  border-color: #dc3545;
+  border-color: var(--error);
 }
 
 .button-danger:hover:not(:disabled) {
-  background: #c82333;
-  border-color: #bd2130;
+  background: #dc2626;
+  border-color: #dc2626;
 }
 
 .contexts-help-card {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-left: 3px solid var(--accent-primary);
   border-radius: 12px;
   padding: 32px;
-  color: white;
+  color: var(--text-primary);
   margin-bottom: 32px;
-  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.2);
 }
 
 .contexts-help-card h3 {
-  font-size: 24px;
+  font-size: 20px;
   font-weight: 600;
   margin: 0 0 16px 0;
-  color: white;
+  color: var(--text-primary);
 }
 
 .contexts-help-card p {
-  font-size: 16px;
+  font-size: 14px;
   line-height: 1.7;
   margin: 0 0 16px 0;
-  opacity: 0.95;
+  color: var(--text-secondary);
 }
 
 .contexts-help-card ul {
@@ -305,12 +315,13 @@
 
 .contexts-help-card li {
   margin: 8px 0;
-  font-size: 15px;
-  opacity: 0.95;
+  font-size: 14px;
+  color: var(--text-secondary);
 }
 
 .contexts-help-card strong {
   font-weight: 600;
+  color: var(--text-primary);
 }
 
 /* Table cell styles */

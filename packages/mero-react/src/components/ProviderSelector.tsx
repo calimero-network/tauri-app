@@ -2,12 +2,12 @@ import React from 'react';
 import type { Provider } from '../client/types';
 
 const DARK = {
-  bgCard: '#1e293b',
-  bgButton: '#0f172a',
-  text: '#f1f5f9',
-  textMuted: '#94a3b8',
-  border: '#334155',
-  accent: '#818cf8',
+  bgCard: '#18181b',
+  bgButton: '#09090b',
+  text: '#f4f4f5',
+  textMuted: '#a1a1aa',
+  border: '#27272a',
+  accent: '#a5ff11',
 };
 
 export interface ProviderSelectorProps {
@@ -136,7 +136,7 @@ export function ProviderSelector({
                 if (isDark) {
                   e.currentTarget.style.background = DARK.bgCard;
                   e.currentTarget.style.borderColor = DARK.accent;
-                  e.currentTarget.style.boxShadow = '0 0 0 2px rgba(129, 140, 248, 0.2)';
+                  e.currentTarget.style.boxShadow = '0 0 0 2px rgba(165, 255, 17, 0.12)';
                 } else {
                   e.currentTarget.style.background = 'var(--bg-secondary)';
                   e.currentTarget.style.borderColor = 'var(--accent-primary)';

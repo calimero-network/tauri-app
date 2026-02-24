@@ -1,5 +1,16 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { MeroJs, createMeroJs } from './mero-js';
+import { MeroJs, createMeroJs, parseJwtExpiry } from './mero-js';
+
+/**
+ * Helper function to create a mock JWT token with specified payload
+ */
+function createMockJwt(payload: Record<string, unknown>): string {
+  const header = { alg: 'HS256', typ: 'JWT' };
+  const encodedHeader = btoa(JSON.stringify(header));
+  const encodedPayload = btoa(JSON.stringify(payload));
+  const signature = 'fake-signature';
+  return `${encodedHeader}.${encodedPayload}.${signature}`;
+}
 
 // Mock the HTTP client and API clients
 const mockHttpClient = {
@@ -69,6 +80,82 @@ vi.mock('./auth-api', () => ({
 vi.mock('./admin-api', () => ({
   createAdminApiClientFromHttpClient: vi.fn(() => mockAdminClient),
 }));
+
+describe('parseJwtExpiry', () => {
+  it('should parse exp claim from valid JWT', () => {
+    const expTimestamp = 1700000000; // Unix timestamp in seconds
+    const token = createMockJwt({ exp: expTimestamp, sub: 'user123' });
+
+    const result = parseJwtExpiry(token);
+
+    // Should convert seconds to milliseconds
+    expect(result).toBe(expTimestamp * 1000);
+  });
+
+  it('should return null for JWT without exp claim', () => {
+    const token = createMockJwt({ sub: 'user123', iat: 1699999000 });
+
+    const result = parseJwtExpiry(token);
+
+    expect(result).toBeNull();
+  });
+
+  it('should return null for invalid JWT format (no dots)', () => {
+    const result = parseJwtExpiry('invalid-token-without-dots');
+
+    expect(result).toBeNull();
+  });
+
+  it('should return null for JWT with wrong number of parts', () => {
+    const result = parseJwtExpiry('header.payload');
+
+    expect(result).toBeNull();
+  });
+
+  it('should return null for JWT with invalid base64 payload', () => {
+    const result = parseJwtExpiry('valid.!!!invalid-base64!!!.signature');
+
+    expect(result).toBeNull();
+  });
+
+  it('should return null for JWT with non-JSON payload', () => {
+    const header = btoa('{"alg":"HS256"}');
+    const payload = btoa('not-json');
+    const result = parseJwtExpiry(`${header}.${payload}.signature`);
+
+    expect(result).toBeNull();
+  });
+
+  it('should return null when exp is not a number', () => {
+    const token = createMockJwt({ exp: 'not-a-number', sub: 'user123' });
+
+    const result = parseJwtExpiry(token);
+
+    expect(result).toBeNull();
+  });
+
+  it('should handle base64url encoded tokens (with - and _)', () => {
+    // Create a payload that would produce - or _ in base64url
+    const expTimestamp = 1700000000;
+    const header = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9'; // standard header
+    // Manually create a payload with base64url characters
+    const payload = btoa(JSON.stringify({ exp: expTimestamp }))
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=/g, '');
+
+    const token = `${header}.${payload}.signature`;
+    const result = parseJwtExpiry(token);
+
+    expect(result).toBe(expTimestamp * 1000);
+  });
+
+  it('should handle empty string token', () => {
+    const result = parseJwtExpiry('');
+
+    expect(result).toBeNull();
+  });
+});
 
 describe('MeroJs SDK', () => {
   let meroJs: MeroJs;
@@ -164,6 +251,77 @@ describe('MeroJs SDK', () => {
       });
 
       expect(meroJs.isAuthenticated()).toBe(true);
+    });
+
+    it('should use JWT exp claim for token expiry when available', async () => {
+      const futureExpiry = Math.floor(Date.now() / 1000) + 3600; // 1 hour from now in seconds
+      const mockJwtToken = createMockJwt({
+        exp: futureExpiry,
+        sub: 'user123',
+      });
+
+      const mockTokenResponse = {
+        data: {
+          access_token: mockJwtToken,
+          refresh_token: 'mock-refresh-token',
+        },
+      };
+
+      mockAuthClient.generateTokens.mockResolvedValue(mockTokenResponse);
+
+      const tokenData = await meroJs.authenticate();
+
+      // The expires_at should match the JWT exp claim (converted to milliseconds)
+      expect(tokenData.expires_at).toBe(futureExpiry * 1000);
+    });
+
+    it('should fall back to default expiry when JWT has no exp claim', async () => {
+      const mockJwtToken = createMockJwt({
+        sub: 'user123',
+        iat: Math.floor(Date.now() / 1000),
+      });
+
+      const mockTokenResponse = {
+        data: {
+          access_token: mockJwtToken,
+          refresh_token: 'mock-refresh-token',
+        },
+      };
+
+      mockAuthClient.generateTokens.mockResolvedValue(mockTokenResponse);
+
+      const beforeAuth = Date.now();
+      const tokenData = await meroJs.authenticate();
+      const afterAuth = Date.now();
+
+      // Should fall back to default 24 hours
+      const expectedMinExpiry = beforeAuth + 24 * 60 * 60 * 1000;
+      const expectedMaxExpiry = afterAuth + 24 * 60 * 60 * 1000;
+
+      expect(tokenData.expires_at).toBeGreaterThanOrEqual(expectedMinExpiry);
+      expect(tokenData.expires_at).toBeLessThanOrEqual(expectedMaxExpiry);
+    });
+
+    it('should fall back to default expiry when token is not a valid JWT', async () => {
+      const mockTokenResponse = {
+        data: {
+          access_token: 'not-a-valid-jwt-token',
+          refresh_token: 'mock-refresh-token',
+        },
+      };
+
+      mockAuthClient.generateTokens.mockResolvedValue(mockTokenResponse);
+
+      const beforeAuth = Date.now();
+      const tokenData = await meroJs.authenticate();
+      const afterAuth = Date.now();
+
+      // Should fall back to default 24 hours
+      const expectedMinExpiry = beforeAuth + 24 * 60 * 60 * 1000;
+      const expectedMaxExpiry = afterAuth + 24 * 60 * 60 * 1000;
+
+      expect(tokenData.expires_at).toBeGreaterThanOrEqual(expectedMinExpiry);
+      expect(tokenData.expires_at).toBeLessThanOrEqual(expectedMaxExpiry);
     });
 
     it('should authenticate with custom credentials', async () => {
@@ -288,6 +446,45 @@ describe('MeroJs SDK', () => {
       });
 
       expect(validToken.access_token).toBe('new-access-token');
+    });
+
+    it('should use JWT exp claim for token expiry after refresh', async () => {
+      // First authenticate with a token that will expire
+      const initialExpiry = Math.floor(Date.now() / 1000) + 60; // 1 minute from now
+      const initialJwt = createMockJwt({ exp: initialExpiry, sub: 'user123' });
+
+      const mockTokenResponse = {
+        data: {
+          access_token: initialJwt,
+          refresh_token: 'mock-refresh-token',
+        },
+      };
+
+      mockAuthClient.generateTokens.mockResolvedValue(mockTokenResponse);
+      await meroJs.authenticate();
+
+      // Mock refresh response with new JWT
+      const newExpiry = Math.floor(Date.now() / 1000) + 7200; // 2 hours from now
+      const newJwt = createMockJwt({ exp: newExpiry, sub: 'user123' });
+
+      const mockRefreshResponse = {
+        data: {
+          access_token: newJwt,
+          refresh_token: 'new-refresh-token',
+        },
+      };
+
+      mockAuthClient.refreshToken.mockResolvedValue(mockRefreshResponse);
+
+      // Manually set token as expired to trigger refresh
+      const tokenData = meroJs.getTokenData()!;
+      tokenData.expires_at = Date.now() - 1000;
+
+      // This should trigger a refresh
+      const validToken = await (meroJs as any).getValidToken();
+
+      // The new token should have the expiry from the new JWT
+      expect(validToken.expires_at).toBe(newExpiry * 1000);
     });
 
     it('should clear token when refresh fails', async () => {

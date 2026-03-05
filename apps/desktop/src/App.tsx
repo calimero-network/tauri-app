@@ -181,9 +181,11 @@ function App() {
           }
         }
 
-        // Auto-update nodeUrl if we detect a running local node and user has localhost or no URL.
-        // When developer mode + multiple nodes, skip auto-select so user can choose from dropdown.
-        if (runningNodes.length > 0 && !(settings.developerMode && runningNodes.length > 1)) {
+        // Auto-update nodeUrl if we detect a running local node and user has no URL set.
+        // In developer mode, never auto-override — the user explicitly manages which node
+        // to connect to (via NodeManagement or the dropdown). Auto-overriding here races
+        // with the reload from NodeManagement and silently reverts the user's selection.
+        if (runningNodes.length > 0 && !settings.developerMode) {
           const node = runningNodes[0];
           const nodeUrl = `http://localhost:${node.port}`;
           const currentUrl = settings.nodeUrl;
@@ -277,18 +279,12 @@ function App() {
           console.log('✅ User has existing token, loading contexts');
           loadContexts();
           loadInstalledApps();
-        } else if (!onboardingState.authAvailable) {
-          // Auth service not available - show onboarding with error
-          // But don't redirect back to Nodes page if node is running
-          console.log('⚠️ Auth service not available, showing onboarding with error');
-          setNeedsNodeConfig(false); // Clear needsNodeConfig since node is running
-          setShowOnboarding(true);
-        } else if (!onboardingState.hasConfiguredProviders) {
-          // Auth available but no users configured - show onboarding (first time)
-          console.log('📋 No users configured, showing onboarding screen');
-          setShowOnboarding(true);
         } else {
-          // Auth is configured (has users) but no token - show login
+          // No token — always show login. Onboarding is only shown when
+          // onboardingCompleted=false (handled by the early return above).
+          // Node switching, new nodes with no accounts, auth unavailable — all
+          // go to login. LoginView handles both "create first account" and
+          // "sign in with existing account" via requestToken.
           console.log('🔐 No token, showing login screen');
           setShowLogin(true);
         }

@@ -253,21 +253,30 @@ const Contexts: React.FC<ContextsProps> = ({ onAuthRequired, onConfirmDelete, cl
   };
 
   /**
-   * Open the mero-react example app in a Tauri window
-   * with existing tokens and context ID passed via URL hash (SSO flow)
+   * Open an app in a Tauri window with existing tokens and context ID passed
+   * via URL hash (SSO flow) - skips the auth connect/login steps.
    */
   const openFrontend = useCallback(async (contextId: string, applicationId: string) => {
     const accessToken = getAccessToken();
     const refreshToken = getRefreshToken();
     const settings = getSettings();
-    
+
     if (!accessToken || !refreshToken) {
       setError('Not authenticated. Please login first.');
       return;
     }
 
+    // Look up the frontend URL from installed app metadata
+    const app = installedApps.find(a => a.id === applicationId);
+    const metadata = app ? decodeMetadata(app.metadata) : null;
+    const frontendUrl: string | null = metadata?.links?.frontend ?? null;
+
+    if (!frontendUrl) {
+      setError('This application does not have a frontend URL.');
+      return;
+    }
+
     const nodeUrl = settings.nodeUrl.replace(/\/$/, '');
-    const exampleAppUrl = 'http://localhost:5173';
 
     // Build URL with tokens and context ID in hash (SSO pattern)
     const params = new URLSearchParams();
@@ -278,25 +287,21 @@ const Contexts: React.FC<ContextsProps> = ({ onAuthRequired, onConfirmDelete, cl
     params.set('application_id', applicationId);
     params.set('expires_in', '3600'); // 1 hour default
 
-    const fullUrl = `${exampleAppUrl}/#${params.toString()}`;
-    
-    console.log('🚀 Opening frontend with SSO for context:', contextId);
-    
+    const fullUrl = `${frontendUrl}/#${params.toString()}`;
+
     try {
-      // Open in a new Tauri window
       const windowLabel = `app-context-${Date.now()}`;
       await invoke('create_app_window', {
         windowLabel,
         url: fullUrl,
-        title: `Context: ${contextId.slice(0, 8)}...`,
+        title: metadata?.name || applicationId.substring(0, 8) + '...',
         nodeUrl: nodeUrl,
       });
-      console.log('Opened frontend in Tauri window:', fullUrl);
     } catch (err) {
       console.error('Failed to open frontend:', err);
       setError(`Failed to open frontend: ${err instanceof Error ? err.message : 'Unknown error'}`);
     }
-  }, []);
+  }, [installedApps]);
 
   return (
     <div className="contexts-page">
@@ -542,22 +547,37 @@ const Contexts: React.FC<ContextsProps> = ({ onAuthRequired, onConfirmDelete, cl
                 key: 'actions',
                 label: 'Actions',
                 sortable: false,
-                width: '8%',
+                width: '14%',
                 render: (context) => {
                   const contextName = context.name || context.id.substring(0, 16) + '...';
+                  const appId = context.applicationId || context.application_id;
+                  const app = appId ? installedApps.find(a => a.id === appId) : null;
+                  const metadata = app ? decodeMetadata(app.metadata) : null;
+                  const hasFrontend = !!(metadata?.links?.frontend);
                   return (
                     <div className="table-cell-actions">
-                            <button
+                      {hasFrontend && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openFrontend(context.id, appId!);
+                          }}
+                          className="button button-primary button-small"
+                        >
+                          Open
+                        </button>
+                      )}
+                      <button
                         onClick={(e) => {
                           e.stopPropagation();
                           handleDeleteContext(context.id, contextName);
                         }}
                         className="button button-danger button-small"
-                            >
-                              Delete
-                            </button>
-                  </div>
-                );
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  );
                 },
               },
             ]}

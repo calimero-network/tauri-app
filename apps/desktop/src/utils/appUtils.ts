@@ -1,24 +1,6 @@
 import { invoke } from "@tauri-apps/api/tauri";
 import { getSettings } from "./settings";
-
-/**
- * Appends the current node_url as a query parameter to a frontend URL.
- * Encodes the node URL so the full string is valid (?, #, &, =, %, :, / etc. don't break the query).
- * The opened app can read it via URLSearchParams.get('node_url') (decoded automatically).
- */
-function appendNodeUrlParam(frontendUrl: string, nodeUrl: string): string {
-  if (!nodeUrl) return frontendUrl;
-  const encoded = encodeURIComponent(nodeUrl);
-  try {
-    const url = new URL(frontendUrl);
-    url.searchParams.set("node_url", nodeUrl); // URLSearchParams encodes when setting
-    return url.toString();
-  } catch {
-    // If URL parsing fails, append with ? or &
-    const separator = frontendUrl.includes("?") ? "&" : "?";
-    return `${frontendUrl}${separator}node_url=${encoded}`;
-  }
-}
+import { getAccessToken, getRefreshToken } from "@calimero-network/mero-react";
 
 /**
  * Decodes app metadata from various formats (base64 string, byte array, or already decoded object)
@@ -68,13 +50,26 @@ export async function openAppFrontend(
 ): Promise<string | void> {
   try {
     const settings = getSettings();
-    const urlToOpen = appendNodeUrlParam(frontendUrl, settings.nodeUrl ?? '');
-    
+    const nodeUrl = (settings.nodeUrl ?? '').replace(/\/$/, '');
+
+    // Build URL hash with node_url and tokens so the app can skip the auth flow
+    const hashParams = new URLSearchParams();
+    hashParams.set('node_url', nodeUrl);
+    const accessToken = getAccessToken();
+    const refreshToken = getRefreshToken();
+    if (accessToken && refreshToken) {
+      hashParams.set('access_token', accessToken);
+      hashParams.set('refresh_token', refreshToken);
+      hashParams.set('expires_in', '3600');
+    }
+
+    const urlToOpen = `${frontendUrl}#${hashParams.toString()}`;
+
     // Generate unique window label based on domain + timestamp to avoid conflicts
     const urlObj = new URL(frontendUrl);
-    const domain = urlObj.hostname.replace(/\./g, '-'); // Replace dots with dashes for label
+    const domain = urlObj.hostname.replace(/\./g, '-');
     const windowLabel = `app-${domain}-${Date.now()}`;
-    
+
     await invoke('create_app_window', {
       windowLabel,
       url: urlToOpen,
@@ -82,12 +77,12 @@ export async function openAppFrontend(
       openDevtools: false,
       nodeUrl: settings.nodeUrl,
     });
-    
+
     return windowLabel;
   } catch (error) {
     const err = error instanceof Error ? error : new Error(String(error));
     console.error("Failed to open frontend:", err);
-    
+
     if (onError) {
       onError(err);
     } else {

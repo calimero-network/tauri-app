@@ -36,7 +36,8 @@ export async function checkOnboardingState(): Promise<OnboardingState> {
       return state;
     }
 
-    state.authAvailable = 'data' in healthResponse && healthResponse.data?.status === "healthy";
+    // Server returns "alive" (not "healthy") — accept both for compatibility
+    state.authAvailable = 'data' in healthResponse && (healthResponse.data?.status === "alive" || healthResponse.data?.status === "healthy");
 
     // Check providers with timeout
     const providersResponse = await Promise.race([

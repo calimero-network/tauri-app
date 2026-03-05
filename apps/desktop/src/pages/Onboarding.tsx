@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { checkOnboardingState, getOnboardingMessage, type OnboardingState } from "../utils/onboarding";
-import { apiClient, setAccessToken, setRefreshToken } from "@calimero-network/mero-react";
-import { HTTPError } from "@calimero-network/mero-js";
+import { apiClient, LoginView } from "@calimero-network/mero-react";
 import { initMerodNode, startMerod, listMerodNodes, detectRunningMerodNodes, waitForNodeHealthy } from "../utils/merod";
 import { invoke } from "@tauri-apps/api/tauri";
 import { saveSettings, getSettings } from "../utils/settings";
@@ -24,181 +23,6 @@ type OnboardingStep = 'welcome' | 'what-is' | 'node-setup' | 'login' | 'install-
 
 const ONBOARDING_STEPS: OnboardingStep[] = ['welcome', 'what-is', 'node-setup', 'login', 'install-app'];
 
-interface UsernamePasswordFormProps {
-  onSuccess: () => void;
-  onError: (error: Error) => void;
-  loading: boolean;
-}
-
-// Username validation: alphanumeric + underscore only, no spaces
-const USERNAME_REGEX = /^[a-zA-Z0-9_]+$/;
-const MIN_PASSWORD_LENGTH = 8;
-
-function validateUsername(value: string): string | null {
-  const trimmed = value.trim();
-  if (!trimmed) return 'Username is required';
-  if (value !== trimmed) return 'Username cannot contain leading or trailing spaces';
-  if (/\s/.test(value)) return 'Username cannot contain spaces';
-  if (!USERNAME_REGEX.test(trimmed)) return 'Username can only contain letters, numbers, and underscores';
-  return null;
-}
-
-function validatePassword(value: string): string | null {
-  if (!value) return 'Password is required';
-  if (value.length < MIN_PASSWORD_LENGTH) return `Password must be at least ${MIN_PASSWORD_LENGTH} characters`;
-  return null;
-}
-
-// Username/Password Form Component - defined outside to prevent re-creation on each render
-const UsernamePasswordForm: React.FC<UsernamePasswordFormProps> = ({ onSuccess, onError, loading: parentLoading }) => {
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [usernameError, setUsernameError] = useState<string | null>(null);
-  const [passwordError, setPasswordError] = useState<string | null>(null);
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError(null);
-    setUsernameError(null);
-    setPasswordError(null);
-
-    const userErr = validateUsername(username);
-    const passErr = validatePassword(password);
-    if (userErr) {
-      setUsernameError(userErr);
-      return;
-    }
-    if (passErr) {
-      setPasswordError(passErr);
-      return;
-    }
-
-    const trimmedUsername = username.trim();
-
-    try {
-      setLoading(true);
-
-      const tokenPayload = {
-        auth_method: 'user_password',
-        public_key: trimmedUsername, // Use username as public key for user_password provider
-        client_name: 'calimero-desktop',
-        timestamp: Date.now(),
-        permissions: [],
-        provider_data: {
-          username: trimmedUsername,
-          password: password
-        }
-      };
-
-      // apiClient.auth is already an instance, not a function
-      const tokenResponse = await apiClient.auth.requestToken(tokenPayload);
-
-      if (tokenResponse.error) {
-        setError(tokenResponse.error.message || 'Authentication failed');
-        onError(new Error(tokenResponse.error.message || 'Authentication failed'));
-        return;
-      }
-
-      if (tokenResponse.data?.access_token && tokenResponse.data?.refresh_token) {
-        setAccessToken(tokenResponse.data.access_token);
-        setRefreshToken(tokenResponse.data.refresh_token);
-        onSuccess();
-      } else {
-        throw new Error('Failed to get access token');
-      }
-    } catch (err) {
-      console.error('Authentication error:', err);
-      let errorMessage: string;
-      if (err instanceof HTTPError && err.status === 0) {
-        errorMessage = 'Node is not responding. It may have crashed—check the logs.';
-      } else {
-        errorMessage = err instanceof Error ? err.message : 'Authentication failed';
-      }
-      setError(errorMessage);
-      onError(err instanceof Error ? err : new Error(errorMessage));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const isLoading = loading || parentLoading;
-
-  const isValid = !validateUsername(username) && !validatePassword(password);
-
-  return (
-    <form onSubmit={handleSubmit} className="username-password-form">
-      <div className="form-group">
-        <label htmlFor="username">Username</label>
-        <input
-          id="username"
-          type="text"
-          value={username}
-          onChange={(e) => {
-            setUsername(e.target.value);
-            setUsernameError(null);
-          }}
-          onBlur={() => setUsernameError(validateUsername(username))}
-          placeholder="Letters, numbers, underscores only"
-          disabled={isLoading}
-          autoComplete="off"
-          autoCapitalize="none"
-          autoCorrect="off"
-          spellCheck="false"
-          required
-          aria-invalid={!!usernameError}
-          aria-describedby={usernameError ? 'username-error' : undefined}
-        />
-        {usernameError && (
-          <p id="username-error" className="field-error">{usernameError}</p>
-        )}
-      </div>
-
-      <div className="form-group">
-        <label htmlFor="password">Password</label>
-        <input
-          id="password"
-          type="password"
-          value={password}
-          onChange={(e) => {
-            setPassword(e.target.value);
-            setPasswordError(null);
-          }}
-          onBlur={() => setPasswordError(validatePassword(password))}
-          placeholder={`At least ${MIN_PASSWORD_LENGTH} characters`}
-          disabled={isLoading}
-          autoComplete="off"
-          autoCapitalize="none"
-          autoCorrect="off"
-          spellCheck="false"
-          required
-          aria-invalid={!!passwordError}
-          aria-describedby={passwordError ? 'password-error' : undefined}
-        />
-        {passwordError && (
-          <p id="password-error" className="field-error">{passwordError}</p>
-        )}
-      </div>
-
-      {error && (
-        <div className="form-error">
-          {error}
-        </div>
-      )}
-
-      <div className="form-actions">
-        <button
-          type="submit"
-          className="button button-primary"
-          disabled={isLoading || !isValid}
-        >
-          {isLoading ? 'Signing In...' : 'Sign In'}
-        </button>
-      </div>
-    </form>
-  );
-};
 
 export default function Onboarding({ onComplete, onSettings }: OnboardingProps) {
   const toast = useToast();
@@ -262,7 +86,6 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
       const [nodeCreated, setNodeCreated] = useState(false);
       const [nodeStarted, setNodeStarted] = useState(false);
       const [showAdvancedOptions, setShowAdvancedOptions] = useState(false);
-      const [loginLoading, setLoginLoading] = useState(false);
   const [existingNodes, setExistingNodes] = useState<string[]>([]);
   const [useExistingNode, setUseExistingNode] = useState<string | null>(() => loadOnboardingProgress()?.useExistingNode ?? null);
   const [loadingExistingNodes, setLoadingExistingNodes] = useState(false);
@@ -374,31 +197,6 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
     loadAndContinueIfExisting();
   }, [currentStep, dataDir, creatingNode, nodeCreated, onComplete, setTheme, serverPort, swarmPort]);
 
-  // Disable autocomplete and autocapitalize on login form inputs
-  useEffect(() => {
-    if (currentStep === 'login') {
-      const disableAutocomplete = () => {
-        const inputs = document.querySelectorAll('.onboarding-card input');
-        inputs.forEach((input) => {
-          const htmlInput = input as HTMLInputElement;
-          htmlInput.setAttribute('autocomplete', 'off');
-          htmlInput.setAttribute('autocapitalize', 'none');
-          htmlInput.setAttribute('autocorrect', 'off');
-          htmlInput.setAttribute('spellcheck', 'false');
-        });
-      };
-
-      // Run immediately and also after a short delay to catch dynamically added inputs
-      disableAutocomplete();
-      const timeout = setTimeout(disableAutocomplete, 100);
-      const interval = setInterval(disableAutocomplete, 500);
-
-      return () => {
-        clearTimeout(timeout);
-        clearInterval(interval);
-      };
-    }
-  }, [currentStep]);
 
   const handlePickDataDir = async () => {
     try {
@@ -455,11 +253,12 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
             embeddedNodeName: useExistingNode,
             embeddedNodePort: alreadyRunning.port,
           });
-          await waitForNodeHealthy(nodeUrl, 5000);
+          // check_merod_health appends /health — use /auth so it hits /auth/health
+          await waitForNodeHealthy(`${nodeUrl}/auth`, 5000);
           advanceToLogin();
           return;
         }
-        
+
         // Start the existing node
         await startMerod(serverPort, swarmPort, dataDir, useExistingNode, getSettings().debugLogs);
         setNodeCreated(true);
@@ -473,7 +272,8 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
           embeddedNodeName: useExistingNode,
           embeddedNodePort: serverPort,
         });
-        await waitForNodeHealthy(nodeUrl, 20000);
+        // check_merod_health appends /health — use /auth so it hits /auth/health
+        await waitForNodeHealthy(`${nodeUrl}/auth`, 20000);
         advanceToLogin();
       } else {
         // Create new node
@@ -489,7 +289,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
           setCreatingNode(false);
           return;
         }
-        
+
         await startMerod(serverPort, swarmPort, dataDir, targetNodeName, getSettings().debugLogs);
         setNodeCreated(true);
         setNodeStarted(true);
@@ -502,7 +302,8 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
           embeddedNodeName: targetNodeName,
           embeddedNodePort: serverPort,
         });
-        await waitForNodeHealthy(nodeUrl, 20000);
+        // check_merod_health appends /health — use /auth so it hits /auth/health
+        await waitForNodeHealthy(`${nodeUrl}/auth`, 20000);
         advanceToLogin();
       }
     } catch (error: any) {
@@ -1102,27 +903,19 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
                 This account will be used to securely access your node and manage your applications.
               </p>
               <div className="onboarding-card">
-                <UsernamePasswordForm
-                onSuccess={async () => {
-                  setLoginLoading(true);
-                  try {
-                    // Load apps for the install step
-                    await loadApps();
-                    // Always advance to install-app step
+                <LoginView
+                  variant="dark"
+                  onSuccess={async () => {
+                    try {
+                      await loadApps();
+                    } catch (error) {
+                      console.error("Failed to load apps:", error);
+                    }
                     setCurrentStep('install-app');
-                  } catch (error) {
-                    console.error("Failed to load apps:", error);
-                    // Continue anyway - user can skip
-                    setCurrentStep('install-app');
-                  } finally {
-                    setLoginLoading(false);
-                  }
-              }}
-              onError={(error) => {
-                console.error("❌ Onboarding login failed:", error);
-                  setLoginLoading(false);
-              }}
-                loading={loginLoading}
+                  }}
+                  onError={(error) => {
+                    console.error("❌ Onboarding login failed:", error);
+                  }}
                 />
               </div>
             </div>

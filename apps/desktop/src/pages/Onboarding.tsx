@@ -300,7 +300,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
     });
   }, [currentStep, dataDir, nodeName, serverPort, swarmPort, nodeSetupMode, useExistingNode, nodeCreated, nodeStarted]);
 
-  // Load existing nodes when on node-setup step - auto-continue if found (skip auth)
+  // Load existing nodes when on node-setup step - auto-continue to login if found
   const prevDataDirRef = useRef(dataDir);
   useEffect(() => {
     if (currentStep !== 'node-setup') {
@@ -350,7 +350,8 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
               });
             }
             setTheme('dark');
-            onComplete();
+            setCreatingNode(false);
+            setCurrentStep('login');
             return;
           } catch (err) {
             console.error('Failed to use existing node:', err);

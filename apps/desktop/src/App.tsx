@@ -387,10 +387,10 @@ function App() {
   }, [toast]);
 
   // Auto-check node status every 5 seconds (runs on all main app pages for global indicator)
-  // Skip when on login or settings - those screens don't need the periodic check, and it would
-  // redirect back to login on 401 while user is intentionally on Settings (e.g. to configure node)
+  // Skip when on login, settings, or onboarding - those screens don't need the periodic check,
+  // and it would redirect back to login on 401 while user is intentionally on those screens
   useEffect(() => {
-    if (showLogin || showSettings) return;
+    if (showLogin || showSettings || showOnboarding) return;
 
     // Initial check
     checkConnection();
@@ -402,7 +402,7 @@ function App() {
 
     // Cleanup interval on unmount
     return () => clearInterval(interval);
-  }, [checkConnection, showLogin, showSettings]);
+  }, [checkConnection, showLogin, showSettings, showOnboarding]);
 
   // When launched from a desktop shortcut (--open-app-url / --open-app-name): open app, focus it, then hide main window
   useEffect(() => {
@@ -483,6 +483,7 @@ function App() {
           } catch {
             // Autostart may not be available
           }
+          setShowLogin(false); // clear any stale login state from health checks during onboarding
           setShowOnboarding(false);
           setConnected(true);
           setError(null);
@@ -540,9 +541,8 @@ function App() {
     return (
       <Settings
         onBack={async () => {
-          setShowSettings(false);
-          
-          // Always reload client when returning from Settings (settings may have changed)
+          // Reinitialize client BEFORE hiding Settings so the checkConnection useEffect
+          // only fires after the client has tokens loaded from localStorage
           const settings = getSettings();
           // baseUrl should NOT include /admin-api - mero-js adds that internally
           const nodeBaseUrl = settings.nodeUrl.replace(/\/$/, '');
@@ -550,13 +550,16 @@ function App() {
           const authBaseUrl = authUrl.replace(/\/$/, '');
 
           // Reload client with new settings and await token loading
-          // Note: baseUrl is the node URL, NOT /admin-api - mero-js adds that internally
           await createClientAsync({
             baseUrl: nodeBaseUrl,
             authBaseUrl: authBaseUrl,
             requestCredentials: 'omit',
           });
           setClientReady(true);
+
+          // Hide settings only after client is ready — this triggers the checkConnection
+          // useEffect, which needs a properly initialized client to avoid spurious 401→login
+          setShowSettings(false);
           
           if (needsNodeConfig) {
             // After first-time settings, continue with app initialization

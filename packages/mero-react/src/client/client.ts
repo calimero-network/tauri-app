@@ -88,15 +88,22 @@ class AuthApi {
       const providersList = response.providers || [];
       return {
         data: {
-          providers: providersList.map((p) => ({
-            id: p.id,
-            name: p.name,
-            enabled: p.enabled,
-            // Map to legacy fields for backwards compatibility
-            type: p.name,
-            description: '',
-            configured: p.enabled,
-          })),
+          providers: providersList.map((p) => {
+            // The server returns "configured" but mero-js v2 type expects "enabled".
+            // At runtime the raw JSON field is "configured", so p.enabled is undefined.
+            // Fall back to the raw field via cast.
+            const raw = p as any;
+            const isConfigured: boolean = p.enabled ?? raw.configured ?? false;
+            return {
+              id: p.id ?? raw.id,
+              name: p.name,
+              enabled: isConfigured,
+              // Map to legacy fields for backwards compatibility
+              type: p.name,
+              description: '',
+              configured: isConfigured,
+            };
+          }),
           count: response.count ?? providersList.length,
         },
       };

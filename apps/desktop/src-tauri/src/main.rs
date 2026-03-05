@@ -113,14 +113,6 @@ pub(crate) fn validate_allowed_url(url: &str, configured_node_url: Option<&str>)
         }
     }
     
-    // If a node URL is configured, only allow that URL (no fallback to defaults)
-    if configured_node_url.is_some() {
-        return Err(format!(
-            "URL not allowed: {}://{}:{}. Only the configured node URL is allowed for proxying.",
-            scheme, host, port
-        ));
-    }
-    
     // Allow any HTTP localhost request (any port) - these need proxying to avoid
     // mixed content blocking when the app is loaded from HTTPS
     match (scheme, host_lower.as_str()) {

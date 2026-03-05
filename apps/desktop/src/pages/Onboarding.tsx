@@ -86,6 +86,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
       const [nodeCreated, setNodeCreated] = useState(false);
       const [nodeStarted, setNodeStarted] = useState(false);
       const [showAdvancedOptions, setShowAdvancedOptions] = useState(false);
+  const [loginTransitioning, setLoginTransitioning] = useState(false);
   const [existingNodes, setExistingNodes] = useState<string[]>([]);
   const [useExistingNode, setUseExistingNode] = useState<string | null>(() => loadOnboardingProgress()?.useExistingNode ?? null);
   const [loadingExistingNodes, setLoadingExistingNodes] = useState(false);
@@ -903,20 +904,28 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
                 This account will be used to securely access your node and manage your applications.
               </p>
               <div className="onboarding-card">
-                <LoginView
-                  variant="dark"
-                  onSuccess={async () => {
-                    try {
-                      await loadApps();
-                    } catch (error) {
-                      console.error("Failed to load apps:", error);
-                    }
-                    setCurrentStep('install-app');
-                  }}
-                  onError={(error) => {
-                    console.error("❌ Onboarding login failed:", error);
-                  }}
-                />
+                {loginTransitioning ? (
+                  <div className="loading-spinner">
+                    <div className="spinner" />
+                    <p>Setting up your account...</p>
+                  </div>
+                ) : (
+                  <LoginView
+                    variant="dark"
+                    onSuccess={async () => {
+                      setLoginTransitioning(true);
+                      try {
+                        await loadApps();
+                      } catch (error) {
+                        console.error("Failed to load apps:", error);
+                      }
+                      setCurrentStep('install-app');
+                    }}
+                    onError={(error) => {
+                      console.error("❌ Onboarding login failed:", error);
+                    }}
+                  />
+                )}
               </div>
             </div>
             <ScrollHint containerRef={stepContainerRef} />

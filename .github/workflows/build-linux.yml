@@ -153,24 +153,6 @@ jobs:
             echo "No TAURI_PUBLIC_KEY provided, using default pubkey"
           fi
 
-      - name: Patch wry for webkit2gtk 0.18.2+ compatibility
-        working-directory: apps/desktop/src-tauri
-        run: |
-          # wry 0.24.11 (crates.io) is missing `use webkit2gtk::traits::*` which causes
-          # "SettingsExt not in scope" errors with webkit2gtk 0.18.2+. Patch it before build.
-          cargo fetch
-          WRY_MOD=$(find $CARGO_HOME/registry/src -name "mod.rs" -path "*/wry-0.24.*/src/webview/webkitgtk/*" 2>/dev/null | head -1)
-          if [ -n "$WRY_MOD" ]; then
-            if ! grep -q "traits::" "$WRY_MOD"; then
-              sed -i 's/^use webkit2gtk::{/use webkit2gtk::traits::*;\nuse webkit2gtk::{/' "$WRY_MOD"
-              echo "Patched $WRY_MOD"
-            else
-              echo "wry already patched, skipping"
-            fi
-          else
-            echo "wry webkitgtk mod.rs not found — skipping patch"
-          fi
-
       - name: Build Tauri app for Linux
         working-directory: apps/desktop
         env:

@@ -1,12 +1,10 @@
 import React, { useState, useEffect, useMemo, useCallback } from "react";
-import { apiClient, getAccessToken, getRefreshToken } from "@calimero-network/mero-react";
+import { apiClient } from "@calimero-network/mero-react";
 import { useToast } from "../contexts/ToastContext";
 import DataTable from "../components/DataTable";
 import ContextMenu from "../components/ContextMenu";
 import { SkeletonTable } from "../components/Skeleton";
 import { decodeMetadata } from "../utils/appUtils";
-import { invoke } from "@tauri-apps/api/tauri";
-import { getSettings } from "../utils/settings";
 import { X } from "lucide-react";
 import "./Contexts.css";
 
@@ -252,56 +250,6 @@ const Contexts: React.FC<ContextsProps> = ({ onAuthRequired, onConfirmDelete, cl
     }
   };
 
-  /**
-   * Open an app in a Tauri window with existing tokens and context ID passed
-   * via URL hash (SSO flow) - skips the auth connect/login steps.
-   */
-  const openFrontend = useCallback(async (contextId: string, applicationId: string) => {
-    const accessToken = getAccessToken();
-    const refreshToken = getRefreshToken();
-    const settings = getSettings();
-
-    if (!accessToken || !refreshToken) {
-      setError('Not authenticated. Please login first.');
-      return;
-    }
-
-    // Look up the frontend URL from installed app metadata
-    const app = installedApps.find(a => a.id === applicationId);
-    const metadata = app ? decodeMetadata(app.metadata) : null;
-    const frontendUrl: string | null = metadata?.links?.frontend ?? null;
-
-    if (!frontendUrl) {
-      setError('This application does not have a frontend URL.');
-      return;
-    }
-
-    const nodeUrl = settings.nodeUrl.replace(/\/$/, '');
-
-    // Build URL with tokens and context ID in hash (SSO pattern)
-    const params = new URLSearchParams();
-    params.set('access_token', accessToken);
-    params.set('refresh_token', refreshToken);
-    params.set('node_url', nodeUrl);
-    params.set('context_id', contextId);
-    params.set('application_id', applicationId);
-    params.set('expires_in', '3600'); // 1 hour default
-
-    const fullUrl = `${frontendUrl}/#${params.toString()}`;
-
-    try {
-      const windowLabel = `app-context-${Date.now()}`;
-      await invoke('create_app_window', {
-        windowLabel,
-        url: fullUrl,
-        title: metadata?.name || applicationId.substring(0, 8) + '...',
-        nodeUrl: nodeUrl,
-      });
-    } catch (err) {
-      console.error('Failed to open frontend:', err);
-      setError(`Failed to open frontend: ${err instanceof Error ? err.message : 'Unknown error'}`);
-    }
-  }, [installedApps]);
 
   return (
     <div className="contexts-page">
@@ -550,23 +498,8 @@ const Contexts: React.FC<ContextsProps> = ({ onAuthRequired, onConfirmDelete, cl
                 width: '14%',
                 render: (context) => {
                   const contextName = context.name || context.id.substring(0, 16) + '...';
-                  const appId = context.applicationId || context.application_id;
-                  const app = appId ? installedApps.find(a => a.id === appId) : null;
-                  const metadata = app ? decodeMetadata(app.metadata) : null;
-                  const hasFrontend = !!(metadata?.links?.frontend);
                   return (
                     <div className="table-cell-actions">
-                      {hasFrontend && (
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            openFrontend(context.id, appId!);
-                          }}
-                          className="button button-primary button-small"
-                        >
-                          Open
-                        </button>
-                      )}
                       <button
                         onClick={(e) => {
                           e.stopPropagation();

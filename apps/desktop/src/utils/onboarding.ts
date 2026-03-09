@@ -36,7 +36,8 @@ export async function checkOnboardingState(): Promise<OnboardingState> {
       return state;
     }
 
-    state.authAvailable = 'data' in healthResponse && healthResponse.data?.status === "healthy";
+    // Server returns "alive" (not "healthy") — accept both for compatibility
+    state.authAvailable = 'data' in healthResponse && (healthResponse.data?.status === "alive" || healthResponse.data?.status === "healthy");
 
     // Check providers with timeout
     const providersResponse = await Promise.race([
@@ -57,9 +58,11 @@ export async function checkOnboardingState(): Promise<OnboardingState> {
     state.providersAvailable = providers.length > 0;
 
     // Check if any providers are configured (have users/keys)
-    const configuredProviders = providers.filter((p: { configured: boolean }) => p.configured === true);
+    const configuredProviders = providers.filter((p) => p.configured === true);
     state.providersConfigured = configuredProviders.length > 0;
     state.hasConfiguredProviders = configuredProviders.length > 0;
+    console.log('✅ Configured providers:', state.hasConfiguredProviders, configuredProviders.length);
+    console.log('📝 Provider details:', providers.map((p) => ({ name: p.name, configured: p.configured })));
 
     // Determine if this is first-time setup
     // First time = auth is available, providers are available, but none are configured

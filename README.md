@@ -14,10 +14,11 @@ Monorepo for Calimero desktop applications built with Tauri.
 │   ├── desktop/          # Tauri desktop application
 │   └── download-site/    # Download landing page
 ├── packages/
-│   ├── mero-js/          # Mero-js SDK package (workspace)
 │   └── mero-react/       # React bindings and components
 └── pnpm-workspace.yaml   # Workspace configuration
 ```
+
+**Note:** `mero-js` SDK package has been moved to the repository root as an independent package.
 
 ## Prerequisites
 
@@ -33,8 +34,7 @@ Monorepo for Calimero desktop applications built with Tauri.
 # Install dependencies
 pnpm install
 
-# Build SDK packages first
-pnpm build:mero-js
+# Build workspace packages
 pnpm build:mero-react
 
 # Start development server
@@ -46,7 +46,7 @@ pnpm dev:desktop:devtools
 # Start with DevTools forced OFF
 pnpm dev:desktop:no-devtools
 
-# Build for production (builds mero-js first)
+# Build for production
 pnpm build:desktop
 
 # Run Tauri commands
@@ -77,11 +77,11 @@ pnpm build
 ### SDK Packages
 
 ```bash
-# Build mero-js package
-pnpm build:mero-js
-
 # Build mero-react package
 pnpm build:mero-react
+
+# Note: mero-js is installed from npm registry (@calimero-network/mero-js)
+# and does not need to be built locally
 ```
 
 ## Workspace Scripts
@@ -90,7 +90,6 @@ pnpm build:mero-react
 | ----------------------- | ------------------------------------------------ |
 | `pnpm dev`              | Build packages and start desktop app development |
 | `pnpm build`            | Build all packages and desktop app               |
-| `pnpm build:mero-js`    | Build mero-js SDK package                        |
 | `pnpm build:mero-react` | Build mero-react package                         |
 | `pnpm clean`            | Clean all build artifacts and node_modules       |
 

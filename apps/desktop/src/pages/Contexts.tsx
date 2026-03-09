@@ -31,11 +31,12 @@ interface InstalledApp {
 export interface ContextsProps {
   onAuthRequired?: () => void;
   onConfirmDelete?: (contextId: string, contextName: string, onConfirm: () => Promise<void>) => void;
+  clientReady?: boolean;
 }
 
 type ContextWithApp = Context & { appAlias: string };
 
-const Contexts: React.FC<ContextsProps> = ({ onAuthRequired, onConfirmDelete }) => {
+const Contexts: React.FC<ContextsProps> = ({ onAuthRequired, onConfirmDelete, clientReady = true }) => {
   const toast = useToast();
   const [contexts, setContexts] = useState<Context[]>([]);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; context: ContextWithApp } | null>(null);
@@ -50,9 +51,11 @@ const Contexts: React.FC<ContextsProps> = ({ onAuthRequired, onConfirmDelete }) 
   const [loadingApps, setLoadingApps] = useState(false);
 
   useEffect(() => {
-    loadContexts();
-    loadInstalledApps();
-  }, []);
+    if (clientReady) {
+      loadContexts();
+      loadInstalledApps();
+    }
+  }, [clientReady]);
 
   const loadInstalledApps = async () => {
     setLoadingApps(true);
@@ -246,6 +249,7 @@ const Contexts: React.FC<ContextsProps> = ({ onAuthRequired, onConfirmDelete }) 
       }
     }
   };
+
 
   return (
     <div className="contexts-page">
@@ -491,22 +495,22 @@ const Contexts: React.FC<ContextsProps> = ({ onAuthRequired, onConfirmDelete }) 
                 key: 'actions',
                 label: 'Actions',
                 sortable: false,
-                width: '8%',
+                width: '14%',
                 render: (context) => {
                   const contextName = context.name || context.id.substring(0, 16) + '...';
                   return (
                     <div className="table-cell-actions">
-                            <button
+                      <button
                         onClick={(e) => {
                           e.stopPropagation();
                           handleDeleteContext(context.id, contextName);
                         }}
                         className="button button-danger button-small"
-                            >
-                              Delete
-                            </button>
-                  </div>
-                );
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  );
                 },
               },
             ]}

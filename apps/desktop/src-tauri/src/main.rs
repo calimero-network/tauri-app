@@ -113,14 +113,6 @@ pub(crate) fn validate_allowed_url(url: &str, configured_node_url: Option<&str>)
         }
     }
     
-    // If a node URL is configured, only allow that URL (no fallback to defaults)
-    if configured_node_url.is_some() {
-        return Err(format!(
-            "URL not allowed: {}://{}:{}. Only the configured node URL is allowed for proxying.",
-            scheme, host, port
-        ));
-    }
-    
     // Allow any HTTP localhost request (any port) - these need proxying to avoid
     // mixed content blocking when the app is loaded from HTTPS
     match (scheme, host_lower.as_str()) {
@@ -1662,6 +1654,11 @@ async fn kill_all_merod_processes(merod_state: tauri::State<'_, MerodState>) -> 
 /// Path must be under the user's home directory for safety.
 /// Call kill_all_merod_processes first to ensure no process has the directory open.
 #[tauri::command]
+async fn close_current_window(window: tauri::Window) -> Result<(), String> {
+    window.close().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn delete_calimero_data_dir(data_dir: String) -> Result<String, String> {
     let expanded = if data_dir.starts_with("~") {
         if let Some(home) = dirs::home_dir() {
@@ -1852,7 +1849,8 @@ fn main() {
             kill_all_merod_processes,
             autostart_enable,
             autostart_disable,
-            autostart_is_enabled
+            autostart_is_enabled,
+            close_current_window
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

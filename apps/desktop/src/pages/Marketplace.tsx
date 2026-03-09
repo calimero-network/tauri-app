@@ -20,7 +20,11 @@ interface MarketplaceApp extends AppSummary {
   installed?: boolean;
 }
 
-export default function Marketplace() {
+interface MarketplaceProps {
+  clientReady?: boolean;
+}
+
+export default function Marketplace({ clientReady = true }: MarketplaceProps) {
   const toast = useToast();
   const [apps, setApps] = useState<MarketplaceApp[]>([]);
   const [loading, setLoading] = useState(false);
@@ -38,6 +42,13 @@ export default function Marketplace() {
     mountedRef.current = true;
     return () => { mountedRef.current = false; };
   }, []);
+
+  // Load installed apps when client becomes ready
+  useEffect(() => {
+    if (clientReady) {
+      loadInstalledApps();
+    }
+  }, [clientReady]);
 
   // -----------------------------------------------------------------------
   // Helper: build MarketplaceApp[] from raw registry results + installed set

@@ -8,10 +8,6 @@ import {
   Box,
   Stack,
   Grid,
-  Navbar,
-  NavbarBrand,
-  NavbarMenu,
-  NavbarItem,
   List,
   Divider,
 } from "@calimero-network/mero-ui";
@@ -174,59 +170,39 @@ function App() {
   }, []);
 
   const gitHubRepoUrl = getGitHubRepoUrl();
+  const gitHubOrgUrl = "https://github.com/calimero-network";
 
   return (
     <div className="download-page">
       {/* Header */}
       <header className="header">
-        <Container>
-          <Navbar variant="minimal" size="md">
-            <NavbarBrand text="Calimero" />
-            <NavbarMenu align="right">
-              <NavbarItem>
-                <a
-                  href="https://calimero.network"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  style={{ textDecoration: "none", color: "inherit" }}
-                >
-                  <Text color="secondary">Website</Text>
-                </a>
-              </NavbarItem>
-              <NavbarItem>
-                <a
-                  href="https://docs.calimero.network"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  style={{ textDecoration: "none", color: "inherit" }}
-                >
-                  <Text color="secondary">Docs</Text>
-                </a>
-              </NavbarItem>
-              <NavbarItem>
-                <a
-                  href={gitHubRepoUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  style={{ textDecoration: "none", color: "inherit" }}
-                >
-                  <Text color="secondary">GitHub</Text>
-                </a>
-              </NavbarItem>
-            </NavbarMenu>
-          </Navbar>
-        </Container>
+        <div className="header-inner">
+          <a href="/" className="header-brand">
+            <span className="header-title">Calimero Desktop</span>
+          </a>
+          <nav className="header-nav">
+            <a href="https://calimero.network" target="_blank" rel="noopener noreferrer" className="header-nav-link">Website</a>
+            <a href="https://docs.calimero.network" target="_blank" rel="noopener noreferrer" className="header-nav-link">Docs</a>
+            <a href={gitHubOrgUrl} target="_blank" rel="noopener noreferrer" className="header-nav-link">GitHub</a>
+          </nav>
+        </div>
       </header>
 
       {/* Hero Section */}
       <main className="main">
+        <div className="hero-section">
         <Container>
-          <Box style={{ paddingTop: "4rem", paddingBottom: "4rem" }}>
+          <Box style={{ paddingTop: "5rem", paddingBottom: "5rem" }}>
             <Grid columns={2} gap={32} align="center">
               <Box>
                 <Stack spacing="xl">
                   <Stack spacing="md">
-                    <Heading level={1} size="4xl" weight="bold">
+                    {release && (
+                      <Box>
+                        <span className="version-badge">v{release.version} — Latest Release</span>
+                      </Box>
+                    )}
+                    <Heading level={1} size="4xl" weight="bold" className="gradient-heading">
                       Calimero Desktop
                     </Heading>
                     <Text
@@ -283,7 +259,7 @@ function App() {
 
                       {/* Primary Download */}
                       {platformDownloads.primary ? (
-                        <Box>
+                        <Box className="download-glow">
                           <DownloadButton
                             asset={platformDownloads.primary}
                             isPrimary
@@ -325,13 +301,7 @@ function App() {
                           align="center"
                         >
                           <Text size="sm" color="muted">
-                            v{release.version}
-                          </Text>
-                          <Text size="sm" color="muted">
-                            •
-                          </Text>
-                          <Text size="sm" color="muted">
-                            {formatDate(release.publishedAt)}
+                            Released {formatDate(release.publishedAt)}
                           </Text>
                           <Text size="sm" color="muted">
                             •
@@ -358,39 +328,23 @@ function App() {
 
               {/* App Preview */}
               <Box>
-                <Card style={{ overflow: "hidden" }}>
-                  <Box
-                    display="flex"
-                    alignItems="center"
-                    justifyContent="center"
-                    minHeight="400px"
-                    backgroundColor="muted"
-                  >
-                    <Stack spacing="sm" align="center">
-                      <Box
-                        display="flex"
-                        alignItems="center"
-                        justifyContent="center"
-                        width={64}
-                        height={64}
-                        borderRadius="lg"
-                        style={{
-                          backgroundColor: "var(--color-brand-600)",
-                          color: "var(--color-background-primary)",
-                        }}
-                      >
-                        <BoxIcon size={32} />
-                      </Box>
-                      <Text color="muted" size="sm">
-                        App Preview
-                      </Text>
-                    </Stack>
-                  </Box>
-                </Card>
+                <div style={{
+                  overflow: "hidden",
+                  borderRadius: "0.75rem",
+                  border: "1px solid #27272a",
+                  boxShadow: "0 0 40px rgba(165, 255, 17, 0.04), 0 20px 60px rgba(0,0,0,0.6)",
+                }}>
+                  <img
+                    src={`${import.meta.env.BASE_URL}preview.png`}
+                    alt="Calimero Desktop preview"
+                    style={{ width: "100%", height: "auto", display: "block" }}
+                  />
+                </div>
               </Box>
             </Grid>
           </Box>
         </Container>
+        </div>
 
         <Divider />
 
@@ -662,7 +616,7 @@ function App() {
               </Text>
               <Stack direction="horizontal" spacing="lg">
                 <a
-                  href="https://calimero.network/privacy"
+                  href="https://calimero.network/privacy-policy"
                   target="_blank"
                   rel="noopener noreferrer"
                   style={{ textDecoration: "none" }}
@@ -682,7 +636,7 @@ function App() {
                   </Text>
                 </a>
                 <a
-                  href={gitHubRepoUrl}
+                  href={gitHubOrgUrl}
                   target="_blank"
                   rel="noopener noreferrer"
                   style={{ textDecoration: "none" }}

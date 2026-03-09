@@ -1,35 +1,186 @@
-/* Download Page Styles - Minimal custom styles */
+/* Download Page Styles */
 .download-page {
   min-height: 100vh;
   display: flex;
   flex-direction: column;
+  position: relative;
 }
 
-/* Header - Sticky positioning and backdrop */
+/* ── Ambient background glow ── */
+.download-page::before {
+  content: "";
+  pointer-events: none;
+  position: fixed;
+  top: -30%;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 80vw;
+  height: 60vh;
+  background: radial-gradient(ellipse at center, rgba(165, 255, 17, 0.05) 0%, transparent 70%);
+  z-index: 0;
+}
+
+/* ── Header ── */
 .header {
-  position: sticky;
+  position: fixed;
   top: 0;
+  left: 0;
+  right: 0;
   z-index: 100;
-  backdrop-filter: blur(12px);
+  background: rgba(9, 9, 11, 0.85);
+  border-bottom: 1px solid #27272a;
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
 }
 
-/* Main Content - Flex layout */
+.header-inner {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 1rem;
+  height: 60px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.header-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  text-decoration: none;
+}
+
+.header-title {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: #f4f4f5;
+  letter-spacing: -0.01em;
+}
+
+.header-nav {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.header-nav-link {
+  padding: 0.375rem 0.75rem;
+  border-radius: 6px;
+  font-size: 0.875rem;
+  font-weight: 400;
+  color: #a1a1aa;
+  text-decoration: none;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.header-nav-link:hover {
+  color: #f4f4f5;
+  background: #27272a;
+}
+
+/* ── Main content (offset for fixed header) ── */
 .main {
   flex: 1;
   width: 100%;
+  padding-top: 60px;
+  position: relative;
+  z-index: 1;
 }
 
-/* Footer - Auto margin for sticky footer */
+/* ── Hero section ── */
+.hero-section {
+  position: relative;
+  overflow: hidden;
+}
+
+/* Subtle dot-grid texture */
+.hero-section::before {
+  content: "";
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(rgba(165, 255, 17, 0.08) 1px, transparent 1px);
+  background-size: 28px 28px;
+  mask-image: radial-gradient(ellipse 60% 50% at 50% 0%, black 30%, transparent 100%);
+  -webkit-mask-image: radial-gradient(ellipse 60% 50% at 50% 0%, black 30%, transparent 100%);
+}
+
+/* ── Platform tabs ── */
+.platform-tab {
+  transition: all 0.15s ease;
+}
+
+.platform-tab:not(.disabled):hover {
+  background: rgba(165, 255, 17, 0.08) !important;
+  color: #a5ff11 !important;
+}
+
+.platform-tab.active {
+  box-shadow: 0 0 12px rgba(165, 255, 17, 0.25);
+}
+
+/* ── Download button area glow ── */
+.download-glow {
+  position: relative;
+}
+
+.download-glow::after {
+  content: "";
+  pointer-events: none;
+  position: absolute;
+  inset: -1px;
+  border-radius: 0.6rem;
+  background: linear-gradient(135deg, rgba(165, 255, 17, 0.3), rgba(115, 179, 12, 0.1));
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  z-index: -1;
+  filter: blur(10px);
+}
+
+.download-glow:hover::after {
+  opacity: 1;
+}
+
+/* ── Footer ── */
 .footer {
   margin-top: auto;
+  position: relative;
+  z-index: 1;
 }
 
-/* Link hover effects */
-.header a:hover .text,
-.header a:hover text {
-  color: var(--color-brand-600) !important;
-}
-
+/* ── Footer link hovers ── */
 .footer a:hover {
-  color: var(--color-brand-600);
+  color: #a5ff11;
+}
+
+/* ── Version badge ── */
+.version-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.25rem 0.75rem;
+  border-radius: 9999px;
+  background: rgba(165, 255, 17, 0.08);
+  border: 1px solid rgba(165, 255, 17, 0.2);
+  color: #a5ff11;
+  font-size: 0.75rem;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+.version-badge::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #a5ff11;
+  box-shadow: 0 0 6px #a5ff11;
+}
+
+/* ── Heading gradient ── */
+.gradient-heading {
+  background: linear-gradient(135deg, #f4f4f5 30%, #a5ff11 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
 }

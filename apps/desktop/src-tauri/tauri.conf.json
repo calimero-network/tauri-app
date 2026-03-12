@@ -8,7 +8,7 @@
   },
   "package": {
     "productName": "Calimero Desktop",
-    "version": "0.0.22"
+    "version": "0.0.25"
   },
   "tauri": {
     "allowlist": {
@@ -66,7 +66,7 @@
     },
     "bundle": {
       "active": true,
-      "targets": "all",
+      "targets": ["app"],
       "identifier": "network.calimero.desktop",
       "icon": [
         "icons/32x32.png",

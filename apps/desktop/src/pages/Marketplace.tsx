@@ -382,8 +382,9 @@ export default function Marketplace({ clientReady = true }: MarketplaceProps) {
 
       toast.success(`${app.alias || app.name} installed successfully!`);
 
-      // Reload installed apps (this updates installedAppIds which triggers sync useEffect)
-      await loadInstalledApps();
+      // Reload installed apps and refetch marketplace so download count updates
+      const installed = await loadInstalledApps();
+      await loadMarketplaceApps(installed, true);
       // Also explicitly mark this app as installed immediately for instant UI feedback
       setApps((prevApps) =>
         prevApps.map((a) =>
@@ -535,6 +536,10 @@ export default function Marketplace({ clientReady = true }: MarketplaceProps) {
                         <span className="app-meta-value">
                           {app.author || (shortPubkey && shortPubkey !== 'unknown' ? shortPubkey : '—')}
                         </span>
+                      </div>
+                      <div className="app-meta-row">
+                        <span className="app-meta-label">Downloads:</span>
+                        <span className="app-meta-value">{(app.downloads ?? 0).toLocaleString()}</span>
                       </div>
                     </div>
                   </div>

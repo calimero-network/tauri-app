@@ -11,6 +11,7 @@ export default function ToastContainer() {
 
   return (
     <div className="toast-container">
+      <div className="toast-container-inner">
       {toasts.map((toast) => (
         <div
           key={toast.id}
@@ -36,6 +37,7 @@ export default function ToastContainer() {
           </button>
         </div>
       ))}
+      </div>
     </div>
   );
 }

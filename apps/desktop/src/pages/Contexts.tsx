@@ -5,6 +5,7 @@ import DataTable from "../components/DataTable";
 import ContextMenu from "../components/ContextMenu";
 import { SkeletonTable } from "../components/Skeleton";
 import { decodeMetadata } from "../utils/appUtils";
+import { truncateText } from "../utils/string";
 import { X } from "lucide-react";
 import "./Contexts.css";
 
@@ -175,7 +176,8 @@ const Contexts: React.FC<ContextsProps> = ({ onAuthRequired, onConfirmDelete, cl
         return;
       }
 
-      toast.success(`Context created successfully! ID: ${response.data?.contextId || 'N/A'}`);
+      const contextId = response.data?.contextId || 'N/A';
+      toast.success(`Context created! ID: ${truncateText(contextId, 8)}`);
       setCreateProtocol("near");
       setCreateApplicationId("");
       setCreateInitializationParams("");

@@ -30,6 +30,9 @@
   border-radius: 6px;
   margin-bottom: 16px;
   border: 1px solid var(--error);
+  max-height: 80px;
+  overflow-y: auto;
+  word-break: break-word;
 }
 
 .loading {
@@ -55,6 +58,8 @@
   padding: 24px;
   margin-bottom: 24px;
   box-shadow: var(--shadow-md);
+  max-height: calc(100vh - 120px);
+  overflow-y: auto;
 }
 
 .create-context-form h2 {

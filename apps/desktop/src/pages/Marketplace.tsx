@@ -9,6 +9,7 @@ import {
   touchMarketplaceCache,
   invalidateMarketplaceCache,
 } from "../utils/marketplaceCache";
+import { truncateText } from "../utils/string";
 import { useToast } from "../contexts/ToastContext";
 import Skeleton from "../components/Skeleton";
 import { Search, RefreshCw, Package, Download, CheckCircle2, X } from "lucide-react";
@@ -374,7 +375,8 @@ export default function Marketplace({ clientReady = true }: MarketplaceProps) {
 
       if (response.error) {
         console.error("📦 Marketplace: Install error:", response.error);
-        toast.error(`Failed to install: ${response.error.message}`);
+        const msg = response.error.message ? truncateText(response.error.message, 120) : 'Unknown error';
+        toast.error(`Failed to install: ${msg}`);
         return;
       }
 
@@ -392,7 +394,8 @@ export default function Marketplace({ clientReady = true }: MarketplaceProps) {
       );
     } catch (err) {
       console.error("📦 Marketplace: Install exception:", err);
-      toast.error(`Failed to install: ${err instanceof Error ? err.message : "Unknown error"}`);
+      const msg = truncateText(err instanceof Error ? err.message : "Unknown error", 120);
+      toast.error(`Failed to install: ${msg}`);
     } finally {
       setInstallingAppId(null);
     }

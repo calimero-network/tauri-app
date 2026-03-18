@@ -3,11 +3,18 @@
   top: 20px;
   right: 20px;
   z-index: 10000;
+  pointer-events: none;
+}
+
+.toast-container-inner {
   display: flex;
   flex-direction: column;
   gap: 12px;
   max-width: 400px;
-  pointer-events: none;
+  max-height: calc(100vh - 40px);
+  overflow-y: auto;
+  overflow-x: hidden;
+  pointer-events: auto;
 }
 
 .toast {
@@ -124,6 +131,9 @@
     top: 16px;
     right: 16px;
     left: 16px;
+  }
+
+  .toast-container-inner {
     max-width: none;
   }
 

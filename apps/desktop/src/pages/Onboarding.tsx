@@ -1013,6 +1013,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
                           {(app as any).description && (
                             <p className="app-description">{(app as any).description}</p>
                           )}
+                          <p className="app-downloads">{(app as any).downloads ?? 0} downloads</p>
                           <button
                             onClick={() => handleInstallApp(app, registry)}
                             className="app-install-button"

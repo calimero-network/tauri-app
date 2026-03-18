@@ -11,6 +11,7 @@ export interface AppSummary {
   alias?: string;
   description?: string;
   author?: string;
+  downloads?: number;
 }
 
 export interface VersionInfo {
@@ -109,6 +110,7 @@ export async function fetchAppsFromRegistry(
       description: bundle.metadata?.description,
       author: bundle.metadata?.author,
       minRuntimeVersion: bundle.minRuntimeVersion,
+      downloads: bundle.downloads ?? 0,
     }));
   } catch (error) {
     console.error(`Failed to fetch apps from registry ${registryUrl}:`, error);

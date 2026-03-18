@@ -175,7 +175,8 @@ const Contexts: React.FC<ContextsProps> = ({ onAuthRequired, onConfirmDelete, cl
         return;
       }
 
-      toast.success(`Context created successfully! ID: ${response.data?.contextId || 'N/A'}`);
+      const contextId = response.data?.contextId || 'N/A';
+      toast.success(`Context created! ID: ${contextId.length > 8 ? contextId.substring(0, 8) + '…' : contextId}`);
       setCreateProtocol("near");
       setCreateApplicationId("");
       setCreateInitializationParams("");

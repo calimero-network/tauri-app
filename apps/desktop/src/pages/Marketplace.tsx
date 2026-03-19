@@ -382,6 +382,10 @@ export default function Marketplace({ clientReady = true }: MarketplaceProps) {
 
       toast.success(`${app.alias || app.name} installed successfully!`);
 
+      // Record download with registry (fire-and-forget)
+      const { recordDownload } = await import("../utils/registry");
+      recordDownload(app.registry, app.id, app.latest_version);
+
       // Reload installed apps and refetch marketplace so download count updates
       const installed = await loadInstalledApps();
       await loadMarketplaceApps(installed, true);

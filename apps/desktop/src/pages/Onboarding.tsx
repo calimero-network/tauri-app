@@ -432,7 +432,11 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
 
       toast.success(`Successfully installed ${app.name}!`);
       setInstalledAppIds(new Set([...installedAppIds, app.id]));
-      
+
+      // Record download with registry (fire-and-forget)
+      const { recordDownload } = await import("../utils/registry");
+      recordDownload(registry, app.id, app.latest_version);
+
       // Ensure dark mode is saved before completing onboarding
       setTheme('dark');
       

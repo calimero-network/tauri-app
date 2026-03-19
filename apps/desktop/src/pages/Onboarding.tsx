@@ -5,7 +5,7 @@ import { initMerodNode, startMerod, listMerodNodes, detectRunningMerodNodes, wai
 import { invoke } from "@tauri-apps/api/tauri";
 import { saveSettings, getSettings } from "../utils/settings";
 import { saveOnboardingProgress, loadOnboardingProgress } from "../utils/onboardingProgress";
-import { fetchAppsFromAllRegistries, fetchAppManifest, type AppSummary } from "../utils/registry";
+import { fetchAppsFromAllRegistries, fetchAppManifest, recordDownload, type AppSummary } from "../utils/registry";
 import { useToast } from "../contexts/ToastContext";
 import { useTheme } from "../contexts/ThemeContext";
 import { ArrowLeft, ArrowRight, Check, Package, Download, CheckCircle2, ChevronDown, ChevronUp, Search, AlertTriangle } from "lucide-react";
@@ -432,7 +432,10 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
 
       toast.success(`Successfully installed ${app.name}!`);
       setInstalledAppIds(new Set([...installedAppIds, app.id]));
-      
+
+      // Record download with registry (fire-and-forget)
+      recordDownload(registry, app.id, app.latest_version);
+
       // Ensure dark mode is saved before completing onboarding
       setTheme('dark');
       

@@ -255,20 +255,28 @@ export async function fetchAppManifest(
 /**
  * Record a download with the registry (fire-and-forget).
  * Call after a successful app install so download counts stay accurate.
+ * Never throws; logs warnings on invalid URL or fetch failure.
  */
 export function recordDownload(
   registryBaseUrl: string,
   packageId: string,
   version: string
 ): void {
-  const recordUrl = new URL('/api/v2/downloads/record', registryBaseUrl).toString();
-  fetch(recordUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ package: packageId, version }),
-  }).catch((err) => {
-    console.warn('Failed to record download:', err);
-  });
+  try {
+    if (!registryBaseUrl?.startsWith('https://')) {
+      console.warn('recordDownload: registry URL should use HTTPS', registryBaseUrl);
+    }
+    const recordUrl = new URL('/api/v2/downloads/record', registryBaseUrl).toString();
+    fetch(recordUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ package: packageId, version }),
+    }).catch((err) => {
+      console.warn('Failed to record download:', err);
+    });
+  } catch (err) {
+    console.warn('Failed to record download (invalid URL or serialization):', err);
+  }
 }
 
 /**

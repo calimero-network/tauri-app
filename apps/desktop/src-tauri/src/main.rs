@@ -1659,6 +1659,12 @@ async fn close_current_window(window: tauri::Window) -> Result<(), String> {
 }
 
 #[tauri::command]
+async fn open_url_in_browser(url: String, app_handle: tauri::AppHandle) -> Result<(), String> {
+    tauri::api::shell::open(&app_handle.shell_scope(), url, None)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn delete_calimero_data_dir(data_dir: String) -> Result<String, String> {
     let expanded = if data_dir.starts_with("~") {
         if let Some(home) = dirs::home_dir() {
@@ -1850,7 +1856,8 @@ fn main() {
             autostart_enable,
             autostart_disable,
             autostart_is_enabled,
-            close_current_window
+            close_current_window,
+            open_url_in_browser
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -1,9 +1,9 @@
 .data-table-container {
   width: 100%;
   overflow-x: auto;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   border: 1px solid var(--border-color);
-  background: var(--bg-primary);
+  background: var(--surface-glass-soft);
 }
 
 .data-table {
@@ -13,7 +13,7 @@
 }
 
 .data-table thead {
-  background: var(--bg-secondary);
+  background: var(--surface-glass);
   border-bottom: 2px solid var(--border-color);
 }
 
@@ -34,7 +34,7 @@
 }
 
 .data-table th.sortable:hover {
-  background: var(--bg-tertiary);
+  background: var(--surface-glass-soft);
 }
 
 .data-table .th-content {
@@ -70,7 +70,7 @@
 }
 
 .data-table tbody tr:hover {
-  background: var(--bg-secondary);
+  background: var(--surface-glass-soft);
 }
 
 .data-table tbody tr.clickable {

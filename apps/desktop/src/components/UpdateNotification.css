@@ -22,7 +22,9 @@
   align-items: center;
   gap: 16px;
   padding: 16px 20px;
-  background: var(--bg-secondary);
+  background: var(--surface-glass-strong);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
   border: 1px solid var(--border-hover);
   border-radius: 12px;
   box-shadow: var(--shadow-xl);
@@ -95,7 +97,7 @@
 }
 
 .update-button-secondary:hover:not(:disabled) {
-  background: var(--bg-tertiary);
+  background: var(--surface-glass-soft);
   color: var(--text-primary);
 }
 

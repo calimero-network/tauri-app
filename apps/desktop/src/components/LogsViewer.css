@@ -10,9 +10,11 @@
 }
 
 .logs-viewer-modal {
-  background: var(--bg-secondary);
+  background: var(--surface-glass-strong);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
   border: 1px solid var(--border-color);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   box-shadow: var(--shadow-lg);
   max-width: 95vw;
   max-height: 90vh;
@@ -48,16 +50,18 @@
   gap: 6px;
   padding: 6px 12px;
   font-size: 13px;
-  background: var(--bg-tertiary);
+  background: var(--button-glass);
   color: var(--text-primary);
   border: 1px solid var(--border-color);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   cursor: pointer;
   transition: all 0.15s;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
 }
 
 .logs-viewer-btn:hover:not(:disabled) {
-  background: var(--bg-primary);
+  background: var(--button-glass-hover);
   border-color: var(--border-hover);
 }
 
@@ -77,7 +81,7 @@
   gap: 12px;
   padding: 12px 20px;
   border-bottom: 1px solid var(--border-color);
-  background: var(--bg-primary);
+  background: var(--surface-glass-soft);
 }
 
 .logs-viewer-search {
@@ -99,9 +103,9 @@
   width: 100%;
   padding: 8px 12px 8px 34px;
   font-size: 13px;
-  background: var(--bg-secondary);
+  background: var(--surface-glass-soft);
   border: 1px solid var(--border-color);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   color: var(--text-primary);
   outline: none;
 }
@@ -130,9 +134,9 @@
 .logs-viewer-level-select {
   padding: 6px 10px;
   font-size: 13px;
-  background: var(--bg-secondary);
+  background: var(--surface-glass-soft);
   border: 1px solid var(--border-color);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   color: var(--text-primary);
   cursor: pointer;
 }
@@ -150,7 +154,7 @@
   font-size: 12px;
   line-height: 1.5;
   color: var(--text-secondary);
-  background: var(--bg-primary);
+  background: var(--bg-secondary);
   white-space: pre-wrap;
   word-break: break-all;
 }
@@ -162,5 +166,5 @@
   font-size: 12px;
   color: var(--text-tertiary);
   border-top: 1px solid var(--border-color);
-  background: var(--bg-primary);
+  background: var(--surface-glass-soft);
 }

@@ -1,5 +1,5 @@
 .skeleton {
-  background: var(--bg-secondary);
+  background: var(--surface-glass-soft);
   position: relative;
   overflow: hidden;
 }
@@ -64,7 +64,7 @@
   overflow-x: auto;
   border-radius: 8px;
   border: 1px solid var(--border-color);
-  background: var(--bg-primary);
+  background: var(--surface-glass-soft);
 }
 
 .skeleton-table {
@@ -74,7 +74,7 @@
 }
 
 .skeleton-table thead {
-  background: var(--bg-secondary);
+  background: var(--surface-glass-soft);
   border-bottom: 2px solid var(--border-color);
 }
 
@@ -97,9 +97,9 @@
 
 /* Card skeleton for marketplace */
 .skeleton-card {
-  background: var(--bg-primary);
+  background: var(--surface-glass-soft);
   border: 1px solid var(--border-color);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   padding: 20px;
   display: flex;
   flex-direction: column;

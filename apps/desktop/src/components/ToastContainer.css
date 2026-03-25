@@ -25,7 +25,9 @@
   padding: 14px 16px;
   border-radius: 8px;
   box-shadow: var(--shadow-lg);
-  background: var(--bg-primary);
+  background: var(--surface-glass-strong);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
   border: 1px solid var(--border-color);
   pointer-events: auto;
   animation: slideInRight 0.3s ease-out;
@@ -88,7 +90,7 @@
 }
 
 .toast-close:hover {
-  background: var(--bg-secondary);
+  background: var(--surface-glass-soft);
   color: var(--text-primary);
 }
 

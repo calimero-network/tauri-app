@@ -7,13 +7,47 @@
   justify-content: flex-start;
   min-height: 100vh;
   height: 100vh;
-  background: var(--bg-primary);
+  background-color: var(--bg-primary);
+  background-image: var(--desktop-space-background);
+  background-size: var(--desktop-space-size);
+  background-position: var(--desktop-space-position);
+  background-repeat: var(--desktop-space-repeat);
   padding: 20px;
   transition: background 0.3s ease;
   overflow-y: auto;
   overflow-x: hidden;
   position: relative;
   box-sizing: border-box;
+}
+
+.onboarding-page::before {
+  content: none;
+  position: fixed;
+  width: 500px;
+  height: 500px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(165, 255, 17, 0.08) 0%, transparent 68%);
+  top: -100px;
+  right: -80px;
+  filter: blur(80px);
+  pointer-events: none;
+  animation: none;
+  z-index: 0;
+}
+
+.onboarding-page::after {
+  content: none;
+  position: fixed;
+  width: 400px;
+  height: 400px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(165, 255, 17, 0.05) 0%, transparent 70%);
+  bottom: -80px;
+  left: -60px;
+  filter: blur(80px);
+  pointer-events: none;
+  animation: none;
+  z-index: 0;
 }
 
 /* Progress Indicator */
@@ -26,7 +60,8 @@
   position: relative;
   background: transparent;
   z-index: 10;
-  order: -1; /* Ensure it appears at the top */
+  order: -1;
+  animation: fadeUp 0.5s ease-out;
 }
 
 .progress-steps {
@@ -45,7 +80,7 @@
   top: 50%;
   transform: translateY(-50%);
   height: 2px;
-  background: var(--bg-tertiary);
+  background: var(--border-color);
   z-index: 0;
   border-radius: 1px;
 }
@@ -75,7 +110,7 @@
   width: 12px;
   height: 12px;
   border-radius: 50%;
-  background: var(--bg-secondary);
+  background: var(--surface-glass-soft);
   border: 2px solid var(--border-color);
   position: relative;
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
@@ -93,14 +128,14 @@
   background: var(--accent-primary);
   border-color: var(--accent-primary);
   transform: scale(1.4);
-  box-shadow: 0 0 0 4px var(--accent-light);
+  box-shadow: 0 0 0 4px var(--accent-light), 0 0 16px rgba(165, 255, 17, 0.2);
 }
 
 /* Step Container */
 .onboarding-step-container {
-  background: var(--bg-secondary);
+  background: var(--gradient-surface), var(--surface-glass);
   border: 1px solid var(--border-color);
-  border-radius: 20px;
+  border-radius: var(--radius-xl);
   padding: 40px 48px;
   width: 100%;
   max-width: 700px;
@@ -114,32 +149,35 @@
   box-sizing: border-box;
   overflow-y: auto;
   overflow-x: hidden;
-  /* Ensure content doesn't get cut off */
   scroll-behavior: smooth;
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  z-index: 1;
+  animation: fadeUp 0.5s ease-out 0.1s both;
 }
 
 /* Back Button */
 .step-back-button {
   position: absolute;
-  top: 0;
-  left: 0;
-  background: var(--bg-secondary);
+  top: 12px;
+  left: 12px;
+  background: var(--surface-glass-soft);
   border: 1px solid var(--border-color);
   color: var(--text-primary);
   font-size: 14px;
   cursor: pointer;
-  padding: 10px 14px;
-  border-radius: 10px;
+  padding: 10px;
+  border-radius: var(--radius-lg);
   transition: all 0.2s;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 40px;
-  height: 40px;
+  width: 36px;
+  height: 36px;
 }
 
 .step-back-button:hover {
-  background: var(--bg-tertiary);
+  background: var(--button-glass);
   border-color: var(--border-hover);
   transform: translateX(-2px);
 }
@@ -155,10 +193,8 @@
   padding: 32px 0;
   min-height: 0;
   width: 100%;
-  /* Ensure content can scroll and doesn't get cut off */
   overflow: visible;
   position: relative;
-  /* Ensure proper spacing for buttons inside content */
   gap: 0;
 }
 
@@ -166,7 +202,7 @@
   width: 100px;
   height: 100px;
   border-radius: 30px;
-  background: var(--bg-secondary);
+  background: var(--surface-glass-soft);
   border: 1px solid var(--border-color);
   display: flex;
   align-items: center;
@@ -196,7 +232,6 @@
   height: auto;
   max-width: 100%;
   object-fit: contain;
-  /* White in dark mode (default), black in light mode */
   filter: brightness(0) invert(1);
 }
 
@@ -205,8 +240,7 @@
 }
 
 .step-icon-success {
-  background: var(--success);
-  background: rgba(52, 211, 153, 0.15);
+  background: rgba(34, 197, 94, 0.1);
   border-color: var(--success);
   animation: iconPulse 2s ease-in-out infinite;
 }
@@ -264,12 +298,18 @@
   justify-content: center;
   gap: 10px;
   padding: 12px 20px;
-  background: var(--bg-secondary);
+  background: var(--surface-glass-soft);
   border: 1px solid var(--border-color);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   color: var(--text-primary);
   font-size: 14px;
   font-weight: 500;
+  transition: all 0.2s;
+}
+
+.step-feature:hover {
+  border-color: var(--accent-dim);
+  transform: translateY(-1px);
 }
 
 .step-feature svg {
@@ -294,12 +334,18 @@
   align-items: flex-start;
   gap: 12px;
   padding: 12px 16px;
-  background: var(--bg-secondary);
+  background: var(--surface-glass-soft);
   border: 1px solid var(--border-color);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   color: var(--text-primary);
   font-size: 15px;
   line-height: 1.5;
+  transition: all 0.2s;
+}
+
+.principle-item:hover {
+  border-color: var(--border-hover);
+  transform: translateY(-1px);
 }
 
 .principle-item svg {
@@ -313,7 +359,6 @@
   font-weight: 600;
 }
 
-/* Responsive adjustments for principles */
 @media (max-width: 768px) {
   .step-principles {
     margin-top: 20px;
@@ -342,7 +387,6 @@
   }
 }
 
-/* Large screens - better use of space */
 @media (min-width: 1200px) {
   .onboarding-step-container {
     max-width: 900px;
@@ -367,7 +411,6 @@
   }
 }
 
-/* Very large screens */
 @media (min-width: 1600px) {
   .onboarding-step-container {
     max-width: 1000px;
@@ -390,26 +433,32 @@
 
 /* Step Messages */
 .step-message {
-  padding: 14px 18px;
-  border-radius: 12px;
-  margin: 20px 0;
+  padding: 12px 16px;
+  border-radius: var(--radius-lg);
+  margin: 8px 0 0;
   display: flex;
   align-items: center;
   gap: 10px;
-  font-size: 14px;
+  font-size: 13px;
   width: 100%;
   max-width: 500px;
+  animation: fadeIn 0.25s ease-out;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 .step-message-success {
-  background: rgba(52, 211, 153, 0.15);
-  border: 1px solid var(--success);
+  background: rgba(34, 197, 94, 0.1);
+  border: 1px solid rgba(34, 197, 94, 0.2);
   color: var(--text-primary);
 }
 
 .step-message-error {
-  background: rgba(248, 113, 113, 0.15);
-  border: 1px solid var(--error);
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.2);
   color: var(--text-primary);
 }
 
@@ -421,10 +470,8 @@
   margin-bottom: 20px;
   overflow-x: hidden;
   overflow-y: visible;
-  /* Ensure form content is visible */
   position: relative;
   z-index: 0;
-  /* Ensure advanced options are visible */
   display: flex;
   flex-direction: column;
   gap: 0;
@@ -434,12 +481,10 @@
   margin-bottom: 20px;
 }
 
-/* Reduce spacing for the data directory field to keep advanced options visible */
 .step-form > .form-group:first-of-type {
   margin-bottom: 16px;
 }
 
-/* Ensure form groups have consistent spacing */
 .step-form .form-group:last-child {
   margin-bottom: 0;
 }
@@ -458,9 +503,9 @@
   width: 100%;
   padding: 14px 16px;
   border: 1px solid var(--border-color);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   font-size: 15px;
-  background: var(--bg-secondary);
+  background: var(--surface-glass-soft);
   color: var(--text-primary);
   transition: all 0.2s;
   box-sizing: border-box;
@@ -476,7 +521,7 @@
 .step-form select:focus {
   outline: none;
   border-color: var(--accent-primary);
-  background: var(--bg-tertiary);
+  background: var(--surface-glass);
   box-shadow: 0 0 0 4px var(--accent-light);
 }
 
@@ -497,9 +542,9 @@
 .step-form .input-group button {
   flex-shrink: 0;
   padding: 14px 20px;
-  background: var(--bg-tertiary);
+  background: var(--surface-glass-soft);
   border: 1px solid var(--border-color);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   color: var(--text-primary);
   font-size: 14px;
   font-weight: 500;
@@ -508,7 +553,7 @@
 }
 
 .step-form .input-group button:hover:not(:disabled) {
-  background: var(--bg-secondary);
+  background: var(--button-glass);
   border-color: var(--border-hover);
 }
 
@@ -549,7 +594,6 @@
   z-index: 1;
 }
 
-/* Step Actions inside step-content (for natural flow) */
 .step-content .step-actions {
   margin-top: 32px;
   margin-bottom: 0;
@@ -557,8 +601,8 @@
 
 .step-button {
   padding: 16px 32px;
-  border: none;
-  border-radius: 12px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-lg);
   font-size: 16px;
   font-weight: 600;
   cursor: pointer;
@@ -572,15 +616,19 @@
 }
 
 .step-button-primary {
-  background: var(--accent-primary);
-  color: #09090b;
-  box-shadow: var(--shadow-md);
+  background: var(--button-glass);
+  color: var(--accent-primary);
+  border-color: rgba(165, 255, 17, 0.2);
+  box-shadow: none;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
 }
 
 .step-button-primary:hover:not(:disabled) {
   transform: translateY(-2px);
-  background: var(--accent-hover);
-  box-shadow: var(--shadow-lg);
+  background: var(--button-glass-hover);
+  border-color: rgba(165, 255, 17, 0.28);
+  box-shadow: var(--shadow-sm);
 }
 
 .step-button-primary:active:not(:disabled) {
@@ -594,13 +642,15 @@
 }
 
 .step-button-secondary {
-  background: var(--bg-tertiary);
+  background: var(--surface-glass-soft);
   color: var(--text-primary);
   border: 1px solid var(--border-color);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
 }
 
 .step-button-secondary:hover:not(:disabled) {
-  background: var(--bg-secondary);
+  background: var(--button-glass);
   border-color: var(--border-hover);
 }
 
@@ -619,18 +669,19 @@
   width: 100%;
   padding: 24px;
   text-align: left;
-  background: var(--bg-tertiary);
+  background: var(--surface-glass-soft);
   border: 1px solid var(--border-color);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   cursor: pointer;
-  transition: all 0.2s;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
   color: var(--text-primary);
 }
 
 .node-setup-choice-card:hover {
   border-color: var(--accent-primary);
-  background: var(--bg-secondary);
-  box-shadow: 0 0 0 2px var(--accent-light);
+  background: var(--surface-glass);
+  box-shadow: 0 0 0 2px var(--accent-light), var(--shadow-glow);
+  transform: translateY(-2px);
 }
 
 .node-setup-choice-card strong {
@@ -665,7 +716,6 @@
     padding: 24px 20px;
     min-height: auto;
     max-height: calc(100vh - 100px);
-    /* Ensure proper scrolling on mobile */
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
   }
@@ -677,7 +727,6 @@
   .step-content {
     padding: 24px 0;
     min-height: 0;
-    /* Ensure content doesn't get cut off */
     padding-bottom: 100px;
   }
 
@@ -702,18 +751,17 @@
     margin-bottom: 20px;
   }
 
-.step-form {
-  margin-top: 24px;
-  margin-bottom: 24px;
-  max-width: 100%;
-  /* Ensure form is scrollable and visible */
-  padding-bottom: 20px;
+  .step-form {
+    margin-top: 24px;
+    margin-bottom: 24px;
+    max-width: 100%;
+    padding-bottom: 20px;
   }
-  
+
   .advanced-options-section {
     margin-bottom: 16px;
   }
-  
+
   .advanced-options-content {
     padding-bottom: 16px;
   }
@@ -740,11 +788,12 @@
     padding-top: 24px;
     padding-bottom: 0;
     flex-wrap: wrap;
-    /* Ensure buttons are visible and don't overlap */
     margin-top: 24px;
     position: sticky;
     bottom: 0;
-    background: var(--bg-secondary);
+    background: var(--surface-glass-strong);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
     border-top: 1px solid var(--border-color);
     margin-left: -20px;
     margin-right: -20px;
@@ -771,7 +820,6 @@
     padding: 20px 20px;
     min-height: auto;
     max-height: calc(100vh - 80px);
-    /* Ensure proper scrolling on short screens */
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
   }
@@ -783,7 +831,6 @@
   .step-content {
     padding: 20px 0;
     min-height: 0;
-    /* Add bottom padding to prevent content cutoff */
     padding-bottom: 120px;
   }
 
@@ -820,7 +867,7 @@
   .step-form .form-group {
     margin-bottom: 16px;
   }
-  
+
   .step-form .form-group:first-of-type {
     margin-bottom: 20px;
   }
@@ -828,10 +875,11 @@
   .step-actions {
     padding-top: 16px;
     padding-bottom: 0;
-    /* Ensure buttons are visible on short screens */
     position: sticky;
     bottom: 0;
-    background: var(--bg-secondary);
+    background: var(--surface-glass-strong);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
     border-top: 1px solid var(--border-color);
     margin-left: -20px;
     margin-right: -20px;
@@ -840,7 +888,7 @@
     padding-bottom: 8px;
     z-index: 10;
   }
-  
+
   .advanced-options-section {
     margin-bottom: 12px;
   }
@@ -851,12 +899,10 @@
   }
 }
 
-/* Small screens - width and height */
 @media (max-width: 480px), (max-height: 600px) {
   .onboarding-step-container {
     padding: 16px 16px;
     max-height: calc(100vh - 60px);
-    /* Ensure proper scrolling on very small screens */
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
   }
@@ -877,7 +923,6 @@
 
   .step-content {
     padding: 16px 0;
-    /* Add bottom padding to prevent content cutoff on small screens */
     padding-bottom: 140px;
   }
 
@@ -925,10 +970,11 @@
     padding-top: 16px;
     padding-bottom: 0;
     gap: 8px;
-    /* Ensure buttons are visible on very small screens */
     position: sticky;
     bottom: 0;
-    background: var(--bg-secondary);
+    background: var(--surface-glass-strong);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
     border-top: 1px solid var(--border-color);
     margin-left: -16px;
     margin-right: -16px;
@@ -937,15 +983,15 @@
     padding-bottom: 8px;
     z-index: 10;
   }
-  
+
   .step-form {
     margin-bottom: 24px;
   }
-  
+
   .advanced-options-section {
     margin-bottom: 16px;
   }
-  
+
   .advanced-options-content {
     padding-bottom: 12px;
   }
@@ -995,29 +1041,24 @@
   opacity: 1;
 }
 
-/* Override LoginView styles to match theme */
 .onboarding-card * {
   box-sizing: border-box;
 }
 
-/* Disable autocomplete and autocapitalize - attributes will be set via JavaScript */
-
-/* Override LoginView form container styles */
 .onboarding-card > div > div {
-  background: var(--bg-secondary) !important;
+  background: var(--surface-glass) !important;
   border: 1px solid var(--border-color) !important;
-  border-radius: 12px !important;
+  border-radius: var(--radius-lg) !important;
   padding: 24px !important;
   color: var(--text-primary) !important;
 }
 
-/* Override LoginView input styles */
 .onboarding-card input {
-  background: var(--bg-tertiary) !important;
+  background: var(--surface-glass-soft) !important;
   border: 1px solid var(--border-color) !important;
   color: var(--text-primary) !important;
   padding: 14px 16px !important;
-  border-radius: 12px !important;
+  border-radius: var(--radius-lg) !important;
   font-size: 15px !important;
 }
 
@@ -1028,18 +1069,16 @@
 .onboarding-card input:focus {
   outline: none !important;
   border-color: var(--accent-primary) !important;
-  background: var(--bg-secondary) !important;
+  background: var(--surface-glass) !important;
   box-shadow: 0 0 0 4px var(--accent-light) !important;
 }
 
-/* Override LoginView label styles */
 .onboarding-card label {
   color: var(--text-primary) !important;
   font-size: 14px !important;
   font-weight: 600 !important;
 }
 
-/* Override LoginView title styles */
 .onboarding-card h1,
 .onboarding-card h2,
 .onboarding-card h3 {
@@ -1073,11 +1112,11 @@
 }
 
 .username-password-form input {
-  background: var(--bg-tertiary) !important;
+  background: var(--surface-glass-soft) !important;
   border: 1px solid var(--border-color) !important;
   color: var(--text-primary) !important;
   padding: 14px 16px !important;
-  border-radius: 12px !important;
+  border-radius: var(--radius-lg) !important;
   font-size: 15px !important;
   width: 100% !important;
   box-sizing: border-box !important;
@@ -1095,7 +1134,7 @@
 .username-password-form input:focus {
   outline: none;
   border-color: var(--accent-primary);
-  background: var(--bg-secondary);
+  background: var(--surface-glass);
   box-shadow: 0 0 0 4px var(--accent-light);
 }
 
@@ -1108,7 +1147,7 @@
   background: var(--error-bg);
   color: var(--error-text);
   padding: 12px 16px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   font-size: 14px;
   border: 1px solid var(--error-border);
 }
@@ -1128,7 +1167,7 @@
 .username-password-form .button {
   padding: 14px 32px;
   border: none;
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   font-size: 15px;
   font-weight: 600;
   cursor: pointer;
@@ -1136,14 +1175,15 @@
 }
 
 .username-password-form .button-primary {
-  background: var(--accent-primary);
-  color: #09090b;
+  background: var(--button-glass);
+  color: var(--accent-primary);
+  border: 1px solid rgba(165, 255, 17, 0.2);
 }
 
 .username-password-form .button-primary:hover:not(:disabled) {
-  background: var(--accent-hover);
+  background: var(--button-glass-hover);
   transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  box-shadow: var(--shadow-sm);
 }
 
 .username-password-form .button-primary:disabled {
@@ -1152,12 +1192,11 @@
   transform: none;
 }
 
-/* Override LoginView button styles */
 .onboarding-card button {
-  background: var(--bg-tertiary) !important;
+  background: var(--surface-glass-soft) !important;
   border: 1px solid var(--border-color) !important;
   color: var(--text-primary) !important;
-  border-radius: 12px !important;
+  border-radius: var(--radius-lg) !important;
   padding: 12px 24px !important;
   font-size: 14px !important;
   font-weight: 500 !important;
@@ -1165,30 +1204,28 @@
 }
 
 .onboarding-card button:hover:not(:disabled) {
-  background: var(--bg-secondary) !important;
+  background: var(--button-glass) !important;
   border-color: var(--border-hover) !important;
 }
 
 .onboarding-card button[type="submit"],
 .onboarding-card button.primary {
-  background: var(--accent-primary) !important;
-  border-color: var(--accent-primary) !important;
-  color: #09090b !important;
+  background: var(--button-glass) !important;
+  border-color: rgba(165, 255, 17, 0.2) !important;
+  color: var(--accent-primary) !important;
 }
 
 .onboarding-card button[type="submit"]:hover:not(:disabled),
 .onboarding-card button.primary:hover:not(:disabled) {
-  background: var(--accent-hover) !important;
-  border-color: var(--accent-hover) !important;
+  background: var(--button-glass-hover) !important;
+  border-color: rgba(165, 255, 17, 0.28) !important;
 }
 
-/* Override error message styles */
 .onboarding-card [class*="error"],
 .onboarding-card [class*="ErrorMessage"] {
   color: var(--error) !important;
 }
 
-/* Override any text colors */
 .onboarding-card p,
 .onboarding-card span,
 .onboarding-card div {
@@ -1223,9 +1260,9 @@
   width: 100%;
   padding: 14px 16px;
   border: 1px solid var(--border-color);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   font-size: 15px;
-  background: var(--bg-tertiary);
+  background: var(--surface-glass-soft);
   color: var(--text-primary);
   transition: all 0.2s;
   box-sizing: border-box;
@@ -1238,7 +1275,7 @@
 .form-group input:focus {
   outline: none;
   border-color: var(--accent-primary);
-  background: var(--bg-secondary);
+  background: var(--surface-glass);
   box-shadow: 0 0 0 4px var(--accent-light);
 }
 
@@ -1259,9 +1296,9 @@
 .input-group .button {
   flex-shrink: 0;
   padding: 14px 20px;
-  background: var(--bg-tertiary);
+  background: var(--surface-glass-soft);
   border: 1px solid var(--border-color);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   color: var(--text-primary);
   font-size: 14px;
   font-weight: 500;
@@ -1270,7 +1307,7 @@
 }
 
 .input-group .button:hover:not(:disabled) {
-  background: var(--bg-secondary);
+  background: var(--button-glass);
   border-color: var(--border-hover);
 }
 
@@ -1291,22 +1328,21 @@
   color: var(--text-tertiary);
 }
 
-/* Existing nodes section */
 .existing-nodes-section {
   margin-bottom: 24px;
   padding: 16px;
-  background: var(--bg-tertiary);
+  background: var(--surface-glass-soft);
   border: 1px solid var(--border-color);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
 }
 
 .existing-node-select {
   width: 100%;
   padding: 10px 12px;
   border: 1px solid var(--border-color);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   font-size: 14px;
-  background: var(--bg-secondary);
+  background: var(--surface-glass-soft);
   color: var(--text-primary);
 }
 
@@ -1315,11 +1351,9 @@
   margin-top: 0;
   margin-bottom: 16px;
   width: 100%;
-  /* Ensure advanced options are visible */
   position: relative;
   z-index: 0;
   overflow: visible;
-  /* Ensure it's always visible in the viewport */
   scroll-margin-top: 20px;
 }
 
@@ -1329,9 +1363,9 @@
   justify-content: space-between;
   width: 100%;
   padding: 12px 16px;
-  background: var(--bg-tertiary);
+  background: var(--surface-glass-soft);
   border: 1px solid var(--border-color);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   color: var(--text-primary);
   font-size: 14px;
   font-weight: 500;
@@ -1342,7 +1376,7 @@
 }
 
 .advanced-options-toggle:hover:not(:disabled) {
-  background: var(--bg-secondary);
+  background: var(--button-glass);
   border-color: var(--border-hover);
 }
 
@@ -1362,7 +1396,6 @@
   padding-bottom: 8px;
   border-top: 1px solid var(--border-color);
   animation: slideDown 0.2s ease-out;
-  /* Ensure content is visible and scrollable */
   position: relative;
   z-index: 0;
   overflow: visible;
@@ -1385,7 +1418,6 @@
   display: none;
 }
 
-/* Loading spinner */
 .loading-spinner {
   text-align: center;
   padding: 60px 20px;
@@ -1405,18 +1437,12 @@
 .loading-spinner .spinner {
   width: 48px;
   height: 48px;
-  border: 4px solid var(--bg-tertiary);
+  border: 4px solid var(--border-color);
   border-top-color: var(--accent-primary);
   border-radius: 50%;
   animation: spin 1s linear infinite;
   margin: 0 auto 20px;
   flex-shrink: 0;
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
 }
 
 .loading-spinner p {
@@ -1447,9 +1473,9 @@
   width: 100%;
   padding: 14px 16px 14px 44px;
   border: 1px solid var(--border-color);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   font-size: 15px;
-  background: var(--bg-secondary);
+  background: var(--surface-glass-soft);
   color: var(--text-primary);
   transition: all 0.2s;
   box-sizing: border-box;
@@ -1462,7 +1488,7 @@
 .app-search-input:focus {
   outline: none;
   border-color: var(--accent-primary);
-  background: var(--bg-tertiary);
+  background: var(--surface-glass);
   box-shadow: 0 0 0 4px var(--accent-light);
 }
 
@@ -1516,20 +1542,23 @@
 }
 
 .onboarding-app-card {
-  background: var(--bg-secondary);
+  background: var(--gradient-surface), var(--surface-glass);
   border: 1px solid var(--border-color);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   padding: 20px;
   display: flex;
   flex-direction: column;
   gap: 12px;
-  transition: all 0.2s;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
 }
 
 .onboarding-app-card:hover {
-  background: var(--bg-tertiary);
-  border-color: var(--border-hover);
+  background: var(--gradient-surface), rgba(16, 21, 18, 0.72);
+  border-color: var(--accent-dim);
   transform: translateY(-2px);
+  box-shadow: var(--shadow-glow);
 }
 
 .app-card-header {
@@ -1541,8 +1570,8 @@
 .app-icon-placeholder {
   width: 48px;
   height: 48px;
-  border-radius: 8px;
-  background: var(--bg-tertiary);
+  border-radius: var(--radius-md);
+  background: var(--surface-glass-soft);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1586,10 +1615,10 @@
 .app-install-button {
   width: 100%;
   padding: 10px 16px;
-  background: var(--accent-primary);
-  color: #09090b;
-  border: none;
-  border-radius: 8px;
+  background: var(--button-glass);
+  color: var(--accent-primary);
+  border: 1px solid rgba(165, 255, 17, 0.2);
+  border-radius: var(--radius-md);
   font-size: 14px;
   font-weight: 500;
   cursor: pointer;
@@ -1599,10 +1628,13 @@
   gap: 8px;
   transition: all 0.2s;
   margin-top: auto;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
 }
 
 .app-install-button:hover:not(:disabled) {
-  background: var(--accent-hover);
+  background: var(--button-glass-hover);
+  border-color: rgba(165, 255, 17, 0.28);
   transform: translateY(-1px);
 }
 

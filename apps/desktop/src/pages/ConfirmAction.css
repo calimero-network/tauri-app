@@ -35,11 +35,13 @@
 }
 
 .confirm-action-content {
-  background: var(--bg-secondary);
+  background: var(--surface-glass);
   border: 1px solid var(--border-color);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   padding: 32px;
   box-shadow: var(--shadow-md);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
 }
 
 .confirm-action-content h1 {
@@ -81,12 +83,14 @@
 }
 
 .button-secondary {
-  background: var(--bg-tertiary);
+  background: var(--button-glass);
   color: var(--text-primary);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
 }
 
 .button-secondary:hover {
-  background: var(--bg-secondary);
+  background: var(--button-glass-hover);
   border-color: var(--border-hover);
 }
 

@@ -21,10 +21,19 @@
 }
 
 .nodes-card {
-  background: var(--bg-secondary);
+  background: var(--gradient-surface), var(--surface-glass);
   border: 1px solid var(--border-color);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   padding: 24px;
+  box-shadow: var(--shadow-sm);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.nodes-card:hover {
+  border-color: var(--border-hover);
+  box-shadow: var(--shadow-md);
 }
 
 .nodes-card h2 {
@@ -50,12 +59,12 @@
   width: 100%;
   padding: 10px 12px;
   border: 1px solid var(--border-color);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   font-size: 14px;
-  background: var(--bg-primary);
+  background: var(--surface-glass-soft);
   color: var(--text-primary);
   box-sizing: border-box;
-  transition: all 0.15s;
+  transition: all 0.2s;
 }
 
 .nodes-field input:focus,
@@ -73,12 +82,16 @@
 
 .button {
   padding: 10px 20px;
-  border: none;
-  border-radius: 6px;
+  border: 1px solid rgba(165, 255, 17, 0.18);
+  border-radius: var(--radius-md);
   font-size: 14px;
   font-weight: 500;
   cursor: pointer;
-  transition: all 0.15s;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  background: var(--button-glass);
+  color: var(--accent-primary);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
 }
 
 .button:disabled {
@@ -106,7 +119,12 @@
   align-items: center;
   justify-content: space-between;
   padding: 12px;
-  background: var(--bg-tertiary);
-  border-radius: 6px;
+  background: var(--surface-glass-soft);
+  border-radius: var(--radius-md);
   border: 1px solid var(--border-color);
+  transition: all 0.2s;
+}
+
+.node-item:hover {
+  border-color: var(--border-hover);
 }

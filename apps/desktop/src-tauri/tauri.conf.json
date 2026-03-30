@@ -1,7 +1,7 @@
 {
   "build": {
-    "beforeDevCommand": "pnpm dev",
-    "beforeBuildCommand": "pnpm build",
+    "beforeDevCommand": "pnpm merod:prepare && pnpm dev",
+    "beforeBuildCommand": "pnpm merod:prepare && pnpm build",
     "devPath": "http://localhost:1420",
     "distDir": "../dist",
     "withGlobalTauri": false
@@ -77,7 +77,7 @@
         "icons/icon.png"
       ],
       "resources": [
-        "merod/merod"
+        "merod"
       ],
       "macOS": {
         "entitlements": "entitlements.plist",

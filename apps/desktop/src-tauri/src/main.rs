@@ -561,17 +561,24 @@ type MerodState = Arc<Mutex<Vec<MerodProcess>>>;
 
 /// Get the path to the bundled merod binary
 fn get_merod_binary_path(app_handle: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
-    // Access the bundled resource
-    let resource_path = app_handle
-        .path_resolver()
-        .resolve_resource("merod/merod")
-        .ok_or("Failed to resolve merod resource")?;
-    
-    if !resource_path.exists() {
-        return Err(format!("Merod resource not found at {:?}", resource_path));
+    let resource_candidates = if cfg!(target_os = "windows") {
+        vec!["merod/merod.exe", "merod/merod"]
+    } else {
+        vec!["merod/merod", "merod/merod.exe"]
+    };
+
+    for candidate in &resource_candidates {
+        if let Some(resource_path) = app_handle.path_resolver().resolve_resource(candidate) {
+            if resource_path.exists() {
+                return Ok(resource_path);
+            }
+        }
     }
-    
-    Ok(resource_path)
+
+    Err(format!(
+        "Merod resource not found. Checked: {:?}",
+        resource_candidates
+    ))
 }
 
 /// Get the app data directory for storing merod data

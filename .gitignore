@@ -37,6 +37,8 @@ target/
 # Tauri
 **/src-tauri/target
 **/src-tauri/gen
+**/src-tauri/merod/merod
+**/src-tauri/merod/merod.exe
 
 # Environment variables
 .env

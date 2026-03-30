@@ -247,20 +247,25 @@ async function findBinary(startDir) {
 }
 
 async function extractBinary(assetPath, assetName) {
+  const lower = assetName.toLowerCase();
+  if (
+    !lower.endsWith(".tar.gz") &&
+    !lower.endsWith(".tgz") &&
+    !lower.endsWith(".zip")
+  ) {
+    return assetPath;
+  }
+
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "merod-extract-"));
 
   try {
-    const lower = assetName.toLowerCase();
-
     if (lower.endsWith(".tar.gz") || lower.endsWith(".tgz")) {
       await tar.x({
         file: assetPath,
         cwd: tempDir,
       });
-    } else if (lower.endsWith(".zip")) {
-      shellExtractZip(assetPath, tempDir);
     } else {
-      return assetPath;
+      shellExtractZip(assetPath, tempDir);
     }
 
     const binaryPath = await findBinary(tempDir);
@@ -276,6 +281,16 @@ async function extractBinary(assetPath, assetName) {
 }
 
 async function main() {
+  await fs.mkdir(merodDir, { recursive: true });
+
+  if (
+    process.env.MEROD_SKIP_IF_EXISTS === "1" &&
+    existsSync(merodBinaryPath)
+  ) {
+    console.log(`[merod] ready: ${merodBinaryPath} (existing binary in CI)`);
+    return;
+  }
+
   const config = await readConfig();
   const target = resolveTarget();
   const { release, source } = await resolveRelease(config);
@@ -285,7 +300,6 @@ async function main() {
   console.log(`[merod] release: ${release.tag_name} (${source})`);
   console.log(`[merod] asset: ${asset.name}`);
 
-  await fs.mkdir(merodDir, { recursive: true });
   await fs.rm(merodBinaryPath, { force: true });
   if (process.platform === "win32") {
     await fs.rm(path.join(merodDir, "merod"), { force: true });

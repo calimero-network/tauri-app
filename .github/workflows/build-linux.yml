@@ -181,6 +181,8 @@ jobs:
       - name: Build Tauri app for Linux
         working-directory: apps/desktop
         env:
+          # beforeBuildCommand runs merod:prepare again; reuse binary from "Prepare merod binary" (no GITHUB_TOKEN here).
+          MEROD_SKIP_IF_EXISTS: "1"
           TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
           TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
         run: pnpm tauri build

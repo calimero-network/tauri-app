@@ -7,12 +7,14 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
+    "merod:prepare": "node scripts/prepare-merod.mjs",
     "tauri": "tauri",
-    "tauri:dev": "tauri dev",
-    "tauri:dev:devtools": "TAURI_OPEN_DEVTOOLS=true tauri dev",
-    "tauri:dev:no-devtools": "TAURI_OPEN_DEVTOOLS=false tauri dev",
-    "tauri:build": "tauri build",
-    "tauri:build:app": "tauri build --bundles app",
+    "tauri:dev": "pnpm merod:prepare && tauri dev",
+    "tauri:dev:devtools": "pnpm merod:prepare && TAURI_OPEN_DEVTOOLS=true tauri dev",
+    "tauri:dev:no-devtools": "pnpm merod:prepare && TAURI_OPEN_DEVTOOLS=false tauri dev",
+    "tauri:build": "pnpm merod:prepare && tauri build --bundles app",
+    "tauri:build:app": "pnpm merod:prepare && tauri build --bundles app",
+    "tauri:build:full": "pnpm merod:prepare && tauri build",
     "icon": "node scripts/svg-to-icon.js && pnpm tauri icon src-tauri/icons/icon-1024.png",
     "clean": "rm -rf dist src-tauri/target"
   },
@@ -33,6 +35,7 @@
     "@types/react-dom": "^19.2.2",
     "@vitejs/plugin-react": "^3.1.0",
     "sharp": "^0.34.5",
+    "tar": "^7.5.13",
     "typescript": "^5.8.3",
     "vite": "^4.1.0"
   }

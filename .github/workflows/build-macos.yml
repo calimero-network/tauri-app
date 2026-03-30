@@ -139,6 +139,12 @@ jobs:
         working-directory: apps/desktop
         run: pnpm tauri icon src-tauri/icons/icon.png
 
+      - name: Prepare merod binary
+        working-directory: apps/desktop
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: pnpm merod:prepare
+
       - name: Update version in tauri.conf.json
         if: steps.build-mode.outputs.mode == 'release'
         run: |
@@ -241,6 +247,7 @@ jobs:
         if: steps.build-mode.outputs.mode == 'release'
         working-directory: apps/desktop
         env:
+          MEROD_SKIP_IF_EXISTS: "1"
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}

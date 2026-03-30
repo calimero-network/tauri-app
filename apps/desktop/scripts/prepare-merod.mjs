@@ -28,10 +28,27 @@ function githubHeaders() {
   return headers;
 }
 
+async function readErrorBody(response) {
+  try {
+    const text = await response.text();
+    const trimmed = text.trim();
+    if (!trimmed) {
+      return "";
+    }
+    return trimmed.length > 800 ? `${trimmed.slice(0, 800)}…` : trimmed;
+  } catch {
+    return "";
+  }
+}
+
 async function fetchJson(url) {
   const response = await fetch(url, { headers: githubHeaders() });
   if (!response.ok) {
-    throw new Error(`GitHub API request failed (${response.status}) for ${url}`);
+    const body = await readErrorBody(response);
+    const detail = body ? ` — ${body}` : "";
+    throw new Error(
+      `GitHub API request failed (${response.status}) for ${url}${detail}`,
+    );
   }
 
   return response.json();
@@ -195,10 +212,33 @@ function pickAsset(release, target) {
   );
 }
 
+/**
+ * When the pinned release omits a platform (e.g. no Windows zip yet), find a newer
+ * release that ships merod for this target. Newest-first.
+ */
+async function findReleaseWithMerodForTarget(target) {
+  const releases = await fetchJson(
+    `https://api.github.com/repos/${CORE_REPO}/releases?per_page=40`,
+  );
+
+  for (const candidate of releases) {
+    try {
+      const asset = pickAsset(candidate, target);
+      return { release: candidate, asset };
+    } catch {
+      continue;
+    }
+  }
+
+  return null;
+}
+
 async function downloadToFile(url, destination) {
   const response = await fetch(url, { headers: githubHeaders() });
   if (!response.ok || !response.body) {
-    throw new Error(`Failed to download ${url} (${response.status})`);
+    const body = await readErrorBody(response);
+    const detail = body ? ` — ${body}` : "";
+    throw new Error(`Failed to download ${url} (${response.status})${detail}`);
   }
 
   await pipeline(Readable.fromWeb(response.body), createWriteStream(destination));
@@ -227,6 +267,10 @@ async function findBinary(startDir) {
   const entries = await fs.readdir(startDir, { withFileTypes: true });
 
   for (const entry of entries) {
+    if (entry.isSymbolicLink()) {
+      continue;
+    }
+
     const fullPath = path.join(startDir, entry.name);
 
     if (entry.isDirectory()) {
@@ -293,8 +337,33 @@ async function main() {
 
   const config = await readConfig();
   const target = resolveTarget();
-  const { release, source } = await resolveRelease(config);
-  const asset = pickAsset(release, target);
+  let { release, source } = await resolveRelease(config);
+  let asset;
+
+  try {
+    asset = pickAsset(release, target);
+  } catch (primaryError) {
+    const allowFallback = process.env.MEROD_ASSET_FALLBACK === "1";
+    const isMissingAsset =
+      primaryError instanceof Error &&
+      primaryError.message.includes("No merod asset found");
+
+    if (!allowFallback || !isMissingAsset) {
+      throw primaryError;
+    }
+
+    const found = await findReleaseWithMerodForTarget(target);
+    if (!found) {
+      throw primaryError;
+    }
+
+    console.warn(
+      `[merod] ${release.tag_name} has no ${target.label} asset; using fallback ${found.release.tag_name}`,
+    );
+    release = found.release;
+    source = `${source} → fallback ${found.release.tag_name}`;
+    asset = found.asset;
+  }
 
   console.log(`[merod] target: ${target.label}`);
   console.log(`[merod] release: ${release.tag_name} (${source})`);

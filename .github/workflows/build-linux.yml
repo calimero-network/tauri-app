@@ -125,6 +125,8 @@ jobs:
 
       - name: Prepare merod binary
         working-directory: apps/desktop
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: pnpm merod:prepare
 
       - name: Update version in tauri.conf.json

@@ -15,6 +15,26 @@ const merodDir = path.join(desktopDir, "src-tauri", "merod");
 const merodBinaryName = process.platform === "win32" ? "merod.exe" : "merod";
 const merodBinaryPath = path.join(merodDir, merodBinaryName);
 
+function envTruthy(name) {
+  const v = String(process.env[name] ?? "").trim().toLowerCase();
+  return v === "1" || v === "true" || v === "yes" || v === "on";
+}
+
+function shouldUseExistingMerodBinary() {
+  if (!existsSync(merodBinaryPath)) {
+    return false;
+  }
+  if (envTruthy("MEROD_SKIP_IF_EXISTS")) {
+    return true;
+  }
+  // calimero-network/core does not ship Windows merod archives; CI builds from source first.
+  // If MEROD_SKIP_IF_EXISTS is missing (org env, old workflow), still skip when the binary is already there.
+  if (process.env.CI === "true" && process.platform === "win32") {
+    return true;
+  }
+  return false;
+}
+
 function githubHeaders() {
   const headers = {
     Accept: "application/vnd.github+json",
@@ -327,11 +347,10 @@ async function extractBinary(assetPath, assetName) {
 async function main() {
   await fs.mkdir(merodDir, { recursive: true });
 
-  if (
-    process.env.MEROD_SKIP_IF_EXISTS === "1" &&
-    existsSync(merodBinaryPath)
-  ) {
-    console.log(`[merod] ready: ${merodBinaryPath} (existing binary in CI)`);
+  if (shouldUseExistingMerodBinary()) {
+    console.log(
+      `[merod] ready: ${merodBinaryPath} (existing binary; skip GitHub download)`,
+    );
     return;
   }
 
@@ -343,7 +362,7 @@ async function main() {
   try {
     asset = pickAsset(release, target);
   } catch (primaryError) {
-    const allowFallback = process.env.MEROD_ASSET_FALLBACK === "1";
+    const allowFallback = envTruthy("MEROD_ASSET_FALLBACK");
     const isMissingAsset =
       primaryError instanceof Error &&
       primaryError.message.includes("No merod asset found");

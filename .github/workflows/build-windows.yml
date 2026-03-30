@@ -126,12 +126,31 @@ jobs:
         working-directory: apps/desktop
         run: pnpm tauri icon src-tauri/icons/icon.png
 
+      # calimero-network/core does not publish merod_* Windows archives on GitHub Releases (only macOS/Linux).
+      # MEROD_ASSET_FALLBACK cannot fix that. Build merod from the same git tag as merod-config.json.
+      - name: Build merod from source (Windows)
+        shell: bash
+        env:
+          CARGO_INCREMENTAL: "0"
+        run: |
+          set -euo pipefail
+          VERSION="$(node -p "require('./merod-config.json').version")"
+          DEST="${GITHUB_WORKSPACE}/apps/desktop/src-tauri/merod/merod.exe"
+          mkdir -p "$(dirname "$DEST")"
+          CORE_TMP="${RUNNER_TEMP}/calimero-core-${VERSION}"
+          rm -rf "$CORE_TMP"
+          git clone --depth 1 --branch "${VERSION}" "https://github.com/calimero-network/core.git" "$CORE_TMP"
+          cd "$CORE_TMP"
+          cargo build --release -p merod
+          cp "target/release/merod.exe" "$DEST"
+          ls -la "$DEST"
+
       - name: Prepare merod binary
         working-directory: apps/desktop
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Pinned core release may omit Windows zips; use newest release that ships merod for this OS.
-          MEROD_ASSET_FALLBACK: "1"
+          # Binary already built from source above; skip GitHub download (no Windows release asset exists).
+          MEROD_SKIP_IF_EXISTS: "1"
         run: pnpm merod:prepare
 
       - name: Update version in tauri.conf.json
@@ -169,6 +188,8 @@ jobs:
       - name: Build Tauri app for Windows
         working-directory: apps/desktop
         env:
+          # beforeBuildCommand runs merod:prepare again; keep using the binary built above (no Windows GitHub asset).
+          MEROD_SKIP_IF_EXISTS: "1"
           TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
           TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
         run: pnpm tauri build

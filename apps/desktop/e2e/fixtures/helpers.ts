@@ -1,0 +1,234 @@
+import type { Page } from "@playwright/test";
+import {
+  STORAGE_KEYS,
+  AUTHENTICATED_SETTINGS,
+  DEVELOPER_SETTINGS,
+  DEFAULT_SETTINGS,
+  MOCK_ACCESS_TOKEN,
+  MOCK_REFRESH_TOKEN,
+  MOCK_TOKEN_EXPIRES_AT,
+  MOCK_HEALTH_OK,
+  MOCK_PROVIDERS_RESPONSE,
+  MOCK_INSTALLED_APPS,
+  MOCK_CONTEXTS,
+  MOCK_REGISTRY_APPS,
+  API_ROUTES,
+  type AppSettings,
+} from "./mock-data";
+
+// ─── localStorage seeding ────────────────────────────────────────────────────
+
+export async function seedSettings(
+  page: Page,
+  settings: AppSettings,
+): Promise<void> {
+  await page.evaluate(
+    ([key, value]) => {
+      localStorage.setItem(key, JSON.stringify(value));
+    },
+    [STORAGE_KEYS.settings, settings] as const,
+  );
+}
+
+export async function seedAuthTokens(page: Page): Promise<void> {
+  await page.evaluate(
+    ([accessKey, refreshKey, expiresKey, accessVal, refreshVal, expiresVal]) => {
+      localStorage.setItem(accessKey, accessVal);
+      localStorage.setItem(refreshKey, refreshVal);
+      localStorage.setItem(expiresKey, expiresVal.toString());
+    },
+    [
+      STORAGE_KEYS.accessToken,
+      STORAGE_KEYS.refreshToken,
+      STORAGE_KEYS.tokenExpiresAt,
+      MOCK_ACCESS_TOKEN,
+      MOCK_REFRESH_TOKEN,
+      MOCK_TOKEN_EXPIRES_AT,
+    ] as const,
+  );
+}
+
+export async function clearAllStorage(page: Page): Promise<void> {
+  await page.evaluate(() => localStorage.clear());
+}
+
+/**
+ * Seeds localStorage so the app skips onboarding and renders the
+ * authenticated home page. Call this, then page.goto("/") or reload.
+ */
+export async function seedAuthenticatedState(page: Page): Promise<void> {
+  await seedSettings(page, AUTHENTICATED_SETTINGS);
+  await seedAuthTokens(page);
+}
+
+/**
+ * Seeds localStorage for authenticated + developer mode enabled.
+ */
+export async function seedDeveloperState(page: Page): Promise<void> {
+  await seedSettings(page, DEVELOPER_SETTINGS);
+  await seedAuthTokens(page);
+}
+
+// ─── API mocking helpers ─────────────────────────────────────────────────────
+
+/**
+ * Intercept common backend routes so the app doesn't hang on network calls.
+ * Call this before page.goto("/") for any post-onboarding test.
+ */
+export async function mockCoreAPIs(page: Page): Promise<void> {
+  await page.route(API_ROUTES.health, (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(MOCK_HEALTH_OK) }),
+  );
+
+  await page.route(API_ROUTES.providers, (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(MOCK_PROVIDERS_RESPONSE) }),
+  );
+
+  await page.route(API_ROUTES.listApplications, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ data: MOCK_INSTALLED_APPS }),
+    }),
+  );
+
+  await page.route(API_ROUTES.listContexts, (route) => {
+    if (route.request().method() === "GET") {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ data: MOCK_CONTEXTS }),
+      });
+    }
+    return route.continue();
+  });
+}
+
+/**
+ * Mock registry endpoints so the Marketplace page can render apps.
+ */
+export async function mockRegistryAPIs(page: Page): Promise<void> {
+  await page.route(API_ROUTES.registryBundles, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(MOCK_REGISTRY_APPS),
+    }),
+  );
+}
+
+/**
+ * Mock install/uninstall endpoints to return success.
+ */
+export async function mockInstallAPIs(page: Page): Promise<void> {
+  await page.route(API_ROUTES.installApplication, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ data: { success: true } }),
+    }),
+  );
+
+  await page.route(API_ROUTES.uninstallApplication, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ data: { success: true } }),
+    }),
+  );
+
+  await page.route(API_ROUTES.registryBundleManifest, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        name: "only-peers-chat",
+        version: "0.3.0",
+        metadata: { name: "Only Peers Chat" },
+        source: {
+          url: "https://apps.calimero.network/bundles/app-1/0.3.0.wasm",
+          hash: "abc123",
+        },
+      }),
+    }),
+  );
+
+  await page.route(API_ROUTES.registryDownload, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ success: true }),
+    }),
+  );
+}
+
+/**
+ * Mock context create / delete endpoints.
+ */
+export async function mockContextAPIs(page: Page): Promise<void> {
+  await page.route(API_ROUTES.createContext, (route) => {
+    if (route.request().method() === "POST") {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          data: {
+            id: "ctx-new-" + Date.now(),
+            name: "New Context",
+            application_id: "installed-app-1",
+            protocol: "near",
+            created_at: new Date().toISOString(),
+          },
+        }),
+      });
+    }
+    return route.continue();
+  });
+
+  await page.route(API_ROUTES.deleteContext, (route) => {
+    if (route.request().method() === "DELETE") {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ data: { success: true } }),
+      });
+    }
+    return route.continue();
+  });
+}
+
+// ─── Navigation helpers ──────────────────────────────────────────────────────
+
+export async function navigateVia(
+  page: Page,
+  label: "Home" | "Nodes" | "Contexts" | "Applications" | "Marketplace",
+): Promise<void> {
+  await page.locator("aside.sidebar").getByTitle(label).click();
+}
+
+// ─── Composite setup helpers ─────────────────────────────────────────────────
+
+/**
+ * Full setup for an authenticated user session:
+ *   1. mock APIs
+ *   2. navigate to the app (establishes origin for localStorage)
+ *   3. seed authenticated state
+ *   4. reload so the app picks up seeded state
+ */
+export async function setupAuthenticatedPage(page: Page): Promise<void> {
+  await mockCoreAPIs(page);
+  await page.goto("/");
+  await seedAuthenticatedState(page);
+  await page.reload();
+}
+
+/**
+ * Full setup for developer mode (authenticated + developer features visible).
+ */
+export async function setupDeveloperPage(page: Page): Promise<void> {
+  await mockCoreAPIs(page);
+  await mockContextAPIs(page);
+  await page.goto("/");
+  await seedDeveloperState(page);
+  await page.reload();
+}

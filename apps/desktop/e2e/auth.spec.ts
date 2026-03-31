@@ -34,10 +34,10 @@ test.describe("Login screen display", () => {
         body: JSON.stringify({ data: MOCK_PROVIDERS }),
       })
     );
-    await page.route(API_ROUTES.installedApps, (route) =>
+    await page.route(API_ROUTES.listApplications, (route) =>
       route.fulfill({ status: 200, body: JSON.stringify({ data: [] }) })
     );
-    await page.route(API_ROUTES.contexts, (route) =>
+    await page.route(API_ROUTES.listContexts, (route) =>
       route.fulfill({ status: 200, body: JSON.stringify({ data: [] }) })
     );
 
@@ -67,10 +67,10 @@ test.describe("Login screen display", () => {
         body: JSON.stringify({ data: MOCK_PROVIDERS }),
       })
     );
-    await page.route(API_ROUTES.installedApps, (route) =>
+    await page.route(API_ROUTES.listApplications, (route) =>
       route.fulfill({ status: 200, body: JSON.stringify({ data: [] }) })
     );
-    await page.route(API_ROUTES.contexts, (route) =>
+    await page.route(API_ROUTES.listContexts, (route) =>
       route.fulfill({ status: 200, body: JSON.stringify({ data: [] }) })
     );
 
@@ -149,10 +149,10 @@ test.describe("401 redirect to login", () => {
         body: JSON.stringify({ data: MOCK_PROVIDERS }),
       })
     );
-    await page.route(API_ROUTES.installedApps, (route) =>
+    await page.route(API_ROUTES.listApplications, (route) =>
       route.fulfill({ status: 200, body: JSON.stringify({ data: [] }) })
     );
-    await page.route(API_ROUTES.contexts, (route) =>
+    await page.route(API_ROUTES.listContexts, (route) =>
       route.fulfill({ status: 200, body: JSON.stringify({ data: [] }) })
     );
 
@@ -172,7 +172,7 @@ test.describe("401 redirect to login", () => {
         MOCK_ACCESS_TOKEN,
         STORAGE_KEYS.refreshToken,
         MOCK_REFRESH_TOKEN,
-        STORAGE_KEYS.tokenExpires,
+        STORAGE_KEYS.tokenExpiresAt,
       ] as const
     );
     await page.goto("/");
@@ -198,10 +198,10 @@ test.describe("Node disconnected state", () => {
         }),
       })
     );
-    await page.route(API_ROUTES.installedApps, (route) =>
+    await page.route(API_ROUTES.listApplications, (route) =>
       route.fulfill({ status: 200, body: JSON.stringify({ data: [] }) })
     );
-    await page.route(API_ROUTES.contexts, (route) =>
+    await page.route(API_ROUTES.listContexts, (route) =>
       route.fulfill({ status: 200, body: JSON.stringify({ data: [] }) })
     );
 
@@ -221,7 +221,7 @@ test.describe("Node disconnected state", () => {
         MOCK_ACCESS_TOKEN,
         STORAGE_KEYS.refreshToken,
         MOCK_REFRESH_TOKEN,
-        STORAGE_KEYS.tokenExpires,
+        STORAGE_KEYS.tokenExpiresAt,
       ] as const
     );
     await page.goto("/");

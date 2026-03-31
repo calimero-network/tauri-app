@@ -4,10 +4,13 @@ import {
   AUTHENTICATED_SETTINGS,
   DEVELOPER_SETTINGS,
   DEFAULT_SETTINGS,
+  EMBEDDED_NODE_SETTINGS,
+  DISCONNECTED_SETTINGS,
   MOCK_ACCESS_TOKEN,
   MOCK_REFRESH_TOKEN,
   MOCK_TOKEN_EXPIRES_AT,
   MOCK_HEALTH_OK,
+  MOCK_HEALTH_UNREACHABLE,
   MOCK_PROVIDERS_RESPONSE,
   MOCK_INSTALLED_APPS,
   MOCK_CONTEXTS,
@@ -77,6 +80,10 @@ export async function seedDeveloperState(page: Page): Promise<void> {
  */
 export async function mockCoreAPIs(page: Page): Promise<void> {
   await page.route(API_ROUTES.health, (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(MOCK_HEALTH_OK) }),
+  );
+
+  await page.route(API_ROUTES.adminHealth, (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(MOCK_HEALTH_OK) }),
   );
 
@@ -231,4 +238,119 @@ export async function setupDeveloperPage(page: Page): Promise<void> {
   await page.goto("/");
   await seedDeveloperState(page);
   await page.reload();
+}
+
+// ─── Node lifecycle helpers ─────────────────────────────────────────────────
+
+/**
+ * Mock the health endpoint to return a healthy response.
+ */
+export async function mockHealthy(page: Page): Promise<void> {
+  await page.route(API_ROUTES.health, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(MOCK_HEALTH_OK),
+    }),
+  );
+
+  await page.route(API_ROUTES.adminHealth, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(MOCK_HEALTH_OK),
+    }),
+  );
+}
+
+/**
+ * Mock the health endpoint to simulate an unreachable / disconnected node.
+ */
+export async function mockUnhealthy(page: Page): Promise<void> {
+  await page.route(API_ROUTES.health, (route) =>
+    route.fulfill({
+      status: 503,
+      contentType: "application/json",
+      body: JSON.stringify(MOCK_HEALTH_UNREACHABLE),
+    }),
+  );
+
+  await page.route(API_ROUTES.adminHealth, (route) =>
+    route.fulfill({
+      status: 503,
+      contentType: "application/json",
+      body: JSON.stringify(MOCK_HEALTH_UNREACHABLE),
+    }),
+  );
+}
+
+/**
+ * Setup for an authenticated page where the node is healthy / connected.
+ */
+export async function setupConnectedPage(page: Page): Promise<void> {
+  await mockCoreAPIs(page);
+  await page.goto("/");
+  await seedAuthenticatedState(page);
+  await page.reload();
+}
+
+/**
+ * Setup for an authenticated page where the node is unreachable / disconnected.
+ * The health endpoint returns 503, all other core routes are still mocked so the
+ * app doesn't hang on unrelated requests.
+ */
+export async function setupDisconnectedPage(page: Page): Promise<void> {
+  await mockUnhealthy(page);
+
+  await page.route(API_ROUTES.providers, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(MOCK_PROVIDERS_RESPONSE),
+    }),
+  );
+
+  await page.route(API_ROUTES.listApplications, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ data: [] }),
+    }),
+  );
+
+  await page.route(API_ROUTES.listContexts, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ data: [] }),
+    }),
+  );
+
+  await page.goto("/");
+  await seedSettings(page, DISCONNECTED_SETTINGS);
+  await page.reload();
+}
+
+/**
+ * Setup for an authenticated page with embedded-node settings seeded.
+ */
+export async function setupEmbeddedNodePage(page: Page): Promise<void> {
+  await mockCoreAPIs(page);
+  await page.goto("/");
+  await seedSettings(page, EMBEDDED_NODE_SETTINGS);
+  await seedAuthTokens(page);
+  await page.reload();
+}
+
+/**
+ * Wait until the node status indicator shows the expected connection state.
+ */
+export async function waitForNodeStatus(
+  page: Page,
+  state: "connected" | "disconnected",
+  timeout = 10_000,
+): Promise<void> {
+  await page
+    .locator(`.node-status-indicator.${state}`)
+    .waitFor({ state: "visible", timeout });
 }

@@ -187,10 +187,25 @@ export const MOCK_HEALTH_UNREACHABLE = {
   error: { message: "Connection refused" },
 };
 
+// ─── Embedded-node settings presets ─────────────────────────────────────────
+
+export const EMBEDDED_NODE_SETTINGS: AppSettings = {
+  ...AUTHENTICATED_SETTINGS,
+  useEmbeddedNode: true,
+  embeddedNodeName: "test-node",
+  embeddedNodePort: 2528,
+  embeddedNodeDataDir: "~/.calimero",
+};
+
+export const DISCONNECTED_SETTINGS: AppSettings = {
+  ...AUTHENTICATED_SETTINGS,
+};
+
 // ─── API route patterns (for page.route()) ───────────────────────────────────
 
 export const API_ROUTES = {
   health: "**/auth/health",
+  adminHealth: "**/admin-api/health",
   providers: "**/auth/providers",
   requestToken: "**/auth/request-token",
   refreshToken: "**/auth/refresh-token",

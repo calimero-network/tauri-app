@@ -524,8 +524,8 @@ async fn create_app_window(
         }
     };
     
+    #[cfg(feature = "devtools")]
     if should_open_devtools {
-        // Wait a bit for window to be ready, then open devtools
         tokio::time::sleep(tokio::time::Duration::from_millis(800)).await;
         window.open_devtools();
     }
@@ -534,15 +534,18 @@ async fn create_app_window(
 }
 
 #[tauri::command]
-async fn open_devtools(window_label: String, app_handle: tauri::AppHandle) {
-    // Try multiple times with delays in case window isn't ready yet
-    for _i in 0..5 {
-        if let Some(window) = app_handle.get_window(&window_label) {
-            window.open_devtools();
-            return;
+async fn open_devtools(_window_label: String, _app_handle: tauri::AppHandle) {
+    #[cfg(feature = "devtools")]
+    {
+        // Try multiple times with delays in case window isn't ready yet
+        for _i in 0..5 {
+            if let Some(window) = _app_handle.get_window(&_window_label) {
+                window.open_devtools();
+                return;
+            }
+            // Wait a bit before retrying (use async sleep to avoid blocking runtime)
+            tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
         }
-        // Wait a bit before retrying (use async sleep to avoid blocking runtime)
-        tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
     }
 }
 
@@ -1828,6 +1831,7 @@ fn main() {
                 }
             };
             
+            #[cfg(feature = "devtools")]
             if should_open_main_devtools {
                 use tauri::Manager;
                 if let Some(window) = app.get_window("main") {

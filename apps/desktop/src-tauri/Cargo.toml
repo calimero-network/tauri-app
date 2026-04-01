@@ -11,7 +11,7 @@ edition = "2021"
 tauri-build = { version = "1.5", features = [] }
 
 [dependencies]
-tauri = { version = "1.5", features = [ "system-tray", "updater", "process-relaunch", "shell-open", "http-all", "window-all", "devtools", "dialog-all", "icon-png"] }
+tauri = { version = "1.5", features = [ "system-tray", "updater", "process-relaunch", "shell-open", "http-all", "window-all", "dialog-all", "icon-png"] }
 tauri-plugin-autostart = { git = "https://github.com/tauri-apps/plugins-workspace", branch = "v1", optional = true }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -24,8 +24,15 @@ dirs = "5.0"
 toml = "0.8"
 regex = "1.10"
 
+[profile.release]
+strip = "symbols"
+lto = true
+opt-level = "s"
+codegen-units = 1
+
 [features]
 default = ["custom-protocol", "autostart"]
 custom-protocol = ["tauri/custom-protocol"]
 autostart = ["dep:tauri-plugin-autostart"]
+devtools = ["tauri/devtools"]
 

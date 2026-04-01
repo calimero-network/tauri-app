@@ -200,8 +200,8 @@ jobs:
             exit 1
           fi
 
-          [ -n "$DEB_FILE" ] && echo "DEB: $DEB_FILE"
-          [ -n "$RPM_FILE" ] && echo "RPM: $RPM_FILE"
+          [ -n "$DEB_FILE" ] && echo "DEB: $DEB_FILE ($(du -sh "$DEB_FILE" | cut -f1))"
+          [ -n "$RPM_FILE" ] && echo "RPM: $RPM_FILE ($(du -sh "$RPM_FILE" | cut -f1))"
 
           echo "Build validation passed"
 

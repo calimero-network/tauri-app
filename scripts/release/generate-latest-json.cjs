@@ -13,17 +13,17 @@ const fs = require("fs");
 const path = require("path");
 
 // Tauri v1 platform identifiers
+// Note: Linux is excluded — .deb/.rpm don't support Tauri's built-in updater.
+// Linux users update via their package manager.
 const TAURI_PLATFORMS = {
   macos: ["darwin-universal", "darwin-x86_64", "darwin-aarch64"],
   windows: ["windows-x86_64"],
-  linux: ["linux-x86_64"],
 };
 
 // Map our artifact types to Tauri updater expectations
 const UPDATER_ASSET_SUFFIX = {
   macos: "_macos_universal.app.tar.gz",
   windows: "_windows_x64.nsis.zip",
-  linux: "_linux_x64.AppImage.tar.gz",
 };
 
 function parseArgs() {

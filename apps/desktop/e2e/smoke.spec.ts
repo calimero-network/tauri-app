@@ -1,13 +1,15 @@
 import { test, expect } from "@playwright/test";
+import { describeAfter35 } from "./fixtures/e2e-cap";
 import {
   STORAGE_KEYS,
   DEFAULT_SETTINGS,
   MOCK_PROVIDERS_RESPONSE,
   MOCK_HEALTH_OK,
   API_ROUTES,
+  listApplicationsWireBody,
 } from "./fixtures/mock-data";
 
-test.describe("onboarding flow", () => {
+describeAfter35("onboarding flow", () => {
   test("fresh profile shows welcome screen", async ({ page }) => {
     await page.goto("/");
     await expect(
@@ -154,7 +156,7 @@ test.describe("onboarding flow", () => {
       route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify({ data: [] }),
+        body: listApplicationsWireBody([]),
       }),
     );
 

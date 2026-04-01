@@ -1,45 +1,31 @@
 import { test, expect } from "@playwright/test";
-import {
-  MOCK_CONTEXTS,
-  MOCK_INSTALLED_APPS,
-  API_ROUTES,
-} from "./fixtures/mock-data";
+import { MOCK_CONTEXTS, MOCK_INSTALLED_APPS, API_ROUTES } from "./fixtures/mock-data";
 import {
   setupDeveloperPage,
   setupAuthenticatedPage,
   navigateVia,
-  mockCoreAPIs,
-  mockContextAPIs,
-  seedDeveloperState,
 } from "./fixtures/helpers";
 
 // ─── Contexts page – listing ────────────────────────────────────────────────
 
-test.describe.only("Contexts – listing", () => {
+test.describe("Contexts – listing", () => {
   test.beforeEach(async ({ page }) => {
-    await setupDeveloperPage(page);
+    // First-run parity: developer mode on, but no installed apps and no contexts yet.
+    await setupDeveloperPage(page, { installedApps: [], contexts: [] });
     await navigateVia(page, "Contexts");
     await expect(page.getByRole("main").getByRole("heading", { name: "Contexts" })).toBeVisible();
+    await expect(page.getByText("No contexts found.")).toBeVisible({ timeout: 15_000 });
   });
 
   test("renders the Contexts heading", async ({ page }) => {
     await expect(page.getByRole("main").getByRole("heading", { name: "Contexts" })).toBeVisible();
   });
 
-  test("displays contexts fetched from API", async ({ page }) => {
-    for (const ctx of MOCK_CONTEXTS) {
-      const displayName = ctx.name || ctx.id.substring(0, 16) + "...";
-      await expect(
-        page.getByText(displayName),
-      ).toBeVisible();
-    }
-  });
-
-  test("shows context IDs in the table (truncated)", async ({ page }) => {
-    for (const ctx of MOCK_CONTEXTS) {
-      const truncatedId = ctx.id.substring(0, 32);
-      await expect(page.getByText(truncatedId, { exact: false })).toBeVisible();
-    }
+  test("after developer mode: empty table and no Delete actions when API returns no contexts", async ({
+    page,
+  }) => {
+    const deleteButtons = page.getByRole("button", { name: "Delete" });
+    await expect(deleteButtons).toHaveCount(0);
   });
 
   test("refresh button is present and clickable", async ({ page }) => {
@@ -53,38 +39,39 @@ test.describe.only("Contexts – listing", () => {
       page.locator("button", { hasText: "+ Create Context" }),
     ).toBeVisible();
   });
-
-  test("each context row has a Delete button", async ({ page }) => {
-    const deleteButtons = page.getByRole("button", { name: "Delete" });
-    await expect(deleteButtons).toHaveCount(MOCK_CONTEXTS.length);
-  });
 });
 
-// ─── Contexts page – empty state ────────────────────────────────────────────
+// ─── Contexts listing when node has data (separate from fresh empty state) ──
 
-test.describe.only("Contexts – empty state", () => {
-  test("shows empty message when no contexts exist", async ({ page }) => {
-    await mockCoreAPIs(page);
-    await mockContextAPIs(page);
-
-    await page.route(API_ROUTES.listContexts, (route) => {
-      if (route.request().method() === "GET") {
-        return route.fulfill({
-          status: 200,
-          contentType: "application/json",
-          body: JSON.stringify({ data: { contexts: [] } }),
-        });
-      }
-      return route.continue();
+test.describe("Contexts – listing when API returns contexts", () => {
+  test.beforeEach(async ({ page }) => {
+    await setupDeveloperPage(page, {
+      contexts: MOCK_CONTEXTS,
+      installedApps: MOCK_INSTALLED_APPS,
     });
-
-    await page.goto("/");
-    await seedDeveloperState(page);
-    await page.reload();
-
     await navigateVia(page, "Contexts");
     await expect(page.getByRole("main").getByRole("heading", { name: "Contexts" })).toBeVisible();
-    await expect(page.getByText("No contexts found.")).toBeVisible();
+    await expect(page.getByText("Test Context Alpha")).toBeVisible({ timeout: 15_000 });
+  });
+
+  test("displays context names from the API", async ({ page }) => {
+    await expect(page.getByText("Test Context Alpha")).toBeVisible();
+    await expect(page.getByText("Test Context Beta")).toBeVisible();
+  });
+
+  test("displays truncated context IDs in the table", async ({ page }) => {
+    await expect(
+      page.getByText("ctx-001-abcdef1234567890..."),
+    ).toBeVisible();
+    await expect(
+      page.getByText("ctx-002-1234567890abcdef..."),
+    ).toBeVisible();
+  });
+
+  test("renders a Delete action per context row", async ({ page }) => {
+    await expect(page.getByRole("button", { name: "Delete" })).toHaveCount(
+      MOCK_CONTEXTS.length,
+    );
   });
 });
 
@@ -119,16 +106,17 @@ test.describe("Contexts – create form", () => {
     const appSelect = page.locator("#context-application-id");
     await expect(appSelect).toBeVisible();
 
+    // Native <option> elements are not "visible" to Playwright inside <select>.
     await expect(
       appSelect.locator("option", { hasText: "Select an application..." }),
-    ).toBeVisible();
+    ).toBeAttached();
 
     for (const app of MOCK_INSTALLED_APPS) {
       const meta = JSON.parse(atob(app.metadata as string));
       const displayName = meta.name || app.name || app.id;
       await expect(
         appSelect.locator("option", { hasText: displayName }),
-      ).toBeVisible();
+      ).toBeAttached();
     }
   });
 
@@ -138,7 +126,10 @@ test.describe("Contexts – create form", () => {
       page.locator("h2", { hasText: "Create New Context" }),
     ).toBeVisible();
 
-    await page.getByRole("button", { name: "Cancel" }).click();
+    await page
+      .locator(".create-context-form .form-actions")
+      .getByRole("button", { name: "Cancel" })
+      .click();
     await expect(
       page.locator("h2", { hasText: "Create New Context" }),
     ).not.toBeVisible();
@@ -176,16 +167,17 @@ test.describe("Contexts – create submission", () => {
     await navigateVia(page, "Contexts");
     await expect(page.getByRole("main").getByRole("heading", { name: "Contexts" })).toBeVisible();
 
-    let createCalled = false;
+    // Layer on top of mockContextAPIs: same URL glob; newest route runs first when it matches.
+    // Asserting via waitForRequest avoids flakes when the default mock handles POST instead.
     await page.route(API_ROUTES.createContext, (route) => {
       if (route.request().method() === "POST") {
-        createCalled = true;
         return route.fulfill({
           status: 200,
           contentType: "application/json",
           body: JSON.stringify({
             data: {
               contextId: "ctx-new-123",
+              memberPublicKey: "mock-member-pk",
             },
           }),
         });
@@ -198,26 +190,28 @@ test.describe("Contexts – create submission", () => {
     const appSelect = page.locator("#context-application-id");
     await appSelect.selectOption({ index: 1 });
 
-    const requestPromise = page.waitForRequest(
-      (req) => req.url().includes("/contexts") && req.method() === "POST",
-    );
-    await page.getByRole("button", { name: "Create Context" }).click();
-    await requestPromise;
-    expect(createCalled).toBe(true);
+    const [request] = await Promise.all([
+      page.waitForRequest(
+        (req) =>
+          req.url().includes("/admin-api/contexts") && req.method() === "POST",
+      ),
+      page.getByRole("button", { name: "Create Context" }).click(),
+    ]);
+    expect(request.method()).toBe("POST");
   });
 
   test("submitting with init params sends them as JSON", async ({ page }) => {
     await setupDeveloperPage(page);
     await navigateVia(page, "Contexts");
 
-    let requestBody: any = null;
     await page.route(API_ROUTES.createContext, (route) => {
       if (route.request().method() === "POST") {
-        requestBody = route.request().postDataJSON();
         return route.fulfill({
           status: 200,
           contentType: "application/json",
-          body: JSON.stringify({ data: { contextId: "ctx-new-456" } }),
+          body: JSON.stringify({
+            data: { contextId: "ctx-new-456", memberPublicKey: "mock-member-pk" },
+          }),
         });
       }
       return route.continue();
@@ -227,12 +221,21 @@ test.describe("Contexts – create submission", () => {
     await page.locator("#context-application-id").selectOption({ index: 1 });
     await page.locator("#context-init-params").fill('{"greeting": "hello"}');
 
-    const requestPromise = page.waitForRequest(
-      (req) => req.url().includes("/contexts") && req.method() === "POST",
+    const [request] = await Promise.all([
+      page.waitForRequest(
+        (req) =>
+          req.url().includes("/admin-api/contexts") && req.method() === "POST",
+      ),
+      page.getByRole("button", { name: "Create Context" }).click(),
+    ]);
+    const requestBody = request.postDataJSON() as {
+      initializationParams?: number[];
+    };
+    expect(requestBody?.initializationParams?.length).toBeGreaterThan(0);
+    const decoded = new TextDecoder().decode(
+      new Uint8Array(requestBody.initializationParams!),
     );
-    await page.getByRole("button", { name: "Create Context" }).click();
-    await requestPromise;
-    expect(requestBody).not.toBeNull();
+    expect(JSON.parse(decoded)).toEqual({ greeting: "hello" });
   });
 });
 
@@ -240,7 +243,7 @@ test.describe("Contexts – create submission", () => {
 
 test.describe("Contexts – delete flow", () => {
   test("clicking Delete triggers the delete API", async ({ page }) => {
-    await setupDeveloperPage(page);
+    await setupDeveloperPage(page, { contexts: MOCK_CONTEXTS });
     await navigateVia(page, "Contexts");
     await expect(page.getByRole("main").getByRole("heading", { name: "Contexts" })).toBeVisible();
 
@@ -262,10 +265,7 @@ test.describe("Contexts – delete flow", () => {
     );
     await page.getByRole("button", { name: "Delete" }).first().click();
 
-    const confirmBtn = page.locator("button", { hasText: /confirm|yes/i });
-    if (await confirmBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
-      await confirmBtn.click();
-    }
+    await page.locator(".confirm-action-page .confirm-actions .button-danger").click();
 
     await requestPromise;
     expect(deleteCalled).toBe(true);

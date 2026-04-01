@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { describeAfter35 } from "./fixtures/e2e-cap";
 import {
   setupAuthenticatedPage,
   setupDeveloperPage,
@@ -15,7 +16,7 @@ import {
 
 // ─── Navigate to Settings ──────────────────────────────────────────────────
 
-test.describe("Settings page access", () => {
+describeAfter35("Settings page access", () => {
   test.beforeEach(async ({ page }) => {
     await setupAuthenticatedPage(page);
   });
@@ -49,7 +50,7 @@ test.describe("Settings page access", () => {
 
 // ─── General tab — toggles ──────────────────────────────────────────────────
 
-test.describe("General tab toggles", () => {
+describeAfter35("General tab toggles", () => {
   test.beforeEach(async ({ page }) => {
     await setupAuthenticatedPage(page);
     await page.click('button[title="Settings"]');
@@ -124,7 +125,7 @@ test.describe("General tab toggles", () => {
 
 // ─── Developer mode effect on sidebar ───────────────────────────────────────
 
-test.describe("Developer mode enables sidebar links", () => {
+describeAfter35("Developer mode enables sidebar links", () => {
   test("enabling developer mode reveals Contexts & Nodes links", async ({
     page,
   }) => {
@@ -162,7 +163,7 @@ test.describe("Developer mode enables sidebar links", () => {
 
 // ─── Developer mode pre-seeded ──────────────────────────────────────────────
 
-test.describe("Developer mode pre-seeded", () => {
+describeAfter35("Developer mode pre-seeded", () => {
   test.beforeEach(async ({ page }) => {
     await setupDeveloperPage(page);
     await page.click('button[title="Settings"]');
@@ -177,7 +178,7 @@ test.describe("Developer mode pre-seeded", () => {
 
 // ─── Registries tab ─────────────────────────────────────────────────────────
 
-test.describe("Registries tab", () => {
+describeAfter35("Registries tab", () => {
   test.beforeEach(async ({ page }) => {
     await setupAuthenticatedPage(page);
     await page.click('button[title="Settings"]');
@@ -245,7 +246,7 @@ test.describe("Registries tab", () => {
 
 // ─── Reset / Nuke sections ──────────────────────────────────────────────────
 
-test.describe("Reset and Nuke sections", () => {
+describeAfter35("Reset and Nuke sections", () => {
   test.beforeEach(async ({ page }) => {
     await setupAuthenticatedPage(page);
     await page.click('button[title="Settings"]');
@@ -288,7 +289,7 @@ test.describe("Reset and Nuke sections", () => {
 
 // ─── Tab switching ──────────────────────────────────────────────────────────
 
-test.describe("Tab switching", () => {
+describeAfter35("Tab switching", () => {
   test.beforeEach(async ({ page }) => {
     await setupAuthenticatedPage(page);
     await page.click('button[title="Settings"]');

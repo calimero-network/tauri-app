@@ -339,7 +339,9 @@ class NodeApi {
   async getContexts(): Promise<ApiResponse<any[]>> {
     try {
       const response = await this.meroJs.admin.contexts.listContexts();
-      return { data: response.contexts || [] };
+      const raw = response as { contexts?: unknown[] } | unknown[];
+      const rows = Array.isArray(raw) ? raw : raw?.contexts ?? [];
+      return { data: rows };
     } catch (error: unknown) {
       const err = error as { status?: number };
       if (err?.status === 401) {
@@ -452,7 +454,14 @@ class NodeApi {
         return { error: { message: 'Client not initialized. Please wait and try again.' } };
       }
       const response = await this.meroJs.admin.applications.listApplications();
-      return { data: response.apps || [] };
+      const raw = response as { apps?: unknown[] } | unknown[];
+      const rows = Array.isArray(raw) ? raw : raw?.apps ?? [];
+      // Normalize API rows (`applicationId`) to UI shape (`id`).
+      const normalized = rows.map((app: Record<string, unknown>) => ({
+        ...app,
+        id: app.id ?? app.applicationId,
+      }));
+      return { data: normalized };
     } catch (error: unknown) {
       const err = error as { status?: number };
       if (err?.status === 401) {

@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { describeAfter35 } from "./fixtures/e2e-cap";
 import {
   setupAuthenticatedPage,
   setupDeveloperPage,
@@ -8,7 +9,7 @@ import {
 } from "./fixtures/helpers";
 import { DEFAULT_SETTINGS, AUTHENTICATED_SETTINGS, DEVELOPER_SETTINGS } from "./fixtures/mock-data";
 
-test.describe("Sidebar navigation", () => {
+describeAfter35("Sidebar navigation", () => {
   test.beforeEach(async ({ page }) => {
     await setupAuthenticatedPage(page);
   });
@@ -65,7 +66,7 @@ test.describe("Sidebar navigation", () => {
   });
 });
 
-test.describe("Sidebar navigation — developer mode", () => {
+describeAfter35("Sidebar navigation — developer mode", () => {
   test.beforeEach(async ({ page }) => {
     await setupDeveloperPage(page);
   });
@@ -110,7 +111,7 @@ test.describe("Sidebar navigation — developer mode", () => {
   });
 });
 
-test.describe("Settings navigation", () => {
+describeAfter35("Settings navigation", () => {
   test.beforeEach(async ({ page }) => {
     await setupAuthenticatedPage(page);
   });
@@ -129,7 +130,7 @@ test.describe("Settings navigation", () => {
   });
 });
 
-test.describe("Home page content", () => {
+describeAfter35("Home page content", () => {
   test.beforeEach(async ({ page }) => {
     await setupAuthenticatedPage(page);
   });

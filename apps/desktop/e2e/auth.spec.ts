@@ -9,11 +9,13 @@ import {
   MOCK_PROVIDERS_RESPONSE,
   API_ROUTES,
   STORAGE_KEYS,
+  listApplicationsWireBody,
+  listContextsWireBody,
 } from "./fixtures/mock-data";
 
 // ─── Login screen ────────────────────────────────────────────────────────────
 
-test.describe.only("Login screen display", () => {
+test.describe("Login screen display", () => {
   test.beforeEach(async ({ page }) => {
     await mockCoreAPIs(page);
     await page.goto("/");
@@ -33,7 +35,7 @@ test.describe.only("Login screen display", () => {
 
 // ─── Authenticated user ──────────────────────────────────────────────────────
 
-test.describe.only("Authenticated user bypass", () => {
+test.describe("Authenticated user bypass", () => {
   test.beforeEach(async ({ page }) => {
     await setupAuthenticatedPage(page);
   });
@@ -46,7 +48,7 @@ test.describe.only("Authenticated user bypass", () => {
 
 // ─── 401 / auth error redirect ───────────────────────────────────────────────
 
-test.describe.only("401 redirect to login", () => {
+test.describe("401 redirect to login", () => {
   test("shows login when health check returns auth error", async ({ page }) => {
     // Return real HTTP 401 so mero-js throws with .status === 401, which the
     // healthCheck wrapper maps to { error: { code: '401' } }, triggering login.
@@ -71,14 +73,14 @@ test.describe.only("401 redirect to login", () => {
       route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify({ data: { apps: [] } }),
+        body: listApplicationsWireBody([]),
       }),
     );
     await page.route(API_ROUTES.listContexts, (route) =>
       route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify({ data: { contexts: [] } }),
+        body: listContextsWireBody([]),
       }),
     );
 
@@ -106,7 +108,7 @@ test.describe.only("401 redirect to login", () => {
 
 // ─── Node disconnected state ─────────────────────────────────────────────────
 
-test.describe.only("Node disconnected state", () => {
+test.describe("Node disconnected state", () => {
   test("shows disconnected indicator when node health fails", async ({ page }) => {
     await page.route(API_ROUTES.health, (route) =>
       route.fulfill({
@@ -130,10 +132,10 @@ test.describe.only("Node disconnected state", () => {
       }),
     );
     await page.route(API_ROUTES.listApplications, (route) =>
-      route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ data: [] }) }),
+      route.fulfill({ status: 200, contentType: "application/json", body: listApplicationsWireBody([]) }),
     );
     await page.route(API_ROUTES.listContexts, (route) =>
-      route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ data: [] }) }),
+      route.fulfill({ status: 200, contentType: "application/json", body: listContextsWireBody([]) }),
     );
 
     await page.goto("/");

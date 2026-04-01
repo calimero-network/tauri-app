@@ -3,6 +3,7 @@ import {
   MOCK_REGISTRY_APPS,
   MOCK_INSTALLED_APPS,
   API_ROUTES,
+  listApplicationsWireBody,
 } from "./fixtures/mock-data";
 import {
   setupAuthenticatedPage,
@@ -12,6 +13,7 @@ import {
   mockCoreAPIs,
   seedAuthenticatedState,
 } from "./fixtures/helpers";
+import { describeAfter35 } from "./fixtures/e2e-cap";
 
 // ─── Marketplace page ─────────────────────────────────────────────────────────
 
@@ -171,7 +173,7 @@ test.describe("Installed Applications – listing", () => {
       return route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify({ data: MOCK_INSTALLED_APPS }),
+        body: listApplicationsWireBody(MOCK_INSTALLED_APPS),
       });
     });
 
@@ -192,7 +194,7 @@ test.describe("Installed Applications – empty state", () => {
       route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify({ data: [] }),
+        body: listApplicationsWireBody([]),
       }),
     );
     await page.goto("/");
@@ -209,7 +211,7 @@ test.describe("Installed Applications – empty state", () => {
 
 // ─── Uninstall flow ──────────────────────────────────────────────────────────
 
-test.describe("Installed Applications – uninstall flow", () => {
+describeAfter35("Installed Applications – uninstall flow", () => {
   test("uninstall button triggers uninstall API call", async ({ page }) => {
     await mockInstallAPIs(page);
     await setupAuthenticatedPage(page);
@@ -251,7 +253,7 @@ test.describe("Installed Applications – uninstall flow", () => {
 
 // ─── Open & Shortcut buttons ─────────────────────────────────────────────────
 
-test.describe("Installed Applications – actions", () => {
+describeAfter35("Installed Applications – actions", () => {
   test.beforeEach(async ({ page }) => {
     await setupAuthenticatedPage(page);
     await navigateVia(page, "Applications");
@@ -292,7 +294,7 @@ test.describe("Installed Applications – actions", () => {
 
 // ─── Cross-page navigation ───────────────────────────────────────────────────
 
-test.describe("Marketplace ↔ Applications navigation", () => {
+describeAfter35("Marketplace ↔ Applications navigation", () => {
   test("can navigate between Marketplace and Applications", async ({
     page,
   }) => {

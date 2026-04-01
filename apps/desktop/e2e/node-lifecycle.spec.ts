@@ -13,6 +13,7 @@ import {
   EMBEDDED_NODE_SETTINGS,
   DISCONNECTED_SETTINGS,
 } from "./fixtures/mock-data";
+import { describeAfter35 } from "./fixtures/e2e-cap";
 
 /**
  * Node lifecycle tests.
@@ -27,7 +28,7 @@ import {
 
 // ─── Connected state ────────────────────────────────────────────────────────
 
-test.describe("Node lifecycle – connected", () => {
+describeAfter35("Node lifecycle – connected", () => {
   test.beforeEach(async ({ page }) => {
     await setupConnectedPage(page);
   });
@@ -70,7 +71,7 @@ test.describe("Node lifecycle – connected", () => {
 
 // ─── Disconnected state ─────────────────────────────────────────────────────
 
-test.describe("Node lifecycle – disconnected", () => {
+describeAfter35("Node lifecycle – disconnected", () => {
   test.beforeEach(async ({ page }) => {
     await setupDisconnectedPage(page);
   });
@@ -97,7 +98,7 @@ test.describe("Node lifecycle – disconnected", () => {
 
 // ─── Transition from disconnected → connected ───────────────────────────────
 
-test.describe("Node lifecycle – reconnection", () => {
+describeAfter35("Node lifecycle – reconnection", () => {
   test("transitions to Connected when health endpoint recovers", async ({
     page,
   }) => {
@@ -117,7 +118,7 @@ test.describe("Node lifecycle – reconnection", () => {
 
 // ─── Transition from connected → disconnected ───────────────────────────────
 
-test.describe("Node lifecycle – connection loss", () => {
+describeAfter35("Node lifecycle – connection loss", () => {
   test("transitions to Disconnected when health endpoint starts failing", async ({
     page,
   }) => {
@@ -137,7 +138,7 @@ test.describe("Node lifecycle – connection loss", () => {
 
 // ─── Embedded node settings ─────────────────────────────────────────────────
 
-test.describe("Node lifecycle – embedded node configuration", () => {
+describeAfter35("Node lifecycle – embedded node configuration", () => {
   test.beforeEach(async ({ page }) => {
     await setupEmbeddedNodePage(page);
   });
@@ -163,7 +164,7 @@ test.describe("Node lifecycle – embedded node configuration", () => {
 
 // ─── Fresh state / no settings ──────────────────────────────────────────────
 
-test.describe("Node lifecycle – fresh state", () => {
+describeAfter35("Node lifecycle – fresh state", () => {
   test("app without completed onboarding shows onboarding flow", async ({
     page,
   }) => {

@@ -12,12 +12,23 @@ import {
   MOCK_HEALTH_OK,
   MOCK_HEALTH_UNREACHABLE,
   MOCK_PROVIDERS_RESPONSE,
-  MOCK_INSTALLED_APPS,
   MOCK_CONTEXTS,
+  MOCK_INSTALLED_APPS,
   MOCK_REGISTRY_APPS,
   API_ROUTES,
+  listApplicationsWireBody,
+  listContextsWireBody,
   type AppSettings,
+  type MockContextRow,
+  type MockInstalledAppRow,
 } from "./mock-data";
+
+export type MockCoreAPIsOptions = {
+  /** Defaults to `[]` (fresh install: no contexts). */
+  contexts?: MockContextRow[];
+  /** Defaults to `MOCK_INSTALLED_APPS` (non-empty app dropdown for create-context flows). */
+  installedApps?: MockInstalledAppRow[];
+};
 
 // ─── localStorage seeding ────────────────────────────────────────────────────
 
@@ -78,7 +89,13 @@ export async function seedDeveloperState(page: Page): Promise<void> {
  * Intercept common backend routes so the app doesn't hang on network calls.
  * Call this before page.goto("/") for any post-onboarding test.
  */
-export async function mockCoreAPIs(page: Page): Promise<void> {
+export async function mockCoreAPIs(
+  page: Page,
+  options?: MockCoreAPIsOptions,
+): Promise<void> {
+  const contexts = options?.contexts ?? [];
+  const installedApps = options?.installedApps ?? MOCK_INSTALLED_APPS;
+
   await page.route(API_ROUTES.health, (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(MOCK_HEALTH_OK) }),
   );
@@ -95,7 +112,7 @@ export async function mockCoreAPIs(page: Page): Promise<void> {
     route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify({ data: { apps: MOCK_INSTALLED_APPS } }),
+      body: listApplicationsWireBody(installedApps),
     }),
   );
 
@@ -104,7 +121,7 @@ export async function mockCoreAPIs(page: Page): Promise<void> {
       return route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify({ data: { contexts: MOCK_CONTEXTS } }),
+        body: listContextsWireBody(contexts),
       });
     }
     return route.continue();
@@ -180,16 +197,14 @@ export async function mockContextAPIs(page: Page): Promise<void> {
         contentType: "application/json",
         body: JSON.stringify({
           data: {
-            id: "ctx-new-" + Date.now(),
-            name: "New Context",
-            application_id: "installed-app-1",
-            protocol: "near",
-            created_at: new Date().toISOString(),
+            contextId: "ctx-new-" + Date.now(),
+            memberPublicKey: "mock-member-pk",
           },
         }),
       });
     }
-    return route.continue();
+    // Same glob as listContexts in mockCoreAPIs; fallback chains to that handler.
+    return route.fallback();
   });
 
   await page.route(API_ROUTES.deleteContext, (route) => {
@@ -232,8 +247,11 @@ export async function setupAuthenticatedPage(page: Page): Promise<void> {
 /**
  * Full setup for developer mode (authenticated + developer features visible).
  */
-export async function setupDeveloperPage(page: Page): Promise<void> {
-  await mockCoreAPIs(page);
+export async function setupDeveloperPage(
+  page: Page,
+  options?: MockCoreAPIsOptions,
+): Promise<void> {
+  await mockCoreAPIs(page, options);
   await mockContextAPIs(page);
   await page.goto("/");
   await seedDeveloperState(page);
@@ -314,7 +332,7 @@ export async function setupDisconnectedPage(page: Page): Promise<void> {
     route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify({ data: { apps: [] } }),
+      body: listApplicationsWireBody([]),
     }),
   );
 
@@ -322,7 +340,7 @@ export async function setupDisconnectedPage(page: Page): Promise<void> {
     route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify({ data: { contexts: [] } }),
+      body: listContextsWireBody([]),
     }),
   );
 

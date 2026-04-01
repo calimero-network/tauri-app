@@ -180,6 +180,46 @@ export const MOCK_CONTEXTS = [
   },
 ];
 
+/** Row shapes used by Playwright route mocks (same as `MOCK_INSTALLED_APPS` / `MOCK_CONTEXTS`). */
+export type MockInstalledAppRow = (typeof MOCK_INSTALLED_APPS)[number];
+export type MockContextRow = (typeof MOCK_CONTEXTS)[number];
+
+/**
+ * JSON body for `GET .../admin-api/applications`.
+ * mero-js unwraps `{ data: T }`; the typed admin client expects `{ apps: Application[] }`.
+ */
+export function listApplicationsWireBody(apps: MockInstalledAppRow[]): string {
+  return JSON.stringify({
+    data: {
+      apps: apps.map((app) => ({
+        applicationId: app.id,
+        name: app.name,
+        version: app.version,
+        metadata: app.metadata,
+        source: app.source,
+      })),
+    },
+  });
+}
+
+/**
+ * JSON body for `GET .../admin-api/contexts`.
+ * mero-js expects `{ contexts: Context[] }` after unwrap.
+ */
+export function listContextsWireBody(rows: MockContextRow[]): string {
+  return JSON.stringify({
+    data: {
+      contexts: rows.map((c) => ({
+        id: c.id,
+        name: c.name,
+        applicationId: c.application_id,
+        protocol: c.protocol,
+        created_at: c.created_at,
+      })),
+    },
+  });
+}
+
 // ─── Health check response ───────────────────────────────────────────────────
 
 export const MOCK_HEALTH_OK = { data: { status: "ok" } };

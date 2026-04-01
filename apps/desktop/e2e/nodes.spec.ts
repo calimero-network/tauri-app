@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { describeAfter35 } from "./fixtures/e2e-cap";
 import { setupAuthenticatedPage, navigateVia } from "./fixtures/helpers";
 
 /**
@@ -9,7 +10,7 @@ import { setupAuthenticatedPage, navigateVia } from "./fixtures/helpers";
  * rather than backend side-effects.
  */
 
-test.describe("Nodes – page rendering", () => {
+describeAfter35("Nodes – page rendering", () => {
   test.beforeEach(async ({ page }) => {
     await setupAuthenticatedPage(page);
     await navigateVia(page, "Nodes");
@@ -39,7 +40,7 @@ test.describe("Nodes – page rendering", () => {
 
 // ─── Home directory ─────────────────────────────────────────────────────────
 
-test.describe("Nodes – home directory", () => {
+describeAfter35("Nodes – home directory", () => {
   test.beforeEach(async ({ page }) => {
     await setupAuthenticatedPage(page);
     await navigateVia(page, "Nodes");
@@ -66,7 +67,7 @@ test.describe("Nodes – home directory", () => {
 
 // ─── Create node form ───────────────────────────────────────────────────────
 
-test.describe("Nodes – create node form", () => {
+describeAfter35("Nodes – create node form", () => {
   test.beforeEach(async ({ page }) => {
     await setupAuthenticatedPage(page);
     await navigateVia(page, "Nodes");
@@ -135,7 +136,7 @@ test.describe("Nodes – create node form", () => {
 
 // ─── Available nodes section ────────────────────────────────────────────────
 
-test.describe("Nodes – available nodes (empty state)", () => {
+describeAfter35("Nodes – available nodes (empty state)", () => {
   test("shows empty message when no nodes exist", async ({ page }) => {
     await setupAuthenticatedPage(page);
     await navigateVia(page, "Nodes");
@@ -148,7 +149,7 @@ test.describe("Nodes – available nodes (empty state)", () => {
 
 // ─── Port inputs ────────────────────────────────────────────────────────────
 
-test.describe("Nodes – port inputs (when nodes available)", () => {
+describeAfter35("Nodes – port inputs (when nodes available)", () => {
   test("port inputs have correct defaults when the select is visible", async ({
     page,
   }) => {
@@ -167,7 +168,7 @@ test.describe("Nodes – port inputs (when nodes available)", () => {
 
 // ─── Running nodes section ──────────────────────────────────────────────────
 
-test.describe("Nodes – running nodes (empty state)", () => {
+describeAfter35("Nodes – running nodes (empty state)", () => {
   test("shows empty message when no nodes are running", async ({ page }) => {
     await setupAuthenticatedPage(page);
     await navigateVia(page, "Nodes");
@@ -180,7 +181,7 @@ test.describe("Nodes – running nodes (empty state)", () => {
 
 // ─── Back button ────────────────────────────────────────────────────────────
 
-test.describe("Nodes – navigation", () => {
+describeAfter35("Nodes – navigation", () => {
   test("Nodes is accessible from the sidebar", async ({ page }) => {
     await setupAuthenticatedPage(page);
 

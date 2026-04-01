@@ -129,6 +129,18 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: pnpm merod:prepare
 
+      - name: Strip merod binary
+        run: |
+          MEROD_BINARY="apps/desktop/src-tauri/merod/merod"
+          if [ -f "$MEROD_BINARY" ]; then
+            BEFORE=$(stat --printf="%s" "$MEROD_BINARY")
+            strip "$MEROD_BINARY"
+            AFTER=$(stat --printf="%s" "$MEROD_BINARY")
+            echo "Stripped merod: $(( BEFORE / 1024 / 1024 ))MB → $(( AFTER / 1024 / 1024 ))MB"
+          else
+            echo "Warning: merod binary not found at $MEROD_BINARY"
+          fi
+
       - name: Update version in tauri.conf.json
         if: steps.build-mode.outputs.mode == 'release'
         run: |
@@ -185,20 +197,22 @@ jobs:
           MEROD_SKIP_IF_EXISTS: "1"
           TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
           TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
-        run: pnpm exec tauri build --bundles deb,rpm
+        run: pnpm exec tauri build --bundles appimage,deb,rpm
 
       - name: Verify build outputs
         if: steps.build-mode.outputs.mode == 'validation'
         run: |
           echo "Checking for expected build outputs..."
 
+          APPIMAGE_FILE=$(find apps/desktop/src-tauri/target/release/bundle -name "*.AppImage" 2>/dev/null | head -1)
           DEB_FILE=$(find apps/desktop/src-tauri/target/release/bundle -name "*.deb" 2>/dev/null | head -1)
           RPM_FILE=$(find apps/desktop/src-tauri/target/release/bundle -name "*.rpm" 2>/dev/null | head -1)
 
-          if [ -z "$DEB_FILE" ] && [ -z "$RPM_FILE" ]; then
-            echo "Error: Neither .deb nor .rpm package found"
+          if [ -z "$APPIMAGE_FILE" ]; then
+            echo "Error: AppImage not found"
             exit 1
           fi
+          echo "AppImage: $APPIMAGE_FILE ($(du -sh "$APPIMAGE_FILE" | cut -f1))"
 
           [ -n "$DEB_FILE" ] && echo "DEB: $DEB_FILE ($(du -sh "$DEB_FILE" | cut -f1))"
           [ -n "$RPM_FILE" ] && echo "RPM: $RPM_FILE ($(du -sh "$RPM_FILE" | cut -f1))"

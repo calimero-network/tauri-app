@@ -26,7 +26,7 @@ const DOWNLOAD_META = {
 const PRIMARY_FORMAT = {
   macos: "dmg",
   windows: "exe",
-  linux: "deb",
+  linux: "appimage",
 };
 
 function parseArgs() {

@@ -185,7 +185,7 @@ jobs:
           MEROD_SKIP_IF_EXISTS: "1"
           TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
           TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
-        run: pnpm tauri build -- --bundles deb,rpm
+        run: pnpm exec tauri build --bundles deb,rpm
 
       - name: Verify build outputs
         if: steps.build-mode.outputs.mode == 'validation'

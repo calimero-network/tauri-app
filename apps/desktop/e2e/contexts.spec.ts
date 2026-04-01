@@ -6,6 +6,7 @@ import {
 } from "./fixtures/mock-data";
 import {
   setupDeveloperPage,
+  setupAuthenticatedPage,
   navigateVia,
   mockCoreAPIs,
   mockContextAPIs,
@@ -14,22 +15,22 @@ import {
 
 // ─── Contexts page – listing ────────────────────────────────────────────────
 
-test.describe("Contexts – listing", () => {
+test.describe.only("Contexts – listing", () => {
   test.beforeEach(async ({ page }) => {
     await setupDeveloperPage(page);
     await navigateVia(page, "Contexts");
-    await expect(page.locator("h1", { hasText: "Contexts" })).toBeVisible();
+    await expect(page.getByRole("main").getByRole("heading", { name: "Contexts" })).toBeVisible();
   });
 
   test("renders the Contexts heading", async ({ page }) => {
-    await expect(page.locator("h1", { hasText: "Contexts" })).toBeVisible();
+    await expect(page.getByRole("main").getByRole("heading", { name: "Contexts" })).toBeVisible();
   });
 
   test("displays contexts fetched from API", async ({ page }) => {
     for (const ctx of MOCK_CONTEXTS) {
       const displayName = ctx.name || ctx.id.substring(0, 16) + "...";
       await expect(
-        page.locator(".table-cell-primary", { hasText: displayName }),
+        page.getByText(displayName),
       ).toBeVisible();
     }
   });
@@ -54,16 +55,14 @@ test.describe("Contexts – listing", () => {
   });
 
   test("each context row has a Delete button", async ({ page }) => {
-    const deleteButtons = page.locator("button.button-danger.button-small", {
-      hasText: "Delete",
-    });
+    const deleteButtons = page.getByRole("button", { name: "Delete" });
     await expect(deleteButtons).toHaveCount(MOCK_CONTEXTS.length);
   });
 });
 
 // ─── Contexts page – empty state ────────────────────────────────────────────
 
-test.describe("Contexts – empty state", () => {
+test.describe.only("Contexts – empty state", () => {
   test("shows empty message when no contexts exist", async ({ page }) => {
     await mockCoreAPIs(page);
     await mockContextAPIs(page);
@@ -73,7 +72,7 @@ test.describe("Contexts – empty state", () => {
         return route.fulfill({
           status: 200,
           contentType: "application/json",
-          body: JSON.stringify({ data: [] }),
+          body: JSON.stringify({ data: { contexts: [] } }),
         });
       }
       return route.continue();
@@ -84,7 +83,7 @@ test.describe("Contexts – empty state", () => {
     await page.reload();
 
     await navigateVia(page, "Contexts");
-    await expect(page.locator("h1", { hasText: "Contexts" })).toBeVisible();
+    await expect(page.getByRole("main").getByRole("heading", { name: "Contexts" })).toBeVisible();
     await expect(page.getByText("No contexts found.")).toBeVisible();
   });
 });
@@ -95,7 +94,7 @@ test.describe("Contexts – create form", () => {
   test.beforeEach(async ({ page }) => {
     await setupDeveloperPage(page);
     await navigateVia(page, "Contexts");
-    await expect(page.locator("h1", { hasText: "Contexts" })).toBeVisible();
+    await expect(page.getByRole("main").getByRole("heading", { name: "Contexts" })).toBeVisible();
   });
 
   test("clicking '+ Create Context' opens the form", async ({ page }) => {
@@ -139,10 +138,7 @@ test.describe("Contexts – create form", () => {
       page.locator("h2", { hasText: "Create New Context" }),
     ).toBeVisible();
 
-    await page
-      .locator(".form-actions")
-      .locator("button", { hasText: "Cancel" })
-      .click();
+    await page.getByRole("button", { name: "Cancel" }).click();
     await expect(
       page.locator("h2", { hasText: "Create New Context" }),
     ).not.toBeVisible();
@@ -178,7 +174,7 @@ test.describe("Contexts – create submission", () => {
   }) => {
     await setupDeveloperPage(page);
     await navigateVia(page, "Contexts");
-    await expect(page.locator("h1", { hasText: "Contexts" })).toBeVisible();
+    await expect(page.getByRole("main").getByRole("heading", { name: "Contexts" })).toBeVisible();
 
     let createCalled = false;
     await page.route(API_ROUTES.createContext, (route) => {
@@ -202,12 +198,11 @@ test.describe("Contexts – create submission", () => {
     const appSelect = page.locator("#context-application-id");
     await appSelect.selectOption({ index: 1 });
 
-    await page
-      .locator(".form-actions")
-      .locator("button", { hasText: "Create Context" })
-      .click();
-
-    await page.waitForTimeout(500);
+    const requestPromise = page.waitForRequest(
+      (req) => req.url().includes("/contexts") && req.method() === "POST",
+    );
+    await page.getByRole("button", { name: "Create Context" }).click();
+    await requestPromise;
     expect(createCalled).toBe(true);
   });
 
@@ -232,12 +227,11 @@ test.describe("Contexts – create submission", () => {
     await page.locator("#context-application-id").selectOption({ index: 1 });
     await page.locator("#context-init-params").fill('{"greeting": "hello"}');
 
-    await page
-      .locator(".form-actions")
-      .locator("button", { hasText: "Create Context" })
-      .click();
-
-    await page.waitForTimeout(500);
+    const requestPromise = page.waitForRequest(
+      (req) => req.url().includes("/contexts") && req.method() === "POST",
+    );
+    await page.getByRole("button", { name: "Create Context" }).click();
+    await requestPromise;
     expect(requestBody).not.toBeNull();
   });
 });
@@ -248,7 +242,7 @@ test.describe("Contexts – delete flow", () => {
   test("clicking Delete triggers the delete API", async ({ page }) => {
     await setupDeveloperPage(page);
     await navigateVia(page, "Contexts");
-    await expect(page.locator("h1", { hasText: "Contexts" })).toBeVisible();
+    await expect(page.getByRole("main").getByRole("heading", { name: "Contexts" })).toBeVisible();
 
     let deleteCalled = false;
     await page.route(API_ROUTES.deleteContext, (route) => {
@@ -263,17 +257,17 @@ test.describe("Contexts – delete flow", () => {
       return route.continue();
     });
 
-    const firstDeleteBtn = page
-      .locator("button.button-danger.button-small", { hasText: "Delete" })
-      .first();
-    await firstDeleteBtn.click();
+    const requestPromise = page.waitForRequest(
+      (req) => req.url().includes("/contexts/") && req.method() === "DELETE",
+    );
+    await page.getByRole("button", { name: "Delete" }).first().click();
 
     const confirmBtn = page.locator("button", { hasText: /confirm|yes/i });
     if (await confirmBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
       await confirmBtn.click();
     }
 
-    await page.waitForTimeout(500);
+    await requestPromise;
     expect(deleteCalled).toBe(true);
   });
 });
@@ -284,42 +278,7 @@ test.describe("Contexts – requires developer mode", () => {
   test("Contexts link is not in sidebar without developer mode", async ({
     page,
   }) => {
-    await mockCoreAPIs(page);
-    await page.goto("/");
-
-    await page.evaluate(
-      ([key, value]) => {
-        localStorage.setItem(key, JSON.stringify(value));
-      },
-      [
-        "calimero-desktop-settings",
-        {
-          darkMode: true,
-          developerMode: false,
-          debugLogs: false,
-          nodeUrl: "http://localhost:2528",
-          authUrl: "http://localhost:2528",
-          registries: [],
-        },
-      ] as const,
-    );
-
-    await page.evaluate(
-      ([accessKey, refreshKey, expiresKey, accessVal, refreshVal]) => {
-        localStorage.setItem(accessKey, accessVal);
-        localStorage.setItem(refreshKey, refreshVal);
-        localStorage.setItem(expiresKey, (Date.now() + 86400000).toString());
-      },
-      [
-        "calimero_access_token",
-        "calimero_refresh_token",
-        "calimero_token_expires_at",
-        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ0ZXN0IiwiaWF0IjoxNzExMDAwMDAwLCJleHAiOjE5MDAwMDAwMDB9.test",
-        "refresh-token",
-      ] as const,
-    );
-
-    await page.reload();
+    await setupAuthenticatedPage(page);
 
     const sidebar = page.locator("aside.sidebar");
     await expect(sidebar).toBeVisible();

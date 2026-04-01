@@ -506,7 +506,7 @@ export default function Marketplace({ clientReady = true }: MarketplaceProps) {
                 : app.developer_pubkey;
               
               return (
-              <div key={`${app.developer_pubkey}-${app.name}-${index}`} className="app-card">
+              <div key={`${app.developer_pubkey}-${app.name}-${index}`} className="app-card" data-testid="app-card">
                 <div className="app-card-header">
                     <div className="app-icon-wrapper">
                       <Package className="app-icon" size={20} />

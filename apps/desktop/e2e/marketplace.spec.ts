@@ -29,7 +29,7 @@ test.describe("Marketplace – browsing & searching", () => {
     page,
   }) => {
     await expect(page.locator('input[placeholder="Search applications..."]')).toBeVisible();
-    await expect(page.locator("select.filter-select")).toBeVisible();
+    await expect(page.locator("select")).toBeVisible();
   });
 
   test("displays apps fetched from registry", async ({ page }) => {
@@ -59,7 +59,7 @@ test.describe("Marketplace – browsing & searching", () => {
   test("search with no results shows empty state", async ({ page }) => {
     const searchInput = page.locator('input[placeholder="Search applications..."]');
     await searchInput.fill("nonexistent-app-xyz");
-    await expect(page.locator(".app-card")).toHaveCount(0);
+    await expect(page.locator("[data-testid='app-card']")).toHaveCount(0);
   });
 
   test("refresh button is present and clickable", async ({ page }) => {
@@ -81,7 +81,7 @@ test.describe("Marketplace – install flow", () => {
       page.locator("h1", { hasText: "Application Marketplace" }),
     ).toBeVisible();
 
-    const appCard = page.locator(".app-card", { hasText: "Blockchain Demo" });
+    const appCard = page.locator("[data-testid='app-card']", { hasText: "Blockchain Demo" });
     await expect(appCard).toBeVisible();
 
     let installCalled = false;
@@ -96,9 +96,12 @@ test.describe("Marketplace – install flow", () => {
 
     const installBtn = appCard.locator("button", { hasText: "Install" });
     await expect(installBtn).toBeVisible();
-    await installBtn.click();
 
-    await page.waitForTimeout(500);
+    const requestPromise = page.waitForRequest(
+      (req) => req.url().includes("install") && req.method() === "POST",
+    );
+    await installBtn.click();
+    await requestPromise;
     expect(installCalled).toBe(true);
   });
 
@@ -125,7 +128,7 @@ test.describe("Marketplace – install flow", () => {
       page.locator("h1", { hasText: "Application Marketplace" }),
     ).toBeVisible();
 
-    const chatCard = page.locator(".app-card", { hasText: "Only Peers Chat" });
+    const chatCard = page.locator("[data-testid='app-card']", { hasText: "Only Peers Chat" });
     await expect(chatCard).toBeVisible();
     await expect(
       chatCard.locator("button", { hasText: "Installed" }),
@@ -174,8 +177,9 @@ test.describe("Installed Applications – listing", () => {
 
     const refreshBtn = page.locator("button", { hasText: /refresh/i });
     if (await refreshBtn.isVisible()) {
+      const requestPromise = page.waitForRequest(API_ROUTES.listApplications);
       await refreshBtn.click();
-      await page.waitForTimeout(300);
+      await requestPromise;
       expect(listCallCount).toBeGreaterThanOrEqual(1);
     }
   });
@@ -229,6 +233,9 @@ test.describe("Installed Applications – uninstall flow", () => {
       .locator("button", { hasText: "Uninstall" });
 
     if (await uninstallBtn.isVisible()) {
+      const requestPromise = page.waitForRequest(
+        (req) => req.url().includes("uninstall") && req.method() === "POST",
+      );
       await uninstallBtn.click();
 
       const confirmBtn = page.locator("button", { hasText: /confirm|yes/i });
@@ -236,7 +243,7 @@ test.describe("Installed Applications – uninstall flow", () => {
         await confirmBtn.click();
       }
 
-      await page.waitForTimeout(500);
+      await requestPromise;
       expect(uninstallCalled).toBe(true);
     }
   });

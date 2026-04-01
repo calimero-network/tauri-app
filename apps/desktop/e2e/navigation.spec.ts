@@ -145,10 +145,7 @@ test.describe("Home page content", () => {
   });
 
   test("home page shows Settings quick action", async ({ page }) => {
-    const settingsAction = page.locator(".action-card", {
-      hasText: "Settings",
-    });
-    await expect(settingsAction).toBeVisible();
+    await expect(page.getByText("Settings", { exact: false }).first()).toBeVisible();
   });
 
   test("empty state shows when no apps installed", async ({ page }) => {

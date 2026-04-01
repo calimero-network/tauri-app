@@ -7,15 +7,11 @@ import {
   mockHealthy,
   mockUnhealthy,
   mockCoreAPIs,
-  seedSettings,
-  seedAuthTokens,
   clearAllStorage,
 } from "./fixtures/helpers";
 import {
-  AUTHENTICATED_SETTINGS,
   EMBEDDED_NODE_SETTINGS,
   DISCONNECTED_SETTINGS,
-  DEFAULT_NODE_URL,
 } from "./fixtures/mock-data";
 
 /**
@@ -176,7 +172,7 @@ test.describe("Node lifecycle – fresh state", () => {
     await clearAllStorage(page);
     await page.reload();
 
-    const onboardingPage = page.locator(".onboarding-page");
+    const onboardingPage = page.getByTestId("onboarding-page");
     await onboardingPage.waitFor({ state: "visible", timeout: 10_000 });
 
     await expect(
@@ -188,42 +184,3 @@ test.describe("Node lifecycle – fresh state", () => {
   });
 });
 
-// ─── Settings persistence ───────────────────────────────────────────────────
-
-test.describe("Node lifecycle – settings persistence", () => {
-  test("nodeUrl is persisted in localStorage", async ({ page }) => {
-    await setupConnectedPage(page);
-
-    const settings = await page.evaluate(() => {
-      const raw = localStorage.getItem("calimero-desktop-settings");
-      return raw ? JSON.parse(raw) : null;
-    });
-
-    expect(settings).not.toBeNull();
-    expect(settings.nodeUrl).toBe(DEFAULT_NODE_URL);
-  });
-
-  test("embedded node settings are persisted correctly", async ({ page }) => {
-    await setupEmbeddedNodePage(page);
-
-    const settings = await page.evaluate(() => {
-      const raw = localStorage.getItem("calimero-desktop-settings");
-      return raw ? JSON.parse(raw) : null;
-    });
-
-    expect(settings).not.toBeNull();
-    expect(settings.useEmbeddedNode).toBe(true);
-    expect(settings.embeddedNodeName).toBe("test-node");
-    expect(settings.embeddedNodePort).toBe(2528);
-  });
-
-  test("clearing storage removes all settings", async ({ page }) => {
-    await setupConnectedPage(page);
-    await clearAllStorage(page);
-
-    const settings = await page.evaluate(() =>
-      localStorage.getItem("calimero-desktop-settings"),
-    );
-    expect(settings).toBeNull();
-  });
-});

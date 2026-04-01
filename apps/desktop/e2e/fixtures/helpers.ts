@@ -95,7 +95,7 @@ export async function mockCoreAPIs(page: Page): Promise<void> {
     route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify({ data: MOCK_INSTALLED_APPS }),
+      body: JSON.stringify({ data: { apps: MOCK_INSTALLED_APPS } }),
     }),
   );
 
@@ -104,7 +104,7 @@ export async function mockCoreAPIs(page: Page): Promise<void> {
       return route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify({ data: MOCK_CONTEXTS }),
+        body: JSON.stringify({ data: { contexts: MOCK_CONTEXTS } }),
       });
     }
     return route.continue();
@@ -314,7 +314,7 @@ export async function setupDisconnectedPage(page: Page): Promise<void> {
     route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify({ data: [] }),
+      body: JSON.stringify({ data: { apps: [] } }),
     }),
   );
 
@@ -322,7 +322,7 @@ export async function setupDisconnectedPage(page: Page): Promise<void> {
     route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify({ data: [] }),
+      body: JSON.stringify({ data: { contexts: [] } }),
     }),
   );
 

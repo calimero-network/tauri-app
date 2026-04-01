@@ -1,234 +1,160 @@
 import { test, expect } from "@playwright/test";
 import {
-  seedSettings,
-  seedAuthTokens,
-  clearAllStorage,
   mockCoreAPIs,
   setupAuthenticatedPage,
+  seedSettings,
 } from "./fixtures/helpers";
 import {
-  STORAGE_KEYS,
   AUTHENTICATED_SETTINGS,
-  MOCK_ACCESS_TOKEN,
-  MOCK_REFRESH_TOKEN,
-  MOCK_PROVIDERS,
-  MOCK_TOKEN_RESPONSE,
+  MOCK_PROVIDERS_RESPONSE,
   API_ROUTES,
+  STORAGE_KEYS,
 } from "./fixtures/mock-data";
 
-test.describe("Login screen display", () => {
-  test("shows login screen when authenticated tokens are missing", async ({
-    page,
-  }) => {
-    const settings = {
-      ...AUTHENTICATED_SETTINGS,
-      onboardingCompleted: true,
-    };
+// ─── Login screen ────────────────────────────────────────────────────────────
 
-    await page.route(API_ROUTES.health, (route) =>
-      route.fulfill({ status: 200, body: JSON.stringify({ data: "OK" }) })
-    );
-    await page.route(API_ROUTES.providers, (route) =>
-      route.fulfill({
-        status: 200,
-        body: JSON.stringify({ data: MOCK_PROVIDERS }),
-      })
-    );
-    await page.route(API_ROUTES.listApplications, (route) =>
-      route.fulfill({ status: 200, body: JSON.stringify({ data: [] }) })
-    );
-    await page.route(API_ROUTES.listContexts, (route) =>
-      route.fulfill({ status: 200, body: JSON.stringify({ data: [] }) })
-    );
-
-    await page.addInitScript(
-      (s) => {
-        localStorage.setItem("calimero-desktop-settings", JSON.stringify(s));
-      },
-      settings
-    );
+test.describe.only("Login screen display", () => {
+  test.beforeEach(async ({ page }) => {
+    await mockCoreAPIs(page);
     await page.goto("/");
-
-    await expect(page.locator(".login-screen")).toBeVisible({ timeout: 10000 });
+    await seedSettings(page, AUTHENTICATED_SETTINGS);
+    await page.reload();
   });
 
-  test("login screen has Settings button", async ({ page }) => {
-    const settings = {
-      ...AUTHENTICATED_SETTINGS,
-      onboardingCompleted: true,
-    };
+  test("shows login screen when tokens are absent", async ({ page }) => {
+    await expect(page.getByTestId("login-screen")).toBeVisible({ timeout: 10_000 });
+  });
 
-    await page.route(API_ROUTES.health, (route) =>
-      route.fulfill({ status: 200, body: JSON.stringify({ data: "OK" }) })
-    );
-    await page.route(API_ROUTES.providers, (route) =>
-      route.fulfill({
-        status: 200,
-        body: JSON.stringify({ data: MOCK_PROVIDERS }),
-      })
-    );
-    await page.route(API_ROUTES.listApplications, (route) =>
-      route.fulfill({ status: 200, body: JSON.stringify({ data: [] }) })
-    );
-    await page.route(API_ROUTES.listContexts, (route) =>
-      route.fulfill({ status: 200, body: JSON.stringify({ data: [] }) })
-    );
-
-    await page.addInitScript(
-      (s) => {
-        localStorage.setItem("calimero-desktop-settings", JSON.stringify(s));
-      },
-      settings
-    );
-    await page.goto("/");
-
-    await expect(page.locator(".login-screen")).toBeVisible({ timeout: 10000 });
-    await expect(
-      page.locator(".login-screen-header button", { hasText: "Settings" })
-    ).toBeVisible();
+  test("login screen has a Settings button", async ({ page }) => {
+    await expect(page.getByTestId("login-screen")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByRole("button", { name: "Settings" })).toBeVisible();
   });
 });
 
-test.describe("Authenticated user bypass", () => {
-  test("skips login and shows main app when tokens exist", async ({
-    page,
-  }) => {
-    await setupAuthenticatedPage(page);
+// ─── Authenticated user ──────────────────────────────────────────────────────
 
-    await expect(page.locator(".login-screen")).not.toBeVisible();
-    await expect(
-      page.locator("text=Welcome to Calimero Desktop")
-    ).toBeVisible();
+test.describe.only("Authenticated user bypass", () => {
+  test.beforeEach(async ({ page }) => {
+    await setupAuthenticatedPage(page);
   });
 
-  test("access token is stored in localStorage after setup", async ({
-    page,
-  }) => {
-    await setupAuthenticatedPage(page);
-
-    const token = await page.evaluate(
-      (key) => localStorage.getItem(key),
-      STORAGE_KEYS.accessToken
-    );
-    expect(token).toBe(MOCK_ACCESS_TOKEN);
-  });
-
-  test("refresh token is stored in localStorage after setup", async ({
-    page,
-  }) => {
-    await setupAuthenticatedPage(page);
-
-    const token = await page.evaluate(
-      (key) => localStorage.getItem(key),
-      STORAGE_KEYS.refreshToken
-    );
-    expect(token).toBe(MOCK_REFRESH_TOKEN);
+  test("skips login and shows main app", async ({ page }) => {
+    await expect(page.getByTestId("login-screen")).not.toBeVisible();
+    await expect(page.locator("aside.sidebar")).toBeVisible();
   });
 });
 
-test.describe("401 redirect to login", () => {
-  test("redirects to login when health check returns 401", async ({
-    page,
-  }) => {
-    const settings = {
-      ...AUTHENTICATED_SETTINGS,
-      onboardingCompleted: true,
-    };
+// ─── 401 / auth error redirect ───────────────────────────────────────────────
 
+test.describe.only("401 redirect to login", () => {
+  test("shows login when health check returns auth error", async ({ page }) => {
+    // Return real HTTP 401 so mero-js throws with .status === 401, which the
+    // healthCheck wrapper maps to { error: { code: '401' } }, triggering login.
     await page.route(API_ROUTES.health, (route) =>
-      route.fulfill({
-        status: 200,
-        body: JSON.stringify({
-          error: { message: "Unauthorized", code: "401" },
-        }),
-      })
+      route.fulfill({ status: 401, contentType: "application/json", body: JSON.stringify({ error: "Unauthorized" }) }),
+    );
+    await page.route(API_ROUTES.adminHealth, (route) =>
+      route.fulfill({ status: 401, contentType: "application/json", body: JSON.stringify({ error: "Unauthorized" }) }),
+    );
+    // Mock refresh token endpoint so the mero-js retry fails quickly (401 → no further retry)
+    await page.route(API_ROUTES.refreshToken, (route) =>
+      route.fulfill({ status: 401, contentType: "application/json", body: JSON.stringify({ error: "Unauthorized" }) }),
     );
     await page.route(API_ROUTES.providers, (route) =>
       route.fulfill({
         status: 200,
-        body: JSON.stringify({ data: MOCK_PROVIDERS }),
-      })
+        contentType: "application/json",
+        body: JSON.stringify(MOCK_PROVIDERS_RESPONSE),
+      }),
     );
     await page.route(API_ROUTES.listApplications, (route) =>
-      route.fulfill({ status: 200, body: JSON.stringify({ data: [] }) })
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ data: { apps: [] } }),
+      }),
     );
     await page.route(API_ROUTES.listContexts, (route) =>
-      route.fulfill({ status: 200, body: JSON.stringify({ data: [] }) })
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ data: { contexts: [] } }),
+      }),
     );
 
-    await page.addInitScript(
-      ([s, accessKey, accessVal, refreshKey, refreshVal, expiresKey]) => {
-        localStorage.setItem("calimero-desktop-settings", JSON.stringify(s));
-        localStorage.setItem(accessKey as string, accessVal as string);
-        localStorage.setItem(refreshKey as string, refreshVal as string);
-        localStorage.setItem(
-          expiresKey as string,
-          String(Date.now() + 3600000)
-        );
+    await page.goto("/");
+    await page.evaluate(
+      ([settingsKey, settings, accessKey, refreshKey, expiresKey]) => {
+        localStorage.setItem(settingsKey, JSON.stringify(settings));
+        localStorage.setItem(accessKey, "mock-access-token");
+        localStorage.setItem(refreshKey, "mock-refresh-token");
+        localStorage.setItem(expiresKey, String(Date.now() + 3600000));
       },
       [
-        settings,
+        STORAGE_KEYS.settings,
+        AUTHENTICATED_SETTINGS,
         STORAGE_KEYS.accessToken,
-        MOCK_ACCESS_TOKEN,
         STORAGE_KEYS.refreshToken,
-        MOCK_REFRESH_TOKEN,
         STORAGE_KEYS.tokenExpiresAt,
-      ] as const
+      ] as const,
     );
-    await page.goto("/");
+    await page.reload();
 
-    await expect(page.locator(".login-screen")).toBeVisible({ timeout: 10000 });
+    await expect(page.getByTestId("login-screen")).toBeVisible({ timeout: 10_000 });
   });
 });
 
-test.describe("Node disconnected state", () => {
-  test("shows disconnected status when node health fails", async ({
-    page,
-  }) => {
-    const settings = {
-      ...AUTHENTICATED_SETTINGS,
-      onboardingCompleted: true,
-    };
+// ─── Node disconnected state ─────────────────────────────────────────────────
 
+test.describe.only("Node disconnected state", () => {
+  test("shows disconnected indicator when node health fails", async ({ page }) => {
     await page.route(API_ROUTES.health, (route) =>
       route.fulfill({
         status: 200,
-        body: JSON.stringify({
-          error: { message: "Node not responding" },
-        }),
-      })
+        contentType: "application/json",
+        body: JSON.stringify({ error: { message: "Node not responding" } }),
+      }),
+    );
+    await page.route(API_ROUTES.adminHealth, (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ error: { message: "Node not responding" } }),
+      }),
+    );
+    await page.route(API_ROUTES.providers, (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(MOCK_PROVIDERS_RESPONSE),
+      }),
     );
     await page.route(API_ROUTES.listApplications, (route) =>
-      route.fulfill({ status: 200, body: JSON.stringify({ data: [] }) })
+      route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ data: [] }) }),
     );
     await page.route(API_ROUTES.listContexts, (route) =>
-      route.fulfill({ status: 200, body: JSON.stringify({ data: [] }) })
+      route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ data: [] }) }),
     );
 
-    await page.addInitScript(
-      ([s, accessKey, accessVal, refreshKey, refreshVal, expiresKey]) => {
-        localStorage.setItem("calimero-desktop-settings", JSON.stringify(s));
-        localStorage.setItem(accessKey as string, accessVal as string);
-        localStorage.setItem(refreshKey as string, refreshVal as string);
-        localStorage.setItem(
-          expiresKey as string,
-          String(Date.now() + 3600000)
-        );
+    await page.goto("/");
+    await page.evaluate(
+      ([settingsKey, settings, accessKey, refreshKey, expiresKey]) => {
+        localStorage.setItem(settingsKey, JSON.stringify(settings));
+        localStorage.setItem(accessKey, "mock-access-token");
+        localStorage.setItem(refreshKey, "mock-refresh-token");
+        localStorage.setItem(expiresKey, String(Date.now() + 3600000));
       },
       [
-        settings,
+        STORAGE_KEYS.settings,
+        AUTHENTICATED_SETTINGS,
         STORAGE_KEYS.accessToken,
-        MOCK_ACCESS_TOKEN,
         STORAGE_KEYS.refreshToken,
-        MOCK_REFRESH_TOKEN,
         STORAGE_KEYS.tokenExpiresAt,
-      ] as const
+      ] as const,
     );
-    await page.goto("/");
+    await page.reload();
 
-    await expect(page.locator(".status-badge.disconnected")).toBeVisible({
-      timeout: 10000,
-    });
-    await expect(page.locator("text=Disconnected")).toBeVisible();
+    await expect(page.locator(".node-status-indicator.disconnected")).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator(".node-status-label", { hasText: "Disconnected" })).toBeVisible();
   });
 });

@@ -497,7 +497,7 @@ function App() {
   // Show login if needed
   if (showLogin) {
     return (
-      <div className="app login-screen">
+      <div className="app login-screen" data-testid="login-screen">
         <header className="login-screen-header">
           <div className="login-screen-brand">
             <img src={calimeroLogo} alt="Calimero" className="login-screen-logo" />

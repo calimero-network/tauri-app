@@ -458,7 +458,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
   // If loading and we have a step other than welcome/node-setup, show loading
   if (loading && !['welcome', 'what-is', 'node-setup'].includes(currentStep)) {
     return (
-      <div className="onboarding-page">
+      <div className="onboarding-page" data-testid="onboarding-page">
         <div className="onboarding-content">
           <div className="loading-spinner">
             <div className="spinner"></div>
@@ -498,7 +498,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
       );
 
     return (
-      <div className="onboarding-page">
+      <div className="onboarding-page" data-testid="onboarding-page">
           <ProgressIndicator />
         <div className="onboarding-content">
           <div className="onboarding-card error">
@@ -559,7 +559,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
   // Welcome screen
   if (currentStep === 'welcome') {
     return (
-      <div className="onboarding-page">
+      <div className="onboarding-page" data-testid="onboarding-page">
         <ProgressIndicator />
         <div ref={stepContainerRef} className="onboarding-step-container">
           <div className="step-content">
@@ -590,7 +590,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
   // What is Calimero screen
   if (currentStep === 'what-is') {
     return (
-      <div className="onboarding-page">
+      <div className="onboarding-page" data-testid="onboarding-page">
         <ProgressIndicator />
         <div ref={stepContainerRef} className="onboarding-step-container">
           <button 
@@ -650,7 +650,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
     const showCreateNew = nodeSetupMode === 'create-new';
 
     return (
-      <div className="onboarding-page">
+      <div className="onboarding-page" data-testid="onboarding-page">
         <ProgressIndicator />
         <div ref={stepContainerRef} className="onboarding-step-container">
           <button 
@@ -897,7 +897,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
   // Login step - show after node is created
   if (currentStep === 'login') {
       return (
-        <div className="onboarding-page">
+        <div className="onboarding-page" data-testid="onboarding-page">
         <ProgressIndicator />
           <div ref={stepContainerRef} className="onboarding-step-container">
             <div className="step-content">
@@ -940,7 +940,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
   // Install app step
   if (currentStep === 'install-app') {
     return (
-      <div className="onboarding-page">
+      <div className="onboarding-page" data-testid="onboarding-page">
         <ProgressIndicator />
         <div ref={stepContainerRef} className="onboarding-step-container">
           <div className="step-content">

@@ -159,7 +159,9 @@ function App() {
 
       try {
         const { startMerod } = await import('./utils/merod');
-        let runningNodes = await detectRunningMerodNodes();
+        const normalizeRunningNodes = (n: unknown): RunningMerodNode[] =>
+          Array.isArray(n) ? n : [];
+        let runningNodes = normalizeRunningNodes(await detectRunningMerodNodes());
         setRunningNodes(runningNodes);
 
         // Auto-start merod if user has embedded node configured and no node is running
@@ -174,7 +176,7 @@ function App() {
           try {
             await startMerod(serverPort, swarmPort, dataDir, settings.embeddedNodeName, settings.debugLogs);
             await new Promise((r) => setTimeout(r, 4000)); // give merod time to start (longer when app launches at login)
-            runningNodes = await detectRunningMerodNodes();
+            runningNodes = normalizeRunningNodes(await detectRunningMerodNodes());
             setRunningNodes(runningNodes);
           } catch (startErr) {
             console.warn('Auto-start merod failed:', startErr);
@@ -195,6 +197,7 @@ function App() {
           );
           if ((!currentUrl || isLocalhostUrl) && currentUrl !== nodeUrl) {
             saveSettings({ ...settings, nodeUrl });
+            setCheckingOnboarding(false);
             window.location.reload();
             return;
           }
@@ -203,18 +206,27 @@ function App() {
         console.error('Failed to check nodes:', error);
       }
 
-      // baseUrl should NOT include /admin-api - mero-js adds that internally
-      const nodeBaseUrl = settings.nodeUrl.replace(/\/$/, '');
-      const authUrl = getAuthUrl(settings);
-      const authBaseUrl = authUrl.replace(/\/$/, '');
-      await createClientAsync({
-        baseUrl: nodeBaseUrl,
-        authBaseUrl: authBaseUrl,
-        requestCredentials: 'omit',
-      });
-      setClientReady(true);
-
       try {
+        const rawNodeUrl = settings.nodeUrl;
+        if (!rawNodeUrl?.trim()) {
+          console.error('Missing nodeUrl after completed onboarding');
+          setConnected(false);
+          setError('Node URL is not configured');
+          setNeedsNodeConfig(true);
+          return;
+        }
+
+        // baseUrl should NOT include /admin-api - mero-js adds that internally
+        const nodeBaseUrl = rawNodeUrl.replace(/\/$/, '');
+        const authUrl = getAuthUrl(settings);
+        const authBaseUrl = authUrl.replace(/\/$/, '');
+        await createClientAsync({
+          baseUrl: nodeBaseUrl,
+          authBaseUrl: authBaseUrl,
+          requestCredentials: 'omit',
+        });
+        setClientReady(true);
+
         const healthCheck = await Promise.race([
           apiClient.node.healthCheck(),
           new Promise<{ error: { message: string; code?: string } }>((resolve) =>
@@ -229,7 +241,6 @@ function App() {
           setNeedsNodeConfig(false);
           loadContexts().catch(() => {});
           loadInstalledApps().catch(() => {});
-          setCheckingOnboarding(false);
           invoke("set_tray_icon_connected", { connected: false }).catch(() => {});
           return;
         }
@@ -289,9 +300,10 @@ function App() {
           setShowLogin(true);
         }
       } catch (err) {
-        console.error('Failed to check node:', err);
+        console.error('Failed to initialize client or check node:', err);
         setConnected(false);
         setError(err instanceof Error ? err.message : String(err));
+        setNeedsNodeConfig(false);
         loadContexts().catch(() => {});
         loadInstalledApps().catch(() => {});
         invoke("set_tray_icon_connected", { connected: false }).catch(() => {});
@@ -497,7 +509,7 @@ function App() {
   // Show login if needed
   if (showLogin) {
     return (
-      <div className="app login-screen">
+      <div className="app login-screen" data-testid="login-screen">
         <header className="login-screen-header">
           <div className="login-screen-brand">
             <img src={calimeroLogo} alt="Calimero" className="login-screen-logo" />
@@ -615,7 +627,7 @@ function App() {
           <div className="app-content">
         <header className="header">
               <div className="header-title">
-                <h1>Marketplace</h1>
+                <h1 data-testid="shell-page-title">Marketplace</h1>
               </div>
               <NodeStatusIndicator
                 connected={connected}
@@ -651,7 +663,7 @@ function App() {
           <div className="app-content">
         <header className="header">
               <div className="header-title">
-                <h1>Applications</h1>
+                <h1 data-testid="shell-page-title">Applications</h1>
               </div>
               <NodeStatusIndicator
                 connected={connected}
@@ -715,7 +727,7 @@ function App() {
           <div className="app-content">
             <header className="header">
               <div className="header-title">
-                <h1>Nodes</h1>
+                <h1 data-testid="shell-page-title">Nodes</h1>
               </div>
               <NodeStatusIndicator
                 connected={connected}
@@ -751,7 +763,7 @@ function App() {
           <div className="app-content">
         <header className="header">
               <div className="header-title">
-                <h1>Contexts</h1>
+                <h1 data-testid="shell-page-title">Contexts</h1>
               </div>
               <NodeStatusIndicator
                 connected={connected}
@@ -846,7 +858,7 @@ function App() {
         <div className="app-content">
       <header className="header">
             <div className="header-title">
-              <h1>{pageTitle}</h1>
+              <h1 data-testid="shell-page-title">{pageTitle}</h1>
               {appVersion && (
                 <span className="version-badge">v{appVersion}</span>
               )}
@@ -912,7 +924,7 @@ function App() {
           </button>
             </div>
             <div className="apps-grid">
-              {installedApps.slice(0, 4).map((app: any) => {
+              {installedApps.slice(0, 4).map((app: any, index: number) => {
                 let appName = app.id;
                 let frontendUrl: string | null = null;
                 try {
@@ -926,7 +938,10 @@ function App() {
                 }
                 
                 return (
-                  <div key={app.id} className="app-card-mini-wrapper">
+                  <div
+                    key={`${app?.id != null && String(app.id) !== '' ? String(app.id) : 'app'}-${index}`}
+                    className="app-card-mini-wrapper"
+                  >
                     <button
                       type="button"
                       onClick={() => {

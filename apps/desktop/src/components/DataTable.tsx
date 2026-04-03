@@ -15,7 +15,8 @@ export interface Column<T> {
 interface DataTableProps<T> {
   data: T[];
   columns: Column<T>[];
-  keyExtractor: (item: T) => string;
+  /** Second argument is row index; use it when id fields may be empty so keys stay unique. */
+  keyExtractor: (item: T, index: number) => string;
   emptyMessage?: string | React.ReactNode;
   onRowClick?: (item: T) => void;
   compact?: boolean;
@@ -88,7 +89,7 @@ export default function DataTable<T>({
   if (data.length === 0) {
     return (
       <div className="data-table-empty">
-        <p>{emptyMessage}</p>
+        {emptyMessage}
       </div>
     );
   }
@@ -98,9 +99,9 @@ export default function DataTable<T>({
       <table className="data-table">
         <thead>
           <tr>
-            {columns.map((column) => (
+            {columns.map((column, colIndex) => (
               <th
-                key={column.key}
+                key={column.key || `col-${colIndex}`}
                 className={column.sortable ? 'sortable' : ''}
                 style={{ width: column.width }}
                 onClick={() => column.sortable && handleSort(column.key)}
@@ -122,22 +123,32 @@ export default function DataTable<T>({
           </tr>
         </thead>
         <tbody>
-          {sortedData.map((item) => (
+          {sortedData.map((item, rowIndex) => {
+            const rawKey = keyExtractor(item, rowIndex);
+            const rowKey =
+              rawKey != null && String(rawKey) !== ''
+                ? String(rawKey)
+                : `row-${rowIndex}`;
+            return (
             <tr
-              key={keyExtractor(item)}
+              key={rowKey}
               onClick={() => onRowClick?.(item)}
               onContextMenu={(e) => onRowContextMenu?.(e, item)}
               className={onRowClick ? 'clickable' : ''}
             >
-              {columns.map((column) => (
-                <td key={column.key} style={{ width: column.width }}>
+              {columns.map((column, colIndex) => (
+                <td
+                  key={column.key || `col-${colIndex}`}
+                  style={{ width: column.width }}
+                >
                   {column.render
                     ? column.render(item)
                     : String((item as any)[column.key] ?? '')}
                 </td>
               ))}
             </tr>
-          ))}
+            );
+          })}
         </tbody>
       </table>
     </div>

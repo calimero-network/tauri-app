@@ -1,4 +1,4 @@
-import type { Page } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
 import {
   STORAGE_KEYS,
   AUTHENTICATED_SETTINGS,
@@ -14,7 +14,7 @@ import {
   MOCK_PROVIDERS_RESPONSE,
   MOCK_CONTEXTS,
   MOCK_INSTALLED_APPS,
-  MOCK_REGISTRY_APPS,
+  MOCK_REGISTRY_V2_BUNDLES,
   API_ROUTES,
   listApplicationsWireBody,
   listContextsWireBody,
@@ -29,6 +29,31 @@ export type MockCoreAPIsOptions = {
   /** Defaults to `MOCK_INSTALLED_APPS` (non-empty app dropdown for create-context flows). */
   installedApps?: MockInstalledAppRow[];
 };
+
+// ─── Tauri IPC stub ──────────────────────────────────────────────────────────
+
+/**
+ * Stub `window.__TAURI_IPC__` so that `invoke()` from `@tauri-apps/api/tauri`
+ * resolves immediately instead of throwing a TypeError in the browser context.
+ * Must be called **before** the page navigates to the app.
+ */
+export async function stubTauriIPC(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    (window as any).__TAURI_IPC__ = ({
+      callback,
+    }: {
+      cmd: string;
+      callback: number;
+      error: number;
+    }) => {
+      // Resolve every invoke call with an empty/successful response.
+      const cb = (window as any)[`_${callback}`];
+      if (typeof cb === "function") {
+        cb(null);
+      }
+    };
+  });
+}
 
 // ─── localStorage seeding ────────────────────────────────────────────────────
 
@@ -73,6 +98,9 @@ export async function clearAllStorage(page: Page): Promise<void> {
 export async function seedAuthenticatedState(page: Page): Promise<void> {
   await seedSettings(page, AUTHENTICATED_SETTINGS);
   await seedAuthTokens(page);
+  await page.evaluate(() => {
+    localStorage.setItem("calimero-autostart-default-applied", "1");
+  });
 }
 
 /**
@@ -81,6 +109,9 @@ export async function seedAuthenticatedState(page: Page): Promise<void> {
 export async function seedDeveloperState(page: Page): Promise<void> {
   await seedSettings(page, DEVELOPER_SETTINGS);
   await seedAuthTokens(page);
+  await page.evaluate(() => {
+    localStorage.setItem("calimero-autostart-default-applied", "1");
+  });
 }
 
 // ─── API mocking helpers ─────────────────────────────────────────────────────
@@ -129,16 +160,62 @@ export async function mockCoreAPIs(
 }
 
 /**
- * Mock registry endpoints so the Marketplace page can render apps.
+ * Mock registry V2 bundle API: list, ?package= filter, and GET /bundles/:package/:version.
+ * Matches `fetchAppsFromRegistry`, `fetchAppVersions`, `fetchAppManifest` in registry.ts.
  */
 export async function mockRegistryAPIs(page: Page): Promise<void> {
-  await page.route(API_ROUTES.registryBundles, (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify(MOCK_REGISTRY_APPS),
-    }),
+  await page.route(
+    (url) => url.pathname.includes("/api/v2/bundles"),
+    async (route) => {
+      if (route.request().method() !== "GET") {
+        return route.continue();
+      }
+      const url = new URL(route.request().url());
+      const parts = url.pathname.split("/").filter(Boolean);
+      const bi = parts.indexOf("bundles");
+      const rest = bi >= 0 ? parts.slice(bi + 1) : [];
+
+      if (rest.length === 0) {
+        const pkg = url.searchParams.get("package");
+        const list = pkg
+          ? MOCK_REGISTRY_V2_BUNDLES.filter((b) => b.package === pkg)
+          : [...MOCK_REGISTRY_V2_BUNDLES];
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(list),
+        });
+      }
+
+      if (rest.length === 2) {
+        const [pkg, ver] = rest;
+        const b = MOCK_REGISTRY_V2_BUNDLES.find(
+          (x) => x.package === pkg && x.appVersion === ver,
+        );
+        if (!b) {
+          return route.fulfill({ status: 404, body: "not found" });
+        }
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(b),
+        });
+      }
+
+      return route.continue();
+    },
   );
+
+  await page.route(API_ROUTES.registryDownloadsRecord, (route) => {
+    if (route.request().method() === "POST") {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: "{}",
+      });
+    }
+    return route.continue();
+  });
 }
 
 /**
@@ -149,7 +226,9 @@ export async function mockInstallAPIs(page: Page): Promise<void> {
     route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify({ data: { success: true } }),
+      body: JSON.stringify({
+        data: { applicationId: "mock-installed-app-" + Date.now() },
+      }),
     }),
   );
 
@@ -158,30 +237,6 @@ export async function mockInstallAPIs(page: Page): Promise<void> {
       status: 200,
       contentType: "application/json",
       body: JSON.stringify({ data: { success: true } }),
-    }),
-  );
-
-  await page.route(API_ROUTES.registryBundleManifest, (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify({
-        name: "only-peers-chat",
-        version: "0.3.0",
-        metadata: { name: "Only Peers Chat" },
-        source: {
-          url: "https://apps.calimero.network/bundles/app-1/0.3.0.wasm",
-          hash: "abc123",
-        },
-      }),
-    }),
-  );
-
-  await page.route(API_ROUTES.registryDownload, (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify({ success: true }),
     }),
   );
 }
@@ -221,10 +276,54 @@ export async function mockContextAPIs(page: Page): Promise<void> {
 
 // ─── Navigation helpers ──────────────────────────────────────────────────────
 
+/** Max time for post-reload init: node health (3s race) + checkOnboardingState (10s race). */
+const APP_SHELL_TIMEOUT_MS = 30_000;
+
+/**
+ * Wait until the main shell (sidebar) is visible. After `page.reload()`, the app shows
+ * "Setting up Calimero Desktop" until `checkingOnboarding` clears — that can exceed Playwright's
+ * default 5s expect timeout if onboarding checks are slow.
+ */
+export async function waitForAppShellReady(
+  page: Page,
+  timeout = APP_SHELL_TIMEOUT_MS,
+): Promise<void> {
+  await Promise.all([
+    page.locator("aside.sidebar").waitFor({ state: "visible", timeout }),
+    page
+      .getByTestId("shell-page-title")
+      .waitFor({ state: "visible", timeout }),
+  ]);
+}
+
+/**
+ * Scroll a control into view inside the Settings page's nested `.settings-main` region.
+ * Playwright does not scroll `overflow: auto` ancestors when only the window scrolls.
+ *
+ * We avoid `scrollIntoViewIfNeeded()` here: controls below the fold are often treated as
+ * not visible while clipped, so Playwright times out waiting for visibility before scrolling.
+ * `scrollIntoView` via `evaluate` runs on an attached node and scrolls the correct ancestor.
+ */
+export async function scrollSettingsControlIntoView(
+  page: Page,
+  target: string | Locator,
+): Promise<void> {
+  await page.locator(".settings-main").waitFor({ state: "visible" });
+  const loc = typeof target === "string" ? page.locator(target) : target;
+  await loc.waitFor({ state: "attached" });
+  await loc.evaluate((el) => {
+    (el as HTMLElement).scrollIntoView({
+      block: "center",
+      inline: "nearest",
+    });
+  });
+}
+
 export async function navigateVia(
   page: Page,
   label: "Home" | "Nodes" | "Contexts" | "Applications" | "Marketplace",
 ): Promise<void> {
+  await waitForAppShellReady(page);
   await page.locator("aside.sidebar").getByTitle(label).click();
 }
 
@@ -237,11 +336,16 @@ export async function navigateVia(
  *   3. seed authenticated state
  *   4. reload so the app picks up seeded state
  */
-export async function setupAuthenticatedPage(page: Page): Promise<void> {
-  await mockCoreAPIs(page);
+export async function setupAuthenticatedPage(
+  page: Page,
+  options?: MockCoreAPIsOptions,
+): Promise<void> {
+  await stubTauriIPC(page);
+  await mockCoreAPIs(page, options);
   await page.goto("/");
   await seedAuthenticatedState(page);
   await page.reload();
+  await waitForAppShellReady(page);
 }
 
 /**
@@ -251,11 +355,13 @@ export async function setupDeveloperPage(
   page: Page,
   options?: MockCoreAPIsOptions,
 ): Promise<void> {
+  await stubTauriIPC(page);
   await mockCoreAPIs(page, options);
   await mockContextAPIs(page);
   await page.goto("/");
   await seedDeveloperState(page);
   await page.reload();
+  await waitForAppShellReady(page);
 }
 
 // ─── Node lifecycle helpers ─────────────────────────────────────────────────
@@ -306,10 +412,12 @@ export async function mockUnhealthy(page: Page): Promise<void> {
  * Setup for an authenticated page where the node is healthy / connected.
  */
 export async function setupConnectedPage(page: Page): Promise<void> {
+  await stubTauriIPC(page);
   await mockCoreAPIs(page);
   await page.goto("/");
   await seedAuthenticatedState(page);
   await page.reload();
+  await waitForAppShellReady(page);
 }
 
 /**
@@ -318,6 +426,7 @@ export async function setupConnectedPage(page: Page): Promise<void> {
  * app doesn't hang on unrelated requests.
  */
 export async function setupDisconnectedPage(page: Page): Promise<void> {
+  await stubTauriIPC(page);
   await mockUnhealthy(page);
 
   await page.route(API_ROUTES.providers, (route) =>
@@ -346,18 +455,27 @@ export async function setupDisconnectedPage(page: Page): Promise<void> {
 
   await page.goto("/");
   await seedSettings(page, DISCONNECTED_SETTINGS);
+  await page.evaluate(() => {
+    localStorage.setItem("calimero-autostart-default-applied", "1");
+  });
   await page.reload();
+  await waitForAppShellReady(page);
 }
 
 /**
  * Setup for an authenticated page with embedded-node settings seeded.
  */
 export async function setupEmbeddedNodePage(page: Page): Promise<void> {
+  await stubTauriIPC(page);
   await mockCoreAPIs(page);
   await page.goto("/");
   await seedSettings(page, EMBEDDED_NODE_SETTINGS);
   await seedAuthTokens(page);
+  await page.evaluate(() => {
+    localStorage.setItem("calimero-autostart-default-applied", "1");
+  });
   await page.reload();
+  await waitForAppShellReady(page);
 }
 
 /**

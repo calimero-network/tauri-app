@@ -147,7 +147,7 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
   return (
     <div className="installed-apps-page">
       <header className="installed-apps-header">
-        <h1>Installed Applications</h1>
+        <h2>Installed Applications</h2>
         <button onClick={loadInstalledApps} className="button" disabled={loading}>
           {loading ? "Loading..." : "Refresh"}
         </button>
@@ -205,7 +205,7 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
                 width: '25%',
                 sortValue: (app) => {
                   const metadata = decodeMetadata(app.metadata);
-                  return metadata?.name || app.name || app.id;
+                  return metadata?.name || app.name || app.id || '';
                 },
                 render: (app) => {
                   const metadata = decodeMetadata(app.metadata);
@@ -213,7 +213,7 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
                   return (
                     <div className="table-cell-name">
                       <div className="table-cell-primary">{appName}</div>
-                      <div className="table-cell-secondary">ID: {app.id.substring(0, 16)}...</div>
+                      <div className="table-cell-secondary">ID: {app.id ? `${app.id.substring(0, 16)}...` : 'N/A'}</div>
                     </div>
                   );
                 },
@@ -315,7 +315,9 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
                 },
               },
             ]}
-            keyExtractor={(app) => app.id}
+            keyExtractor={(app, index) =>
+              app.id || app.name || app.source || `installed-${index}`
+            }
             emptyMessage={
               <div className="empty-state">
                 <p>No applications installed.</p>

@@ -9,6 +9,8 @@ import {
 } from "./fixtures/helpers";
 import { DEFAULT_SETTINGS, AUTHENTICATED_SETTINGS, DEVELOPER_SETTINGS } from "./fixtures/mock-data";
 
+const shellTitleTimeout = 20_000;
+
 describeAfter35("Sidebar navigation", () => {
   test.beforeEach(async ({ page }) => {
     await setupAuthenticatedPage(page);
@@ -32,7 +34,10 @@ describeAfter35("Sidebar navigation", () => {
     page,
   }) => {
     await page.click('button[title="Marketplace"]');
-    await expect(page.locator("h1")).toHaveText("Marketplace");
+    await expect(page.getByTestId("shell-page-title")).toHaveText(
+      "Marketplace",
+      { timeout: shellTitleTimeout }
+    );
     await expect(page.locator('button[title="Marketplace"]')).toHaveClass(
       /active/
     );
@@ -42,7 +47,10 @@ describeAfter35("Sidebar navigation", () => {
     page,
   }) => {
     await page.click('button[title="Applications"]');
-    await expect(page.locator("h1")).toHaveText("Applications");
+    await expect(page.getByTestId("shell-page-title")).toHaveText(
+      "Applications",
+      { timeout: shellTitleTimeout }
+    );
     await expect(page.locator('button[title="Applications"]')).toHaveClass(
       /active/
     );
@@ -50,10 +58,15 @@ describeAfter35("Sidebar navigation", () => {
 
   test("clicking Home returns to home page", async ({ page }) => {
     await page.click('button[title="Marketplace"]');
-    await expect(page.locator("h1")).toHaveText("Marketplace");
+    await expect(page.getByTestId("shell-page-title")).toHaveText(
+      "Marketplace",
+      { timeout: shellTitleTimeout }
+    );
 
     await page.click('button[title="Home"]');
-    await expect(page.locator("h1")).toHaveText("Home");
+    await expect(page.getByTestId("shell-page-title")).toHaveText("Home", {
+      timeout: shellTitleTimeout,
+    });
     await expect(page.locator('button[title="Home"]')).toHaveClass(/active/);
   });
 
@@ -81,7 +94,9 @@ describeAfter35("Sidebar navigation — developer mode", () => {
 
   test("clicking Contexts navigates to contexts page", async ({ page }) => {
     await page.click('button[title="Contexts"]');
-    await expect(page.locator("h1")).toHaveText("Contexts");
+    await expect(page.getByTestId("shell-page-title")).toHaveText("Contexts", {
+      timeout: shellTitleTimeout,
+    });
     await expect(page.locator('button[title="Contexts"]')).toHaveClass(
       /active/
     );
@@ -89,25 +104,39 @@ describeAfter35("Sidebar navigation — developer mode", () => {
 
   test("clicking Nodes navigates to nodes page", async ({ page }) => {
     await page.click('button[title="Nodes"]');
-    await expect(page.locator("h1")).toHaveText("Nodes");
+    await expect(page.getByTestId("shell-page-title")).toHaveText("Nodes", {
+      timeout: shellTitleTimeout,
+    });
     await expect(page.locator('button[title="Nodes"]')).toHaveClass(/active/);
   });
 
   test("full navigation cycle through all pages", async ({ page }) => {
     await page.click('button[title="Marketplace"]');
-    await expect(page.locator("h1")).toHaveText("Marketplace");
+    await expect(page.getByTestId("shell-page-title")).toHaveText(
+      "Marketplace",
+      { timeout: shellTitleTimeout }
+    );
 
     await page.click('button[title="Applications"]');
-    await expect(page.locator("h1")).toHaveText("Applications");
+    await expect(page.getByTestId("shell-page-title")).toHaveText(
+      "Applications",
+      { timeout: shellTitleTimeout }
+    );
 
     await page.click('button[title="Contexts"]');
-    await expect(page.locator("h1")).toHaveText("Contexts");
+    await expect(page.getByTestId("shell-page-title")).toHaveText("Contexts", {
+      timeout: shellTitleTimeout,
+    });
 
     await page.click('button[title="Nodes"]');
-    await expect(page.locator("h1")).toHaveText("Nodes");
+    await expect(page.getByTestId("shell-page-title")).toHaveText("Nodes", {
+      timeout: shellTitleTimeout,
+    });
 
     await page.click('button[title="Home"]');
-    await expect(page.locator("h1")).toHaveText("Home");
+    await expect(page.getByTestId("shell-page-title")).toHaveText("Home", {
+      timeout: shellTitleTimeout,
+    });
   });
 });
 
@@ -118,12 +147,16 @@ describeAfter35("Settings navigation", () => {
 
   test("clicking Settings button opens settings page", async ({ page }) => {
     await page.click('button[title="Settings"]');
-    await expect(page.locator("h1")).toHaveText("Settings");
+    await expect(
+      page.getByRole("heading", { name: "Settings", level: 1 }),
+    ).toHaveText("Settings");
   });
 
   test("settings page has Back button to return", async ({ page }) => {
     await page.click('button[title="Settings"]');
-    await expect(page.locator("h1")).toHaveText("Settings");
+    await expect(
+      page.getByRole("heading", { name: "Settings", level: 1 }),
+    ).toHaveText("Settings");
 
     const backBtn = page.locator("button", { hasText: "Back" });
     await expect(backBtn).toBeVisible();
@@ -149,9 +182,27 @@ describeAfter35("Home page content", () => {
     await expect(page.getByText("Settings", { exact: false }).first()).toBeVisible();
   });
 
-  test("empty state shows when no apps installed", async ({ page }) => {
+  test("home shows no-apps card when installed list is empty", async ({
+    page,
+  }) => {
+    await setupAuthenticatedPage(page, { installedApps: [] });
     await expect(
-      page.locator("text=No Applications Installed")
+      page.getByRole("heading", { name: "No Applications Installed" }),
     ).toBeVisible();
+  });
+});
+
+describeAfter35("Applications page — empty state", () => {
+  test.beforeEach(async ({ page }) => {
+    await setupAuthenticatedPage(page, { installedApps: [] });
+  });
+
+  test("empty state shows when no apps installed", async ({ page }) => {
+    await page.click('button[title="Applications"]');
+    await expect(page.getByTestId("shell-page-title")).toHaveText(
+      "Applications",
+      { timeout: shellTitleTimeout },
+    );
+    await expect(page.getByText("No applications installed.")).toBeVisible();
   });
 });

@@ -25,12 +25,19 @@ const DEFAULT_PROGRESS: Omit<OnboardingProgress, 'savedAt'> = {
   useExistingNode: null,
 };
 
+/** Avoid spreading explicit `undefined` into merged state (breaks React controlled inputs). */
+function omitUndefined<T extends Record<string, unknown>>(obj: Partial<T>): Partial<T> {
+  return Object.fromEntries(
+    Object.entries(obj).filter(([, v]) => v !== undefined),
+  ) as Partial<T>;
+}
+
 export function saveOnboardingProgress(progress: Partial<OnboardingProgress>): void {
   try {
     const existing = loadOnboardingProgress();
     const merged: OnboardingProgress = {
       ...(existing || DEFAULT_PROGRESS),
-      ...progress,
+      ...omitUndefined(progress as Record<string, unknown>),
       savedAt: Date.now(),
     };
     localStorage.setItem(ONBOARDING_PROGRESS_KEY, JSON.stringify(merged));
@@ -44,13 +51,18 @@ export function loadOnboardingProgress(): OnboardingProgress | null {
     const stored = localStorage.getItem(ONBOARDING_PROGRESS_KEY);
     if (!stored) return null;
 
-    const parsed = JSON.parse(stored) as OnboardingProgress;
+    const parsed = JSON.parse(stored) as Partial<OnboardingProgress>;
     // Expire after 7 days
     if (Date.now() - (parsed.savedAt || 0) > 7 * 24 * 60 * 60 * 1000) {
       clearOnboardingProgress();
       return null;
     }
-    return parsed;
+    const normalized: OnboardingProgress = {
+      ...DEFAULT_PROGRESS,
+      ...omitUndefined(parsed as Record<string, unknown>),
+      savedAt: parsed.savedAt ?? Date.now(),
+    } as OnboardingProgress;
+    return normalized;
   } catch {
     return null;
   }

@@ -6,6 +6,7 @@ import {
   seedSettings,
   seedAuthTokens,
   mockCoreAPIs,
+  scrollSettingsControlIntoView,
 } from "./fixtures/helpers";
 import {
   STORAGE_KEYS,
@@ -23,7 +24,9 @@ describeAfter35("Settings page access", () => {
 
   test("opens settings page via gear button", async ({ page }) => {
     await page.click('button[title="Settings"]');
-    await expect(page.locator("h1")).toHaveText("Settings");
+    await expect(
+      page.getByRole("heading", { name: "Settings", level: 1 }),
+    ).toHaveText("Settings");
   });
 
   test("settings page has General tab active by default", async ({ page }) => {
@@ -41,10 +44,14 @@ describeAfter35("Settings page access", () => {
 
   test("Back button returns to previous page", async ({ page }) => {
     await page.click('button[title="Settings"]');
-    await expect(page.locator("h1")).toHaveText("Settings");
+    await expect(
+      page.getByRole("heading", { name: "Settings", level: 1 }),
+    ).toHaveText("Settings");
 
     await page.locator("button", { hasText: "Back" }).click();
-    await expect(page.locator("h1")).not.toHaveText("Settings");
+    await expect(
+      page.getByRole("heading", { name: "Settings", level: 1 }),
+    ).not.toBeVisible();
   });
 });
 
@@ -57,22 +64,27 @@ describeAfter35("General tab toggles", () => {
   });
 
   test("dark mode toggle is visible", async ({ page }) => {
+    await scrollSettingsControlIntoView(page, "#theme-toggle");
     await expect(page.locator("#theme-toggle")).toBeVisible();
   });
 
   test("developer mode toggle is visible", async ({ page }) => {
+    await scrollSettingsControlIntoView(page, "#developer-mode");
     await expect(page.locator("#developer-mode")).toBeVisible();
   });
 
   test("debug logs toggle is visible", async ({ page }) => {
+    await scrollSettingsControlIntoView(page, "#debug-logs");
     await expect(page.locator("#debug-logs")).toBeVisible();
   });
 
   test("developer mode is off by default", async ({ page }) => {
+    await scrollSettingsControlIntoView(page, "#developer-mode");
     await expect(page.locator("#developer-mode")).not.toBeChecked();
   });
 
   test("toggling developer mode on updates localStorage", async ({ page }) => {
+    await scrollSettingsControlIntoView(page, "#developer-mode");
     await page.locator("#developer-mode").check();
 
     const raw = await page.evaluate(
@@ -87,6 +99,7 @@ describeAfter35("General tab toggles", () => {
   test("toggling developer mode off updates localStorage", async ({
     page,
   }) => {
+    await scrollSettingsControlIntoView(page, "#developer-mode");
     await page.locator("#developer-mode").check();
     await expect(page.locator("#developer-mode")).toBeChecked();
 
@@ -100,6 +113,7 @@ describeAfter35("General tab toggles", () => {
   });
 
   test("dark mode toggle changes theme class on body", async ({ page }) => {
+    await scrollSettingsControlIntoView(page, "#theme-toggle");
     const isChecked = await page.locator("#theme-toggle").isChecked();
     await page.locator("#theme-toggle").click();
 
@@ -111,6 +125,7 @@ describeAfter35("General tab toggles", () => {
   });
 
   test("debug logs toggle updates localStorage", async ({ page }) => {
+    await scrollSettingsControlIntoView(page, "#debug-logs");
     const wasChecked = await page.locator("#debug-logs").isChecked();
     await page.locator("#debug-logs").click();
 
@@ -135,6 +150,7 @@ describeAfter35("Developer mode enables sidebar links", () => {
     await expect(page.locator('button[title="Nodes"]')).not.toBeVisible();
 
     await page.click('button[title="Settings"]');
+    await scrollSettingsControlIntoView(page, "#developer-mode");
     await page.locator("#developer-mode").check();
 
     await page.locator("button", { hasText: "Back" }).click();
@@ -152,6 +168,7 @@ describeAfter35("Developer mode enables sidebar links", () => {
     await expect(page.locator('button[title="Nodes"]')).toBeVisible();
 
     await page.click('button[title="Settings"]');
+    await scrollSettingsControlIntoView(page, "#developer-mode");
     await page.locator("#developer-mode").uncheck();
 
     await page.locator("button", { hasText: "Back" }).click();
@@ -172,6 +189,7 @@ describeAfter35("Developer mode pre-seeded", () => {
   test("developer mode toggle is checked when pre-seeded", async ({
     page,
   }) => {
+    await scrollSettingsControlIntoView(page, "#developer-mode");
     await expect(page.locator("#developer-mode")).toBeChecked();
   });
 });
@@ -253,6 +271,10 @@ describeAfter35("Reset and Nuke sections", () => {
   });
 
   test("Reset section shows initial button", async ({ page }) => {
+    await scrollSettingsControlIntoView(
+      page,
+      page.getByRole("button", { name: "Reset node and all settings" }),
+    );
     await expect(
       page.locator("button", { hasText: "Reset node and all settings" }),
     ).toBeVisible();
@@ -261,15 +283,23 @@ describeAfter35("Reset and Nuke sections", () => {
   test("clicking Reset button shows confirmation checkbox", async ({
     page,
   }) => {
+    await scrollSettingsControlIntoView(
+      page,
+      page.getByRole("button", { name: "Reset node and all settings" }),
+    );
     await page
       .locator("button", { hasText: "Reset node and all settings" })
       .click();
     await expect(
-      page.locator("text=I understand this will delete"),
+      page.locator("text=I understand this cannot be undone"),
     ).toBeVisible();
   });
 
   test("Nuke section shows initial button", async ({ page }) => {
+    await scrollSettingsControlIntoView(
+      page,
+      page.getByRole("button", { name: "Delete data folder and reset" }),
+    );
     await expect(
       page.locator("button", { hasText: "Delete data folder and reset" }),
     ).toBeVisible();
@@ -278,6 +308,10 @@ describeAfter35("Reset and Nuke sections", () => {
   test("clicking Nuke button shows confirmation checkbox", async ({
     page,
   }) => {
+    await scrollSettingsControlIntoView(
+      page,
+      page.getByRole("button", { name: "Delete data folder and reset" }),
+    );
     await page
       .locator("button", { hasText: "Delete data folder and reset" })
       .click();
@@ -303,6 +337,7 @@ describeAfter35("Tab switching", () => {
     await expect(page.locator("#developer-mode")).not.toBeVisible();
 
     await page.locator(".settings-tab", { hasText: "General" }).click();
+    await scrollSettingsControlIntoView(page, "#developer-mode");
     await expect(page.locator("#developer-mode")).toBeVisible();
     await expect(page.locator("#registry-url")).not.toBeVisible();
   });

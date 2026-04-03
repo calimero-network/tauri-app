@@ -40,6 +40,8 @@ export default function NodeManagement() {
   const [logsContent, setLogsContent] = useState("");
   const [logsLoading, setLogsLoading] = useState(false);
   const developerMode = getSettings().developerMode ?? false;
+  const safeAvailableNodes = Array.isArray(availableNodes) ? availableNodes : [];
+  const safeRunningNodes = Array.isArray(runningNodes) ? runningNodes : [];
 
   useEffect(() => {
     const settings = getSettings();
@@ -59,43 +61,47 @@ export default function NodeManagement() {
   // When selected node is not running and current ports conflict with running nodes, auto-assign next free ports
   const getRunningNodeInfo = (nodeName: string): { running: boolean; port?: number } => {
     if (!nodeName) return { running: false };
-    const runningNode = runningNodes.find(n => n.node_name === nodeName);
+    const runningNode = safeRunningNodes.find(n => n.node_name === nodeName);
     return runningNode ? { running: true, port: runningNode.port } : { running: false };
   };
 
   useEffect(() => {
-    if (!selectedNode || runningNodes.length === 0) return;
+    if (!selectedNode || safeRunningNodes.length === 0) return;
     const nodeInfo = getRunningNodeInfo(selectedNode);
     if (nodeInfo.running) return;
 
-    const serverPortInUse = runningNodes.some(n => n.port === serverPort);
-    const swarmPortInUse = runningNodes.some(n => (n.swarm_port ?? 2428) === swarmPort);
+    const serverPortInUse = safeRunningNodes.some(n => n.port === serverPort);
+    const swarmPortInUse = safeRunningNodes.some(n => (n.swarm_port ?? 2428) === swarmPort);
     if (!serverPortInUse && !swarmPortInUse) return;
 
-    const maxServerPort = Math.max(2528, ...runningNodes.map(n => n.port));
-    const maxSwarmPort = Math.max(2428, ...runningNodes.map(n => n.swarm_port ?? 2428));
+    const maxServerPort = Math.max(2528, ...safeRunningNodes.map(n => n.port));
+    const maxSwarmPort = Math.max(2428, ...safeRunningNodes.map(n => n.swarm_port ?? 2428));
     setServerPort(maxServerPort + 1);
     setSwarmPort(maxSwarmPort + 1);
   }, [selectedNode, runningNodes, serverPort, swarmPort]);
 
   const loadNodes = async () => {
     try {
-      const nodes = await listMerodNodes(homeDir);
+      const raw = await listMerodNodes(homeDir);
+      const nodes = Array.isArray(raw) ? raw : [];
       setAvailableNodes(nodes);
       if (nodes.length > 0 && !selectedNode) {
         setSelectedNode(nodes[0]);
       }
     } catch (error) {
       console.error("Failed to load nodes:", error);
+      setAvailableNodes([]);
     }
   };
 
   const detectRunning = async () => {
     try {
-      const running = await detectRunningMerodNodes();
+      const raw = await detectRunningMerodNodes();
+      const running = Array.isArray(raw) ? raw : [];
       setRunningNodes(running);
     } catch (error) {
       console.error("Failed to detect running nodes:", error);
+      setRunningNodes([]);
     }
   };
 
@@ -152,8 +158,8 @@ export default function NodeManagement() {
     // If current serverPort is already in use by another node, pick next free port.
     let portToUse = serverPort;
     let swarmToUse = swarmPort;
-    const usedServerPorts = runningNodes.map((n) => n.port ?? 2528);
-    const usedSwarmPorts = runningNodes.map((n) => n.swarm_port ?? 2428);
+    const usedServerPorts = safeRunningNodes.map((n) => n.port ?? 2528);
+    const usedSwarmPorts = safeRunningNodes.map((n) => n.swarm_port ?? 2428);
     if (usedServerPorts.includes(serverPort)) {
       portToUse = Math.max(2528, ...usedServerPorts) + 1;
       setServerPort(portToUse);
@@ -206,7 +212,7 @@ export default function NodeManagement() {
     setLoading(true);
     try {
       // Try to stop by PID if we have it
-      const runningNode = runningNodes.find(n => n.node_name === selectedNode);
+      const runningNode = safeRunningNodes.find(n => n.node_name === selectedNode);
       if (runningNode && runningNode.pid) {
         await stopMerodByPid(runningNode.pid);
         toast.success(`Node "${selectedNode}" stopped successfully`);
@@ -380,7 +386,7 @@ export default function NodeManagement() {
             </div>
           </div>
 
-          {availableNodes.length > 0 && (
+          {safeAvailableNodes.length > 0 && (
             <div className="node-management-card">
               <h3 className="node-card-title">Manage Nodes</h3>
               <div className="form-field">
@@ -390,7 +396,7 @@ export default function NodeManagement() {
                   onChange={(e) => setSelectedNode(e.target.value)}
                   disabled={loading}
                 >
-                  {availableNodes.map((node) => {
+                  {safeAvailableNodes.map((node) => {
                     const nodeInfo = getRunningNodeInfo(node);
                     return (
                       <option key={node} value={node}>
@@ -427,7 +433,7 @@ export default function NodeManagement() {
                 </div>
               </div>
               <div className="node-status-cards">
-                {availableNodes.map((node) => {
+                {safeAvailableNodes.map((node) => {
                   const nodeInfo = getRunningNodeInfo(node);
                   return (
                     <div
@@ -485,7 +491,7 @@ export default function NodeManagement() {
             </div>
           )}
 
-          {availableNodes.length === 0 && (
+          {safeAvailableNodes.length === 0 && (
             <div className="empty-state">
               <p>No nodes found. Create your first node above.</p>
             </div>

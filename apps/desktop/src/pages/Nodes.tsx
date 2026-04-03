@@ -244,7 +244,6 @@ export default function Nodes({ onBack }: NodesProps) {
               ← Back
             </button>
           )}
-          <h1 style={{ margin: 0 }}>Nodes</h1>
         </div>
       </header>
 

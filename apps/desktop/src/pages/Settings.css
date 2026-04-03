@@ -254,10 +254,28 @@
 .toggle-switch {
   display: flex;
   align-items: center;
+  position: relative;
 }
 
+/* Overlay the slider hit area so the native checkbox stays in layout (Playwright
+   visibility / check()) while the custom slider still shows underneath. */
 .toggle-switch input[type="checkbox"] {
-  display: none;
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 48px;
+  height: 26px;
+  margin: 0;
+  padding: 0;
+  opacity: 0.02;
+  cursor: pointer;
+  z-index: 3;
+  flex-shrink: 0;
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  border: none;
 }
 
 .toggle-label {

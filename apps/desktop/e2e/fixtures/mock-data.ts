@@ -86,50 +86,65 @@ export const MOCK_TOKEN_RESPONSE = {
   },
 };
 
-// ─── Marketplace / Registry apps ─────────────────────────────────────────────
+// ─── Marketplace / Registry (V2 bundle API) ───────────────────────────────────
+// `fetchAppsFromRegistry` / `fetchAppManifest` expect V2 bundle objects
+// (`package`, `appVersion`, `wasm`, `metadata`, `signature`, `downloads`, …).
 
-export const MOCK_REGISTRY_APPS = [
+export const MOCK_REGISTRY_V2_BUNDLES = [
   {
-    id: "app-1",
-    name: "only-peers-chat",
-    alias: "Only Peers Chat",
-    developer_pubkey: "dev1.testnet",
-    latest_version: "0.3.0",
-    description: "Decentralized chat application",
-    repository: "https://github.com/example/chat",
-    download_count: 42,
-    category: "Social",
-    created_at: "2025-01-01T00:00:00Z",
-    updated_at: "2025-06-01T00:00:00Z",
+    package: "only-peers-chat",
+    appVersion: "0.3.0",
+    minRuntimeVersion: "1.0.0",
+    version: "2.0",
+    wasm: { hash: "deadbeefcafedeadbeefcafedeadbeefcafedeadbeefcafedeadbeefcafedead", path: "", size: 12345 },
+    metadata: {
+      name: "Only Peers Chat",
+      description: "Decentralized chat application",
+      author: "dev1.testnet",
+    },
+    signature: {
+      pubkey: "dev1.testnet",
+      alg: "ed25519",
+      sig: "aa",
+      signedAt: "2025-01-01T00:00:00.000Z",
+    },
+    downloads: 42,
+    interfaces: { exports: [] as string[], uses: [] as string[] },
+    links: {},
   },
   {
-    id: "app-2",
-    name: "blockchain-demo",
-    alias: "Blockchain Demo",
-    developer_pubkey: "dev2.testnet",
-    latest_version: "1.0.0",
-    description: "Simple blockchain demo application",
-    repository: "https://github.com/example/demo",
-    download_count: 10,
-    category: "Utilities",
-    created_at: "2025-02-01T00:00:00Z",
-    updated_at: "2025-05-01T00:00:00Z",
+    package: "blockchain-demo",
+    appVersion: "1.0.0",
+    minRuntimeVersion: "1.0.0",
+    version: "2.0",
+    wasm: { hash: "beefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdead", size: 9999 },
+    metadata: {
+      name: "Blockchain Demo",
+      description: "Simple blockchain demo application",
+      author: "dev2.testnet",
+    },
+    signature: {
+      pubkey: "dev2.testnet",
+      alg: "ed25519",
+      sig: "bb",
+      signedAt: "2025-02-01T00:00:00.000Z",
+    },
+    downloads: 10,
+    interfaces: { exports: [] as string[], uses: [] as string[] },
+    links: {},
   },
-];
+] as const;
 
-export const MOCK_APP_MANIFEST = {
-  name: "only-peers-chat",
-  version: "0.3.0",
-  metadata: {
-    name: "Only Peers Chat",
-    description: "Decentralized chat application",
-    repository: "https://github.com/example/chat",
-  },
-  source: {
-    url: "https://apps.calimero.network/bundles/app-1/0.3.0.wasm",
-    hash: "abc123",
-  },
-};
+/** Rows aligned with UI after `fetchAppsFromRegistry` mapping (for assertions). */
+export const MOCK_REGISTRY_APPS = MOCK_REGISTRY_V2_BUNDLES.map((b) => ({
+  id: b.package,
+  name: b.package,
+  alias: b.metadata.name,
+  developer_pubkey: b.signature.pubkey,
+  latest_version: b.appVersion,
+  description: b.metadata.description,
+  download_count: b.downloads,
+}));
 
 // ─── Installed applications ──────────────────────────────────────────────────
 
@@ -256,6 +271,5 @@ export const API_ROUTES = {
   createContext: "**/admin-api/contexts",
   deleteContext: "**/admin-api/contexts/*",
   registryBundles: "**/api/v2/bundles",
-  registryBundleManifest: "**/api/v2/bundles/*/versions/*/manifest",
-  registryDownload: "**/api/v2/bundles/*/download",
+  registryDownloadsRecord: "**/api/v2/downloads/record",
 } as const;

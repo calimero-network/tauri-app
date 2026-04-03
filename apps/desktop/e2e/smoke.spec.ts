@@ -172,10 +172,9 @@ describeAfter35("onboarding flow", () => {
     );
 
     await page.reload();
-    // After onboarding completed but no auth tokens, should show login or home
-    // The app may show a login screen or redirect; verify we're past onboarding
-    await expect(
-      page.getByRole("heading", { name: /Welcome to Calimero/i }),
-    ).not.toBeVisible({ timeout: 10_000 });
+    // Past onboarding: main shell may still show headings that match "Welcome to Calimero"
+    await expect(page.getByTestId("onboarding-page")).toHaveCount(0, {
+      timeout: 10_000,
+    });
   });
 });

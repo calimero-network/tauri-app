@@ -61,11 +61,7 @@ const PLATFORM_CONFIG = {
   linux: {
     searchPaths: ["apps/desktop/src-tauri/target/release/bundle"],
     artifacts: [
-      {
-        pattern: /\.AppImage$/,
-        suffix: "_linux_x64.AppImage",
-        type: "installer",
-      },
+      { pattern: /\.AppImage$/, suffix: "_linux_x64.AppImage", type: "installer" },
       {
         pattern: /\.AppImage\.tar\.gz$/,
         suffix: "_linux_x64.AppImage.tar.gz",

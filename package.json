@@ -17,8 +17,7 @@
     "build": "pnpm build:mero-react && pnpm build:desktop",
     "clean": "pnpm -r clean && rm -rf node_modules",
     "check-runners": "ps aux | grep merod",
-    "test:e2e:desktop": "pnpm --filter desktop test:e2e",
-    "test:e2e:desktop:cap35": "pnpm --filter desktop test:e2e:cap35"
+    "test:e2e:desktop": "pnpm --filter desktop test:e2e"
   },
   "devDependencies": {
     "typescript": "^5.8.3"

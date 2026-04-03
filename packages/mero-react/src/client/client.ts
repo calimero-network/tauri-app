@@ -470,10 +470,13 @@ class NodeApi {
         return [];
       })();
       // Normalize API rows (`applicationId`) to UI shape (`id`).
-      const normalized = rows.map((app: Record<string, unknown>) => ({
-        ...app,
-        id: app.id ?? app.applicationId,
-      }));
+      const normalized = rows.map((app) => {
+        const row = app as Record<string, unknown>;
+        return {
+          ...row,
+          id: row.id ?? row.applicationId,
+        };
+      });
       return { data: normalized };
     } catch (error: unknown) {
       const err = error as { status?: number };

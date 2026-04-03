@@ -454,8 +454,21 @@ class NodeApi {
         return { error: { message: 'Client not initialized. Please wait and try again.' } };
       }
       const response = await this.meroJs.admin.applications.listApplications();
-      const raw = response as { apps?: unknown[] } | unknown[];
-      const rows = Array.isArray(raw) ? raw : raw?.apps ?? [];
+      // mero-js returns the HTTP JSON body as-is: { data: { apps: [...] } } (see admin listApplications).
+      const rows = ((): unknown[] => {
+        const r = response as unknown;
+        if (Array.isArray(r)) return r;
+        if (r && typeof r === 'object') {
+          const o = r as Record<string, unknown>;
+          if (Array.isArray(o.apps)) return o.apps;
+          const data = o.data;
+          if (Array.isArray(data)) return data;
+          if (data && typeof data === 'object' && Array.isArray((data as { apps?: unknown[] }).apps)) {
+            return (data as { apps: unknown[] }).apps;
+          }
+        }
+        return [];
+      })();
       // Normalize API rows (`applicationId`) to UI shape (`id`).
       const normalized = rows.map((app: Record<string, unknown>) => ({
         ...app,

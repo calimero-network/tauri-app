@@ -248,6 +248,7 @@ jobs:
         working-directory: apps/desktop
         env:
           MEROD_SKIP_IF_EXISTS: "1"
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
@@ -267,6 +268,8 @@ jobs:
         working-directory: apps/desktop
         id: build-app-validation
         env:
+          MEROD_SKIP_IF_EXISTS: "1"
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
           TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
         run: |

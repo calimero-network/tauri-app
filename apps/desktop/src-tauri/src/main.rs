@@ -180,8 +180,15 @@ pub(crate) fn validate_allowed_url(url: &str, configured_node_url: Option<&str>)
 
 #[tauri::command]
 async fn proxy_http_request(request: HttpRequest, configured_node_url: Option<String>) -> Result<HttpResponse, String> {
+    IN_FLIGHT_REQUESTS.fetch_add(1, Ordering::SeqCst);
+    let result = proxy_http_request_inner(request, configured_node_url).await;
+    IN_FLIGHT_REQUESTS.fetch_sub(1, Ordering::SeqCst);
+    result
+}
+
+async fn proxy_http_request_inner(request: HttpRequest, configured_node_url: Option<String>) -> Result<HttpResponse, String> {
     use reqwest;
-    
+
     // Validate URL before processing (pass configured node URL if available)
     validate_allowed_url(&request.url, configured_node_url.as_deref())?;
     
@@ -598,7 +605,15 @@ async fn open_devtools(_window_label: String, _app_handle: tauri::AppHandle) {
 
 // Merod process management using bundled resource
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::process::Stdio;
+
+/// Tracks the number of in-flight HTTP proxy requests.
+/// Used during graceful shutdown to wait for pending requests to complete.
+static IN_FLIGHT_REQUESTS: AtomicUsize = AtomicUsize::new(0);
+
+const REQUEST_DRAIN_TIMEOUT_SECS: u64 = 10;
+const PROCESS_TERM_WAIT_SECS: u64 = 3;
 use tokio::process::Command;
 
 #[derive(Debug, Clone)]
@@ -1768,6 +1783,114 @@ async fn delete_calimero_data_dir(data_dir: String) -> Result<String, String> {
     Ok(format!("Deleted {}", path_canonical.display()))
 }
 
+/// Performs graceful shutdown:
+/// 1. SIGTERM all managed (and detected) merod processes
+/// 2. Wait up to PROCESS_TERM_WAIT_SECS, then SIGKILL survivors
+/// 3. Drain in-flight proxy requests up to REQUEST_DRAIN_TIMEOUT_SECS
+fn graceful_shutdown(merod_state: &MerodState) {
+    info!("[Shutdown] Starting graceful shutdown...");
+
+    // Collect PIDs from managed state + any merod processes detected on the system
+    let mut pids: Vec<u32> = Vec::new();
+    if let Ok(state) = merod_state.lock() {
+        for proc in state.iter() {
+            pids.push(proc.pid);
+        }
+    }
+
+    #[cfg(unix)]
+    {
+        if let Ok(output) = std::process::Command::new("ps").args(["ax", "-o", "pid,command"]).output() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            for line in stdout.lines() {
+                if line.contains("merod") && line.contains("run") {
+                    if let Some(pid_str) = line.split_whitespace().next() {
+                        if let Ok(pid) = pid_str.parse::<u32>() {
+                            if !pids.contains(&pid) {
+                                pids.push(pid);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        if let Ok(output) = std::process::Command::new("tasklist").args(["/FO", "CSV"]).output() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            for line in stdout.lines().skip(1) {
+                if line.contains("merod") {
+                    let parts: Vec<&str> = line.split(',').collect();
+                    if parts.len() >= 2 {
+                        if let Ok(pid) = parts[1].trim_matches('"').parse::<u32>() {
+                            if !pids.contains(&pid) {
+                                pids.push(pid);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if !pids.is_empty() {
+        info!("[Shutdown] Sending SIGTERM to {} merod process(es): {:?}", pids.len(), pids);
+        for pid in &pids {
+            #[cfg(unix)]
+            let _ = std::process::Command::new("kill").args(["-TERM", &pid.to_string()]).output();
+            #[cfg(windows)]
+            let _ = std::process::Command::new("taskkill").args(["/PID", &pid.to_string()]).output();
+        }
+
+        info!("[Shutdown] Waiting {}s for processes to exit...", PROCESS_TERM_WAIT_SECS);
+        std::thread::sleep(std::time::Duration::from_secs(PROCESS_TERM_WAIT_SECS));
+
+        for pid in &pids {
+            #[cfg(unix)]
+            {
+                let still_alive = std::process::Command::new("ps").arg("-p").arg(pid.to_string()).output()
+                    .map(|o| o.status.success()).unwrap_or(false);
+                if still_alive {
+                    info!("[Shutdown] Force killing PID {} with SIGKILL", pid);
+                    let _ = std::process::Command::new("kill").args(["-9", &pid.to_string()]).output();
+                }
+            }
+            #[cfg(windows)]
+            let _ = std::process::Command::new("taskkill").args(["/PID", &pid.to_string(), "/F"]).output();
+        }
+        info!("[Shutdown] All merod processes terminated");
+    } else {
+        info!("[Shutdown] No merod processes to terminate");
+    }
+
+    // Drain in-flight proxy requests
+    let in_flight = IN_FLIGHT_REQUESTS.load(Ordering::SeqCst);
+    if in_flight > 0 {
+        info!("[Shutdown] Waiting for {} in-flight proxy request(s) to drain (timeout: {}s)...", in_flight, REQUEST_DRAIN_TIMEOUT_SECS);
+        let start = std::time::Instant::now();
+        let timeout = std::time::Duration::from_secs(REQUEST_DRAIN_TIMEOUT_SECS);
+        while IN_FLIGHT_REQUESTS.load(Ordering::SeqCst) > 0 {
+            if start.elapsed() >= timeout {
+                warn!("[Shutdown] Timeout — {} request(s) will be dropped", IN_FLIGHT_REQUESTS.load(Ordering::SeqCst));
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        if IN_FLIGHT_REQUESTS.load(Ordering::SeqCst) == 0 {
+            info!("[Shutdown] All in-flight requests drained");
+        }
+    } else {
+        info!("[Shutdown] No in-flight proxy requests to drain");
+    }
+
+    if let Ok(mut state) = merod_state.lock() {
+        state.clear();
+    }
+    info!("[Shutdown] Graceful shutdown complete");
+}
+
 fn main() {
     // Initialize logger - reads from RUST_LOG environment variable
     // Default: info level in release, debug level in debug builds
@@ -1811,6 +1934,9 @@ fn main() {
                             }
                         }
                         "quit" => {
+                            if let Some(merod_state) = app.try_state::<MerodState>() {
+                                graceful_shutdown(&merod_state);
+                            }
                             std::process::exit(0);
                         }
                         _ => {}

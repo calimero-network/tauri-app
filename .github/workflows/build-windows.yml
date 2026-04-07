@@ -126,15 +126,30 @@ jobs:
         working-directory: apps/desktop
         run: pnpm tauri icon src-tauri/icons/icon.png
 
+      - name: Read merod version
+        id: merod-version
+        shell: bash
+        run: |
+          VERSION="$(node -p "require('./merod-config.json').version")"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Cache merod binary (Windows)
+        id: cache-merod
+        uses: actions/cache@v4
+        with:
+          path: apps/desktop/src-tauri/merod/merod.exe
+          key: windows-merod-${{ steps.merod-version.outputs.version }}
+
       # calimero-network/core does not publish merod_* Windows archives on GitHub Releases (only macOS/Linux).
-      # MEROD_ASSET_FALLBACK cannot fix that. Build merod from the same git tag as merod-config.json.
+      # Build from source only when the cached binary is missing.
       - name: Build merod from source (Windows)
+        if: steps.cache-merod.outputs.cache-hit != 'true'
         shell: bash
         env:
           CARGO_INCREMENTAL: "0"
         run: |
           set -euo pipefail
-          VERSION="$(node -p "require('./merod-config.json').version")"
+          VERSION="${{ steps.merod-version.outputs.version }}"
           DEST="${GITHUB_WORKSPACE}/apps/desktop/src-tauri/merod/merod.exe"
           mkdir -p "$(dirname "$DEST")"
           CORE_TMP="${RUNNER_TEMP}/calimero-core-${VERSION}"
@@ -145,11 +160,20 @@ jobs:
           cp "target/release/merod.exe" "$DEST"
           ls -la "$DEST"
 
+      - name: Verify merod binary exists
+        shell: bash
+        run: |
+          DEST="apps/desktop/src-tauri/merod/merod.exe"
+          if [ ! -f "$DEST" ]; then
+            echo "Error: merod.exe not found at $DEST"
+            exit 1
+          fi
+          echo "merod.exe ready ($(wc -c < "$DEST") bytes)"
+
       - name: Prepare merod binary
         working-directory: apps/desktop
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Binary already built from source above; skip GitHub download (no Windows release asset exists).
           MEROD_SKIP_IF_EXISTS: "1"
         run: pnpm merod:prepare
 
@@ -185,11 +209,22 @@ jobs:
             echo "No TAURI_PUBLIC_KEY provided, using default pubkey"
           fi
 
-      - name: Build Tauri app for Windows
+      - name: Build Tauri app for Windows (release)
+        if: steps.build-mode.outputs.mode == 'release'
         working-directory: apps/desktop
         env:
-          # beforeBuildCommand runs merod:prepare again; keep using the binary built above (no Windows GitHub asset).
           MEROD_SKIP_IF_EXISTS: "1"
+          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+        run: pnpm tauri build
+
+      - name: Build Tauri app for Windows (validation)
+        if: steps.build-mode.outputs.mode == 'validation'
+        working-directory: apps/desktop
+        env:
+          MEROD_SKIP_IF_EXISTS: "1"
+          CARGO_PROFILE_RELEASE_LTO: "thin"
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
           TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
           TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
         run: pnpm tauri build

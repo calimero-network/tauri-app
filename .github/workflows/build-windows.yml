@@ -168,7 +168,7 @@ jobs:
             echo "Error: merod.exe not found at $DEST"
             exit 1
           fi
-          echo "merod.exe ready ($(stat --printf='%s' "$DEST" 2>/dev/null || stat -f'%z' "$DEST") bytes)"
+          echo "merod.exe ready ($(wc -c < "$DEST") bytes)"
 
       - name: Prepare merod binary
         working-directory: apps/desktop
@@ -225,6 +225,8 @@ jobs:
           MEROD_SKIP_IF_EXISTS: "1"
           CARGO_PROFILE_RELEASE_LTO: "thin"
           CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
         run: pnpm tauri build
 
       - name: Sign Windows installer (optional)

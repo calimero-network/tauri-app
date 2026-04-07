@@ -1,11 +1,14 @@
 {
   "tauri": {
-    "allowlist": {
-      "http": {
-        "all": true,
-        "request": true,
-        "scope": ["http://**", "https://**"]
-      }
+    "security": {
+      "dangerousRemoteDomainIpcAccess": [
+        {
+          "domain": "*",
+          "windows": ["*"],
+          "plugins": [],
+          "enableTauriAPI": true
+        }
+      ]
     }
   }
 }

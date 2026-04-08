@@ -1736,7 +1736,7 @@ async fn autostart_is_enabled(_app: tauri::AppHandle) -> Result<bool, String> {
 /// has the data directory open. Clears MerodState and waits for processes to fully exit.
 #[tauri::command]
 async fn kill_all_merod_processes(merod_state: tauri::State<'_, MerodState>) -> Result<String, String> {
-    let tracked: Vec<u32> = merod_state.lock().unwrap().iter().map(|p| p.pid).collect();
+    let tracked: Vec<u32> = merod_state.lock().map(|s| s.iter().map(|p| p.pid).collect()).unwrap_or_default();
     let pids = collect_merod_pids(&tracked);
 
     kill_pids(&pids);

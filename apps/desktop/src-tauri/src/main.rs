@@ -1900,7 +1900,7 @@ async fn delete_calimero_data_dir(data_dir: String) -> Result<String, TauriError
     }
 
     std::fs::remove_dir_all(&path_canonical)
-        .map_err(|e| TauriError::with_details(TauriErrorCode::FileWriteError, "Failed to delete directory", e.to_string()))?;
+        .map_err(|e| TauriError::with_details(TauriErrorCode::DirectoryError, "Failed to delete directory", e.to_string()))?;
 
     info!("[Calimero] Deleted data directory: {:?}", path_canonical);
     Ok(format!("Deleted {}", path_canonical.display()))

@@ -59,16 +59,21 @@ function tauriInvoke<T>(cmd: string, args: Record<string, unknown> = {}): Promis
 
 // ─── Keychain primitives ───────────────────────────────────────────────────────
 
-async function keychainSet(key: string, value: string): Promise<void> {
+/**
+ * Returns true if the value was written to the keychain, false if it fell back
+ * to localStorage (Tauri not available or keychain write failed).
+ */
+async function keychainSet(key: string, value: string): Promise<boolean> {
   if (isTauriEnv()) {
     try {
       await tauriInvoke('secure_store_token', { key, value });
-      return;
+      return true;
     } catch (e) {
       console.warn('[TokenStorage] Keychain write failed, falling back to localStorage:', e);
     }
   }
   localStorage.setItem(key, value);
+  return false;
 }
 
 async function keychainGet(key: string): Promise<string | null> {
@@ -132,14 +137,14 @@ export async function initializeTokenStorage(): Promise<void> {
       const localAccess = localStorage.getItem(ACCESS_TOKEN_KEY);
       const localRefresh = localStorage.getItem(REFRESH_TOKEN_KEY);
       if (localAccess && !cache[ACCESS_TOKEN_KEY]) {
-        await keychainSet(ACCESS_TOKEN_KEY, localAccess);
+        const wroteToKeychain = await keychainSet(ACCESS_TOKEN_KEY, localAccess);
         cache[ACCESS_TOKEN_KEY] = localAccess;
-        localStorage.removeItem(ACCESS_TOKEN_KEY);
+        if (wroteToKeychain) localStorage.removeItem(ACCESS_TOKEN_KEY);
       }
       if (localRefresh && !cache[REFRESH_TOKEN_KEY]) {
-        await keychainSet(REFRESH_TOKEN_KEY, localRefresh);
+        const wroteToKeychain = await keychainSet(REFRESH_TOKEN_KEY, localRefresh);
         cache[REFRESH_TOKEN_KEY] = localRefresh;
-        localStorage.removeItem(REFRESH_TOKEN_KEY);
+        if (wroteToKeychain) localStorage.removeItem(REFRESH_TOKEN_KEY);
       }
     }
 

@@ -715,7 +715,12 @@ async fn start_merod(
     
     std::fs::create_dir_all(&home_dir_path)
         .map_err(|e| format!("Failed to create home directory: {}", e))?;
-    
+
+    // Validate node name before any filesystem use
+    if let Some(name) = &node_name {
+        validate_node_name(name)?;
+    }
+
     // Update config.toml with the specified ports if node_name is provided
     if let Some(name) = &node_name {
         let node_dir = home_dir_path.join(name);
@@ -805,7 +810,6 @@ async fn start_merod(
     
     // Node name required
     let node_name_str = node_name.as_ref().ok_or("Node name is required")?.clone();
-    validate_node_name(&node_name_str)?;
 
     // Create logs directory and open log file - redirect merod stdout/stderr here
     let log_dir = home_dir_path.join(&node_name_str).join("logs");

@@ -64,6 +64,11 @@
         const shouldProxy = isHttpLocalhost(urlStr);
         console.log('[Tauri Proxy] Should proxy?', shouldProxy, 'for URL:', urlStr);
         if (shouldProxy) {
+            // Reject immediately if signal is already aborted
+            if (init && init.signal && init.signal.aborted) {
+                return Promise.reject(new DOMException('The operation was aborted.', 'AbortError'));
+            }
+
             try {
                 const headers = {};
                 if (init && init.headers) {
@@ -79,7 +84,7 @@
                         Object.assign(headers, init.headers);
                     }
                 }
-                
+
                 let bodyStr = null;
                 if (init && init.body) {
                     if (typeof init.body === 'string') {
@@ -90,21 +95,33 @@
                         bodyStr = await new Response(init.body).text();
                     }
                 }
-                
+
                 console.log('[Tauri Proxy] Intercepting fetch:', urlStr, 'method:', init?.method || 'GET');
                 console.log('[Tauri Proxy] Headers being sent:', JSON.stringify(headers, null, 2));
                 console.log('[Tauri Proxy] Has Authorization header?', 'Authorization' in headers || 'authorization' in headers);
-                // Debug: Log body for /refresh endpoint
-                if (urlStr.includes('/refresh')) {
-                    console.log('[Tauri Proxy /refresh] Body being proxied:', bodyStr);
-                    console.log('[Tauri Proxy /refresh] Body type:', typeof bodyStr);
-                    console.log('[Tauri Proxy /refresh] Body length:', bodyStr ? bodyStr.length : 0);
+
+                const requestPromise = proxyRequest(urlStr, (init && init.method) || 'GET', headers, bodyStr);
+
+                let response;
+                if (init && init.signal) {
+                    // Race the request against the abort signal
+                    const abortPromise = new Promise((_, reject) => {
+                        const onAbort = () => {
+                            init.signal.removeEventListener('abort', onAbort);
+                            reject(new DOMException('The operation was aborted.', 'AbortError'));
+                        };
+                        init.signal.addEventListener('abort', onAbort);
+                        // Clean up listener when request wins
+                        requestPromise.then(() => init.signal.removeEventListener('abort', onAbort))
+                                      .catch(() => init.signal.removeEventListener('abort', onAbort));
+                    });
+                    response = await Promise.race([requestPromise, abortPromise]);
+                } else {
+                    response = await requestPromise;
                 }
-                const response = await proxyRequest(urlStr, (init && init.method) || 'GET', headers, bodyStr);
-                
+
                 console.log('[Tauri Proxy] Proxy response:', response.status, urlStr);
-                
-                // Create a Response-like object
+
                 return new Response(response.body, {
                     status: response.status,
                     statusText: response.status === 200 ? 'OK' : (response.statusText || 'Error'),
@@ -112,8 +129,16 @@
                 });
             } catch (error) {
                 console.error('[Tauri Proxy] Fetch proxy failed:', error, 'URL:', urlStr);
-                // Fall back to original fetch (will fail due to mixed content, but at least we tried)
-                return originalFetch.apply(this, arguments);
+                // In non-Tauri environments (tests, dev server), Tauri invoke isn't
+                // available — fall back so Playwright mocks and dev server still work.
+                const isTauri = typeof window.__TAURI_INVOKE__ === 'function' ||
+                    (typeof window.__TAURI__ !== 'undefined' && typeof window.__TAURI__.invoke === 'function');
+                if (!isTauri) {
+                    return originalFetch.apply(this, arguments);
+                }
+                // In Tauri, falling back always produces HTTP 0 (mixed content).
+                // Re-throw so the caller gets the real error.
+                throw error;
             }
         }
         

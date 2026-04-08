@@ -1807,12 +1807,15 @@ fn graceful_shutdown(merod_state: &MerodState) {
         if let Ok(output) = std::process::Command::new("ps").args(["ax", "-o", "pid,command"]).output() {
             let stdout = String::from_utf8_lossy(&output.stdout);
             for line in stdout.lines() {
-                if line.contains("merod") && line.contains("run") {
-                    if let Some(pid_str) = line.split_whitespace().next() {
-                        if let Ok(pid) = pid_str.parse::<u32>() {
-                            if !pids.contains(&pid) {
-                                pids.push(pid);
-                            }
+                let mut parts = line.split_whitespace();
+                let pid_str = match parts.next() { Some(p) => p, None => continue };
+                let exe = match parts.next() { Some(e) => e, None => continue };
+                let args: Vec<&str> = parts.collect();
+                let basename = exe.split('/').last().unwrap_or(exe);
+                if basename == "merod" && args.first() == Some(&"run") {
+                    if let Ok(pid) = pid_str.parse::<u32>() {
+                        if !pids.contains(&pid) {
+                            pids.push(pid);
                         }
                     }
                 }
@@ -1882,7 +1885,17 @@ fn graceful_shutdown(merod_state: &MerodState) {
                 }
             }
             #[cfg(windows)]
-            let _ = std::process::Command::new("taskkill").args(["/PID", &pid.to_string(), "/F"]).output();
+            {
+                let still_alive = std::process::Command::new("tasklist")
+                    .args(["/FI", &format!("PID eq {}", pid), "/FO", "CSV", "/NH"])
+                    .output()
+                    .map(|o| String::from_utf8_lossy(&o.stdout).contains(&pid.to_string()))
+                    .unwrap_or(false);
+                if still_alive {
+                    info!("[Shutdown] Force killing PID {} with taskkill /F", pid);
+                    let _ = std::process::Command::new("taskkill").args(["/PID", &pid.to_string(), "/F"]).output();
+                }
+            }
         }
         info!("[Shutdown] All merod processes terminated");
     } else {

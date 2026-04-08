@@ -6,6 +6,7 @@ use tauri::{CustomMenuItem, SystemTray, SystemTrayEvent, SystemTrayMenu};
 use serde::{Deserialize, Serialize};
 use log::{debug, info, warn};
 use std::sync::OnceLock;
+use thiserror::Error;
 
 static HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 
@@ -17,6 +18,88 @@ fn http_client() -> &'static reqwest::Client {
             .build()
             .expect("Failed to build HTTP client")
     })
+}
+
+// ============================================================================
+// Typed error types for Tauri commands
+// ============================================================================
+
+/// Error codes for programmatic error handling on the frontend.
+/// Serializes as SCREAMING_SNAKE_CASE, e.g. `"INVALID_URL"`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum TauriErrorCode {
+    // URL / proxy errors
+    InvalidUrl,
+    UrlNotAllowed,
+    UnsupportedMethod,
+    // HTTP errors
+    HttpClientError,
+    HttpRequestFailed,
+    HttpTimeout,
+    ConnectionFailed,
+    ResponseReadError,
+    // Merod process errors
+    MerodNotRunning,
+    MerodStartFailed,
+    MerodStopFailed,
+    MerodInitFailed,
+    MerodProcessExited,
+    // Window errors
+    WindowCreationFailed,
+    WindowOperationFailed,
+    // Filesystem errors
+    FileNotFound,
+    FileReadError,
+    FileWriteError,
+    DirectoryError,
+    PathNotAllowed,
+    // Config errors
+    ConfigParseError,
+    ConfigWriteError,
+    // Platform / feature errors
+    PlatformNotSupported,
+    ShortcutCreationFailed,
+    HomeDirNotFound,
+    AutostartNotAvailable,
+    // General
+    InvalidInput,
+    Timeout,
+    InternalError,
+}
+
+/// Structured error returned by all `#[tauri::command]` functions.
+///
+/// Serialises to:
+/// ```json
+/// { "code": "INVALID_URL", "message": "...", "details": "..." }
+/// ```
+#[derive(Debug, Clone, Error, Serialize)]
+#[error("{message}")]
+pub struct TauriError {
+    pub code: TauriErrorCode,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub details: Option<String>,
+}
+
+impl TauriError {
+    pub fn new(code: TauriErrorCode, message: impl Into<String>) -> Self {
+        Self { code, message: message.into(), details: None }
+    }
+
+    pub fn with_details(code: TauriErrorCode, message: impl Into<String>, details: impl Into<String>) -> Self {
+        Self { code, message: message.into(), details: Some(details.into()) }
+    }
+}
+
+/// Fallback conversion so internal helpers returning `Result<_, String>` can propagate
+/// through commands with `?`. Uses `InternalError` — callers that need a specific code
+/// should call `.map_err(|e| TauriError::new(TauriErrorCode::XYZ, e))?` explicitly.
+impl From<String> for TauriError {
+    fn from(e: String) -> Self {
+        TauriError::new(TauriErrorCode::InternalError, e)
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -192,22 +275,23 @@ pub(crate) fn validate_allowed_url(url: &str, configured_node_url: Option<&str>)
 }
 
 #[tauri::command]
-async fn proxy_http_request(request: HttpRequest, configured_node_url: Option<String>) -> Result<HttpResponse, String> {
+async fn proxy_http_request(request: HttpRequest, configured_node_url: Option<String>) -> Result<HttpResponse, TauriError> {
     let _guard = InFlightGuard::new();
     proxy_http_request_inner(request, configured_node_url).await
 }
 
-async fn proxy_http_request_inner(request: HttpRequest, configured_node_url: Option<String>) -> Result<HttpResponse, String> {
+async fn proxy_http_request_inner(request: HttpRequest, configured_node_url: Option<String>) -> Result<HttpResponse, TauriError> {
     use reqwest;
 
     // Validate URL before processing (pass configured node URL if available)
-    validate_allowed_url(&request.url, configured_node_url.as_deref())?;
+    validate_allowed_url(&request.url, configured_node_url.as_deref())
+        .map_err(|e| TauriError::new(TauriErrorCode::UrlNotAllowed, e))?;
     
     // Parse URL to determine what Host header to use
     let parsed_original = url::Url::parse(&request.url)
-        .map_err(|e| format!("Failed to parse URL '{}': {}. Please ensure the URL is properly formatted.", request.url, e))?;
+        .map_err(|e| TauriError::with_details(TauriErrorCode::InvalidUrl, format!("Failed to parse URL '{}'", request.url), e.to_string()))?;
     let original_host = parsed_original.host_str()
-        .ok_or_else(|| format!("Invalid URL '{}': missing hostname. Please provide a URL with a valid hostname.", request.url))?;
+        .ok_or_else(|| TauriError::new(TauriErrorCode::InvalidUrl, format!("Invalid URL '{}': missing hostname", request.url)))?;
     // Get port (explicit or default)
     let original_port = parsed_original.port().or_else(|| {
         match parsed_original.scheme() {
@@ -215,7 +299,7 @@ async fn proxy_http_request_inner(request: HttpRequest, configured_node_url: Opt
             "https" => Some(443),  // Default for HTTPS
             _ => None,
         }
-    }).ok_or_else(|| "Could not determine port".to_string())?;
+    }).ok_or_else(|| TauriError::new(TauriErrorCode::InvalidUrl, "Could not determine port from URL"))?;
     let host_header = format!("{}:{}", original_host, original_port);
     
     // DON'T normalize - use original URL exactly as Chrome does
@@ -240,9 +324,9 @@ async fn proxy_http_request_inner(request: HttpRequest, configured_node_url: Opt
         "PATCH" => client.patch(&normalized_url),
         "OPTIONS" => client.request(reqwest::Method::OPTIONS, &normalized_url),
         "HEAD" => client.head(&normalized_url),
-        _ => return Err(format!(
-            "Unsupported HTTP method: '{}'. Supported methods are: GET, POST, PUT, DELETE, PATCH, OPTIONS, HEAD",
-            request.method
+        _ => return Err(TauriError::new(
+            TauriErrorCode::UnsupportedMethod,
+            format!("Unsupported HTTP method: '{}'. Supported methods are: GET, POST, PUT, DELETE, PATCH, OPTIONS, HEAD", request.method),
         )),
     };
     
@@ -310,11 +394,11 @@ async fn proxy_http_request_inner(request: HttpRequest, configured_node_url: Opt
         .map_err(|e| {
             let error_msg = e.to_string();
             if error_msg.contains("timeout") {
-                format!("Request to {} timed out after 30 seconds. The server may be slow or unreachable. Please check your connection and try again.", request.url)
+                TauriError::with_details(TauriErrorCode::HttpTimeout, format!("Request to {} timed out after 30 seconds", request.url), error_msg)
             } else if error_msg.contains("connection") || error_msg.contains("resolve") {
-                format!("Failed to connect to {}. Please ensure the Calimero node is running or check your network connection.", request.url)
+                TauriError::with_details(TauriErrorCode::ConnectionFailed, format!("Failed to connect to {}", request.url), error_msg)
             } else {
-                format!("Request to {} failed: {}. Please check the URL and try again.", request.url, error_msg)
+                TauriError::with_details(TauriErrorCode::HttpRequestFailed, format!("Request to {} failed", request.url), error_msg)
             }
         })?;
     
@@ -329,7 +413,7 @@ async fn proxy_http_request_inner(request: HttpRequest, configured_node_url: Opt
     
     let body = response.text()
         .await
-        .map_err(|e| format!("Failed to read response from {}. The server may have closed the connection unexpectedly. Error: {}", request.url, e))?;
+        .map_err(|e| TauriError::with_details(TauriErrorCode::ResponseReadError, format!("Failed to read response from {}", request.url), e.to_string()))?;
     
     info!("[Tauri Proxy] Response: {} ({} bytes)", status, body.len());
     
@@ -353,17 +437,17 @@ fn clear_pending_open_app(state: tauri::State<'_, PendingOpenApp>) {
 }
 
 #[tauri::command]
-fn hide_main_window(app_handle: tauri::AppHandle) -> Result<(), String> {
+fn hide_main_window(app_handle: tauri::AppHandle) -> Result<(), TauriError> {
     if let Some(window) = app_handle.get_window("main") {
-        window.hide().map_err(|e| e.to_string())?;
+        window.hide().map_err(|e| TauriError::new(TauriErrorCode::WindowOperationFailed, e.to_string()))?;
     }
     Ok(())
 }
 
 #[tauri::command]
-fn focus_window(app_handle: tauri::AppHandle, window_label: String) -> Result<(), String> {
+fn focus_window(app_handle: tauri::AppHandle, window_label: String) -> Result<(), TauriError> {
     if let Some(window) = app_handle.get_window(&window_label) {
-        window.set_focus().map_err(|e| e.to_string())?;
+        window.set_focus().map_err(|e| TauriError::new(TauriErrorCode::WindowOperationFailed, e.to_string()))?;
     }
     Ok(())
 }
@@ -374,12 +458,12 @@ fn create_desktop_shortcut(
     app_handle: tauri::AppHandle,
     app_name: String,
     frontend_url: String,
-) -> Result<String, String> {
+) -> Result<String, TauriError> {
     let exe = std::env::current_exe()
-        .map_err(|e| format!("Could not get executable path: {}", e))?;
+        .map_err(|e| TauriError::with_details(TauriErrorCode::ShortcutCreationFailed, "Could not get executable path", e.to_string()))?;
     let exe_str = exe
         .to_str()
-        .ok_or_else(|| "Executable path is not valid UTF-8".to_string())?;
+        .ok_or_else(|| TauriError::new(TauriErrorCode::ShortcutCreationFailed, "Executable path is not valid UTF-8"))?;
 
     let safe_name: String = app_name
         .chars()
@@ -391,7 +475,7 @@ fn create_desktop_shortcut(
     #[cfg(windows)]
     {
         let desktop = dirs::desktop_dir()
-            .ok_or_else(|| "Could not find Desktop folder".to_string())?;
+            .ok_or_else(|| TauriError::new(TauriErrorCode::HomeDirNotFound, "Could not find Desktop folder"))?;
         let lnk_path = desktop.join(format!("{}.lnk", shortcut_name));
         let url_esc = frontend_url.replace('"', "\\\"");
         let name_esc = app_name.replace('"', "\\\"");
@@ -405,10 +489,10 @@ fn create_desktop_shortcut(
         let output = std::process::Command::new("powershell")
             .args(["-NoProfile", "-NonInteractive", "-Command", &ps])
             .output()
-            .map_err(|e| format!("Failed to run PowerShell: {}", e))?;
+            .map_err(|e| TauriError::with_details(TauriErrorCode::ShortcutCreationFailed, "Failed to run PowerShell", e.to_string()))?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(format!("Failed to create shortcut: {}", stderr));
+            return Err(TauriError::new(TauriErrorCode::ShortcutCreationFailed, format!("Failed to create shortcut: {}", stderr)));
         }
         return Ok(lnk_path.to_string_lossy().into_owned());
     }
@@ -416,14 +500,14 @@ fn create_desktop_shortcut(
     #[cfg(target_os = "macos")]
     {
         let desktop = dirs::desktop_dir()
-            .ok_or_else(|| "Could not find Desktop folder".to_string())?;
+            .ok_or_else(|| TauriError::new(TauriErrorCode::HomeDirNotFound, "Could not find Desktop folder"))?;
         // Run the binary directly with args so the process always receives --open-app-url/--open-app-name.
         // (open -a "App" --args ... often just activates the existing process without passing args.)
         let exe_esc = exe_str.replace('\\', "\\\\").replace('"', "\\\"");
         let app_bundle = format!("{}.app", shortcut_name);
         let app_path = desktop.join(&app_bundle);
         let macos_dir = app_path.join("Contents/MacOS");
-        std::fs::create_dir_all(&macos_dir).map_err(|e| format!("Failed to create .app bundle: {}", e))?;
+        std::fs::create_dir_all(&macos_dir).map_err(|e| TauriError::with_details(TauriErrorCode::DirectoryError, "Failed to create .app bundle", e.to_string()))?;
         let launcher_path = macos_dir.join(shortcut_name);
         let script = format!(
             "#!/bin/bash\nexec \"{}\" --open-app-url \"{}\" --open-app-name \"{}\"\n",
@@ -431,13 +515,13 @@ fn create_desktop_shortcut(
             frontend_url.replace('\\', "\\\\").replace('"', "\\\""),
             app_name.replace('\\', "\\\\").replace('"', "\\\"")
         );
-        std::fs::write(&launcher_path, script).map_err(|e| format!("Failed to write launcher script: {}", e))?;
+        std::fs::write(&launcher_path, script).map_err(|e| TauriError::with_details(TauriErrorCode::FileWriteError, "Failed to write launcher script", e.to_string()))?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let mut perms = std::fs::metadata(&launcher_path).map_err(|e| format!("Failed to stat launcher: {}", e))?.permissions();
+            let mut perms = std::fs::metadata(&launcher_path).map_err(|e| TauriError::with_details(TauriErrorCode::FileWriteError, "Failed to stat launcher", e.to_string()))?.permissions();
             perms.set_mode(0o755);
-            std::fs::set_permissions(&launcher_path, perms).map_err(|e| format!("Failed to chmod launcher: {}", e))?;
+            std::fs::set_permissions(&launcher_path, perms).map_err(|e| TauriError::with_details(TauriErrorCode::FileWriteError, "Failed to chmod launcher", e.to_string()))?;
         }
         let plist = format!(
             r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -460,7 +544,7 @@ fn create_desktop_shortcut(
             shortcut_name.replace('<', "&lt;").replace('>', "&gt;").replace('&', "&amp;")
         );
         let plist_path = app_path.join("Contents/Info.plist");
-        std::fs::write(&plist_path, plist).map_err(|e| format!("Failed to write Info.plist: {}", e))?;
+        std::fs::write(&plist_path, plist).map_err(|e| TauriError::with_details(TauriErrorCode::FileWriteError, "Failed to write Info.plist", e.to_string()))?;
         return Ok(app_path.to_string_lossy().into_owned());
     }
 
@@ -468,7 +552,7 @@ fn create_desktop_shortcut(
     {
         let desktop = std::env::var("XDG_DESKTOP_DIR")
             .map(std::path::PathBuf::from)
-            .or_else(|_| dirs::desktop_dir().ok_or_else(|| "Could not find Desktop folder".to_string()))?;
+            .or_else(|_| dirs::desktop_dir().ok_or_else(|| TauriError::new(TauriErrorCode::HomeDirNotFound, "Could not find Desktop folder")))?;
         let path = desktop.join(format!("{}.desktop", shortcut_name));
         let exe_esc = exe_str.replace('\\', "\\\\").replace('"', "\\\"");
         let url_esc = frontend_url.replace('\\', "\\\\").replace('"', "\\\"");
@@ -484,13 +568,13 @@ fn create_desktop_shortcut(
             url_esc,
             name_esc
         );
-        std::fs::write(&path, content).map_err(|e| format!("Failed to write shortcut file: {}", e))?;
+        std::fs::write(&path, content).map_err(|e| TauriError::with_details(TauriErrorCode::FileWriteError, "Failed to write shortcut file", e.to_string()))?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let mut perms = std::fs::metadata(&path).map_err(|e| format!("Failed to stat file: {}", e))?.permissions();
+            let mut perms = std::fs::metadata(&path).map_err(|e| TauriError::with_details(TauriErrorCode::FileWriteError, "Failed to stat shortcut file", e.to_string()))?.permissions();
             perms.set_mode(0o755);
-            std::fs::set_permissions(&path, perms).map_err(|e| format!("Failed to chmod: {}", e))?;
+            std::fs::set_permissions(&path, perms).map_err(|e| TauriError::with_details(TauriErrorCode::FileWriteError, "Failed to chmod shortcut file", e.to_string()))?;
         }
         return Ok(path.to_string_lossy().into_owned());
     }
@@ -498,7 +582,7 @@ fn create_desktop_shortcut(
     #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
     {
         let _ = (app_handle, app_name, frontend_url);
-        Err("Desktop shortcuts are not supported on this platform".to_string())
+        Err(TauriError::new(TauriErrorCode::PlatformNotSupported, "Desktop shortcuts are not supported on this platform"))
     }
 }
 
@@ -510,15 +594,15 @@ async fn create_app_window(
     title: String,
     open_devtools: Option<bool>,
     node_url: Option<String>,
-) -> Result<(), String> {
+) -> Result<(), TauriError> {
     use tauri::{WindowBuilder, Manager};
-    
+
     // Parse URL to get domain for IPC scope configuration
     let parsed_url = url.parse::<url::Url>()
-        .map_err(|e| format!("Invalid URL '{}': {}. Please provide a valid URL (e.g., https://example.com)", url, e))?;
+        .map_err(|e| TauriError::with_details(TauriErrorCode::InvalidUrl, format!("Invalid URL '{}'", url), e.to_string()))?;
     let domain = parsed_url.host_str()
-        .ok_or_else(|| format!("Invalid URL '{}': missing hostname. Please provide a URL with a valid hostname.", url))?;
-    
+        .ok_or_else(|| TauriError::new(TauriErrorCode::InvalidUrl, format!("Invalid URL '{}': missing hostname", url)))?;
+
     // Inject fetch interceptor to proxy node requests through Tauri
     // Since calimero-client-js now uses fetch instead of Axios, we only need fetch interception
     // CRITICAL: Intercept IMMEDIATELY before React makes any fetch calls
@@ -535,7 +619,7 @@ async fn create_app_window(
     let window = WindowBuilder::new(
         &app_handle,
         &window_label,
-        tauri::WindowUrl::External(url.parse().map_err(|e| format!("Invalid URL '{}': {}. Please provide a valid URL (e.g., https://example.com)", url, e))?),
+        tauri::WindowUrl::External(url.parse::<url::Url>().map_err(|e| TauriError::with_details(TauriErrorCode::InvalidUrl, format!("Invalid URL '{}'", url), e.to_string()))?),
     )
     .title(&title)
     .inner_size(1200.0, 800.0)
@@ -544,19 +628,19 @@ async fn create_app_window(
     .center()
     .initialization_script(&proxy_script) // Inject script with configured node URL
     .build()
-    .map_err(|e| format!("Failed to create window '{}' for URL '{}': {}. Please check that the window label is unique and try again.", title, url, e))?;
-    
+    .map_err(|e| TauriError::with_details(TauriErrorCode::WindowCreationFailed, format!("Failed to create window '{}' for URL '{}'", title, url), e.to_string()))?;
+
     // Configure IPC scope BEFORE showing window
     // This allows windows with unique labels (domain + timestamp) to access Tauri IPC
     let remote_access = tauri::ipc::RemoteDomainAccessScope::new(domain)
         .add_window(&window_label)
         .enable_tauri_api();
     app_handle.ipc_scope().configure_remote_access(remote_access);
-    
+
     info!("[Tauri] Configured IPC scope for domain: {} on window: {}", domain, window_label);
-    
+
     // Show the window AFTER IPC scope is configured
-    window.show().map_err(|e| format!("Failed to display window '{}': {}. The window may have been closed or there may be a system issue.", title, e))?;
+    window.show().map_err(|e| TauriError::with_details(TauriErrorCode::WindowOperationFailed, format!("Failed to display window '{}'", title), e.to_string()))?;
     // Bring app window to front so user sees it instead of the main dashboard
     let _ = window.set_focus();
 
@@ -768,7 +852,7 @@ async fn start_merod(
     debug_logs: Option<bool>,
     app_handle: tauri::AppHandle,
     merod_state: tauri::State<'_, MerodState>,
-) -> Result<String, String> {
+) -> Result<String, TauriError> {
     let server_port = server_port.unwrap_or(2528);
     let swarm_port = swarm_port.unwrap_or(2428);
     
@@ -807,8 +891,9 @@ async fn start_merod(
     }
     
     // Get bundled merod binary
-    let merod_binary = get_merod_binary_path(&app_handle)?;
-    
+    let merod_binary = get_merod_binary_path(&app_handle)
+        .map_err(|e| TauriError::new(TauriErrorCode::FileNotFound, e))?;
+
     // Prepare home directory (where .calimero folder is, e.g., ~/.calimero)
     let home_dir_path = if let Some(dir) = data_dir {
         // Expand ~ if present
@@ -824,16 +909,16 @@ async fn start_merod(
         std::path::PathBuf::from(expanded)
     } else {
         dirs::home_dir()
-            .ok_or("Failed to get home directory")?
+            .ok_or_else(|| TauriError::new(TauriErrorCode::HomeDirNotFound, "Failed to get home directory"))?
             .join(".calimero")
     };
-    
+
     std::fs::create_dir_all(&home_dir_path)
-        .map_err(|e| format!("Failed to create home directory: {}", e))?;
+        .map_err(|e| TauriError::with_details(TauriErrorCode::DirectoryError, "Failed to create home directory", e.to_string()))?;
 
     // Validate node name before any filesystem use
     if let Some(name) = &node_name {
-        validate_node_name(name)?;
+        validate_node_name(name).map_err(|e| TauriError::new(TauriErrorCode::InvalidInput, e))?;
     }
 
     // Update config.toml with the specified ports if node_name is provided
@@ -843,9 +928,9 @@ async fn start_merod(
 
         // Verify the node is initialized (config.toml exists)
         if !config_path.exists() {
-            return Err(format!(
-                "Node '{}' is not initialized. config.toml not found at {:?}. Please run init first.",
-                name, config_path
+            return Err(TauriError::new(
+                TauriErrorCode::FileNotFound,
+                format!("Node '{}' is not initialized. config.toml not found. Please run init first.", name),
             ));
         }
 
@@ -853,10 +938,10 @@ async fn start_merod(
         {
             // Read existing config
             let config_content = std::fs::read_to_string(&config_path)
-                .map_err(|e| format!("Failed to read config.toml: {}", e))?;
-            
-            let mut config: toml::Value = config_content.parse()
-                .map_err(|e| format!("Failed to parse config.toml: {}", e))?;
+                .map_err(|e| TauriError::with_details(TauriErrorCode::FileReadError, "Failed to read config.toml", e.to_string()))?;
+
+            let mut config: toml::Value = config_content.parse::<toml::Value>()
+                .map_err(|e| TauriError::with_details(TauriErrorCode::ConfigParseError, "Failed to parse config.toml", e.to_string()))?;
             
             // Update server.listen ports (auth_mode comes from merod init --auth-mode embedded)
             if let Some(server) = config.get_mut("server") {
@@ -915,21 +1000,21 @@ async fn start_merod(
             
             // Write updated config back
             let updated_config = toml::to_string_pretty(&config)
-                .map_err(|e| format!("Failed to serialize config.toml: {}", e))?;
+                .map_err(|e| TauriError::with_details(TauriErrorCode::ConfigWriteError, "Failed to serialize config.toml", e.to_string()))?;
             std::fs::write(&config_path, updated_config)
-                .map_err(|e| format!("Failed to write config.toml: {}", e))?;
+                .map_err(|e| TauriError::with_details(TauriErrorCode::ConfigWriteError, "Failed to write config.toml", e.to_string()))?;
             
             info!("[Merod] Updated config.toml with server_port={} and swarm_port={}", server_port, swarm_port);
         }
     }
     
     // Node name required
-    let node_name_str = node_name.as_ref().ok_or("Node name is required")?.clone();
+    let node_name_str = node_name.as_ref().ok_or_else(|| TauriError::new(TauriErrorCode::InvalidInput, "Node name is required"))?.clone();
 
     // Create logs directory and open log file - redirect merod stdout/stderr here
     let log_dir = home_dir_path.join(&node_name_str).join("logs");
     std::fs::create_dir_all(&log_dir)
-        .map_err(|e| format!("Failed to create logs directory: {}", e))?;
+        .map_err(|e| TauriError::with_details(TauriErrorCode::DirectoryError, "Failed to create logs directory", e.to_string()))?;
     let log_path = log_dir.join("merod.log");
 
     // Open log file for append - use separate handles for stdout and stderr
@@ -937,7 +1022,7 @@ async fn start_merod(
         .create(true)
         .append(true)
         .open(&log_path)
-        .map_err(|e| format!("Failed to create log file: {}", e))?;
+        .map_err(|e| TauriError::with_details(TauriErrorCode::FileWriteError, "Failed to create log file", e.to_string()))?;
     let log_file_stderr = log_file_stdout
         .try_clone()
         .or_else(|_| {
@@ -946,7 +1031,7 @@ async fn start_merod(
                 .append(true)
                 .open(&log_path)
         })
-        .map_err(|e| format!("Failed to open log file for stderr: {}", e))?;
+        .map_err(|e| TauriError::with_details(TauriErrorCode::FileWriteError, "Failed to open log file for stderr", e.to_string()))?;
 
     // Build command - global options come BEFORE subcommand
     // Merod expects: merod --home ~/.calimero --node node1 run
@@ -982,7 +1067,7 @@ async fn start_merod(
     
     // Start the process
     let mut child = cmd.spawn()
-        .map_err(|e| format!("Failed to start merod: {}", e))?;
+        .map_err(|e| TauriError::with_details(TauriErrorCode::MerodStartFailed, "Failed to start merod", e.to_string()))?;
     
     let pid = child.id().unwrap();
     info!("[Merod] Started with PID: {}", pid);
@@ -995,7 +1080,7 @@ async fn start_merod(
         if let Some(code) = status.code() {
             let error_msg = format!("Merod process exited immediately with code: {}. Check merod logs for details.", code);
             warn!("[Merod] {}", error_msg);
-            return Err(error_msg);
+            return Err(TauriError::new(TauriErrorCode::MerodProcessExited, error_msg));
         }
     }
     
@@ -1023,14 +1108,14 @@ async fn start_merod(
 }
 
 #[tauri::command]
-async fn stop_merod(merod_state: tauri::State<'_, MerodState>) -> Result<String, String> {
+async fn stop_merod(merod_state: tauri::State<'_, MerodState>) -> Result<String, TauriError> {
     let pids: Vec<u32> = {
         let state = merod_state.lock().unwrap();
         state.iter().map(|p| p.pid).collect()
     };
 
     if pids.is_empty() {
-        return Err("Merod is not running".to_string());
+        return Err(TauriError::new(TauriErrorCode::MerodNotRunning, "Merod is not running"));
     }
 
     for pid in &pids {
@@ -1080,7 +1165,7 @@ async fn stop_merod(merod_state: tauri::State<'_, MerodState>) -> Result<String,
                         if !output.status.success() {
                             let stderr = String::from_utf8_lossy(&output.stderr);
                             if !stderr.contains("No such process") {
-                                return Err(format!("Failed to stop merod process: {}", stderr));
+                                return Err(TauriError::new(TauriErrorCode::MerodStopFailed, format!("Failed to stop merod process: {}", stderr)));
                             }
                         }
                     }
@@ -1119,7 +1204,7 @@ async fn stop_merod(merod_state: tauri::State<'_, MerodState>) -> Result<String,
 }
 
 #[tauri::command]
-async fn stop_merod_by_pid_command(pid: u32, merod_state: tauri::State<'_, MerodState>) -> Result<String, String> {
+async fn stop_merod_by_pid_command(pid: u32, merod_state: tauri::State<'_, MerodState>) -> Result<String, TauriError> {
     #[cfg(unix)]
     {
         use std::process::Command;
@@ -1173,7 +1258,7 @@ async fn stop_merod_by_pid_command(pid: u32, merod_state: tauri::State<'_, Merod
                         let stderr = String::from_utf8_lossy(&output.stderr);
                         // If process doesn't exist, that's fine - it's already stopped
                         if !stderr.contains("No such process") {
-                            return Err(format!("Failed to stop merod process: {}", stderr));
+                            return Err(TauriError::new(TauriErrorCode::MerodStopFailed, format!("Failed to stop merod process: {}", stderr)));
                         }
                     }
                 }
@@ -1235,7 +1320,7 @@ fn is_process_running(pid: u32) -> bool {
 }
 
 #[tauri::command]
-async fn get_merod_status(merod_state: tauri::State<'_, MerodState>) -> Result<serde_json::Value, String> {
+async fn get_merod_status(merod_state: tauri::State<'_, MerodState>) -> Result<serde_json::Value, TauriError> {
     let mut state = merod_state.lock().unwrap();
     if state.is_empty() {
         return Ok(serde_json::json!({ "running": false, "nodes": [] }));
@@ -1258,7 +1343,7 @@ async fn get_merod_status(merod_state: tauri::State<'_, MerodState>) -> Result<s
 }
 
 #[tauri::command]
-async fn list_merod_nodes(home_dir: Option<String>) -> Result<Vec<String>, String> {
+async fn list_merod_nodes(home_dir: Option<String>) -> Result<Vec<String>, TauriError> {
     // Merod stores nodes in ~/.calimero/ as directories (node1, node2, etc.)
     let calimero_home = if let Some(dir) = home_dir {
         // Expand ~ if present
@@ -1274,7 +1359,7 @@ async fn list_merod_nodes(home_dir: Option<String>) -> Result<Vec<String>, Strin
         std::path::PathBuf::from(expanded)
     } else {
         dirs::home_dir()
-            .ok_or("Failed to get home directory")?
+            .ok_or_else(|| TauriError::new(TauriErrorCode::HomeDirNotFound, "Failed to get home directory"))?
             .join(".calimero")
     };
     
@@ -1283,12 +1368,12 @@ async fn list_merod_nodes(home_dir: Option<String>) -> Result<Vec<String>, Strin
     }
     
     let entries = std::fs::read_dir(&calimero_home)
-        .map_err(|e| format!("Failed to read calimero directory: {}", e))?;
-    
+        .map_err(|e| TauriError::with_details(TauriErrorCode::DirectoryError, "Failed to read calimero directory", e.to_string()))?;
+
     let mut nodes = Vec::new();
     for entry in entries {
-        let entry = entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
-        let file_type = entry.file_type().map_err(|e| format!("Failed to get file type: {}", e))?;
+        let entry = entry.map_err(|e| TauriError::with_details(TauriErrorCode::DirectoryError, "Failed to read directory entry", e.to_string()))?;
+        let file_type = entry.file_type().map_err(|e| TauriError::with_details(TauriErrorCode::DirectoryError, "Failed to get file type", e.to_string()))?;
         if file_type.is_dir() {
             if let Some(name) = entry.file_name().to_str() {
                 // Skip hidden directories
@@ -1325,15 +1410,15 @@ async fn list_merod_nodes(home_dir: Option<String>) -> Result<Vec<String>, Strin
 }
 
 #[tauri::command]
-async fn check_merod_health(node_url: String) -> Result<serde_json::Value, String> {
+async fn check_merod_health(node_url: String) -> Result<serde_json::Value, TauriError> {
     let health_url = format!("{}/health", node_url.trim_end_matches('/'));
-    
+
     info!("[Merod] Checking health at: {}", health_url);
-    
+
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
         .build()
-        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+        .map_err(|e| TauriError::with_details(TauriErrorCode::HttpClientError, "Failed to create HTTP client", e.to_string()))?;
     
     let response = client.get(&health_url).send().await;
     
@@ -1364,11 +1449,12 @@ async fn init_merod_node(
     node_name: String,
     home_dir: Option<String>,
     app_handle: tauri::AppHandle,
-) -> Result<String, String> {
-    validate_node_name(&node_name)?;
+) -> Result<String, TauriError> {
+    validate_node_name(&node_name).map_err(|e| TauriError::new(TauriErrorCode::InvalidInput, e))?;
     // Get bundled merod binary
-    let merod_binary = get_merod_binary_path(&app_handle)?;
-    
+    let merod_binary = get_merod_binary_path(&app_handle)
+        .map_err(|e| TauriError::new(TauriErrorCode::FileNotFound, e))?;
+
     // Prepare home directory (where .calimero folder will be)
     let home_dir_path = if let Some(dir) = home_dir {
         // Expand ~ if present
@@ -1384,36 +1470,36 @@ async fn init_merod_node(
         std::path::PathBuf::from(expanded)
     } else {
         dirs::home_dir()
-            .ok_or("Failed to get home directory")?
+            .ok_or_else(|| TauriError::new(TauriErrorCode::HomeDirNotFound, "Failed to get home directory"))?
             .join(".calimero")
     };
-    
+
     std::fs::create_dir_all(&home_dir_path)
-        .map_err(|e| format!("Failed to create home directory: {}", e))?;
-    
+        .map_err(|e| TauriError::with_details(TauriErrorCode::DirectoryError, "Failed to create home directory", e.to_string()))?;
+
     // Run merod init command - global options come BEFORE subcommand
     // Use --auth-mode embedded so merod creates the full embedded_auth config
     let mut cmd = Command::new(&merod_binary);
     cmd.arg("--home").arg(&home_dir_path);
     cmd.arg("--node").arg(&node_name);
     cmd.arg("init").arg("--auth-mode").arg("embedded");
-    
+
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
     cmd.stdin(Stdio::null());
-    
+
     // Add timeout to prevent hanging (30 seconds should be enough for init)
     let output = tokio::time::timeout(
         tokio::time::Duration::from_secs(30),
         cmd.output()
     )
         .await
-    .map_err(|_| "Merod init command timed out after 30 seconds. Please check if the merod binary is working correctly.")?
-        .map_err(|e| format!("Failed to execute merod init: {}", e))?;
-    
+        .map_err(|_| TauriError::new(TauriErrorCode::Timeout, "Merod init command timed out after 30 seconds"))?
+        .map_err(|e| TauriError::with_details(TauriErrorCode::MerodInitFailed, "Failed to execute merod init", e.to_string()))?;
+
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("Merod init failed: {}", stderr));
+        return Err(TauriError::new(TauriErrorCode::MerodInitFailed, format!("Merod init failed: {}", stderr)));
     }
     
     info!("[Merod] Initialized node '{}' in {:?}", node_name, home_dir_path);
@@ -1421,18 +1507,18 @@ async fn init_merod_node(
 }
 
 #[tauri::command]
-async fn detect_running_merod_nodes() -> Result<Vec<serde_json::Value>, String> {
+async fn detect_running_merod_nodes() -> Result<Vec<serde_json::Value>, TauriError> {
     #[cfg(unix)]
     {
         use std::process::Command;
-        
+
         // Use ps to find merod processes
         let output = Command::new("ps")
             .arg("ax")
             .arg("-o")
             .arg("pid,command")
             .output()
-            .map_err(|e| format!("Failed to run ps: {}", e))?;
+            .map_err(|e| TauriError::with_details(TauriErrorCode::InternalError, "Failed to run ps", e.to_string()))?;
         
         let stdout = String::from_utf8_lossy(&output.stdout);
         let mut running_nodes = Vec::new();
@@ -1553,7 +1639,7 @@ async fn detect_running_merod_nodes() -> Result<Vec<serde_json::Value>, String> 
             .arg("/FO")
             .arg("CSV")
             .output()
-            .map_err(|e| format!("Failed to run tasklist: {}", e))?;
+            .map_err(|e| TauriError::with_details(TauriErrorCode::InternalError, "Failed to run tasklist", e.to_string()))?;
         
         let stdout = String::from_utf8_lossy(&output.stdout);
         let mut running_nodes = Vec::new();
@@ -1615,10 +1701,10 @@ async fn get_merod_logs(
     node_name: String,
     home_dir: Option<String>,
     lines: Option<u32>,
-) -> Result<String, String> {
-    validate_node_name(&node_name)?;
+) -> Result<String, TauriError> {
+    validate_node_name(&node_name).map_err(|e| TauriError::new(TauriErrorCode::InvalidInput, e))?;
     let lines = lines.unwrap_or(500).min(10_000);
-    
+
     let home_dir_path = if let Some(dir) = home_dir {
         let expanded = if dir.starts_with("~") {
             if let Some(home) = dirs::home_dir() {
@@ -1632,22 +1718,22 @@ async fn get_merod_logs(
         std::path::PathBuf::from(expanded)
     } else {
         dirs::home_dir()
-            .ok_or("Failed to get home directory")?
+            .ok_or_else(|| TauriError::new(TauriErrorCode::HomeDirNotFound, "Failed to get home directory"))?
             .join(".calimero")
     };
-    
+
     let log_path = home_dir_path.join(&node_name).join("logs").join("merod.log");
-    
+
     if !log_path.exists() {
-        return Err(format!(
-            "No log file found for node '{}'. Logs are only available for nodes started by the app.",
-            node_name
+        return Err(TauriError::new(
+            TauriErrorCode::FileNotFound,
+            format!("No log file found for node '{}'. Logs are only available for nodes started by the app.", node_name),
         ));
     }
-    
+
     let content = tokio::fs::read_to_string(&log_path)
         .await
-        .map_err(|e| format!("Failed to read log file: {}", e))?;
+        .map_err(|e| TauriError::with_details(TauriErrorCode::FileReadError, "Failed to read log file", e.to_string()))?;
     
     let all_lines: Vec<&str> = content.lines().collect();
     let start = all_lines.len().saturating_sub(lines as usize);
@@ -1657,7 +1743,7 @@ async fn get_merod_logs(
 }
 
 #[tauri::command]
-async fn set_tray_icon_connected(connected: bool, app_handle: tauri::AppHandle) -> Result<(), String> {
+async fn set_tray_icon_connected(connected: bool, app_handle: tauri::AppHandle) -> Result<(), TauriError> {
     let icon_bytes: Vec<u8> = if connected {
         include_bytes!("../icons/tray-icon-connected.png").to_vec()
     } else {
@@ -1666,11 +1752,11 @@ async fn set_tray_icon_connected(connected: bool, app_handle: tauri::AppHandle) 
     app_handle
         .tray_handle()
         .set_icon(tauri::Icon::Raw(icon_bytes))
-        .map_err(|e| e.to_string())
+        .map_err(|e| TauriError::new(TauriErrorCode::WindowOperationFailed, e.to_string()))
 }
 
 #[tauri::command]
-async fn pick_directory(default_path: Option<String>) -> Result<Option<String>, String> {
+async fn pick_directory(default_path: Option<String>) -> Result<Option<String>, TauriError> {
     use tauri::api::dialog::blocking::FileDialogBuilder;
     
     let mut dialog = FileDialogBuilder::new();
@@ -1708,47 +1794,47 @@ async fn pick_directory(default_path: Option<String>) -> Result<Option<String>, 
 
 #[cfg(feature = "autostart")]
 #[tauri::command]
-async fn autostart_enable(app: tauri::AppHandle) -> Result<(), String> {
+async fn autostart_enable(app: tauri::AppHandle) -> Result<(), TauriError> {
     use tauri_plugin_autostart::ManagerExt;
-    app.autolaunch().enable().map_err(|e| e.to_string())
+    app.autolaunch().enable().map_err(|e| TauriError::new(TauriErrorCode::AutostartNotAvailable, e.to_string()))
 }
 
 #[cfg(feature = "autostart")]
 #[tauri::command]
-async fn autostart_disable(app: tauri::AppHandle) -> Result<(), String> {
+async fn autostart_disable(app: tauri::AppHandle) -> Result<(), TauriError> {
     use tauri_plugin_autostart::ManagerExt;
-    app.autolaunch().disable().map_err(|e| e.to_string())
+    app.autolaunch().disable().map_err(|e| TauriError::new(TauriErrorCode::AutostartNotAvailable, e.to_string()))
 }
 
 #[cfg(feature = "autostart")]
 #[tauri::command]
-async fn autostart_is_enabled(app: tauri::AppHandle) -> Result<bool, String> {
+async fn autostart_is_enabled(app: tauri::AppHandle) -> Result<bool, TauriError> {
     use tauri_plugin_autostart::ManagerExt;
-    app.autolaunch().is_enabled().map_err(|e| e.to_string())
+    app.autolaunch().is_enabled().map_err(|e| TauriError::new(TauriErrorCode::AutostartNotAvailable, e.to_string()))
 }
 
 #[cfg(not(feature = "autostart"))]
 #[tauri::command]
-async fn autostart_enable(_app: tauri::AppHandle) -> Result<(), String> {
-    Err("Autostart is not available".to_string())
+async fn autostart_enable(_app: tauri::AppHandle) -> Result<(), TauriError> {
+    Err(TauriError::new(TauriErrorCode::AutostartNotAvailable, "Autostart is not available"))
 }
 
 #[cfg(not(feature = "autostart"))]
 #[tauri::command]
-async fn autostart_disable(_app: tauri::AppHandle) -> Result<(), String> {
-    Err("Autostart is not available".to_string())
+async fn autostart_disable(_app: tauri::AppHandle) -> Result<(), TauriError> {
+    Err(TauriError::new(TauriErrorCode::AutostartNotAvailable, "Autostart is not available"))
 }
 
 #[cfg(not(feature = "autostart"))]
 #[tauri::command]
-async fn autostart_is_enabled(_app: tauri::AppHandle) -> Result<bool, String> {
+async fn autostart_is_enabled(_app: tauri::AppHandle) -> Result<bool, TauriError> {
     Ok(false)
 }
 
 /// Kill all merod processes on the system. Used before total nuke to ensure no process
 /// has the data directory open. Clears MerodState and waits for processes to fully exit.
 #[tauri::command]
-async fn kill_all_merod_processes(merod_state: tauri::State<'_, MerodState>) -> Result<String, String> {
+async fn kill_all_merod_processes(merod_state: tauri::State<'_, MerodState>) -> Result<String, TauriError> {
     let tracked: Vec<u32> = merod_state.lock().map(|s| s.iter().map(|p| p.pid).collect()).unwrap_or_default();
     let pids = collect_merod_pids(&tracked);
 
@@ -1768,23 +1854,23 @@ async fn kill_all_merod_processes(merod_state: tauri::State<'_, MerodState>) -> 
 /// Path must be under the user's home directory for safety.
 /// Call kill_all_merod_processes first to ensure no process has the directory open.
 #[tauri::command]
-async fn close_current_window(window: tauri::Window) -> Result<(), String> {
-    window.close().map_err(|e| e.to_string())
+async fn close_current_window(window: tauri::Window) -> Result<(), TauriError> {
+    window.close().map_err(|e| TauriError::new(TauriErrorCode::WindowOperationFailed, e.to_string()))
 }
 
 #[tauri::command]
-async fn open_url_in_browser(url: String, app_handle: tauri::AppHandle) -> Result<(), String> {
+async fn open_url_in_browser(url: String, app_handle: tauri::AppHandle) -> Result<(), TauriError> {
     tauri::api::shell::open(&app_handle.shell_scope(), url, None)
-        .map_err(|e| e.to_string())
+        .map_err(|e| TauriError::new(TauriErrorCode::InternalError, e.to_string()))
 }
 
 #[tauri::command]
-async fn delete_calimero_data_dir(data_dir: String) -> Result<String, String> {
+async fn delete_calimero_data_dir(data_dir: String) -> Result<String, TauriError> {
     let expanded = if data_dir.starts_with("~") {
         if let Some(home) = dirs::home_dir() {
             data_dir.replacen("~", &home.to_string_lossy(), 1)
         } else {
-            return Err("Could not resolve home directory".to_string());
+            return Err(TauriError::new(TauriErrorCode::HomeDirNotFound, "Could not resolve home directory"));
         }
     } else {
         data_dir
@@ -1797,26 +1883,24 @@ async fn delete_calimero_data_dir(data_dir: String) -> Result<String, String> {
         return Ok("Directory did not exist (nothing to delete)".to_string());
     }
 
-    let path_canonical = path.canonicalize().map_err(|e| {
-        format!("Invalid path: {}", e)
-    })?;
+    let path_canonical = path.canonicalize()
+        .map_err(|e| TauriError::with_details(TauriErrorCode::DirectoryError, "Invalid path", e.to_string()))?;
 
     // Safety: only allow deleting paths under the user's home directory
     if let Some(home) = dirs::home_dir() {
         if let Ok(home_canonical) = home.canonicalize() {
             if !path_canonical.starts_with(&home_canonical) {
-                return Err("Path must be under your home directory".to_string());
+                return Err(TauriError::new(TauriErrorCode::PathNotAllowed, "Path must be under your home directory"));
             }
         }
     }
 
     if !path_canonical.is_dir() {
-        return Err("Path is not a directory".to_string());
+        return Err(TauriError::new(TauriErrorCode::InvalidInput, "Path is not a directory"));
     }
 
-    std::fs::remove_dir_all(&path_canonical).map_err(|e| {
-        format!("Failed to delete directory: {}", e)
-    })?;
+    std::fs::remove_dir_all(&path_canonical)
+        .map_err(|e| TauriError::with_details(TauriErrorCode::FileWriteError, "Failed to delete directory", e.to_string()))?;
 
     info!("[Calimero] Deleted data directory: {:?}", path_canonical);
     Ok(format!("Deleted {}", path_canonical.display()))

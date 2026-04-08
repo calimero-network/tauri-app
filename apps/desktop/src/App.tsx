@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import ErrorBoundary from "./components/ErrorBoundary";
 import { createClientAsync, apiClient, LoginView, getAccessToken, clearAccessToken, clearRefreshToken } from "@calimero-network/mero-react";
 import { getSettings, getAuthUrl, saveSettings } from "./utils/settings";
 import { clearOnboardingProgress } from "./utils/onboardingProgress";
@@ -509,46 +510,48 @@ function App() {
   // Show login if needed
   if (showLogin) {
     return (
-      <div className="app login-screen" data-testid="login-screen">
-        <header className="login-screen-header">
-          <div className="login-screen-brand">
-            <img src={calimeroLogo} alt="Calimero" className="login-screen-logo" />
-          </div>
-          <button 
-            onClick={() => { 
-              setShowLogin(false); 
-              setShowSettings(true); 
-            }} 
-            className="button button-secondary"
-          >
-            <SettingsIcon size={16} style={{ marginRight: '6px', verticalAlign: 'middle' }} />
-            Settings
-          </button>
-        </header>
-        <main className="login-screen-main">
-        <LoginView
-          variant={theme}
-          onSuccess={() => {
-            setShowLogin(false);
-            // Reload contexts after login
-            loadContexts();
-            loadInstalledApps();
-            checkConnection();
-          }}
-          onError={(error) => {
-            console.error('❌ Login failed:', error);
-          }}
-        />
-        </main>
-      </div>
+      <ErrorBoundary componentName="Login" onReset={() => setShowLogin(true)}>
+        <div className="app login-screen" data-testid="login-screen">
+          <header className="login-screen-header">
+            <div className="login-screen-brand">
+              <img src={calimeroLogo} alt="Calimero" className="login-screen-logo" />
+            </div>
+            <button
+              onClick={() => {
+                setShowLogin(false);
+                setShowSettings(true);
+              }}
+              className="button button-secondary"
+            >
+              <SettingsIcon size={16} style={{ marginRight: '6px', verticalAlign: 'middle' }} />
+              Settings
+            </button>
+          </header>
+          <main className="login-screen-main">
+            <LoginView
+              variant={theme}
+              onSuccess={() => {
+                setShowLogin(false);
+                loadContexts();
+                loadInstalledApps();
+                checkConnection();
+              }}
+              onError={(error) => {
+                console.error('❌ Login failed:', error);
+              }}
+            />
+          </main>
+        </div>
+      </ErrorBoundary>
     );
   }
 
 
   if (showSettings) {
     return (
-      <Settings
-        onBack={async () => {
+      <ErrorBoundary componentName="Settings" onReset={() => setShowSettings(true)}>
+        <Settings
+          onBack={async () => {
           // Reinitialize client BEFORE hiding Settings so the checkConnection useEffect
           // only fires after the client has tokens loaded from localStorage
           const settings = getSettings();
@@ -608,7 +611,8 @@ function App() {
             }
           }
         }}
-      />
+        />
+      </ErrorBoundary>
     );
   }
 

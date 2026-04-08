@@ -5,6 +5,19 @@ use tauri::Manager;
 use tauri::{CustomMenuItem, SystemTray, SystemTrayEvent, SystemTrayMenu};
 use serde::{Deserialize, Serialize};
 use log::{debug, info, warn};
+use std::sync::OnceLock;
+
+static HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+fn http_client() -> &'static reqwest::Client {
+    HTTP_CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .danger_accept_invalid_certs(false)
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .expect("Failed to build HTTP client")
+    })
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 struct HttpRequest {
@@ -217,14 +230,8 @@ async fn proxy_http_request_inner(request: HttpRequest, configured_node_url: Opt
         debug!("[Tauri Proxy] Has Authorization header: {}", has_auth);
     }
     
-    // Create HTTP client with proper configuration
-    let client = reqwest::Client::builder()
-        .danger_accept_invalid_certs(false) // Use proper cert validation
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .map_err(|e| format!("Failed to initialize HTTP client: {}. This may indicate a system configuration issue. Please try again.", e))?;
-    
     // Build request (use normalized URL)
+    let client = http_client();
     let mut req_builder = match request.method.as_str() {
         "GET" => client.get(&normalized_url),
         "POST" => client.post(&normalized_url),
@@ -676,34 +683,37 @@ async fn kill_pids(pids: &[u32]) {
     if pids.is_empty() {
         return;
     }
-    for pid in pids {
-        #[cfg(unix)]
-        let _ = std::process::Command::new("kill").args(["-TERM", &pid.to_string()]).output();
-        #[cfg(windows)]
-        let _ = std::process::Command::new("taskkill").args(["/PID", &pid.to_string()]).output();
-    }
-    tokio::time::sleep(tokio::time::Duration::from_secs(PROCESS_TERM_WAIT_SECS)).await;
-    for pid in pids {
-        #[cfg(unix)]
-        {
-            let still_alive = std::process::Command::new("ps").arg("-p").arg(pid.to_string()).output()
-                .map(|o| o.status.success()).unwrap_or(false);
-            if still_alive {
-                let _ = std::process::Command::new("kill").args(["-9", &pid.to_string()]).output();
+    let pids_owned = pids.to_vec();
+    tokio::task::spawn_blocking(move || {
+        for pid in &pids_owned {
+            #[cfg(unix)]
+            let _ = std::process::Command::new("kill").args(["-TERM", &pid.to_string()]).output();
+            #[cfg(windows)]
+            let _ = std::process::Command::new("taskkill").args(["/PID", &pid.to_string()]).output();
+        }
+        std::thread::sleep(std::time::Duration::from_secs(PROCESS_TERM_WAIT_SECS));
+        for pid in &pids_owned {
+            #[cfg(unix)]
+            {
+                let still_alive = std::process::Command::new("ps").arg("-p").arg(pid.to_string()).output()
+                    .map(|o| o.status.success()).unwrap_or(false);
+                if still_alive {
+                    let _ = std::process::Command::new("kill").args(["-9", &pid.to_string()]).output();
+                }
+            }
+            #[cfg(windows)]
+            {
+                let still_alive = std::process::Command::new("tasklist")
+                    .args(["/FI", &format!("PID eq {}", pid), "/FO", "CSV", "/NH"])
+                    .output()
+                    .map(|o| String::from_utf8_lossy(&o.stdout).contains(&pid.to_string()))
+                    .unwrap_or(false);
+                if still_alive {
+                    let _ = std::process::Command::new("taskkill").args(["/PID", &pid.to_string(), "/F"]).output();
+                }
             }
         }
-        #[cfg(windows)]
-        {
-            let still_alive = std::process::Command::new("tasklist")
-                .args(["/FI", &format!("PID eq {}", pid), "/FO", "CSV", "/NH"])
-                .output()
-                .map(|o| String::from_utf8_lossy(&o.stdout).contains(&pid.to_string()))
-                .unwrap_or(false);
-            if still_alive {
-                let _ = std::process::Command::new("taskkill").args(["/PID", &pid.to_string(), "/F"]).output();
-            }
-        }
-    }
+    }).await.unwrap_or(());
 }
 
 #[derive(Debug, Clone)]

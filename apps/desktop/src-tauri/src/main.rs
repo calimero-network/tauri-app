@@ -655,7 +655,7 @@ fn collect_merod_pids(tracked: &[u32]) -> Vec<u32> {
         if let Ok(output) = std::process::Command::new("tasklist").args(["/FO", "CSV"]).output() {
             let stdout = String::from_utf8_lossy(&output.stdout);
             for line in stdout.lines().skip(1) {
-                if line.to_lowercase().starts_with("\"merod") {
+                if line.to_lowercase().starts_with("\"merod.exe\"") {
                     let parts: Vec<&str> = line.split(',').collect();
                     if parts.len() >= 2 {
                         if let Ok(pid) = parts[1].trim_matches('"').parse::<u32>() {
@@ -672,14 +672,17 @@ fn collect_merod_pids(tracked: &[u32]) -> Vec<u32> {
 }
 
 /// Sends SIGTERM to all pids, waits, then force-kills any survivors.
-fn kill_pids(pids: &[u32]) {
+async fn kill_pids(pids: &[u32]) {
+    if pids.is_empty() {
+        return;
+    }
     for pid in pids {
         #[cfg(unix)]
         let _ = std::process::Command::new("kill").args(["-TERM", &pid.to_string()]).output();
         #[cfg(windows)]
         let _ = std::process::Command::new("taskkill").args(["/PID", &pid.to_string()]).output();
     }
-    std::thread::sleep(std::time::Duration::from_secs(PROCESS_TERM_WAIT_SECS));
+    tokio::time::sleep(tokio::time::Duration::from_secs(PROCESS_TERM_WAIT_SECS)).await;
     for pid in pids {
         #[cfg(unix)]
         {
@@ -1739,11 +1742,12 @@ async fn kill_all_merod_processes(merod_state: tauri::State<'_, MerodState>) -> 
     let tracked: Vec<u32> = merod_state.lock().map(|s| s.iter().map(|p| p.pid).collect()).unwrap_or_default();
     let pids = collect_merod_pids(&tracked);
 
-    kill_pids(&pids);
+    kill_pids(&pids).await;
 
     {
-        let mut state = merod_state.lock().unwrap();
-        state.clear();
+        if let Ok(mut state) = merod_state.lock() {
+            state.clear();
+        }
     }
 
     info!("[Calimero] Killed {} merod process(es)", pids.len());
@@ -1842,7 +1846,11 @@ fn graceful_shutdown(merod_state: &MerodState) {
 
     if !pids.is_empty() {
         info!("[Shutdown] Terminating {} merod process(es): {:?}", pids.len(), pids);
-        kill_pids(&pids);
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(kill_pids(&pids));
         info!("[Shutdown] All merod processes terminated");
     } else {
         info!("[Shutdown] No merod processes to terminate");

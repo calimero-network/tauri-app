@@ -2197,32 +2197,8 @@ fn main() {
             get_pending_cloud_auth,
             clear_pending_cloud_auth
         ])
-        .build(tauri::generate_context!())
-        .expect("error while building tauri application")
-        .run(|app_handle, event| {
-            // Handle calimero:// deep link URLs when app is already running (macOS Apple Events)
-            #[allow(unused_variables)]
-            if let tauri::RunEvent::Opened { urls } = &event {
-                for url in urls {
-                    let url_str = url.to_string();
-                    if url_str.starts_with("calimero://") {
-                        info!("Received deep link: {}", url_str);
-                        if let Some(state) = app_handle.try_state::<PendingCloudAuth>() {
-                            if let Ok(mut g) = state.0.lock() {
-                                *g = Some(url_str.clone());
-                            }
-                        }
-                        // Emit event to frontend so it can react immediately
-                        let _ = app_handle.emit_all("cloud-auth-callback", url_str);
-                        // Focus the main window
-                        if let Some(window) = app_handle.get_window("main") {
-                            let _ = window.show();
-                            let _ = window.set_focus();
-                        }
-                    }
-                }
-            }
-        });
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
 }
 
 #[cfg(test)]

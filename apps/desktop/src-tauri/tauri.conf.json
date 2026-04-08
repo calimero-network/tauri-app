@@ -51,9 +51,8 @@
         "print": true
       },
       "http": {
-        "all": true,
-        "request": true,
-        "scope": ["http://**", "https://**", "ws://**", "wss://**"]
+        "all": false,
+        "request": false
       },
       "process": {
         "relaunch": true

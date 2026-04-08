@@ -180,10 +180,8 @@ pub(crate) fn validate_allowed_url(url: &str, configured_node_url: Option<&str>)
 
 #[tauri::command]
 async fn proxy_http_request(request: HttpRequest, configured_node_url: Option<String>) -> Result<HttpResponse, String> {
-    IN_FLIGHT_REQUESTS.fetch_add(1, Ordering::SeqCst);
-    let result = proxy_http_request_inner(request, configured_node_url).await;
-    IN_FLIGHT_REQUESTS.fetch_sub(1, Ordering::SeqCst);
-    result
+    let _guard = InFlightGuard::new();
+    proxy_http_request_inner(request, configured_node_url).await
 }
 
 async fn proxy_http_request_inner(request: HttpRequest, configured_node_url: Option<String>) -> Result<HttpResponse, String> {
@@ -612,9 +610,98 @@ use std::process::Stdio;
 /// Used during graceful shutdown to wait for pending requests to complete.
 static IN_FLIGHT_REQUESTS: AtomicUsize = AtomicUsize::new(0);
 
+struct InFlightGuard;
+impl InFlightGuard {
+    fn new() -> Self {
+        IN_FLIGHT_REQUESTS.fetch_add(1, Ordering::SeqCst);
+        InFlightGuard
+    }
+}
+impl Drop for InFlightGuard {
+    fn drop(&mut self) {
+        IN_FLIGHT_REQUESTS.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 const REQUEST_DRAIN_TIMEOUT_SECS: u64 = 10;
 const PROCESS_TERM_WAIT_SECS: u64 = 3;
 use tokio::process::Command;
+
+/// Returns PIDs of running merod processes, merging tracked state with OS-level discovery.
+fn collect_merod_pids(tracked: &[u32]) -> Vec<u32> {
+    let mut pids: Vec<u32> = tracked.to_vec();
+    #[cfg(unix)]
+    {
+        if let Ok(output) = std::process::Command::new("ps").args(["ax", "-o", "pid,command"]).output() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            for line in stdout.lines() {
+                let mut parts = line.split_whitespace();
+                let pid_str = match parts.next() { Some(p) => p, None => continue };
+                let exe = match parts.next() { Some(e) => e, None => continue };
+                let args: Vec<&str> = parts.collect();
+                let basename = exe.split('/').last().unwrap_or(exe);
+                if basename == "merod" && args.first() == Some(&"run") {
+                    if let Ok(pid) = pid_str.parse::<u32>() {
+                        if !pids.contains(&pid) {
+                            pids.push(pid);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    #[cfg(windows)]
+    {
+        if let Ok(output) = std::process::Command::new("tasklist").args(["/FO", "CSV"]).output() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            for line in stdout.lines().skip(1) {
+                if line.to_lowercase().starts_with("\"merod") {
+                    let parts: Vec<&str> = line.split(',').collect();
+                    if parts.len() >= 2 {
+                        if let Ok(pid) = parts[1].trim_matches('"').parse::<u32>() {
+                            if !pids.contains(&pid) {
+                                pids.push(pid);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    pids
+}
+
+/// Sends SIGTERM to all pids, waits, then force-kills any survivors.
+fn kill_pids(pids: &[u32]) {
+    for pid in pids {
+        #[cfg(unix)]
+        let _ = std::process::Command::new("kill").args(["-TERM", &pid.to_string()]).output();
+        #[cfg(windows)]
+        let _ = std::process::Command::new("taskkill").args(["/PID", &pid.to_string()]).output();
+    }
+    std::thread::sleep(std::time::Duration::from_secs(PROCESS_TERM_WAIT_SECS));
+    for pid in pids {
+        #[cfg(unix)]
+        {
+            let still_alive = std::process::Command::new("ps").arg("-p").arg(pid.to_string()).output()
+                .map(|o| o.status.success()).unwrap_or(false);
+            if still_alive {
+                let _ = std::process::Command::new("kill").args(["-9", &pid.to_string()]).output();
+            }
+        }
+        #[cfg(windows)]
+        {
+            let still_alive = std::process::Command::new("tasklist")
+                .args(["/FI", &format!("PID eq {}", pid), "/FO", "CSV", "/NH"])
+                .output()
+                .map(|o| String::from_utf8_lossy(&o.stdout).contains(&pid.to_string()))
+                .unwrap_or(false);
+            if still_alive {
+                let _ = std::process::Command::new("taskkill").args(["/PID", &pid.to_string(), "/F"]).output();
+            }
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 struct MerodProcess {
@@ -1649,76 +1736,10 @@ async fn autostart_is_enabled(_app: tauri::AppHandle) -> Result<bool, String> {
 /// has the data directory open. Clears MerodState and waits for processes to fully exit.
 #[tauri::command]
 async fn kill_all_merod_processes(merod_state: tauri::State<'_, MerodState>) -> Result<String, String> {
-    let pids: Vec<u32> = {
-        #[cfg(unix)]
-        {
-            let output = std::process::Command::new("ps")
-                .arg("ax")
-                .arg("-o")
-                .arg("pid,command")
-                .output()
-                .map_err(|e| format!("Failed to run ps: {}", e))?;
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let mut pids = Vec::new();
-            for line in stdout.lines() {
-                if line.contains("merod") && line.contains("run") {
-                    if let Some(pid_str) = line.split_whitespace().next() {
-                        if let Ok(pid) = pid_str.parse::<u32>() {
-                            pids.push(pid);
-                        }
-                    }
-                }
-            }
-            pids
-        }
-        #[cfg(windows)]
-        {
-            let output = std::process::Command::new("tasklist")
-                .arg("/FO").arg("CSV")
-                .output()
-                .map_err(|e| format!("Failed to run tasklist: {}", e))?;
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let mut pids = Vec::new();
-            for line in stdout.lines().skip(1) {
-                if line.contains("merod") {
-                    let parts: Vec<&str> = line.split(',').collect();
-                    if parts.len() >= 2 {
-                        if let Ok(pid) = parts[1].trim_matches('"').parse::<u32>() {
-                            pids.push(pid);
-                        }
-                    }
-                }
-            }
-            pids
-        }
-    };
+    let tracked: Vec<u32> = merod_state.lock().unwrap().iter().map(|p| p.pid).collect();
+    let pids = collect_merod_pids(&tracked);
 
-    for pid in &pids {
-        #[cfg(unix)]
-        {
-            let _ = std::process::Command::new("kill").arg("-TERM").arg(pid.to_string()).output();
-        }
-        #[cfg(windows)]
-        {
-            let _ = std::process::Command::new("taskkill")
-                .arg("/PID").arg(pid.to_string()).arg("/F")
-                .output();
-        }
-    }
-
-    if !pids.is_empty() {
-        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-        #[cfg(unix)]
-        for pid in &pids {
-            let check = std::process::Command::new("ps").arg("-p").arg(pid.to_string()).output();
-            if let Ok(out) = check {
-                if out.status.success() {
-                    let _ = std::process::Command::new("kill").arg("-9").arg(pid.to_string()).output();
-                }
-            }
-        }
-        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-    }
+    kill_pids(&pids);
 
     {
         let mut state = merod_state.lock().unwrap();
@@ -1788,59 +1809,11 @@ async fn delete_calimero_data_dir(data_dir: String) -> Result<String, String> {
 }
 
 /// Performs graceful shutdown:
-/// 1. SIGTERM all managed (and detected) merod processes
-/// 2. Wait up to PROCESS_TERM_WAIT_SECS, then SIGKILL survivors
-/// 3. Drain in-flight proxy requests up to REQUEST_DRAIN_TIMEOUT_SECS
+/// 1. Drain in-flight proxy requests up to REQUEST_DRAIN_TIMEOUT_SECS
+/// 2. SIGTERM all managed (and detected) merod processes
+/// 3. Wait up to PROCESS_TERM_WAIT_SECS, then SIGKILL survivors
 fn graceful_shutdown(merod_state: &MerodState) {
     info!("[Shutdown] Starting graceful shutdown...");
-
-    // Collect PIDs from managed state + any merod processes detected on the system
-    let mut pids: Vec<u32> = Vec::new();
-    if let Ok(state) = merod_state.lock() {
-        for proc in state.iter() {
-            pids.push(proc.pid);
-        }
-    }
-
-    #[cfg(unix)]
-    {
-        if let Ok(output) = std::process::Command::new("ps").args(["ax", "-o", "pid,command"]).output() {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            for line in stdout.lines() {
-                let mut parts = line.split_whitespace();
-                let pid_str = match parts.next() { Some(p) => p, None => continue };
-                let exe = match parts.next() { Some(e) => e, None => continue };
-                let args: Vec<&str> = parts.collect();
-                let basename = exe.split('/').last().unwrap_or(exe);
-                if basename == "merod" && args.first() == Some(&"run") {
-                    if let Ok(pid) = pid_str.parse::<u32>() {
-                        if !pids.contains(&pid) {
-                            pids.push(pid);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    #[cfg(windows)]
-    {
-        if let Ok(output) = std::process::Command::new("tasklist").args(["/FO", "CSV"]).output() {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            for line in stdout.lines().skip(1) {
-                if line.contains("merod") {
-                    let parts: Vec<&str> = line.split(',').collect();
-                    if parts.len() >= 2 {
-                        if let Ok(pid) = parts[1].trim_matches('"').parse::<u32>() {
-                            if !pids.contains(&pid) {
-                                pids.push(pid);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
 
     // Drain in-flight proxy requests before killing merod so they can complete
     let in_flight = IN_FLIGHT_REQUESTS.load(Ordering::SeqCst);
@@ -1862,41 +1835,14 @@ fn graceful_shutdown(merod_state: &MerodState) {
         info!("[Shutdown] No in-flight proxy requests to drain");
     }
 
+    let tracked: Vec<u32> = merod_state.lock()
+        .map(|s| s.iter().map(|p| p.pid).collect())
+        .unwrap_or_default();
+    let pids = collect_merod_pids(&tracked);
+
     if !pids.is_empty() {
-        info!("[Shutdown] Sending SIGTERM to {} merod process(es): {:?}", pids.len(), pids);
-        for pid in &pids {
-            #[cfg(unix)]
-            let _ = std::process::Command::new("kill").args(["-TERM", &pid.to_string()]).output();
-            #[cfg(windows)]
-            let _ = std::process::Command::new("taskkill").args(["/PID", &pid.to_string()]).output();
-        }
-
-        info!("[Shutdown] Waiting {}s for processes to exit...", PROCESS_TERM_WAIT_SECS);
-        std::thread::sleep(std::time::Duration::from_secs(PROCESS_TERM_WAIT_SECS));
-
-        for pid in &pids {
-            #[cfg(unix)]
-            {
-                let still_alive = std::process::Command::new("ps").arg("-p").arg(pid.to_string()).output()
-                    .map(|o| o.status.success()).unwrap_or(false);
-                if still_alive {
-                    info!("[Shutdown] Force killing PID {} with SIGKILL", pid);
-                    let _ = std::process::Command::new("kill").args(["-9", &pid.to_string()]).output();
-                }
-            }
-            #[cfg(windows)]
-            {
-                let still_alive = std::process::Command::new("tasklist")
-                    .args(["/FI", &format!("PID eq {}", pid), "/FO", "CSV", "/NH"])
-                    .output()
-                    .map(|o| String::from_utf8_lossy(&o.stdout).contains(&pid.to_string()))
-                    .unwrap_or(false);
-                if still_alive {
-                    info!("[Shutdown] Force killing PID {} with taskkill /F", pid);
-                    let _ = std::process::Command::new("taskkill").args(["/PID", &pid.to_string(), "/F"]).output();
-                }
-            }
-        }
+        info!("[Shutdown] Terminating {} merod process(es): {:?}", pids.len(), pids);
+        kill_pids(&pids);
         info!("[Shutdown] All merod processes terminated");
     } else {
         info!("[Shutdown] No merod processes to terminate");

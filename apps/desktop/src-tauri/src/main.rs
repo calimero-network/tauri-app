@@ -46,6 +46,52 @@ fn parse_open_app_args() -> Option<(String, String)> {
 /// State for app to open when launched from a desktop shortcut (read by frontend on load).
 pub struct PendingOpenApp(pub std::sync::Mutex<Option<(String, String)>>);
 
+const MAX_NODE_NAME_LENGTH: usize = 64;
+
+/// Validates a node name to prevent path traversal and command injection.
+/// Valid names: non-empty, max 64 chars, alphanumeric/hyphen/underscore only, no leading hyphen.
+fn validate_node_name(node_name: &str) -> Result<(), String> {
+    if node_name.is_empty() {
+        return Err("Node name cannot be empty".to_string());
+    }
+    if node_name.len() > MAX_NODE_NAME_LENGTH {
+        return Err(format!(
+            "Node name is too long ({} characters). Maximum allowed is {} characters.",
+            node_name.len(),
+            MAX_NODE_NAME_LENGTH
+        ));
+    }
+    if node_name.starts_with('-') {
+        return Err("Node name cannot start with a hyphen (-) as it may be interpreted as a command flag".to_string());
+    }
+    for (i, c) in node_name.chars().enumerate() {
+        if !c.is_ascii_alphanumeric() && c != '-' && c != '_' {
+            if c == '/' || c == '\\' {
+                return Err(format!(
+                    "Node name contains invalid path separator '{}' at position {}. \
+                     Path separators are not allowed to prevent path traversal attacks.",
+                    c, i
+                ));
+            } else if c == ';' || c == '|' || c == '&' || c == '$' || c == '`' {
+                return Err(format!(
+                    "Node name contains invalid shell metacharacter '{}' at position {}. \
+                     Shell metacharacters are not allowed to prevent command injection.",
+                    c, i
+                ));
+            } else if c == '.' && node_name.contains("..") {
+                return Err("Node name contains '..' which could be used for path traversal attacks".to_string());
+            } else {
+                return Err(format!(
+                    "Node name contains invalid character '{}' at position {}. \
+                     Only alphanumeric characters, hyphens (-), and underscores (_) are allowed.",
+                    c, i
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Validates that a URL is allowed for proxying
 /// 
 /// Allowed URLs:
@@ -669,7 +715,12 @@ async fn start_merod(
     
     std::fs::create_dir_all(&home_dir_path)
         .map_err(|e| format!("Failed to create home directory: {}", e))?;
-    
+
+    // Validate node name before any filesystem use
+    if let Some(name) = &node_name {
+        validate_node_name(name)?;
+    }
+
     // Update config.toml with the specified ports if node_name is provided
     if let Some(name) = &node_name {
         let node_dir = home_dir_path.join(name);
@@ -1199,6 +1250,7 @@ async fn init_merod_node(
     home_dir: Option<String>,
     app_handle: tauri::AppHandle,
 ) -> Result<String, String> {
+    validate_node_name(&node_name)?;
     // Get bundled merod binary
     let merod_binary = get_merod_binary_path(&app_handle)?;
     
@@ -1449,6 +1501,7 @@ async fn get_merod_logs(
     home_dir: Option<String>,
     lines: Option<u32>,
 ) -> Result<String, String> {
+    validate_node_name(&node_name)?;
     let lines = lines.unwrap_or(500).min(10_000);
     
     let home_dir_path = if let Some(dir) = home_dir {

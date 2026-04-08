@@ -161,19 +161,9 @@ async fn proxy_http_request(request: HttpRequest, configured_node_url: Option<St
     info!("[Tauri Proxy] Proxying request: {} {}", request.method, request.url);
     if let Some(ref headers) = request.headers {
         debug!("[Tauri Proxy] Request headers count: {}", headers.len());
-        // Log Authorization header if present (but don't log the full token)
-        if let Some(auth_header) = headers.get("Authorization").or_else(|| headers.get("authorization")) {
-            // Safely truncate to first 20 characters (UTF-8 safe)
-            let preview: String = auth_header.chars().take(20).collect();
-            debug!("[Tauri Proxy] Authorization header present: {}...", preview);
-        } else {
-            warn!("[Tauri Proxy] No Authorization header found!");
-        }
-        // Log all header keys for debugging
-        debug!("[Tauri Proxy] Header keys: {:?}", headers.keys().collect::<Vec<_>>());
-        debug!("[Tauri Proxy] Request headers: {:?}", headers);
-    } else {
-        warn!("[Tauri Proxy] No headers in request!");
+        // Log only whether auth header is present — never log its value
+        let has_auth = headers.contains_key("Authorization") || headers.contains_key("authorization");
+        debug!("[Tauri Proxy] Has Authorization header: {}", has_auth);
     }
     
     // Create HTTP client with proper configuration
@@ -210,14 +200,25 @@ async fn proxy_http_request(request: HttpRequest, configured_node_url: Option<St
             if key_lower == "host" {
                 has_host = true;
             }
-            // Log header being added (truncate value for security, UTF-8 safe)
-            let value_preview = if value.len() > 50 {
-                let preview: String = value.chars().take(50).collect();
-                format!("{}...", preview)
+            // Redact sensitive headers entirely in logs
+            let is_sensitive = key_lower == "authorization"
+                || key_lower == "cookie"
+                || key_lower == "x-api-key"
+                || key_lower == "x-auth-token"
+                || key_lower.contains("secret")
+                || key_lower.contains("password")
+                || key_lower.contains("token");
+            if is_sensitive {
+                debug!("[Tauri Proxy] Adding header: '{}' = '[REDACTED]'", key);
             } else {
-                value.clone()
-            };
-            debug!("[Tauri Proxy] Adding header: '{}' = '{}'", key, value_preview);
+                let value_preview = if value.len() > 50 {
+                    let preview: String = value.chars().take(50).collect();
+                    format!("{}...", preview)
+                } else {
+                    value.clone()
+                };
+                debug!("[Tauri Proxy] Adding header: '{}' = '{}'", key, value_preview);
+            }
             // Add header directly - reqwest will handle validation
             req_builder = req_builder.header(key, value);
         }

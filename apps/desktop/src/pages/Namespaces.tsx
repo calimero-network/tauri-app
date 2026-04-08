@@ -58,7 +58,7 @@ export default function Namespaces() {
 
   // Top-level state
   const [namespaces, setNamespaces] = useState<Namespace[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [view, setView] = useState<View>({ type: "list" });
 
@@ -108,14 +108,19 @@ export default function Namespaces() {
   }, [admin]);
 
   // Load group details when viewing a group
-  const loadGroupDetails = useCallback(async (groupId: string) => {
+  const loadGroupDetails = useCallback(async (targetGroupId: string) => {
+    // Clear stale state immediately to prevent showing previous group's data
+    setGroupInfo(null);
+    setGroupMembers([]);
+    setGroupContexts([]);
+    setGroupSubgroups([]);
     setGroupLoading(true);
     try {
       const [info, members, contexts, subgroups] = await Promise.all([
-        admin.getGroupInfo(groupId).catch(() => null),
-        admin.listGroupMembers(groupId).catch(() => ({ data: [], selfIdentity: null })),
-        admin.listGroupContexts(groupId).catch(() => []),
-        admin.listSubgroups(groupId).catch(() => []),
+        admin.getGroupInfo(targetGroupId).catch(() => null),
+        admin.listGroupMembers(targetGroupId).catch(() => ({ data: [], selfIdentity: null })),
+        admin.listGroupContexts(targetGroupId).catch(() => []),
+        admin.listSubgroups(targetGroupId).catch(() => []),
       ]);
       setGroupInfo(info as unknown as GroupInfo | null);
       const memberList = (members as unknown as { data?: GroupMember[] })?.data ?? (Array.isArray(members) ? members : []);

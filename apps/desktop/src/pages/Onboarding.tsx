@@ -6,6 +6,7 @@ import { initMerodNode, startMerod, listMerodNodes, detectRunningMerodNodes, wai
 import { invoke } from "@tauri-apps/api/tauri";
 import { saveSettings, getSettings } from "../utils/settings";
 import { saveOnboardingProgress, loadOnboardingProgress } from "../utils/onboardingProgress";
+import { startCloudLogin } from "../utils/cloudAuth";
 import { fetchAppsFromAllRegistries, fetchAppManifest, recordDownload, type AppSummary } from "../utils/registry";
 import { useToast } from "../contexts/ToastContext";
 import { useTheme } from "../contexts/ThemeContext";
@@ -20,9 +21,9 @@ interface OnboardingProps {
   onSettings?: () => void;
 }
 
-type OnboardingStep = 'welcome' | 'what-is' | 'node-setup' | 'login' | 'install-app';
+type OnboardingStep = 'welcome' | 'what-is' | 'node-setup' | 'cloud-connect' | 'login' | 'install-app';
 
-const ONBOARDING_STEPS: OnboardingStep[] = ['welcome', 'what-is', 'node-setup', 'login', 'install-app'];
+const ONBOARDING_STEPS: OnboardingStep[] = ['welcome', 'what-is', 'node-setup', 'cloud-connect', 'login', 'install-app'];
 
 
 export default function Onboarding({ onComplete, onSettings }: OnboardingProps) {
@@ -88,6 +89,8 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
       const [nodeStarted, setNodeStarted] = useState(false);
       const [showAdvancedOptions, setShowAdvancedOptions] = useState(false);
   const [loginTransitioning, setLoginTransitioning] = useState(false);
+  const [cloudConnecting, setCloudConnecting] = useState(false);
+  const [cloudConnected, setCloudConnected] = useState(() => getSettings().cloudConnected ?? false);
   const [existingNodes, setExistingNodes] = useState<string[]>([]);
   const [useExistingNode, setUseExistingNode] = useState<string | null>(() => loadOnboardingProgress()?.useExistingNode ?? null);
   const [loadingExistingNodes, setLoadingExistingNodes] = useState(false);
@@ -176,7 +179,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
             }
             setTheme('dark');
             setCreatingNode(false);
-            setCurrentStep('login');
+            setCurrentStep('cloud-connect');
             return;
           } catch (err) {
             console.error('Failed to use existing node:', err);
@@ -225,15 +228,15 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
     setNodeError(null);
     
     try {
-      const advanceToLogin = () => {
+      const advanceToCloudConnect = () => {
         setTimeout(async () => {
           try {
             const onboardingState = await checkOnboardingState();
             setState(onboardingState);
-            setCurrentStep('login');
+            setCurrentStep('cloud-connect');
           } catch (err) {
             console.error("Failed to check onboarding state:", err);
-            setCurrentStep('login');
+            setCurrentStep('cloud-connect');
           }
         }, 2000);
       };
@@ -257,7 +260,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
           });
           // check_merod_health appends /health — use /auth so it hits /auth/health
           await waitForNodeHealthy(`${nodeUrl}/auth`, 5000);
-          advanceToLogin();
+          advanceToCloudConnect();
           return;
         }
 
@@ -276,7 +279,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
         });
         // check_merod_health appends /health — use /auth so it hits /auth/health
         await waitForNodeHealthy(`${nodeUrl}/auth`, 20000);
-        advanceToLogin();
+        advanceToCloudConnect();
       } else {
         // Create new node
         try {
@@ -306,7 +309,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
         });
         // check_merod_health appends /health — use /auth so it hits /auth/health
         await waitForNodeHealthy(`${nodeUrl}/auth`, 20000);
-        advanceToLogin();
+        advanceToCloudConnect();
       }
     } catch (error: any) {
       console.error("Failed to create/start node:", error);
@@ -888,6 +891,87 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
               </div>
             </div>
             )}
+          </div>
+          <ScrollHint containerRef={stepContainerRef} />
+        </div>
+      </div>
+    );
+  }
+
+  // Cloud connect step - optional, skippable
+  if (currentStep === 'cloud-connect') {
+    return (
+      <div className="onboarding-page" data-testid="onboarding-page">
+        <ProgressIndicator />
+        <div ref={stepContainerRef} className="onboarding-step-container">
+          <div className="step-content">
+            <h1 className="step-title">Connect to Calimero Cloud</h1>
+            <p className="step-description">
+              Sign in with Google to enable cloud features like High Availability,
+              cloud-hosted contexts, and managed infrastructure. This is optional &mdash;
+              your local node works fully without it.
+            </p>
+            <div className="onboarding-card" style={{ textAlign: 'center', padding: '32px' }}>
+              {cloudConnecting ? (
+                <div className="loading-spinner">
+                  <div className="spinner" />
+                  <p>Waiting for sign-in in your browser...</p>
+                </div>
+              ) : cloudConnected ? (
+                <div>
+                  <CheckCircle2 size={48} style={{ color: 'var(--accent-color, #4ade80)', marginBottom: '12px' }} />
+                  <p style={{ fontWeight: 600, fontSize: '1.1rem' }}>Connected to Calimero Cloud</p>
+                  <p style={{ opacity: 0.7, marginTop: '4px' }}>{getSettings().cloudUserEmail}</p>
+                </div>
+              ) : (
+                <button
+                  className="button button-primary"
+                  style={{ fontSize: '1rem', padding: '12px 32px' }}
+                  onClick={async () => {
+                    setCloudConnecting(true);
+                    try {
+                      const userInfo = await startCloudLogin();
+                      if (userInfo) {
+                        setCloudConnected(true);
+                        toast.success('Connected to Calimero Cloud');
+                      } else {
+                        toast.error('Cloud login timed out or was cancelled');
+                      }
+                    } catch (err: unknown) {
+                      toast.error(`Cloud login failed: ${String(err)}`);
+                    } finally {
+                      setCloudConnecting(false);
+                    }
+                  }}
+                >
+                  Sign in with Google
+                </button>
+              )}
+            </div>
+            <div className="step-actions" style={{ marginTop: '24px' }}>
+              <button
+                className="button button-secondary"
+                onClick={() => setCurrentStep('node-setup')}
+              >
+                <ArrowLeft size={16} style={{ marginRight: '4px', verticalAlign: 'middle' }} />
+                Back
+              </button>
+              <button
+                className="button button-primary"
+                onClick={async () => {
+                  try {
+                    const onboardingState = await checkOnboardingState();
+                    setState(onboardingState);
+                  } catch {
+                    // continue anyway
+                  }
+                  setCurrentStep('login');
+                }}
+              >
+                {cloudConnected ? 'Continue' : 'Skip for now'}
+                <ArrowRight size={16} style={{ marginLeft: '4px', verticalAlign: 'middle' }} />
+              </button>
+            </div>
           </div>
           <ScrollHint containerRef={stepContainerRef} />
         </div>

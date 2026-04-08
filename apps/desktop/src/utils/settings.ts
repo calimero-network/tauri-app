@@ -9,6 +9,11 @@ export interface AppSettings {
   developerMode?: boolean; // Developer mode - shows advanced features like multiple nodes and contexts
   debugLogs?: boolean; // Enable debug-level logging for the merod node
   onboardingCompleted?: boolean; // True once user has completed first-time setup - never show onboarding again
+  cloudConnected?: boolean; // Whether user is connected to Calimero Cloud
+  cloudIdToken?: string; // Google ID token for Cloud API auth
+  cloudUserEmail?: string; // User's Google email (for display)
+  cloudUserName?: string; // User's Google display name
+  cloudUserPicture?: string; // User's Google profile picture URL
 }
 
 const SETTINGS_KEY = 'calimero-desktop-settings';
@@ -80,6 +85,11 @@ export function getSettings(): AppSettings {
         developerMode: rawSettings.developerMode ?? false, // Default to false
         debugLogs: rawSettings.debugLogs ?? false,
         onboardingCompleted: rawSettings.onboardingCompleted ?? false,
+        cloudConnected: rawSettings.cloudConnected ?? false,
+        cloudIdToken: rawSettings.cloudIdToken,
+        cloudUserEmail: rawSettings.cloudUserEmail,
+        cloudUserName: rawSettings.cloudUserName,
+        cloudUserPicture: rawSettings.cloudUserPicture,
       };
     }
   } catch (error) {

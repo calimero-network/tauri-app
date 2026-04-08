@@ -139,8 +139,21 @@ fn parse_open_app_args() -> Option<(String, String)> {
     url.map(|u| (u, name.unwrap_or_else(|| "Application".to_string())))
 }
 
+/// Check CLI args for a calimero:// deep link URL (passed by OS when app is launched via URL scheme).
+fn parse_deep_link_arg() -> Option<String> {
+    for arg in std::env::args() {
+        if arg.starts_with("calimero://") {
+            return Some(arg);
+        }
+    }
+    None
+}
+
 /// State for app to open when launched from a desktop shortcut (read by frontend on load).
 pub struct PendingOpenApp(pub std::sync::Mutex<Option<(String, String)>>);
+
+/// State for pending Calimero Cloud auth callback (set by deep link handler, read by frontend).
+pub struct PendingCloudAuth(pub std::sync::Mutex<Option<String>>);
 
 const MAX_NODE_NAME_LENGTH: usize = 64;
 
@@ -431,6 +444,18 @@ fn get_pending_open_app(state: tauri::State<'_, PendingOpenApp>) -> Option<(Stri
 
 #[tauri::command]
 fn clear_pending_open_app(state: tauri::State<'_, PendingOpenApp>) {
+    if let Ok(mut g) = state.0.lock() {
+        *g = None;
+    }
+}
+
+#[tauri::command]
+fn get_pending_cloud_auth(state: tauri::State<'_, PendingCloudAuth>) -> Option<String> {
+    state.0.lock().ok().and_then(|g| g.clone())
+}
+
+#[tauri::command]
+fn clear_pending_cloud_auth(state: tauri::State<'_, PendingCloudAuth>) {
     if let Ok(mut g) = state.0.lock() {
         *g = None;
     }
@@ -2085,6 +2110,10 @@ fn main() {
         .setup(|app| {
             let pending = parse_open_app_args();
             app.manage(PendingOpenApp(std::sync::Mutex::new(pending.clone())));
+
+            // Check CLI args for calimero:// deep link URL (used by OS URL scheme handler)
+            let cloud_auth = parse_deep_link_arg();
+            app.manage(PendingCloudAuth(std::sync::Mutex::new(cloud_auth)));
             // When launched from a desktop shortcut, hide the main window so only the app window is shown
             if pending.is_some() {
                 if let Some(window) = app.get_window("main") {
@@ -2164,10 +2193,36 @@ fn main() {
             open_url_in_browser,
             secure_store_token,
             secure_get_token,
-            secure_delete_token
+            secure_delete_token,
+            get_pending_cloud_auth,
+            clear_pending_cloud_auth
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            // Handle calimero:// deep link URLs when app is already running (macOS Apple Events)
+            #[allow(unused_variables)]
+            if let tauri::RunEvent::Opened { urls } = &event {
+                for url in urls {
+                    let url_str = url.to_string();
+                    if url_str.starts_with("calimero://") {
+                        info!("Received deep link: {}", url_str);
+                        if let Some(state) = app_handle.try_state::<PendingCloudAuth>() {
+                            if let Ok(mut g) = state.0.lock() {
+                                *g = Some(url_str.clone());
+                            }
+                        }
+                        // Emit event to frontend so it can react immediately
+                        let _ = app_handle.emit_all("cloud-auth-callback", url_str);
+                        // Focus the main window
+                        if let Some(window) = app_handle.get_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                    }
+                }
+            }
+        });
 }
 
 #[cfg(test)]

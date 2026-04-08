@@ -730,7 +730,12 @@ async fn start_merod(
     
     std::fs::create_dir_all(&home_dir_path)
         .map_err(|e| format!("Failed to create home directory: {}", e))?;
-    
+
+    // Validate node name before any filesystem use
+    if let Some(name) = &node_name {
+        validate_node_name(name)?;
+    }
+
     // Update config.toml with the specified ports if node_name is provided
     if let Some(name) = &node_name {
         let node_dir = home_dir_path.join(name);
@@ -820,7 +825,6 @@ async fn start_merod(
     
     // Node name required
     let node_name_str = node_name.as_ref().ok_or("Node name is required")?.clone();
-    validate_node_name(&node_name_str)?;
 
     // Create logs directory and open log file - redirect merod stdout/stderr here
     let log_dir = home_dir_path.join(&node_name_str).join("logs");
@@ -1835,6 +1839,26 @@ fn graceful_shutdown(merod_state: &MerodState) {
         }
     }
 
+    // Drain in-flight proxy requests before killing merod so they can complete
+    let in_flight = IN_FLIGHT_REQUESTS.load(Ordering::SeqCst);
+    if in_flight > 0 {
+        info!("[Shutdown] Waiting for {} in-flight proxy request(s) to drain (timeout: {}s)...", in_flight, REQUEST_DRAIN_TIMEOUT_SECS);
+        let start = std::time::Instant::now();
+        let timeout = std::time::Duration::from_secs(REQUEST_DRAIN_TIMEOUT_SECS);
+        while IN_FLIGHT_REQUESTS.load(Ordering::SeqCst) > 0 {
+            if start.elapsed() >= timeout {
+                warn!("[Shutdown] Timeout — {} request(s) will be dropped", IN_FLIGHT_REQUESTS.load(Ordering::SeqCst));
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        if IN_FLIGHT_REQUESTS.load(Ordering::SeqCst) == 0 {
+            info!("[Shutdown] All in-flight requests drained");
+        }
+    } else {
+        info!("[Shutdown] No in-flight proxy requests to drain");
+    }
+
     if !pids.is_empty() {
         info!("[Shutdown] Sending SIGTERM to {} merod process(es): {:?}", pids.len(), pids);
         for pid in &pids {
@@ -1863,26 +1887,6 @@ fn graceful_shutdown(merod_state: &MerodState) {
         info!("[Shutdown] All merod processes terminated");
     } else {
         info!("[Shutdown] No merod processes to terminate");
-    }
-
-    // Drain in-flight proxy requests
-    let in_flight = IN_FLIGHT_REQUESTS.load(Ordering::SeqCst);
-    if in_flight > 0 {
-        info!("[Shutdown] Waiting for {} in-flight proxy request(s) to drain (timeout: {}s)...", in_flight, REQUEST_DRAIN_TIMEOUT_SECS);
-        let start = std::time::Instant::now();
-        let timeout = std::time::Duration::from_secs(REQUEST_DRAIN_TIMEOUT_SECS);
-        while IN_FLIGHT_REQUESTS.load(Ordering::SeqCst) > 0 {
-            if start.elapsed() >= timeout {
-                warn!("[Shutdown] Timeout — {} request(s) will be dropped", IN_FLIGHT_REQUESTS.load(Ordering::SeqCst));
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(100));
-        }
-        if IN_FLIGHT_REQUESTS.load(Ordering::SeqCst) == 0 {
-            info!("[Shutdown] All in-flight requests drained");
-        }
-    } else {
-        info!("[Shutdown] No in-flight proxy requests to drain");
     }
 
     if let Ok(mut state) = merod_state.lock() {

@@ -1,38 +1,44 @@
 import { MeroJs, type TokenStorage, type TokenData } from '@calimero-network/mero-js';
 import type { ApiResponse, ClientConfig, Provider, TokenResponse } from './types';
 import { setClientInstance } from './singleton';
+import {
+  getAccessToken,
+  getRefreshToken,
+  getTokenExpiresAt,
+  setAccessToken,
+  setRefreshToken,
+  setTokenExpiresAt,
+  clearAllTokens,
+  initializeTokenStorage,
+} from './token-storage';
 
 /**
- * LocalStorage-based TokenStorage implementation for browser/Tauri
- * 
- * IMPORTANT: Uses the same keys as the exported token-storage utilities
- * to maintain consistency across login flows and API calls.
+ * TokenStorage implementation backed by the token-storage cache.
+ *
+ * Reads go through the in-memory cache (populated from the OS keychain in
+ * Tauri, or from localStorage in web/test environments) rather than hitting
+ * localStorage directly. This means tokens are visible to mero-js even after
+ * the one-time migration that removes them from localStorage.
  */
-class LocalStorageTokenStorage implements TokenStorage {
-  // Match the keys from token-storage.ts
-  private readonly ACCESS_TOKEN_KEY = 'calimero_access_token';
-  private readonly REFRESH_TOKEN_KEY = 'calimero_refresh_token';
-  private readonly EXPIRES_AT_KEY = 'calimero_token_expires_at';
-
+class CacheBackedTokenStorage implements TokenStorage {
   async get(): Promise<TokenData | null> {
     try {
-      const accessToken = localStorage.getItem(this.ACCESS_TOKEN_KEY);
-      const refreshToken = localStorage.getItem(this.REFRESH_TOKEN_KEY);
-      const expiresAt = localStorage.getItem(this.EXPIRES_AT_KEY);
-      
+      const accessToken = getAccessToken();
+      const refreshToken = getRefreshToken();
+
       console.log('[TokenStorage.get] accessToken:', accessToken ? 'EXISTS' : 'NULL');
       console.log('[TokenStorage.get] refreshToken:', refreshToken ? 'EXISTS' : 'NULL');
-      console.log('[TokenStorage.get] expiresAt:', expiresAt);
-      
+
       if (!accessToken || !refreshToken) {
         console.log('[TokenStorage.get] Missing tokens, returning null');
         return null;
       }
-      
+
+      const expiresAt = getTokenExpiresAt();
       const tokenData = {
         access_token: accessToken,
         refresh_token: refreshToken,
-        expires_at: expiresAt ? parseInt(expiresAt, 10) : Date.now() + 3600000,
+        expires_at: expiresAt ?? Date.now() + 3600000,
       };
       console.log('[TokenStorage.get] Returning tokenData with expires_at:', tokenData.expires_at);
       return tokenData;
@@ -43,17 +49,15 @@ class LocalStorageTokenStorage implements TokenStorage {
   }
 
   async set(token: TokenData): Promise<void> {
-    localStorage.setItem(this.ACCESS_TOKEN_KEY, token.access_token);
-    localStorage.setItem(this.REFRESH_TOKEN_KEY, token.refresh_token);
+    setAccessToken(token.access_token);
+    setRefreshToken(token.refresh_token);
     if (token.expires_at) {
-      localStorage.setItem(this.EXPIRES_AT_KEY, token.expires_at.toString());
+      setTokenExpiresAt(token.expires_at);
     }
   }
 
   async clear(): Promise<void> {
-    localStorage.removeItem(this.ACCESS_TOKEN_KEY);
-    localStorage.removeItem(this.REFRESH_TOKEN_KEY);
-    localStorage.removeItem(this.EXPIRES_AT_KEY);
+    clearAllTokens();
   }
 }
 
@@ -561,8 +565,8 @@ export class Client {
     console.log('[Client] Constructor called with config:', config);
     
     // Create token storage
-    const tokenStorage = new LocalStorageTokenStorage();
-    console.log('[Client] Created LocalStorageTokenStorage');
+    const tokenStorage = new CacheBackedTokenStorage();
+    console.log('[Client] Created CacheBackedTokenStorage');
     
     // Create MeroJs instance with token storage
     this.meroJs = new MeroJs({
@@ -615,6 +619,10 @@ export function createClient(config: ClientConfig): Client {
  */
 export async function createClientAsync(config: ClientConfig): Promise<Client> {
   console.log('[createClientAsync] Creating client with config:', config);
+  // Warm the token cache from the OS keychain BEFORE the client reads tokens.
+  // Without this, getAccessToken() returns null on first call after a keychain
+  // migration, causing the app to show the login screen on every cold start.
+  await initializeTokenStorage();
   const client = new Client(config);
   
   // Update global singleton

@@ -51,7 +51,10 @@ type View =
 
 export default function Namespaces() {
   const toast = useToast();
-  const admin = apiClient.meroJs.admin;
+  // Cast to any: the installed mero-js types may lag behind the runtime.
+  // Namespace/group methods exist at runtime but may not be in the .d.ts yet.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const admin = apiClient.meroJs.admin as any;
 
   // Top-level state
   const [namespaces, setNamespaces] = useState<Namespace[]>([]);

@@ -640,7 +640,7 @@ fn collect_merod_pids(tracked: &[u32]) -> Vec<u32> {
                 let exe = match parts.next() { Some(e) => e, None => continue };
                 let args: Vec<&str> = parts.collect();
                 let basename = exe.split('/').last().unwrap_or(exe);
-                if basename == "merod" && args.first() == Some(&"run") {
+                if basename == "merod" && args.iter().any(|a| *a == "run") {
                     if let Ok(pid) = pid_str.parse::<u32>() {
                         if !pids.contains(&pid) {
                             pids.push(pid);

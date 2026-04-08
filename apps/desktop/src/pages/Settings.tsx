@@ -55,7 +55,11 @@ export default function Settings({ onBack }: SettingsProps) {
         .then((sub) => { if (sub) setCloudPlan(sub.plan); })
         .catch((err) => {
           if (err instanceof CloudSessionExpiredError) {
+            disconnectCloud();
             setCloudConnected(false);
+            setCloudEmail(undefined);
+            setCloudName(undefined);
+            setCloudPicture(undefined);
           }
         });
     }

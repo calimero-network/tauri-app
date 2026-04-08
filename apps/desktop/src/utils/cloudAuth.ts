@@ -95,35 +95,37 @@ export async function startCloudLogin(): Promise<CloudUserInfo | null> {
  * and polling (for when app was launched by the deep link).
  */
 async function pollForCloudAuth(): Promise<string | null> {
+  let resolvePromise: (token: string | null) => void;
+  let pollTimer: ReturnType<typeof setInterval>;
+  let timeout: ReturnType<typeof setTimeout>;
+  let resolved = false;
+
+  const done = (token: string | null, unlisten: UnlistenFn) => {
+    if (resolved) return;
+    resolved = true;
+    unlisten();
+    clearInterval(pollTimer);
+    clearTimeout(timeout);
+    resolvePromise(token);
+  };
+
+  // Await the listen call to ensure unlisten is available before any callbacks can fire
+  const unlisten = await listen<string>('cloud-auth-callback', (event) => {
+    const token = extractTokenFromCallbackUrl(event.payload);
+    if (token) done(token, unlisten);
+  });
+
   return new Promise<string | null>((resolve) => {
-    let unlisten: UnlistenFn | null = null;
-    let resolved = false;
-
-    const done = (token: string | null) => {
-      if (resolved) return;
-      resolved = true;
-      if (unlisten) unlisten();
-      clearInterval(pollTimer);
-      clearTimeout(timeout);
-      resolve(token);
-    };
-
-    // Listen for the Tauri event (app already running, receives Apple Event)
-    listen<string>('cloud-auth-callback', (event) => {
-      const token = extractTokenFromCallbackUrl(event.payload);
-      if (token) done(token);
-    }).then((fn) => {
-      unlisten = fn;
-    });
+    resolvePromise = resolve;
 
     // Poll for the pending state (app launched by deep link URL)
-    const pollTimer = setInterval(async () => {
+    pollTimer = setInterval(async () => {
       try {
         const url = await invoke<string | null>('get_pending_cloud_auth');
         if (url) {
           await invoke('clear_pending_cloud_auth');
           const token = extractTokenFromCallbackUrl(url);
-          if (token) done(token);
+          if (token) done(token, unlisten);
         }
       } catch {
         // Command not available yet or error — keep polling
@@ -131,7 +133,7 @@ async function pollForCloudAuth(): Promise<string | null> {
     }, LOGIN_POLL_INTERVAL_MS);
 
     // Timeout
-    const timeout = setTimeout(() => done(null), LOGIN_TIMEOUT_MS);
+    timeout = setTimeout(() => done(null, unlisten), LOGIN_TIMEOUT_MS);
   });
 }
 

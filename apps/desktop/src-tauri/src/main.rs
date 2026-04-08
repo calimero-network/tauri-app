@@ -1910,7 +1910,7 @@ fn main() {
                 for url in urls {
                     let url_str = url.to_string();
                     if url_str.starts_with("calimero://") {
-                        info!("Received deep link: {}", url_str);
+                        debug!("Received deep link (token redacted)");
                         if let Some(state) = app_handle.try_state::<PendingCloudAuth>() {
                             if let Ok(mut g) = state.0.lock() {
                                 *g = Some(url_str.clone());

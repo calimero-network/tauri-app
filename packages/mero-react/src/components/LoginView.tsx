@@ -93,8 +93,8 @@ export function LoginView({ onSuccess, onError, variant = 'light' }: LoginViewPr
 
       if (tokenResponse.data?.access_token && tokenResponse.data?.refresh_token) {
         // Store tokens using calimero-client compatible storage
-        setAccessToken(tokenResponse.data.access_token);
-        setRefreshToken(tokenResponse.data.refresh_token);
+        await setAccessToken(tokenResponse.data.access_token);
+        await setRefreshToken(tokenResponse.data.refresh_token);
         
         // Extract expiry from JWT (exp claim is in seconds)
         try {

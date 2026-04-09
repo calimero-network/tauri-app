@@ -1,5 +1,6 @@
 // Test file to verify mero-react integration
-import { createClient, apiClient, setAccessToken, getAccessToken } from '@calimero-network/mero-react';
+import { createClient, apiClient } from './lib/mero-client';
+import { setAccessToken, getAccessToken } from './lib/token-storage';
 import { getSettings, getAuthUrl } from './utils/settings';
 
 // Test the client API

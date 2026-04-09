@@ -1,183 +1,52 @@
-import { useState, useEffect, useCallback, useRef } from "react";
-import { apiClient } from "@calimero-network/mero-react";
+import { useState } from "react";
+import {
+  useNamespaces,
+  useNamespaceGroups,
+  useGroupInfo,
+  useGroupMembers,
+  useGroupContexts,
+  useSubgroups,
+  type Namespace,
+} from "@calimero-network/mero-react";
 import { useToast } from "../contexts/ToastContext";
 import { ArrowLeft, Users, Box, Layers, Copy, ChevronRight, Shield, Globe } from "lucide-react";
 import "./Namespaces.css";
-
-interface Namespace {
-  namespaceId: string;
-  appKey: string;
-  targetApplicationId: string;
-  upgradePolicy: string;
-  createdAt: number;
-  alias?: string;
-  memberCount: number;
-  contextCount: number;
-  subgroupCount: number;
-}
-
-interface GroupInfo {
-  groupId: string;
-  appKey: string;
-  targetApplicationId: string;
-  upgradePolicy: string;
-  memberCount: number;
-  contextCount: number;
-  defaultCapabilities: number;
-  defaultVisibility: string;
-  alias?: string;
-}
-
-interface GroupMember {
-  identity: string;
-  role: string;
-  alias?: string;
-}
-
-interface GroupContextEntry {
-  contextId: string;
-  alias?: string;
-}
-
-interface SubgroupEntry {
-  groupId: string;
-  alias?: string;
-}
 
 type View =
   | { type: "list" }
   | { type: "namespace"; ns: Namespace }
   | { type: "group"; ns: Namespace; groupId: string };
 
-/** Unwrap an API response that may be a plain array or `{ [key]: [...] }`. */
-function unwrapList<T>(response: unknown, key: string): T[] {
-  if (Array.isArray(response)) return response;
-  const obj = response as Record<string, unknown> | null | undefined;
-  if (obj && Array.isArray(obj[key])) return obj[key] as T[];
-  return [];
-}
-
 export default function Namespaces() {
   const toast = useToast();
-
-  // Access admin inside callbacks (not at render scope) to avoid unstable
-  // references triggering infinite useCallback/useEffect re-render loops.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const getAdmin = () => (apiClient as any).meroJs.admin;
-
-  // Top-level state
-  const [namespaces, setNamespaces] = useState<Namespace[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [view, setView] = useState<View>({ type: "list" });
 
-  // Namespace detail state
-  const [nsGroups, setNsGroups] = useState<SubgroupEntry[]>([]);
-  const [nsLoadingGroups, setNsLoadingGroups] = useState(false);
-  const [nsGroupsError, setNsGroupsError] = useState<string | null>(null);
+  // Current namespace/group IDs for hooks
+  const activeNsId = view.type === "namespace" || view.type === "group" ? view.ns.namespaceId : null;
+  const activeGroupId = view.type === "group" ? view.groupId : null;
 
-  // Group detail state
-  const [groupInfo, setGroupInfo] = useState<GroupInfo | null>(null);
-  const [groupMembers, setGroupMembers] = useState<GroupMember[]>([]);
-  const [groupContexts, setGroupContexts] = useState<GroupContextEntry[]>([]);
-  const [groupSubgroups, setGroupSubgroups] = useState<SubgroupEntry[]>([]);
-  const [groupLoading, setGroupLoading] = useState(false);
+  // Hooks
+  const { namespaces, loading, error } = useNamespaces();
+  const { groups: nsGroups, loading: nsLoadingGroups, error: nsGroupsError } = useNamespaceGroups(activeNsId);
+  const { groupInfo, loading: groupInfoLoading } = useGroupInfo(activeGroupId);
+  const { members: groupMembers } = useGroupMembers(activeGroupId);
+  const { contexts: groupContexts } = useGroupContexts(activeGroupId);
+  const { subgroups: groupSubgroups } = useSubgroups(activeGroupId);
 
-  // Guard against stale responses from concurrent loads
-  const groupLoadId = useRef(0);
-
-  // Load namespaces
-  const loadNamespaces = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const response = await getAdmin().listNamespaces();
-      setNamespaces(unwrapList<Namespace>(response, "namespaces"));
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Failed to load namespaces";
-      setError(msg);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    loadNamespaces();
-  }, [loadNamespaces]);
-
-  // Load namespace groups when viewing a namespace
-  const loadNamespaceGroups = useCallback(async (nsId: string) => {
-    setNsLoadingGroups(true);
-    setNsGroupsError(null);
-    try {
-      const groups = await getAdmin().listNamespaceGroups(nsId);
-      setNsGroups(unwrapList<SubgroupEntry>(groups, "groups"));
-    } catch (err: unknown) {
-      setNsGroups([]);
-      const msg = err instanceof Error ? err.message : "Failed to load groups";
-      setNsGroupsError(msg);
-    } finally {
-      setNsLoadingGroups(false);
-    }
-  }, []);
-
-  // Load group details when viewing a group
-  const loadGroupDetails = useCallback(async (targetGroupId: string) => {
-    // Increment load ID to detect stale responses from concurrent loads
-    const thisLoadId = ++groupLoadId.current;
-
-    // Clear stale state immediately to prevent showing previous group's data
-    setGroupInfo(null);
-    setGroupMembers([]);
-    setGroupContexts([]);
-    setGroupSubgroups([]);
-    setGroupLoading(true);
-    try {
-      let failures = 0;
-      const fail = <T,>(fallback: T) => () => { failures++; return fallback; };
-
-      const [info, members, contexts, subgroups] = await Promise.all([
-        getAdmin().getGroupInfo(targetGroupId).catch(fail(null)),
-        getAdmin().listGroupMembers(targetGroupId).catch(fail({ data: [], selfIdentity: null })),
-        getAdmin().listGroupContexts(targetGroupId).catch(fail([])),
-        getAdmin().listSubgroups(targetGroupId).catch(fail([])),
-      ]);
-
-      // Discard results if a newer load was started while we were fetching
-      if (thisLoadId !== groupLoadId.current) return;
-
-      setGroupInfo(info as unknown as GroupInfo | null);
-      setGroupMembers(unwrapList<GroupMember>(members, "data"));
-      setGroupContexts(unwrapList<GroupContextEntry>(contexts, "contexts"));
-      setGroupSubgroups(unwrapList<SubgroupEntry>(subgroups, "subgroups"));
-      if (failures > 0) {
-        toast.error("Failed to load some group details");
-      }
-    } catch {
-      if (thisLoadId !== groupLoadId.current) return;
-      toast.error("Failed to load group details");
-    } finally {
-      if (thisLoadId === groupLoadId.current) {
-        setGroupLoading(false);
-      }
-    }
-  }, [toast]);
+  const groupLoading = groupInfoLoading;
 
   // View transitions
   const openNamespace = (ns: Namespace) => {
     setView({ type: "namespace", ns });
-    loadNamespaceGroups(ns.namespaceId);
   };
 
   const openGroup = (ns: Namespace, groupId: string) => {
     setView({ type: "group", ns, groupId });
-    loadGroupDetails(groupId);
   };
 
   const goBack = () => {
     if (view.type === "group") {
       setView({ type: "namespace", ns: view.ns });
-      loadNamespaceGroups(view.ns.namespaceId);
     } else if (view.type === "namespace") {
       setView({ type: "list" });
     }
@@ -207,7 +76,7 @@ export default function Namespaces() {
           <h1>Namespaces</h1>
         </header>
         <main className="ns-main">
-          {error && <div className="error-message">{error}</div>}
+          {error && <div className="error-message">{error.message}</div>}
           {loading ? (
             <div className="loading">Loading namespaces...</div>
           ) : !error && namespaces.length === 0 ? (
@@ -230,7 +99,7 @@ export default function Namespaces() {
                   onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") openNamespace(ns); }}
                 >
                   <div className="ns-card-header">
-                    <h3>{ns.alias || truncateId(ns.namespaceId)}</h3>
+                    <h3>{(ns as any).alias || truncateId(ns.namespaceId)}</h3>
                     <ChevronRight size={16} className="ns-card-chevron" />
                   </div>
                   <div className="ns-card-id" title={ns.namespaceId}>
@@ -244,9 +113,9 @@ export default function Namespaces() {
                     </button>
                   </div>
                   <div className="ns-card-stats">
-                    <span title="Groups"><Layers size={14} /> {ns.subgroupCount ?? 0}</span>
-                    <span title="Members"><Users size={14} /> {ns.memberCount ?? 0}</span>
-                    <span title="Contexts"><Box size={14} /> {ns.contextCount ?? 0}</span>
+                    <span title="Groups"><Layers size={14} /> {(ns as any).subgroupCount ?? 0}</span>
+                    <span title="Members"><Users size={14} /> {(ns as any).memberCount ?? 0}</span>
+                    <span title="Contexts"><Box size={14} /> {(ns as any).contextCount ?? 0}</span>
                   </div>
                   {ns.upgradePolicy && (
                     <div className="ns-card-policy">
@@ -272,7 +141,7 @@ export default function Namespaces() {
             <ArrowLeft size={16} /> Back
           </button>
           <div>
-            <h1>{ns.alias || truncateId(ns.namespaceId)}</h1>
+            <h1>{(ns as any).alias || truncateId(ns.namespaceId)}</h1>
             <div className="ns-header-id">
               {truncateId(ns.namespaceId)}
               <button className="copy-btn" onClick={() => copyToClipboard(ns.namespaceId)} title="Copy ID">
@@ -285,15 +154,15 @@ export default function Namespaces() {
         <main className="ns-main">
           <div className="ns-detail-stats">
             <div className="stat-card">
-              <div className="stat-value">{ns.memberCount ?? 0}</div>
+              <div className="stat-value">{(ns as any).memberCount ?? 0}</div>
               <div className="stat-label">Members</div>
             </div>
             <div className="stat-card">
-              <div className="stat-value">{ns.contextCount ?? 0}</div>
+              <div className="stat-value">{(ns as any).contextCount ?? 0}</div>
               <div className="stat-label">Contexts</div>
             </div>
             <div className="stat-card">
-              <div className="stat-value">{ns.subgroupCount ?? 0}</div>
+              <div className="stat-value">{(ns as any).subgroupCount ?? 0}</div>
               <div className="stat-label">Groups</div>
             </div>
             <div className="stat-card">
@@ -318,7 +187,7 @@ export default function Namespaces() {
             {nsLoadingGroups ? (
               <div className="loading">Loading groups...</div>
             ) : nsGroupsError ? (
-              <div className="error-message">{nsGroupsError}</div>
+              <div className="error-message">{nsGroupsError.message}</div>
             ) : nsGroups.length === 0 ? (
               <p className="empty-hint">No groups in this namespace</p>
             ) : (
@@ -330,7 +199,7 @@ export default function Namespaces() {
                     onClick={() => openGroup(ns, g.groupId)}
                   >
                     <Layers size={16} />
-                    <span className="group-name">{g.alias || truncateId(g.groupId)}</span>
+                    <span className="group-name">{(g as any).alias || truncateId(g.groupId)}</span>
                     <span className="group-id mono">{truncateId(g.groupId)}</span>
                     <ChevronRight size={14} className="ns-card-chevron" />
                   </button>
@@ -350,7 +219,7 @@ export default function Namespaces() {
       <div className="ns-page">
         <header className="ns-header">
           <button className="ns-back" onClick={goBack}>
-            <ArrowLeft size={16} /> Back to {ns.alias || "namespace"}
+            <ArrowLeft size={16} /> Back to {(ns as any).alias || "namespace"}
           </button>
           <div>
             <h1>{groupInfo?.alias || truncateId(groupId)}</h1>
@@ -399,7 +268,7 @@ export default function Namespaces() {
                     {groupMembers.map((m) => (
                       <div key={m.identity} className="ns-member-item">
                         <div className="member-info">
-                          <span className="member-name">{m.alias || truncateId(m.identity)}</span>
+                          <span className="member-name">{(m as any).alias || truncateId(m.identity)}</span>
                           <span className="member-id mono">{truncateId(m.identity)}</span>
                         </div>
                         <span className="member-role" style={{ color: roleColor(m.role) }}>
@@ -424,7 +293,7 @@ export default function Namespaces() {
                     {groupContexts.map((c) => (
                       <div key={c.contextId} className="ns-context-item">
                         <Box size={14} />
-                        <span className="context-name">{c.alias || truncateId(c.contextId)}</span>
+                        <span className="context-name">{(c as any).alias || truncateId(c.contextId)}</span>
                         <span className="context-id mono">{truncateId(c.contextId)}</span>
                         <button className="copy-btn" onClick={() => copyToClipboard(c.contextId)} title="Copy ID">
                           <Copy size={12} />
@@ -447,7 +316,7 @@ export default function Namespaces() {
                         onClick={() => openGroup(ns, g.groupId)}
                       >
                         <Layers size={16} />
-                        <span className="group-name">{g.alias || truncateId(g.groupId)}</span>
+                        <span className="group-name">{(g as any).alias || truncateId(g.groupId)}</span>
                         <span className="group-id mono">{truncateId(g.groupId)}</span>
                         <ChevronRight size={14} className="ns-card-chevron" />
                       </button>

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { getSettings, saveSettings } from "../utils/settings";
-import { clearAccessToken, clearRefreshToken } from "@calimero-network/mero-react";
+import { clearAccessToken, clearRefreshToken } from "../lib/token-storage";
 import {
   listMerodNodes,
   initMerodNode,

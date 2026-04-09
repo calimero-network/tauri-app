@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/tauri";
 import { getSettings } from "./settings";
-import { getAccessToken, getRefreshToken } from "@calimero-network/mero-react";
+import { getAccessToken, getRefreshToken } from "../lib/token-storage";
 
 /**
  * Extract a human-readable message from a Tauri command error.

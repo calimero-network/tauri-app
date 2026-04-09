@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from "react";
-import { apiClient } from "@calimero-network/mero-react";
+import { apiClient } from "../lib/mero-client";
 import { useToast } from "../contexts/ToastContext";
 import DataTable from "../components/DataTable";
 import ContextMenu from "../components/ContextMenu";

@@ -1,6 +1,9 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import ErrorBoundary from "./components/ErrorBoundary";
-import { createClientAsync, apiClient, LoginView, getAccessToken, clearAccessToken, clearRefreshToken } from "@calimero-network/mero-react";
+import { createClientAsync, apiClient } from "./lib/mero-client";
+import { MeroContext, type MeroContextValue } from "@calimero-network/mero-react";
+import { LoginView } from "./components/LoginView";
+import { getAccessToken, clearAccessToken, clearRefreshToken } from "./lib/token-storage";
 import { getSettings, getAuthUrl, saveSettings } from "./utils/settings";
 import { clearOnboardingProgress } from "./utils/onboardingProgress";
 import { startMerod, detectRunningMerodNodes, type RunningMerodNode } from "./utils/merod";
@@ -49,6 +52,20 @@ function App() {
   } | null>(null);
   const [appVersion, setAppVersion] = useState<string>("");
   const [runningNodes, setRunningNodes] = useState<RunningMerodNode[]>([]);
+
+  // Expose the adapter's MeroJs instance to mero-react hooks (useNamespaces, etc.)
+  const meroContextValue = useMemo<MeroContextValue>(() => ({
+    mero: clientReady ? apiClient.meroJs : null,
+    isAuthenticated: !!getAccessToken(),
+    isOnline: connected,
+    nodeUrl: getSettings().nodeUrl,
+    applicationId: null,
+    contextId: null,
+    contextIdentity: null,
+    connectToNode: () => {},
+    logout: () => { clearAccessToken(); clearRefreshToken(); window.location.reload(); },
+    isLoading: checkingOnboarding,
+  }), [clientReady, connected, checkingOnboarding]);
 
   const handleSelectNode = useCallback(async (nodeUrl: string) => {
     const settings = getSettings();
@@ -780,7 +797,9 @@ function App() {
               />
             </header>
             <main className="main">
-              <Namespaces />
+              <MeroContext.Provider value={meroContextValue}>
+                <Namespaces />
+              </MeroContext.Provider>
             </main>
           </div>
         </div>

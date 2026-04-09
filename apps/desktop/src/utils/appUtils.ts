@@ -3,6 +3,21 @@ import { getSettings } from "./settings";
 import { getAccessToken, getRefreshToken } from "@calimero-network/mero-react";
 
 /**
+ * Extract a human-readable message from a Tauri command error.
+ * Tauri commands returning Result<T, TauriError> throw a plain object
+ * { code, message, details? } on failure — not an Error instance.
+ */
+export function parseTauriError(err: unknown, fallback = 'An unexpected error occurred'): string {
+  if (err instanceof Error) return err.message;
+  if (err != null && typeof err === 'object') {
+    const e = err as Record<string, unknown>;
+    if (typeof e.message === 'string') return e.message;
+  }
+  if (typeof err === 'string') return err;
+  return fallback;
+}
+
+/**
  * Decodes app metadata from various formats (base64 string, byte array, or already decoded object)
  * @param metadata - The metadata to decode (can be string, number[], or already decoded object)
  * @returns The decoded metadata object, or null if decoding fails
@@ -80,7 +95,7 @@ export async function openAppFrontend(
 
     return windowLabel;
   } catch (error) {
-    const err = error instanceof Error ? error : new Error(String(error));
+    const err = new Error(parseTauriError(error));
     console.error("Failed to open frontend:", err);
 
     if (onError) {

@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { getSettings, saveSettings, clearAllAppData } from "../utils/settings";
+import { parseTauriError } from "../utils/appUtils";
 import { invoke } from "@tauri-apps/api/tauri";
 import { killAllMerodProcesses, deleteCalimeroDataDir, stopMerod } from "../utils/merod";
 import { useTheme } from "../contexts/ThemeContext";
@@ -61,7 +62,7 @@ export default function Settings({ onBack }: SettingsProps) {
       setStartAtLogin(newValue);
       toast.success(newValue ? "App will start at login" : "App will not start at login");
     } catch (err: unknown) {
-      toast.error(`Failed to update: ${String(err)}`);
+      toast.error(`Failed to update: ${parseTauriError(err)}`);
     } finally {
       setStartAtLoginLoading(false);
     }
@@ -341,7 +342,7 @@ export default function Settings({ onBack }: SettingsProps) {
                           try {
                             await killAllMerodProcesses();
                           } catch (err: unknown) {
-                            toast.error(String(err));
+                            toast.error(parseTauriError(err));
                             setNuking(false);
                             return;
                           }
@@ -355,7 +356,7 @@ export default function Settings({ onBack }: SettingsProps) {
                               await deleteCalimeroDataDir(dir);
                             }
                           } catch (err: unknown) {
-                            toast.error(String(err));
+                            toast.error(parseTauriError(err));
                             setNuking(false);
                             return;
                           }

@@ -141,12 +141,12 @@ describeAfter35("General tab toggles", () => {
 // ─── Developer mode effect on sidebar ───────────────────────────────────────
 
 describeAfter35("Developer mode enables sidebar links", () => {
-  test("enabling developer mode reveals Contexts & Nodes links", async ({
+  test("enabling developer mode reveals Namespaces & Nodes links", async ({
     page,
   }) => {
     await setupAuthenticatedPage(page);
 
-    await expect(page.locator('button[title="Contexts"]')).not.toBeVisible();
+    await expect(page.locator('button[title="Namespaces"]')).not.toBeVisible();
     await expect(page.locator('button[title="Nodes"]')).not.toBeVisible();
 
     await page.click('button[title="Settings"]');
@@ -155,16 +155,16 @@ describeAfter35("Developer mode enables sidebar links", () => {
 
     await page.locator("button", { hasText: "Back" }).click();
 
-    await expect(page.locator('button[title="Contexts"]')).toBeVisible();
+    await expect(page.locator('button[title="Namespaces"]')).toBeVisible();
     await expect(page.locator('button[title="Nodes"]')).toBeVisible();
   });
 
-  test("disabling developer mode hides Contexts & Nodes links", async ({
+  test("disabling developer mode hides Namespaces & Nodes links", async ({
     page,
   }) => {
     await setupDeveloperPage(page);
 
-    await expect(page.locator('button[title="Contexts"]')).toBeVisible();
+    await expect(page.locator('button[title="Namespaces"]')).toBeVisible();
     await expect(page.locator('button[title="Nodes"]')).toBeVisible();
 
     await page.click('button[title="Settings"]');
@@ -173,7 +173,7 @@ describeAfter35("Developer mode enables sidebar links", () => {
 
     await page.locator("button", { hasText: "Back" }).click();
 
-    await expect(page.locator('button[title="Contexts"]')).not.toBeVisible();
+    await expect(page.locator('button[title="Namespaces"]')).not.toBeVisible();
     await expect(page.locator('button[title="Nodes"]')).not.toBeVisible();
   });
 });

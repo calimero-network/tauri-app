@@ -156,9 +156,9 @@ export async function initializeTokenStorage(): Promise<void> {
 
 // ─── Access token ──────────────────────────────────────────────────────────────
 
-export function setAccessToken(token: string): void {
+export async function setAccessToken(token: string): Promise<void> {
   cache[ACCESS_TOKEN_KEY] = token;
-  keychainSet(ACCESS_TOKEN_KEY, token).catch(console.error);
+  await keychainSet(ACCESS_TOKEN_KEY, token).catch(console.error);
 }
 
 export function getAccessToken(): string | null {
@@ -171,16 +171,16 @@ export function getAccessToken(): string | null {
   return cache[ACCESS_TOKEN_KEY];
 }
 
-export function clearAccessToken(): void {
+export async function clearAccessToken(): Promise<void> {
   cache[ACCESS_TOKEN_KEY] = null;
-  keychainDelete(ACCESS_TOKEN_KEY).catch(console.error);
+  await keychainDelete(ACCESS_TOKEN_KEY).catch(console.error);
 }
 
 // ─── Refresh token ─────────────────────────────────────────────────────────────
 
-export function setRefreshToken(token: string): void {
+export async function setRefreshToken(token: string): Promise<void> {
   cache[REFRESH_TOKEN_KEY] = token;
-  keychainSet(REFRESH_TOKEN_KEY, token).catch(console.error);
+  await keychainSet(REFRESH_TOKEN_KEY, token).catch(console.error);
 }
 
 export function getRefreshToken(): string | null {
@@ -192,9 +192,9 @@ export function getRefreshToken(): string | null {
   return cache[REFRESH_TOKEN_KEY];
 }
 
-export function clearRefreshToken(): void {
+export async function clearRefreshToken(): Promise<void> {
   cache[REFRESH_TOKEN_KEY] = null;
-  keychainDelete(REFRESH_TOKEN_KEY).catch(console.error);
+  await keychainDelete(REFRESH_TOKEN_KEY).catch(console.error);
 }
 
 // ─── Token expiry (not sensitive — stays in localStorage) ─────────────────────
@@ -231,8 +231,7 @@ export function clearAppEndpointKey(): void {
 /**
  * Clear all auth-related tokens
  */
-export function clearAllTokens(): void {
-  clearAccessToken();
-  clearRefreshToken();
+export async function clearAllTokens(): Promise<void> {
+  await Promise.all([clearAccessToken(), clearRefreshToken()]);
   clearTokenExpiresAt();
 }

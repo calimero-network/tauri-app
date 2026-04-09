@@ -49,15 +49,17 @@ class CacheBackedTokenStorage implements TokenStorage {
   }
 
   async set(token: TokenData): Promise<void> {
-    setAccessToken(token.access_token);
-    setRefreshToken(token.refresh_token);
+    await Promise.all([
+      setAccessToken(token.access_token),
+      setRefreshToken(token.refresh_token),
+    ]);
     if (token.expires_at) {
       setTokenExpiresAt(token.expires_at);
     }
   }
 
   async clear(): Promise<void> {
-    clearAllTokens();
+    await clearAllTokens();
   }
 }
 
@@ -600,16 +602,17 @@ export class Client {
 export function createClient(config: ClientConfig): Client {
   console.log('[createClient] Creating client with config:', config);
   const client = new Client(config);
-  
+
   // Update global singleton immediately
   setClientInstance(client);
-  
-  // Initialize async (load tokens from storage)
-  // This runs in background - use createClientAsync if you need guaranteed token loading
-  client.init().then(() => {
-    console.log('[createClient] Token initialization complete');
-  }).catch(console.error);
-  
+
+  // Warm the token cache from the OS keychain BEFORE meroJs.init() reads tokens,
+  // otherwise getAccessToken() returns null after a keychain migration.
+  initializeTokenStorage()
+    .then(() => client.init())
+    .then(() => console.log('[createClient] Token initialization complete'))
+    .catch(console.error);
+
   return client;
 }
 

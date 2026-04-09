@@ -49,6 +49,14 @@ type View =
   | { type: "namespace"; ns: Namespace }
   | { type: "group"; ns: Namespace; groupId: string };
 
+/** Unwrap an API response that may be a plain array or `{ [key]: [...] }`. */
+function unwrapList<T>(response: unknown, key: string): T[] {
+  if (Array.isArray(response)) return response;
+  const obj = response as Record<string, unknown> | null | undefined;
+  if (obj && Array.isArray(obj[key])) return obj[key] as T[];
+  return [];
+}
+
 export default function Namespaces() {
   const toast = useToast();
 
@@ -80,9 +88,7 @@ export default function Namespaces() {
     setError(null);
     try {
       const response = await getAdmin().listNamespaces();
-      const list = (response as unknown as { namespaces?: Namespace[] })?.namespaces
-        ?? (Array.isArray(response) ? response : []);
-      setNamespaces(list);
+      setNamespaces(unwrapList<Namespace>(response, "namespaces"));
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Failed to load namespaces";
       setError(msg);
@@ -100,7 +106,7 @@ export default function Namespaces() {
     setNsLoadingGroups(true);
     try {
       const groups = await getAdmin().listNamespaceGroups(nsId);
-      setNsGroups(Array.isArray(groups) ? groups : []);
+      setNsGroups(unwrapList<SubgroupEntry>(groups, "groups"));
     } catch {
       setNsGroups([]);
     } finally {
@@ -127,10 +133,9 @@ export default function Namespaces() {
         getAdmin().listSubgroups(targetGroupId).catch(fail([])),
       ]);
       setGroupInfo(info as unknown as GroupInfo | null);
-      const memberList = (members as unknown as { data?: GroupMember[] })?.data ?? (Array.isArray(members) ? members : []);
-      setGroupMembers(memberList);
-      setGroupContexts(Array.isArray(contexts) ? contexts : []);
-      setGroupSubgroups(Array.isArray(subgroups) ? subgroups : []);
+      setGroupMembers(unwrapList<GroupMember>(members, "data"));
+      setGroupContexts(unwrapList<GroupContextEntry>(contexts, "contexts"));
+      setGroupSubgroups(unwrapList<SubgroupEntry>(subgroups, "subgroups"));
       if (failures > 0) {
         toast.error("Failed to load some group details");
       }
@@ -188,7 +193,7 @@ export default function Namespaces() {
           {error && <div className="error-message">{error}</div>}
           {loading ? (
             <div className="loading">Loading namespaces...</div>
-          ) : namespaces.length === 0 ? (
+          ) : !error && namespaces.length === 0 ? (
             <div className="empty-state">
               <Globe size={48} style={{ opacity: 0.3, marginBottom: 12 }} />
               <p>No namespaces found</p>

@@ -1,5 +1,4 @@
-import React from 'react';
-import type { Provider } from '../client/types';
+import type { Provider } from '../lib/mero-client';
 
 const DARK = {
   bgCard: '#18181b',
@@ -71,7 +70,7 @@ export function ProviderSelector({
   if (providers.length === 0) {
     return (
       <div className={containerClass} style={containerStyle}>
-        <div className={cardClassName ? `provider-selector-card ${cardClassName}` : 'provider-selector-card'} style={{ ...cardStyle, textAlign: 'center' }}>
+        <div className={cardClassName ? `provider-selector-card ${cardClassName}` : 'provider-selector-card'} style={{ ...cardStyle, textAlign: 'center' as const }}>
           <h3 style={{ marginTop: 0, color: isDark ? DARK.text : 'var(--text-primary)' }}>No providers available</h3>
           <p style={{ color: isDark ? DARK.textMuted : 'var(--text-secondary)' }}>
             No authentication providers are configured on this node.
@@ -166,4 +165,3 @@ export function ProviderSelector({
     </div>
   );
 }
-

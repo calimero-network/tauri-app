@@ -1,6 +1,7 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { apiClient, setAccessToken, setRefreshToken, setTokenExpiresAt } from '../client';
-import type { Provider } from '../client/types';
+import { useState, useEffect, useCallback } from 'react';
+import { apiClient } from '../lib/mero-client';
+import { setAccessToken, setRefreshToken, setTokenExpiresAt } from '../lib/token-storage';
+import type { Provider } from '../lib/mero-client';
 import { ProviderSelector } from './ProviderSelector';
 import { UsernamePasswordForm } from './UsernamePasswordForm';
 
@@ -18,21 +19,15 @@ export function LoginView({ onSuccess, onError, variant = 'light' }: LoginViewPr
   const [showUsernamePasswordForm, setShowUsernamePasswordForm] = useState(false);
   const [usernamePasswordLoading, setUsernamePasswordLoading] = useState(false);
 
-  /**
-   * Load available authentication providers from the auth service
-   */
   const loadProviders = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
-
       const response = await apiClient.auth.getProviders();
-
       if (response.error) {
         setError(response.error.message);
         return;
       }
-
       if (response.data) {
         setProviders(response.data.providers);
       }
@@ -48,9 +43,6 @@ export function LoginView({ onSuccess, onError, variant = 'light' }: LoginViewPr
     loadProviders();
   }, [loadProviders]);
 
-  /**
-   * Handle provider selection
-   */
   const handleProviderSelect = async (provider: Provider) => {
     if (provider.name === 'user_password' || provider.name === 'username_password') {
       setShowProviders(false);
@@ -62,52 +54,35 @@ export function LoginView({ onSuccess, onError, variant = 'light' }: LoginViewPr
     }
   };
 
-  /**
-   * Handle username/password authentication
-   */
   const handleUsernamePasswordAuth = async (username: string, password: string) => {
     try {
       setUsernamePasswordLoading(true);
       setError(null);
 
-      const tokenPayload = {
+      const tokenResponse = await apiClient.auth.requestToken({
         auth_method: 'user_password',
         public_key: username,
         client_name: 'calimero-desktop',
         timestamp: Date.now(),
         permissions: [],
-        provider_data: {
-          username: username,
-          password: password,
-        },
-      };
-
-      const tokenResponse = await apiClient.auth.requestToken(tokenPayload);
+        provider_data: { username, password },
+      });
 
       if (tokenResponse.error) {
-        const errorMessage = tokenResponse.error.message;
-        setError(errorMessage);
-        onError?.(errorMessage);
+        setError(tokenResponse.error.message);
+        onError?.(tokenResponse.error.message);
         return;
       }
 
       if (tokenResponse.data?.access_token && tokenResponse.data?.refresh_token) {
-        // Store tokens using calimero-client compatible storage
-        await setAccessToken(tokenResponse.data.access_token);
-        await setRefreshToken(tokenResponse.data.refresh_token);
-        
-        // Extract expiry from JWT (exp claim is in seconds)
+        setAccessToken(tokenResponse.data.access_token);
+        setRefreshToken(tokenResponse.data.refresh_token);
         try {
           const payload = JSON.parse(atob(tokenResponse.data.access_token.split('.')[1]));
-          const expiresAt = payload.exp * 1000; // Convert seconds to milliseconds
-          console.log('[LoginView] JWT exp:', payload.exp, 'expiresAt:', expiresAt);
-          setTokenExpiresAt(expiresAt);
-        } catch (e) {
-          // Fallback to 1 hour if JWT parsing fails
-          console.warn('[LoginView] Failed to parse JWT, using 1 hour default:', e);
+          setTokenExpiresAt(payload.exp * 1000);
+        } catch {
           setTokenExpiresAt(Date.now() + 3600 * 1000);
         }
-
         onSuccess?.();
       } else {
         throw new Error('Failed to get access token');
@@ -122,16 +97,12 @@ export function LoginView({ onSuccess, onError, variant = 'light' }: LoginViewPr
     }
   };
 
-  /**
-   * Handle back navigation
-   */
   const handleBack = () => {
     setShowUsernamePasswordForm(false);
     setShowProviders(true);
     setError(null);
   };
 
-  // Render provider selector
   if (showProviders) {
     return (
       <ProviderSelector
@@ -146,7 +117,6 @@ export function LoginView({ onSuccess, onError, variant = 'light' }: LoginViewPr
     );
   }
 
-  // Render username/password form
   if (showUsernamePasswordForm) {
     return (
       <UsernamePasswordForm
@@ -163,4 +133,3 @@ export function LoginView({ onSuccess, onError, variant = 'light' }: LoginViewPr
 
   return null;
 }
-

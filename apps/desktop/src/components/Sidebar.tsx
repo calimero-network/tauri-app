@@ -1,11 +1,11 @@
 import { getSettings } from "../utils/settings";
-import { Home, Link2, Package, ShoppingCart, Settings as SettingsIcon, Server } from "lucide-react";
+import { Home, Globe, Package, ShoppingCart, Settings as SettingsIcon, Server } from "lucide-react";
 import calimeroLogo from "../assets/calimero-logo.svg";
 import "./Sidebar.css";
 
 interface SidebarProps {
-  currentPage: 'home' | 'marketplace' | 'installed' | 'contexts' | 'nodes';
-  onNavigate: (page: 'home' | 'marketplace' | 'installed' | 'contexts' | 'nodes') => void;
+  currentPage: 'home' | 'marketplace' | 'installed' | 'namespaces' | 'nodes';
+  onNavigate: (page: 'home' | 'marketplace' | 'installed' | 'namespaces' | 'nodes') => void;
   onOpenSettings: () => void;
   /** When true, show Nodes in nav so users can fix connection (even without developer mode) */
   nodeDisconnected?: boolean;
@@ -18,7 +18,7 @@ export default function Sidebar({ currentPage, onNavigate, onOpenSettings, nodeD
   const navItems = [
     { id: 'home' as const, label: 'Home', icon: Home },
     ...(developerMode || nodeDisconnected ? [{ id: 'nodes' as const, label: 'Nodes', icon: Server }] : []),
-    ...(developerMode ? [{ id: 'contexts' as const, label: 'Contexts', icon: Link2 }] : []),
+    ...(developerMode ? [{ id: 'namespaces' as const, label: 'Namespaces', icon: Globe }] : []),
     { id: 'installed' as const, label: 'Applications', icon: Package },
     { id: 'marketplace' as const, label: 'Marketplace', icon: ShoppingCart },
   ];

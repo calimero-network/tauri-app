@@ -12,7 +12,7 @@ import {
 } from "../utils/merod";
 import { invoke } from "@tauri-apps/api/tauri";
 import { getSettings, saveSettings } from "../utils/settings";
-import { clearAccessToken, clearRefreshToken } from "@calimero-network/mero-react";
+import { clearAccessToken, clearRefreshToken } from "../lib/token-storage";
 import { useToast } from "../contexts/ToastContext";
 import "./Nodes.css";
 

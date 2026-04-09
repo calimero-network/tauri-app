@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { getSettings } from "../utils/settings";
 import { fetchAppsFromAllRegistries, recordDownload, type AppSummary } from "../utils/registry";
-import { apiClient } from "@calimero-network/mero-react";
+import { apiClient } from "../lib/mero-client";
 import { decodeMetadata } from "../utils/appUtils";
 import {
   getMarketplaceCache,

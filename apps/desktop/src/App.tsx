@@ -1,6 +1,9 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import ErrorBoundary from "./components/ErrorBoundary";
-import { createClientAsync, apiClient, LoginView, getAccessToken, clearAccessToken, clearRefreshToken } from "@calimero-network/mero-react";
+import { createClientAsync, apiClient } from "./lib/mero-client";
+import { MeroContext, type MeroContextValue } from "@calimero-network/mero-react";
+import { LoginView } from "./components/LoginView";
+import { getAccessToken, clearAccessToken, clearRefreshToken } from "./lib/token-storage";
 import { getSettings, getAuthUrl, saveSettings } from "./utils/settings";
 import { clearOnboardingProgress } from "./utils/onboardingProgress";
 import { startMerod, detectRunningMerodNodes, type RunningMerodNode } from "./utils/merod";
@@ -11,7 +14,7 @@ import Settings from "./pages/Settings";
 import Onboarding from "./pages/Onboarding";
 import Marketplace from "./pages/Marketplace";
 import InstalledApps from "./pages/InstalledApps";
-import Contexts from "./pages/Contexts";
+import Namespaces from "./pages/Namespaces";
 import NodeManagement from "./pages/NodeManagement";
 import ConfirmAction from "./pages/ConfirmAction";
 import UpdateNotification from "./components/UpdateNotification";
@@ -33,9 +36,10 @@ function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [showLogin, setShowLogin] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
-  const [currentPage, setCurrentPage] = useState<'home' | 'marketplace' | 'installed' | 'contexts' | 'nodes' | 'confirm'>('home');
+  const [currentPage, setCurrentPage] = useState<'home' | 'marketplace' | 'installed' | 'namespaces' | 'nodes' | 'confirm'>('home');
   const [checkingOnboarding, setCheckingOnboarding] = useState(true);
   const [clientReady, setClientReady] = useState(false);
+  const [clientVersion, setClientVersion] = useState(0);
   const [needsNodeConfig, setNeedsNodeConfig] = useState(false);
   const [installedApps, setInstalledApps] = useState<any[]>([]);
   const [loadingApps, setLoadingApps] = useState(false);
@@ -49,6 +53,23 @@ function App() {
   } | null>(null);
   const [appVersion, setAppVersion] = useState<string>("");
   const [runningNodes, setRunningNodes] = useState<RunningMerodNode[]>([]);
+
+  // Expose the adapter's MeroJs instance to mero-react hooks (useNamespaces, etc.)
+  // Include showLogin in deps so the value refreshes after login completes
+  // (isAuthenticated re-reads the token, mero re-reads apiClient.meroJs).
+  const meroContextValue = useMemo<MeroContextValue>(() => ({
+    mero: clientReady ? apiClient.meroJs : null,
+    isAuthenticated: !!getAccessToken(),
+    isOnline: connected,
+    nodeUrl: getSettings().nodeUrl,
+    applicationId: null,
+    contextId: null,
+    contextIdentity: null,
+    connectToNode: () => {},
+    logout: () => { clearAccessToken(); clearRefreshToken(); window.location.reload(); },
+    isLoading: checkingOnboarding,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [clientReady, clientVersion, connected, checkingOnboarding, showLogin]);
 
   const handleSelectNode = useCallback(async (nodeUrl: string) => {
     const settings = getSettings();
@@ -452,7 +473,7 @@ function App() {
   }
 
   // Calculate page title and sidebar page before early returns
-  const sidebarPage: 'home' | 'marketplace' | 'installed' | 'contexts' | 'nodes' = 
+  const sidebarPage: 'home' | 'marketplace' | 'installed' | 'namespaces' | 'nodes' =
     currentPage === 'confirm' ? 'home' : currentPage;
 
   let pageTitle: string;
@@ -463,8 +484,8 @@ function App() {
     case 'nodes':
       pageTitle = 'Nodes';
       break;
-    case 'contexts':
-      pageTitle = 'Contexts';
+    case 'namespaces':
+      pageTitle = 'Namespaces';
       break;
     case 'installed':
       pageTitle = 'Applications';
@@ -567,6 +588,7 @@ function App() {
             requestCredentials: 'omit',
           });
           setClientReady(true);
+          setClientVersion((v) => v + 1);
 
           // Hide settings only after client is ready — this triggers the checkConnection
           // useEffect, which needs a properly initialized client to avoid spurious 401→login
@@ -720,7 +742,7 @@ function App() {
             currentPage="nodes" 
             onNavigate={(p) => {
               if (p === 'nodes') setCurrentPage('nodes');
-              else if (p === 'contexts') setCurrentPage('contexts');
+              else if (p === 'namespaces') setCurrentPage('namespaces');
               else if (p === 'marketplace') setCurrentPage('marketplace');
               else if (p === 'installed') setCurrentPage('installed');
               else if (p === 'home') setCurrentPage('home');
@@ -752,22 +774,22 @@ function App() {
     );
   }
 
-  // Show Contexts if selected
-  if (currentPage === 'contexts') {
+  // Show Namespaces if selected
+  if (currentPage === 'namespaces') {
     return (
       <div className="app">
         <ToastContainer />
         <div className="app-layout">
-          <Sidebar 
-            currentPage={currentPage} 
+          <Sidebar
+            currentPage={currentPage}
             onNavigate={setCurrentPage}
             onOpenSettings={() => setShowSettings(true)}
             nodeDisconnected={!connected && !!error}
           />
           <div className="app-content">
-        <header className="header">
+            <header className="header">
               <div className="header-title">
-                <h1 data-testid="shell-page-title">Contexts</h1>
+                <h1 data-testid="shell-page-title">Namespaces</h1>
               </div>
               <NodeStatusIndicator
                 connected={connected}
@@ -780,29 +802,9 @@ function App() {
               />
             </header>
             <main className="main">
-        <Contexts 
-          clientReady={clientReady}
-          onAuthRequired={() => setShowLogin(true)}
-          onConfirmDelete={(_contextId, contextName, onConfirm) => {
-            setConfirmAction({
-              title: "Delete Context",
-              message: "Are you sure you want to delete this context? This action cannot be undone.",
-              itemName: contextName,
-              actionLabel: "Delete",
-              onConfirm: async () => {
-                await onConfirm();
-                setCurrentPage('contexts');
-                setConfirmAction(null);
-              },
-              breadcrumbs: [
-                { label: "Home", onClick: () => setCurrentPage('home') },
-                { label: "Contexts", onClick: () => setCurrentPage('contexts') },
-                { label: "Delete Context" },
-              ],
-            });
-            setCurrentPage('confirm');
-          }}
-        />
+              <MeroContext.Provider value={meroContextValue}>
+                <Namespaces />
+              </MeroContext.Provider>
             </main>
           </div>
         </div>
@@ -850,7 +852,7 @@ function App() {
           currentPage={sidebarPage} 
           onNavigate={(p) => {
             if (p === 'nodes') setCurrentPage('nodes');
-            else if (p === 'contexts') setCurrentPage('contexts');
+            else if (p === 'namespaces') setCurrentPage('namespaces');
             else if (p === 'marketplace') setCurrentPage('marketplace');
             else if (p === 'installed') setCurrentPage('installed');
             else if (p === 'home') setCurrentPage('home');

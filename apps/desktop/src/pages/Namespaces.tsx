@@ -115,23 +115,24 @@ export default function Namespaces() {
     setGroupContexts([]);
     setGroupSubgroups([]);
     setGroupLoading(true);
-    try {
-      const [info, members, contexts, subgroups] = await Promise.all([
-        admin.getGroupInfo(targetGroupId).catch(() => null),
-        admin.listGroupMembers(targetGroupId).catch(() => ({ data: [], selfIdentity: null })),
-        admin.listGroupContexts(targetGroupId).catch(() => []),
-        admin.listSubgroups(targetGroupId).catch(() => []),
-      ]);
-      setGroupInfo(info as unknown as GroupInfo | null);
-      const memberList = (members as unknown as { data?: GroupMember[] })?.data ?? (Array.isArray(members) ? members : []);
-      setGroupMembers(memberList);
-      setGroupContexts(Array.isArray(contexts) ? contexts : []);
-      setGroupSubgroups(Array.isArray(subgroups) ? subgroups : []);
-    } catch {
-      toast.error("Failed to load group details");
-    } finally {
-      setGroupLoading(false);
+    let failures = 0;
+    const fail = <T,>(fallback: T) => () => { failures++; return fallback; };
+
+    const [info, members, contexts, subgroups] = await Promise.all([
+      admin.getGroupInfo(targetGroupId).catch(fail(null)),
+      admin.listGroupMembers(targetGroupId).catch(fail({ data: [], selfIdentity: null })),
+      admin.listGroupContexts(targetGroupId).catch(fail([])),
+      admin.listSubgroups(targetGroupId).catch(fail([])),
+    ]);
+    setGroupInfo(info as unknown as GroupInfo | null);
+    const memberList = (members as unknown as { data?: GroupMember[] })?.data ?? (Array.isArray(members) ? members : []);
+    setGroupMembers(memberList);
+    setGroupContexts(Array.isArray(contexts) ? contexts : []);
+    setGroupSubgroups(Array.isArray(subgroups) ? subgroups : []);
+    if (failures > 0) {
+      toast.error("Failed to load some group details");
     }
+    setGroupLoading(false);
   }, [admin, toast]);
 
   // View transitions
@@ -213,8 +214,8 @@ export default function Namespaces() {
                   </div>
                   <div className="ns-card-stats">
                     <span title="Groups"><Layers size={14} /> {ns.subgroupCount ?? 0}</span>
-                    <span title="Members"><Users size={14} /> {ns.memberCount}</span>
-                    <span title="Contexts"><Box size={14} /> {ns.contextCount}</span>
+                    <span title="Members"><Users size={14} /> {ns.memberCount ?? 0}</span>
+                    <span title="Contexts"><Box size={14} /> {ns.contextCount ?? 0}</span>
                   </div>
                   {ns.upgradePolicy && (
                     <div className="ns-card-policy">
@@ -253,11 +254,11 @@ export default function Namespaces() {
         <main className="ns-main">
           <div className="ns-detail-stats">
             <div className="stat-card">
-              <div className="stat-value">{ns.memberCount}</div>
+              <div className="stat-value">{ns.memberCount ?? 0}</div>
               <div className="stat-label">Members</div>
             </div>
             <div className="stat-card">
-              <div className="stat-value">{ns.contextCount}</div>
+              <div className="stat-value">{ns.contextCount ?? 0}</div>
               <div className="stat-label">Contexts</div>
             </div>
             <div className="stat-card">
@@ -337,11 +338,11 @@ export default function Namespaces() {
               {groupInfo && (
                 <div className="ns-detail-stats">
                   <div className="stat-card">
-                    <div className="stat-value">{groupInfo.memberCount}</div>
+                    <div className="stat-value">{groupInfo.memberCount ?? 0}</div>
                     <div className="stat-label">Members</div>
                   </div>
                   <div className="stat-card">
-                    <div className="stat-value">{groupInfo.contextCount}</div>
+                    <div className="stat-value">{groupInfo.contextCount ?? 0}</div>
                     <div className="stat-label">Contexts</div>
                   </div>
                   <div className="stat-card">

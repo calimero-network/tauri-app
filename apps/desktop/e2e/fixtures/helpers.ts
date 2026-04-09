@@ -321,7 +321,7 @@ export async function scrollSettingsControlIntoView(
 
 export async function navigateVia(
   page: Page,
-  label: "Home" | "Nodes" | "Contexts" | "Applications" | "Marketplace",
+  label: "Home" | "Nodes" | "Namespaces" | "Applications" | "Marketplace",
 ): Promise<void> {
   await waitForAppShellReady(page);
   await page.locator("aside.sidebar").getByTitle(label).click();

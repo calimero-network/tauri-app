@@ -70,8 +70,8 @@ describeAfter35("Sidebar navigation", () => {
     await expect(page.locator('button[title="Home"]')).toHaveClass(/active/);
   });
 
-  test("Contexts link hidden when developer mode is off", async ({ page }) => {
-    await expect(page.locator('button[title="Contexts"]')).not.toBeVisible();
+  test("Namespaces link hidden when developer mode is off", async ({ page }) => {
+    await expect(page.locator('button[title="Namespaces"]')).not.toBeVisible();
   });
 
   test("Nodes link hidden when developer mode is off", async ({ page }) => {
@@ -84,20 +84,20 @@ describeAfter35("Sidebar navigation — developer mode", () => {
     await setupDeveloperPage(page);
   });
 
-  test("Contexts link visible when developer mode is on", async ({ page }) => {
-    await expect(page.locator('button[title="Contexts"]')).toBeVisible();
+  test("Namespaces link visible when developer mode is on", async ({ page }) => {
+    await expect(page.locator('button[title="Namespaces"]')).toBeVisible();
   });
 
   test("Nodes link visible when developer mode is on", async ({ page }) => {
     await expect(page.locator('button[title="Nodes"]')).toBeVisible();
   });
 
-  test("clicking Contexts navigates to contexts page", async ({ page }) => {
-    await page.click('button[title="Contexts"]');
-    await expect(page.getByTestId("shell-page-title")).toHaveText("Contexts", {
+  test("clicking Namespaces navigates to namespaces page", async ({ page }) => {
+    await page.click('button[title="Namespaces"]');
+    await expect(page.getByTestId("shell-page-title")).toHaveText("Namespaces", {
       timeout: shellTitleTimeout,
     });
-    await expect(page.locator('button[title="Contexts"]')).toHaveClass(
+    await expect(page.locator('button[title="Namespaces"]')).toHaveClass(
       /active/
     );
   });
@@ -123,8 +123,8 @@ describeAfter35("Sidebar navigation — developer mode", () => {
       { timeout: shellTitleTimeout }
     );
 
-    await page.click('button[title="Contexts"]');
-    await expect(page.getByTestId("shell-page-title")).toHaveText("Contexts", {
+    await page.click('button[title="Namespaces"]');
+    await expect(page.getByTestId("shell-page-title")).toHaveText("Namespaces", {
       timeout: shellTitleTimeout,
     });
 

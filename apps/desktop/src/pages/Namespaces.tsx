@@ -199,10 +199,13 @@ export default function Namespaces() {
           ) : (
             <div className="ns-grid">
               {namespaces.map((ns) => (
-                <button
+                <div
                   key={ns.namespaceId}
                   className="ns-card"
+                  role="button"
+                  tabIndex={0}
                   onClick={() => openNamespace(ns)}
+                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") openNamespace(ns); }}
                 >
                   <div className="ns-card-header">
                     <h3>{ns.alias || truncateId(ns.namespaceId)}</h3>
@@ -228,7 +231,7 @@ export default function Namespaces() {
                       <Shield size={12} /> {ns.upgradePolicy}
                     </div>
                   )}
-                </button>
+                </div>
               ))}
             </div>
           )}

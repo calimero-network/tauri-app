@@ -1186,7 +1186,7 @@ async fn stop_merod(merod_state: tauri::State<'_, MerodState>) -> Result<String,
                 if !output.status.success() {
                     let stderr = String::from_utf8_lossy(&output.stderr);
                     if !stderr.contains("not found") && !stderr.contains("does not exist") {
-                        return Err(format!("Failed to stop merod process: {}", stderr));
+                        return Err(TauriError::new(TauriErrorCode::MerodStopFailed, format!("Failed to stop merod process: {}", stderr)));
                     }
                 }
             }
@@ -1280,12 +1280,12 @@ async fn stop_merod_by_pid_command(pid: u32, merod_state: tauri::State<'_, Merod
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 // If process doesn't exist, that's fine - it's already stopped
                 if !stderr.contains("not found") && !stderr.contains("does not exist") {
-                    return Err(format!("Failed to stop merod process: {}", stderr));
+                    return Err(TauriError::new(TauriErrorCode::MerodStopFailed, format!("Failed to stop merod process: {}", stderr)));
                 }
             }
         }
     }
-    
+
     // Remove this process from state
     {
         let mut state = merod_state.lock().unwrap();

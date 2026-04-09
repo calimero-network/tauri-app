@@ -51,10 +51,11 @@ type View =
 
 export default function Namespaces() {
   const toast = useToast();
-  // Cast to any: the installed mero-js types may lag behind the runtime.
-  // Namespace/group methods exist at runtime but may not be in the .d.ts yet.
+
+  // Access admin inside callbacks (not at render scope) to avoid unstable
+  // references triggering infinite useCallback/useEffect re-render loops.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const admin = apiClient.meroJs.admin as any;
+  const getAdmin = () => (apiClient as any).meroJs.admin;
 
   // Top-level state
   const [namespaces, setNamespaces] = useState<Namespace[]>([]);
@@ -78,7 +79,7 @@ export default function Namespaces() {
     setLoading(true);
     setError(null);
     try {
-      const response = await admin.listNamespaces();
+      const response = await getAdmin().listNamespaces();
       const list = (response as unknown as { namespaces?: Namespace[] })?.namespaces
         ?? (Array.isArray(response) ? response : []);
       setNamespaces(list);
@@ -88,7 +89,7 @@ export default function Namespaces() {
     } finally {
       setLoading(false);
     }
-  }, [admin]);
+  }, []);
 
   useEffect(() => {
     loadNamespaces();
@@ -98,14 +99,14 @@ export default function Namespaces() {
   const loadNamespaceGroups = useCallback(async (nsId: string) => {
     setNsLoadingGroups(true);
     try {
-      const groups = await admin.listNamespaceGroups(nsId);
+      const groups = await getAdmin().listNamespaceGroups(nsId);
       setNsGroups(Array.isArray(groups) ? groups : []);
     } catch {
       setNsGroups([]);
     } finally {
       setNsLoadingGroups(false);
     }
-  }, [admin]);
+  }, []);
 
   // Load group details when viewing a group
   const loadGroupDetails = useCallback(async (targetGroupId: string) => {
@@ -119,10 +120,10 @@ export default function Namespaces() {
     const fail = <T,>(fallback: T) => () => { failures++; return fallback; };
 
     const [info, members, contexts, subgroups] = await Promise.all([
-      admin.getGroupInfo(targetGroupId).catch(fail(null)),
-      admin.listGroupMembers(targetGroupId).catch(fail({ data: [], selfIdentity: null })),
-      admin.listGroupContexts(targetGroupId).catch(fail([])),
-      admin.listSubgroups(targetGroupId).catch(fail([])),
+      getAdmin().getGroupInfo(targetGroupId).catch(fail(null)),
+      getAdmin().listGroupMembers(targetGroupId).catch(fail({ data: [], selfIdentity: null })),
+      getAdmin().listGroupContexts(targetGroupId).catch(fail([])),
+      getAdmin().listSubgroups(targetGroupId).catch(fail([])),
     ]);
     setGroupInfo(info as unknown as GroupInfo | null);
     const memberList = (members as unknown as { data?: GroupMember[] })?.data ?? (Array.isArray(members) ? members : []);
@@ -133,7 +134,7 @@ export default function Namespaces() {
       toast.error("Failed to load some group details");
     }
     setGroupLoading(false);
-  }, [admin, toast]);
+  }, [toast]);
 
   // View transitions
   const openNamespace = (ns: Namespace) => {

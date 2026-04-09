@@ -53,20 +53,17 @@ test.describe("Namespaces – page rendering", () => {
     page,
   }) => {
     // Without a running node, the page shows either the empty state or an error.
-    // Both are valid outcomes in the E2E environment.
-    const emptyOrError = page
-      .getByText(/No namespaces found|Failed to load|error/i)
-      .first();
-    await expect(emptyOrError).toBeVisible({ timeout: 15_000 });
+    // Wait for loading to finish by checking for either outcome via CSS class.
+    const loaded = page.locator(".empty-state, .error-message").first();
+    await expect(loaded).toBeVisible({ timeout: 15_000 });
   });
 
   test("does not show namespace cards when list is empty", async ({
     page,
   }) => {
     // Wait for loading to finish
-    await expect(
-      page.getByText(/No namespaces found|Failed to load|error/i).first(),
-    ).toBeVisible({ timeout: 15_000 });
+    const loaded = page.locator(".empty-state, .error-message").first();
+    await expect(loaded).toBeVisible({ timeout: 15_000 });
 
     const cards = page.locator(".ns-card");
     await expect(cards).toHaveCount(0);

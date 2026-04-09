@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { apiClient } from "@calimero-network/mero-react";
 import { useToast } from "../contexts/ToastContext";
 import { ArrowLeft, Users, Box, Layers, Copy, ChevronRight, Shield, Globe } from "lucide-react";
@@ -74,6 +74,7 @@ export default function Namespaces() {
   // Namespace detail state
   const [nsGroups, setNsGroups] = useState<SubgroupEntry[]>([]);
   const [nsLoadingGroups, setNsLoadingGroups] = useState(false);
+  const [nsGroupsError, setNsGroupsError] = useState<string | null>(null);
 
   // Group detail state
   const [groupInfo, setGroupInfo] = useState<GroupInfo | null>(null);
@@ -81,6 +82,9 @@ export default function Namespaces() {
   const [groupContexts, setGroupContexts] = useState<GroupContextEntry[]>([]);
   const [groupSubgroups, setGroupSubgroups] = useState<SubgroupEntry[]>([]);
   const [groupLoading, setGroupLoading] = useState(false);
+
+  // Guard against stale responses from concurrent loads
+  const groupLoadId = useRef(0);
 
   // Load namespaces
   const loadNamespaces = useCallback(async () => {
@@ -104,11 +108,14 @@ export default function Namespaces() {
   // Load namespace groups when viewing a namespace
   const loadNamespaceGroups = useCallback(async (nsId: string) => {
     setNsLoadingGroups(true);
+    setNsGroupsError(null);
     try {
       const groups = await getAdmin().listNamespaceGroups(nsId);
       setNsGroups(unwrapList<SubgroupEntry>(groups, "groups"));
-    } catch {
+    } catch (err: unknown) {
       setNsGroups([]);
+      const msg = err instanceof Error ? err.message : "Failed to load groups";
+      setNsGroupsError(msg);
     } finally {
       setNsLoadingGroups(false);
     }
@@ -116,6 +123,9 @@ export default function Namespaces() {
 
   // Load group details when viewing a group
   const loadGroupDetails = useCallback(async (targetGroupId: string) => {
+    // Increment load ID to detect stale responses from concurrent loads
+    const thisLoadId = ++groupLoadId.current;
+
     // Clear stale state immediately to prevent showing previous group's data
     setGroupInfo(null);
     setGroupMembers([]);
@@ -132,6 +142,10 @@ export default function Namespaces() {
         getAdmin().listGroupContexts(targetGroupId).catch(fail([])),
         getAdmin().listSubgroups(targetGroupId).catch(fail([])),
       ]);
+
+      // Discard results if a newer load was started while we were fetching
+      if (thisLoadId !== groupLoadId.current) return;
+
       setGroupInfo(info as unknown as GroupInfo | null);
       setGroupMembers(unwrapList<GroupMember>(members, "data"));
       setGroupContexts(unwrapList<GroupContextEntry>(contexts, "contexts"));
@@ -140,9 +154,12 @@ export default function Namespaces() {
         toast.error("Failed to load some group details");
       }
     } catch {
+      if (thisLoadId !== groupLoadId.current) return;
       toast.error("Failed to load group details");
     } finally {
-      setGroupLoading(false);
+      if (thisLoadId === groupLoadId.current) {
+        setGroupLoading(false);
+      }
     }
   }, [toast]);
 
@@ -300,6 +317,8 @@ export default function Namespaces() {
             <h2>Groups</h2>
             {nsLoadingGroups ? (
               <div className="loading">Loading groups...</div>
+            ) : nsGroupsError ? (
+              <div className="error-message">{nsGroupsError}</div>
             ) : nsGroups.length === 0 ? (
               <p className="empty-hint">No groups in this namespace</p>
             ) : (

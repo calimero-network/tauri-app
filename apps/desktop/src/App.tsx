@@ -49,12 +49,12 @@ function App() {
   const [appVersion, setAppVersion] = useState<string>("");
   const [runningNodes, setRunningNodes] = useState<RunningMerodNode[]>([]);
 
-  const handleSelectNode = useCallback((nodeUrl: string) => {
+  const handleSelectNode = useCallback(async (nodeUrl: string) => {
     const settings = getSettings();
     if (settings.nodeUrl !== nodeUrl) {
       // Clear auth tokens — old tokens are invalid for the new node
-      clearAccessToken();
-      clearRefreshToken();
+      await clearAccessToken();
+      await clearRefreshToken();
       localStorage.removeItem('calimero-auth-tokens');
     }
     saveSettings({ ...settings, nodeUrl });

@@ -187,8 +187,8 @@ export default function NodeManagement() {
 
       // Clear auth tokens when switching nodes — old tokens are invalid
       if (urlChanged) {
-        clearAccessToken();
-        clearRefreshToken();
+        await clearAccessToken();
+        await clearRefreshToken();
         localStorage.removeItem('calimero-auth-tokens');
       }
 
@@ -264,7 +264,7 @@ export default function NodeManagement() {
     }
   };
 
-  const handleSaveNodeConfig = () => {
+  const handleSaveNodeConfig = async () => {
     try {
       const settings = getSettings();
       const newNodeUrl = nodeUrl.trim() || "http://localhost:2528";
@@ -277,8 +277,8 @@ export default function NodeManagement() {
 
       // Clear auth tokens when switching to a different node — old tokens are invalid
       if (urlChanged) {
-        clearAccessToken();
-        clearRefreshToken();
+        await clearAccessToken();
+        await clearRefreshToken();
         localStorage.removeItem('calimero-auth-tokens');
       }
 

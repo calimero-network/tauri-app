@@ -488,6 +488,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-autostart",
+ "thiserror",
  "tokio",
  "toml 0.8.23",
  "url",

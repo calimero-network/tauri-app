@@ -6,7 +6,7 @@ import { clearOnboardingProgress } from "./utils/onboardingProgress";
 import { startMerod, detectRunningMerodNodes, type RunningMerodNode } from "./utils/merod";
 import { useToast } from "./contexts/ToastContext";
 import { checkOnboardingState, type OnboardingState } from "./utils/onboarding";
-import { decodeMetadata, openAppFrontend } from "./utils/appUtils";
+import { decodeMetadata, openAppFrontend, parseTauriError } from "./utils/appUtils";
 import Settings from "./pages/Settings";
 import Onboarding from "./pages/Onboarding";
 import Marketplace from "./pages/Marketplace";
@@ -303,7 +303,7 @@ function App() {
       } catch (err) {
         console.error('Failed to initialize client or check node:', err);
         setConnected(false);
-        setError(err instanceof Error ? err.message : String(err));
+        setError(parseTauriError(err));
         setNeedsNodeConfig(false);
         loadContexts().catch(() => {});
         loadInstalledApps().catch(() => {});
@@ -351,7 +351,7 @@ function App() {
       await loadInstalledApps();
     } catch (err) {
       setConnected(false);
-      const errorMessage = err instanceof Error ? err.message : String(err);
+      const errorMessage = parseTauriError(err);
       setError(errorMessage);
       console.error("Connection error:", err);
       updateTrayIcon(false);
@@ -369,7 +369,7 @@ function App() {
         await new Promise((r) => setTimeout(r, 3000));
         await checkConnection();
       } catch (err) {
-        toast.error(`Failed to start node: ${err instanceof Error ? err.message : String(err)}`);
+        toast.error(`Failed to start node: ${parseTauriError(err)}`);
       }
     } else {
       setCurrentPage('nodes');
@@ -391,7 +391,7 @@ function App() {
       await invoke("create_desktop_shortcut", { appName, frontendUrl });
       toast.success("Desktop shortcut created on your Desktop");
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to create desktop shortcut");
+      toast.error(parseTauriError(err, "Failed to create desktop shortcut"));
     }
   }, [toast]);
 

@@ -4,7 +4,7 @@ import { useToast } from "../contexts/ToastContext";
 import DataTable from "../components/DataTable";
 import ContextMenu from "../components/ContextMenu";
 import { SkeletonTable } from "../components/Skeleton";
-import { decodeMetadata, openAppFrontend } from "../utils/appUtils";
+import { decodeMetadata, openAppFrontend, parseTauriError } from "../utils/appUtils";
 import { invoke } from "@tauri-apps/api/tauri";
 import "./InstalledApps.css";
 
@@ -76,7 +76,7 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
         onAuthRequired?.();
         return;
       }
-      setError(err instanceof Error ? err.message : "Failed to load installed applications");
+      setError(parseTauriError(err, "Failed to load installed applications"));
       console.error("Failed to load installed apps:", err);
       setApps([]);
     } finally {
@@ -98,7 +98,7 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
           // Reload the list
           await loadInstalledApps();
         } catch (err) {
-          toast.error(`Failed to uninstall application: ${err instanceof Error ? err.message : "Unknown error"}`);
+          toast.error(`Failed to uninstall application: ${parseTauriError(err, "Unknown error")}`);
           console.error("Uninstall error:", err);
         }
       });
@@ -134,7 +134,7 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
       });
       toast.success("Desktop shortcut created on your Desktop");
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to create desktop shortcut");
+      toast.error(parseTauriError(err, "Failed to create desktop shortcut"));
     }
   };
 

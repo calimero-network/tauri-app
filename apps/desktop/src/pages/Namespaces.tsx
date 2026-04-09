@@ -116,24 +116,29 @@ export default function Namespaces() {
     setGroupContexts([]);
     setGroupSubgroups([]);
     setGroupLoading(true);
-    let failures = 0;
-    const fail = <T,>(fallback: T) => () => { failures++; return fallback; };
+    try {
+      let failures = 0;
+      const fail = <T,>(fallback: T) => () => { failures++; return fallback; };
 
-    const [info, members, contexts, subgroups] = await Promise.all([
-      getAdmin().getGroupInfo(targetGroupId).catch(fail(null)),
-      getAdmin().listGroupMembers(targetGroupId).catch(fail({ data: [], selfIdentity: null })),
-      getAdmin().listGroupContexts(targetGroupId).catch(fail([])),
-      getAdmin().listSubgroups(targetGroupId).catch(fail([])),
-    ]);
-    setGroupInfo(info as unknown as GroupInfo | null);
-    const memberList = (members as unknown as { data?: GroupMember[] })?.data ?? (Array.isArray(members) ? members : []);
-    setGroupMembers(memberList);
-    setGroupContexts(Array.isArray(contexts) ? contexts : []);
-    setGroupSubgroups(Array.isArray(subgroups) ? subgroups : []);
-    if (failures > 0) {
-      toast.error("Failed to load some group details");
+      const [info, members, contexts, subgroups] = await Promise.all([
+        getAdmin().getGroupInfo(targetGroupId).catch(fail(null)),
+        getAdmin().listGroupMembers(targetGroupId).catch(fail({ data: [], selfIdentity: null })),
+        getAdmin().listGroupContexts(targetGroupId).catch(fail([])),
+        getAdmin().listSubgroups(targetGroupId).catch(fail([])),
+      ]);
+      setGroupInfo(info as unknown as GroupInfo | null);
+      const memberList = (members as unknown as { data?: GroupMember[] })?.data ?? (Array.isArray(members) ? members : []);
+      setGroupMembers(memberList);
+      setGroupContexts(Array.isArray(contexts) ? contexts : []);
+      setGroupSubgroups(Array.isArray(subgroups) ? subgroups : []);
+      if (failures > 0) {
+        toast.error("Failed to load some group details");
+      }
+    } catch {
+      toast.error("Failed to load group details");
+    } finally {
+      setGroupLoading(false);
     }
-    setGroupLoading(false);
   }, [toast]);
 
   // View transitions

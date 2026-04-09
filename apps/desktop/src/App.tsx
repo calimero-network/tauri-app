@@ -39,6 +39,7 @@ function App() {
   const [currentPage, setCurrentPage] = useState<'home' | 'marketplace' | 'installed' | 'namespaces' | 'nodes' | 'confirm'>('home');
   const [checkingOnboarding, setCheckingOnboarding] = useState(true);
   const [clientReady, setClientReady] = useState(false);
+  const [clientVersion, setClientVersion] = useState(0);
   const [needsNodeConfig, setNeedsNodeConfig] = useState(false);
   const [installedApps, setInstalledApps] = useState<any[]>([]);
   const [loadingApps, setLoadingApps] = useState(false);
@@ -54,6 +55,8 @@ function App() {
   const [runningNodes, setRunningNodes] = useState<RunningMerodNode[]>([]);
 
   // Expose the adapter's MeroJs instance to mero-react hooks (useNamespaces, etc.)
+  // Include showLogin in deps so the value refreshes after login completes
+  // (isAuthenticated re-reads the token, mero re-reads apiClient.meroJs).
   const meroContextValue = useMemo<MeroContextValue>(() => ({
     mero: clientReady ? apiClient.meroJs : null,
     isAuthenticated: !!getAccessToken(),
@@ -65,7 +68,8 @@ function App() {
     connectToNode: () => {},
     logout: () => { clearAccessToken(); clearRefreshToken(); window.location.reload(); },
     isLoading: checkingOnboarding,
-  }), [clientReady, connected, checkingOnboarding]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [clientReady, clientVersion, connected, checkingOnboarding, showLogin]);
 
   const handleSelectNode = useCallback(async (nodeUrl: string) => {
     const settings = getSettings();
@@ -584,6 +588,7 @@ function App() {
             requestCredentials: 'omit',
           });
           setClientReady(true);
+          setClientVersion((v) => v + 1);
 
           // Hide settings only after client is ready — this triggers the checkConnection
           // useEffect, which needs a properly initialized client to avoid spurious 401→login

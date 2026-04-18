@@ -92,6 +92,29 @@ export async function getCloudSubscription(
 
 // ── HA (High Availability) via TEE Fleet Nodes ──
 
+export interface FleetMeasurements {
+  release_tag: string;
+  allowed_mrtd: string[];
+  allowed_rtmr0: string[];
+  allowed_rtmr1: string[];
+  allowed_rtmr2: string[];
+  allowed_rtmr3: string[];
+}
+
+/**
+ * Fetch the fleet's trusted TEE measurements (MRTD, RTMR values)
+ * from the cloud. Used to populate set_tee_admission_policy.
+ */
+export async function getFleetMeasurements(
+  idToken: string,
+): Promise<FleetMeasurements> {
+  const res = await cloudFetch('/api/cloud/fleet/measurements', idToken);
+  if (!res.ok) {
+    throw new Error('Failed to fetch fleet measurements');
+  }
+  return res.json();
+}
+
 export interface EnableHaResponse {
   status: string;
   context_id: string;
@@ -171,21 +194,29 @@ export async function setTeeAdmissionPolicy(
 }
 
 /**
- * Enable HA end-to-end: sets TEE admission policy on the local node,
- * then registers the HA request with the cloud.
+ * Enable HA end-to-end:
+ * 1. Fetch fleet measurements from cloud (trusted MRTD values)
+ * 2. Set TEE admission policy on the local node with those values
+ * 3. Register HA request with cloud for fleet node assignment
  */
 export async function enableHaForNamespace(
   idToken: string,
   nodeUrl: string,
   contextId: string,
   groupId: string,
-  allowedMrtd?: string[],
 ): Promise<EnableHaResponse | null> {
-  // 1. Set TEE admission policy on the local node so fleet nodes
-  //    can be admitted when they present valid attestations.
-  await setTeeAdmissionPolicy(nodeUrl, groupId, allowedMrtd);
+  // 1. Fetch the fleet's trusted measurements from the cloud.
+  const measurements = await getFleetMeasurements(idToken);
+  if (!measurements.allowed_mrtd.length) {
+    throw new Error('No fleet MRTD measurements available — cannot set admission policy');
+  }
 
-  // 2. Register HA request with the cloud — fleet nodes will poll
+  // 2. Set TEE admission policy on the local node with the fleet's
+  //    trusted MRTD values. Only TEE nodes matching these measurements
+  //    will be admitted.
+  await setTeeAdmissionPolicy(nodeUrl, groupId, measurements.allowed_mrtd);
+
+  // 3. Register HA request with the cloud — fleet nodes will poll
   //    should-join and get assigned to this group.
   return enableHa(idToken, contextId, groupId);
 }

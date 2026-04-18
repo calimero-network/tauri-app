@@ -138,14 +138,15 @@ export async function disableHa(
  * Set the TEE admission policy on a group via the local node's admin API.
  * This must be called after enabling HA so that fleet TEE nodes can be
  * admitted into the group's governance DAG.
+ *
+ * accept_mock is always false — only real TDX attestations are accepted.
+ * allowedMrtd should be populated from the cloud's fleet measurements;
+ * an empty list means any MRTD is accepted (not recommended for production).
  */
 export async function setTeeAdmissionPolicy(
   nodeUrl: string,
   groupId: string,
-  options?: {
-    allowedMrtd?: string[];
-    acceptMock?: boolean;
-  },
+  allowedMrtd?: string[],
 ): Promise<void> {
   const res = await fetch(
     `${nodeUrl}/admin-api/groups/${groupId}/settings/tee-admission-policy`,
@@ -153,13 +154,13 @@ export async function setTeeAdmissionPolicy(
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        allowed_mrtd: options?.allowedMrtd ?? [],
+        allowed_mrtd: allowedMrtd ?? [],
         allowed_rtmr0: [],
         allowed_rtmr1: [],
         allowed_rtmr2: [],
         allowed_rtmr3: [],
         allowed_tcb_statuses: [],
-        accept_mock: options?.acceptMock ?? false,
+        accept_mock: false,
       }),
     },
   );
@@ -178,14 +179,11 @@ export async function enableHaForNamespace(
   nodeUrl: string,
   contextId: string,
   groupId: string,
-  options?: {
-    allowedMrtd?: string[];
-    acceptMock?: boolean;
-  },
+  allowedMrtd?: string[],
 ): Promise<EnableHaResponse | null> {
   // 1. Set TEE admission policy on the local node so fleet nodes
   //    can be admitted when they present valid attestations.
-  await setTeeAdmissionPolicy(nodeUrl, groupId, options);
+  await setTeeAdmissionPolicy(nodeUrl, groupId, allowedMrtd);
 
   // 2. Register HA request with the cloud — fleet nodes will poll
   //    should-join and get assigned to this group.

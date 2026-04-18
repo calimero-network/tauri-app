@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import {
   useNamespaces,
   useNamespaceGroups,
@@ -16,6 +16,9 @@ import { ArrowLeft, Users, Box, Layers, Copy, ChevronRight, Shield, Globe, Plus,
 import { apiClient } from "../lib/mero-client";
 import { saveContextKey, getContextKey } from "../utils/contextKeys";
 import { decodeMetadata, openAppFrontend } from "../utils/appUtils";
+import { getSettings } from "../utils/settings";
+import { enableHaForNamespace, disableHa, CloudSessionExpiredError } from "../utils/cloudApi";
+import { getCloudIdToken } from "../utils/cloudAuth";
 import "./Namespaces.css";
 
 // Same default as battleships: CAN_CREATE_CONTEXT (1) | CAN_INVITE_MEMBERS (2) | MANAGE_MEMBERS (8).
@@ -156,6 +159,51 @@ export default function Namespaces() {
       executorPublicKey: key?.publicKey,
     });
   };
+
+  // HA state
+  const [haEnabling, setHaEnabling] = useState(false);
+  const [haEnabled, setHaEnabled] = useState<Record<string, boolean>>({});
+
+  const toggleHa = useCallback(async (ns: Namespace) => {
+    const token = getCloudIdToken();
+    if (!token) {
+      toast.error('Connect to Calimero Cloud first (Settings → Cloud)');
+      return;
+    }
+    const settings = getSettings();
+    if (!settings.nodeUrl) {
+      toast.error('Node URL not configured');
+      return;
+    }
+
+    const nsId = ns.namespaceId;
+    const isEnabled = haEnabled[nsId];
+    setHaEnabling(true);
+
+    try {
+      if (isEnabled) {
+        // Find a context in this namespace to disable HA
+        // Use the namespace ID as a proxy context ID for now
+        await disableHa(token, nsId);
+        setHaEnabled((prev) => ({ ...prev, [nsId]: false }));
+        toast.success('HA disabled — TEE nodes will stop replicating');
+      } else {
+        await enableHaForNamespace(token, settings.nodeUrl, nsId, nsId, {
+          acceptMock: true, // Allow mock attestations during development
+        });
+        setHaEnabled((prev) => ({ ...prev, [nsId]: true }));
+        toast.success('HA enabled — TEE fleet nodes will join this namespace');
+      }
+    } catch (err: any) {
+      if (err instanceof CloudSessionExpiredError) {
+        toast.error('Cloud session expired — reconnect in Settings');
+      } else {
+        toast.error(err.message || 'Failed to toggle HA');
+      }
+    } finally {
+      setHaEnabling(false);
+    }
+  }, [haEnabled, toast]);
 
   // View transitions
   const openNamespace = (ns: Namespace) => {
@@ -355,7 +403,6 @@ export default function Namespaces() {
             </div>
           </div>
 
-          <div className="ns-detail-section">
             <h2><Box size={16} /> Contexts ({nsRootContexts.length})</h2>
             {nsRootContexts.length === 0 ? (
               <p className="empty-hint">No contexts in this namespace yet. Click "Create Context" to add one.</p>
@@ -386,6 +433,26 @@ export default function Namespaces() {
                 })}
               </div>
             )}
+          </div>
+
+          <div className="ns-detail-section">
+            <h2><Shield size={16} style={{ marginRight: 6, verticalAlign: -2 }} />High Availability</h2>
+            <p className="ha-description">
+              Enable TEE replication to have fleet nodes automatically join and replicate
+              your namespace data. Requires a Calimero Cloud account with a paid plan.
+            </p>
+            <div className="ha-toggle-row">
+              <span className="ha-status">
+                {haEnabled[ns.namespaceId] ? '✓ HA Enabled' : 'HA Disabled'}
+              </span>
+              <button
+                className={`ha-toggle-btn ${haEnabled[ns.namespaceId] ? 'ha-enabled' : ''}`}
+                onClick={() => toggleHa(ns)}
+                disabled={haEnabling}
+              >
+                {haEnabling ? 'Working...' : haEnabled[ns.namespaceId] ? 'Disable HA' : 'Enable HA'}
+              </button>
+            </div>
           </div>
 
           <div className="ns-detail-section">

@@ -66,9 +66,7 @@ export default function Namespaces() {
         setHaEnabled((prev) => ({ ...prev, [nsId]: false }));
         toast.success('HA disabled — TEE nodes will stop replicating');
       } else {
-        await enableHaForNamespace(token, settings.nodeUrl, nsId, nsId, {
-          acceptMock: true, // Allow mock attestations during development
-        });
+        await enableHaForNamespace(token, settings.nodeUrl, nsId, nsId);
         setHaEnabled((prev) => ({ ...prev, [nsId]: true }));
         toast.success('HA enabled — TEE fleet nodes will join this namespace');
       }

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import {
   useNamespaces,
   useNamespaceGroups,
@@ -10,6 +10,9 @@ import {
 } from "@calimero-network/mero-react";
 import { useToast } from "../contexts/ToastContext";
 import { ArrowLeft, Users, Box, Layers, Copy, ChevronRight, Shield, Globe } from "lucide-react";
+import { getSettings } from "../utils/settings";
+import { enableHaForNamespace, disableHa, CloudSessionExpiredError } from "../utils/cloudApi";
+import { getCloudIdToken } from "../utils/cloudAuth";
 import "./Namespaces.css";
 
 type View =
@@ -34,6 +37,51 @@ export default function Namespaces() {
   const { subgroups: groupSubgroups } = useSubgroups(activeGroupId);
 
   const groupLoading = groupInfoLoading;
+
+  // HA state
+  const [haEnabling, setHaEnabling] = useState(false);
+  const [haEnabled, setHaEnabled] = useState<Record<string, boolean>>({});
+
+  const toggleHa = useCallback(async (ns: Namespace) => {
+    const token = getCloudIdToken();
+    if (!token) {
+      toast.error('Connect to Calimero Cloud first (Settings → Cloud)');
+      return;
+    }
+    const settings = getSettings();
+    if (!settings.nodeUrl) {
+      toast.error('Node URL not configured');
+      return;
+    }
+
+    const nsId = ns.namespaceId;
+    const isEnabled = haEnabled[nsId];
+    setHaEnabling(true);
+
+    try {
+      if (isEnabled) {
+        // Find a context in this namespace to disable HA
+        // Use the namespace ID as a proxy context ID for now
+        await disableHa(token, nsId);
+        setHaEnabled((prev) => ({ ...prev, [nsId]: false }));
+        toast.success('HA disabled — TEE nodes will stop replicating');
+      } else {
+        await enableHaForNamespace(token, settings.nodeUrl, nsId, nsId, {
+          acceptMock: true, // Allow mock attestations during development
+        });
+        setHaEnabled((prev) => ({ ...prev, [nsId]: true }));
+        toast.success('HA enabled — TEE fleet nodes will join this namespace');
+      }
+    } catch (err: any) {
+      if (err instanceof CloudSessionExpiredError) {
+        toast.error('Cloud session expired — reconnect in Settings');
+      } else {
+        toast.error(err.message || 'Failed to toggle HA');
+      }
+    } finally {
+      setHaEnabling(false);
+    }
+  }, [haEnabled, toast]);
 
   // View transitions
   const openNamespace = (ns: Namespace) => {
@@ -178,6 +226,26 @@ export default function Namespaces() {
               <span className="field-value mono">{truncateId(ns.targetApplicationId)}</span>
               <button className="copy-btn" onClick={() => copyToClipboard(ns.targetApplicationId)} title="Copy">
                 <Copy size={12} />
+              </button>
+            </div>
+          </div>
+
+          <div className="ns-detail-section">
+            <h2><Shield size={16} style={{ marginRight: 6, verticalAlign: -2 }} />High Availability</h2>
+            <p className="ha-description">
+              Enable TEE replication to have fleet nodes automatically join and replicate
+              your namespace data. Requires a Calimero Cloud account with a paid plan.
+            </p>
+            <div className="ha-toggle-row">
+              <span className="ha-status">
+                {haEnabled[ns.namespaceId] ? '✓ HA Enabled' : 'HA Disabled'}
+              </span>
+              <button
+                className={`ha-toggle-btn ${haEnabled[ns.namespaceId] ? 'ha-enabled' : ''}`}
+                onClick={() => toggleHa(ns)}
+                disabled={haEnabling}
+              >
+                {haEnabling ? 'Working...' : haEnabled[ns.namespaceId] ? 'Disable HA' : 'Enable HA'}
               </button>
             </div>
           </div>

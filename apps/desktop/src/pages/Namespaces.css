@@ -397,3 +397,59 @@
   margin-bottom: 16px;
   border: 1px solid rgba(239, 68, 68, 0.2);
 }
+
+/* ─── HA Section ─── */
+.ha-description {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  margin-bottom: 12px;
+  line-height: 1.5;
+}
+
+.ha-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  background: var(--bg-secondary);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+}
+
+.ha-status {
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.ha-toggle-btn {
+  padding: 6px 16px;
+  border-radius: var(--radius-sm);
+  font-size: 0.85rem;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: white;
+  transition: all 0.2s;
+}
+
+.ha-toggle-btn:hover:not(:disabled) {
+  opacity: 0.85;
+}
+
+.ha-toggle-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.ha-toggle-btn.ha-enabled {
+  background: transparent;
+  color: var(--text-muted);
+  border-color: var(--border);
+}
+
+.ha-toggle-btn.ha-enabled:hover:not(:disabled) {
+  border-color: var(--error);
+  color: var(--error);
+}

@@ -7,6 +7,16 @@ const CLOUD_CALLBACK_SCHEME = 'calimero://cloud-callback';
 const LOGIN_POLL_INTERVAL_MS = 1500;
 const LOGIN_TIMEOUT_MS = 120_000; // 2 minutes
 
+// OAuth CSRF state — rotated per startCloudLogin() call and checked when
+// the deep link arrives. Blocks forged calimero:// callbacks.
+let pendingState: string | null = null;
+
+function generateState(): string {
+  const buf = new Uint8Array(16);
+  crypto.getRandomValues(buf);
+  return Array.from(buf, (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
 export interface CloudUserInfo {
   email: string;
   name: string;
@@ -55,7 +65,9 @@ export function isTokenExpired(token: string): boolean {
  * 4. Store credentials in settings
  */
 export async function startCloudLogin(): Promise<CloudUserInfo | null> {
-  const loginUrl = `${CLOUD_LOGIN_URL}/?callback-url=${encodeURIComponent(CLOUD_CALLBACK_SCHEME)}`;
+  pendingState = generateState();
+  const callback = `${CLOUD_CALLBACK_SCHEME}?state=${pendingState}`;
+  const loginUrl = `${CLOUD_LOGIN_URL}/?callback-url=${encodeURIComponent(callback)}`;
 
   // Clear any stale pending auth
   await invoke('clear_pending_cloud_auth');
@@ -115,17 +127,29 @@ async function pollForCloudAuth(): Promise<string | null> {
 
 /**
  * Extract the id_token from a callback URL like:
- * calimero://cloud-callback#id_token=eyJ...
+ * calimero://cloud-callback?state=ABC#id_token=eyJ...
+ *
+ * Validates the state param against the nonce we generated when starting
+ * the flow — rejects the token on mismatch to block forged callbacks.
  */
 function extractTokenFromCallbackUrl(url: string): string | null {
   try {
-    // The token is in the URL fragment (after #)
     const hashIndex = url.indexOf('#');
-    if (hashIndex === -1) return null;
+    const fragment = hashIndex === -1 ? '' : url.substring(hashIndex + 1);
+    const queryIndex = url.indexOf('?');
+    const queryEnd = hashIndex === -1 ? url.length : hashIndex;
+    const query = queryIndex === -1 || queryIndex >= queryEnd
+      ? ''
+      : url.substring(queryIndex + 1, queryEnd);
 
-    const fragment = url.substring(hashIndex + 1);
-    const params = new URLSearchParams(fragment);
-    return params.get('id_token');
+    const expected = pendingState;
+    const got = query ? new URLSearchParams(query).get('state') : null;
+    // Clear nonce as soon as any callback is seen so it can't be replayed.
+    pendingState = null;
+    if (!expected || got !== expected) return null;
+
+    if (!fragment) return null;
+    return new URLSearchParams(fragment).get('id_token');
   } catch {
     return null;
   }

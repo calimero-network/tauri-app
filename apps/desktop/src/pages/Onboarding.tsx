@@ -132,10 +132,11 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
   const prevDataDirRef = useRef(dataDir);
   useEffect(() => {
     if (currentStep !== 'node-setup') {
-      hasAttemptedAutoContinue.current = false;
       return;
     }
-    // Reset when dataDir changes so we retry for the new directory
+    // Reset only when dataDir changes so we retry for the new directory.
+    // Do NOT reset on step change — otherwise pressing Back from cloud-connect
+    // re-triggers auto-advance and the user is bounced forward again.
     if (prevDataDirRef.current !== dataDir) {
       prevDataDirRef.current = dataDir;
       hasAttemptedAutoContinue.current = false;

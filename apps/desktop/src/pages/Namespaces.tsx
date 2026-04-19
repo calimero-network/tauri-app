@@ -17,7 +17,7 @@ import { apiClient } from "../lib/mero-client";
 import { saveContextKey, getContextKey } from "../utils/contextKeys";
 import { decodeMetadata, openAppFrontend } from "../utils/appUtils";
 import { getSettings } from "../utils/settings";
-import { enableHaForNamespace, disableHa, CloudSessionExpiredError } from "../utils/cloudApi";
+import { enableHaForNamespace, disableHa, getCloudGroups, CloudSessionExpiredError } from "../utils/cloudApi";
 import { getCloudIdToken } from "../utils/cloudAuth";
 import "./Namespaces.css";
 
@@ -163,6 +163,28 @@ export default function Namespaces() {
   // HA state
   const [haEnabling, setHaEnabling] = useState(false);
   const [haEnabled, setHaEnabled] = useState<Record<string, boolean>>({});
+
+  // Hydrate HA state from the cloud so toggles reflect server truth on mount.
+  useEffect(() => {
+    const token = getCloudIdToken();
+    if (!token) return;
+    let cancelled = false;
+    getCloudGroups(token)
+      .then((groups) => {
+        if (cancelled) return;
+        const next: Record<string, boolean> = {};
+        for (const g of groups) {
+          next[g.group_id] = g.ha_status === "enabled";
+        }
+        setHaEnabled(next);
+      })
+      .catch(() => {
+        // Silent — HA toggles will stay in local state until next refresh.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const toggleHa = useCallback(async (ns: Namespace) => {
     const token = getCloudIdToken();

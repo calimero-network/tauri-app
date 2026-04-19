@@ -1,3 +1,5 @@
+import { getAccessToken } from '../lib/token-storage';
+
 const CLOUD_BASE_URL = 'https://cloud.calimero.network';
 
 export interface CloudNode {
@@ -90,6 +92,20 @@ export async function getCloudSubscription(
   return res.json();
 }
 
+export interface CloudGroup {
+  group_id: string;
+  contexts: string[];
+  ha_status: string;
+  ha_enabled_at: string | null;
+  fleet_replicas: { active: number; assigned: number; limit: number };
+}
+
+export async function getCloudGroups(idToken: string): Promise<CloudGroup[]> {
+  const res = await cloudFetch('/api/cloud/me/groups', idToken);
+  if (!res.ok) return [];
+  return res.json();
+}
+
 // ── HA (High Availability) via TEE Fleet Nodes ──
 
 export interface FleetMeasurements {
@@ -150,9 +166,13 @@ export async function disableHa(
   idToken: string,
   contextId: string,
 ): Promise<void> {
-  await cloudFetch(`/api/cloud/ha/disable/${contextId}`, idToken, {
+  const res = await cloudFetch(`/api/cloud/ha/disable/${contextId}`, idToken, {
     method: 'POST',
   });
+  if (!res.ok) {
+    const error = await res.json().catch(() => null);
+    throw new Error(error?.detail || 'Failed to disable HA');
+  }
 }
 
 // ── Local Node Admin API ──
@@ -171,11 +191,18 @@ export async function setTeeAdmissionPolicy(
   groupId: string,
   allowedMrtd?: string[],
 ): Promise<void> {
+  const accessToken = getAccessToken();
+  if (!accessToken) {
+    throw new Error('Not authenticated to local node — sign in first');
+  }
   const res = await fetch(
     `${nodeUrl}/admin-api/groups/${groupId}/settings/tee-admission-policy`,
     {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${accessToken}`,
+      },
       body: JSON.stringify({
         allowed_mrtd: allowedMrtd ?? [],
         allowed_rtmr0: [],

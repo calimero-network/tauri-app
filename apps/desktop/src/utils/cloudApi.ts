@@ -1,6 +1,8 @@
 import { getAccessToken } from '../lib/token-storage';
 
-const CLOUD_BASE_URL = 'https://cloud.calimero.network';
+// API lives at manager.cloud.calimero.network; cloud.calimero.network is
+// the static portal and does not proxy /api/*.
+const CLOUD_BASE_URL = 'https://manager.cloud.calimero.network';
 
 export interface CloudNode {
   name: string;

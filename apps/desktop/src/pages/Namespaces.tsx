@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import {
+  useMero,
   useNamespaces,
   useNamespaceGroups,
   useGroupInfo,
@@ -8,7 +9,6 @@ import {
   useSubgroups,
   useCreateNamespace,
   useCreateContext,
-  useMero,
   type Namespace,
 } from "@calimero-network/mero-react";
 import { useToast } from "../contexts/ToastContext";
@@ -17,7 +17,13 @@ import { apiClient } from "../lib/mero-client";
 import { saveContextKey, getContextKey } from "../utils/contextKeys";
 import { decodeMetadata, openAppFrontend } from "../utils/appUtils";
 import { getSettings } from "../utils/settings";
-import { enableHaForNamespace, disableHa, getCloudGroups, CloudSessionExpiredError } from "../utils/cloudApi";
+import {
+  enableHaForNamespace,
+  disableHaNamespace,
+  getCloudGroups,
+  CloudSessionExpiredError,
+  type NamespaceHaGroup,
+} from "../utils/cloudApi";
 import { getCloudIdToken } from "../utils/cloudAuth";
 import "./Namespaces.css";
 
@@ -160,7 +166,9 @@ export default function Namespaces() {
     });
   };
 
-  // HA state
+  // HA state — keyed by namespaceId (not groupId). A namespace is
+  // considered HA-enabled if at least one of its groups has HA enabled
+  // on the cloud side.
   const [haEnabling, setHaEnabling] = useState(false);
   const [haEnabled, setHaEnabled] = useState<Record<string, boolean>>({});
 
@@ -172,11 +180,13 @@ export default function Namespaces() {
     getCloudGroups(token)
       .then((groups) => {
         if (cancelled) return;
-        const next: Record<string, boolean> = {};
+        const byNamespace: Record<string, boolean> = {};
         for (const g of groups) {
-          next[g.group_id] = g.ha_status === "enabled";
+          if (!g.namespace_id) continue;
+          if (g.ha_status === "enabled") byNamespace[g.namespace_id] = true;
+          else if (byNamespace[g.namespace_id] === undefined) byNamespace[g.namespace_id] = false;
         }
-        setHaEnabled(next);
+        setHaEnabled(byNamespace);
       })
       .catch(() => {
         // Silent — HA toggles will stay in local state until next refresh.
@@ -197,22 +207,39 @@ export default function Namespaces() {
       toast.error('Node URL not configured');
       return;
     }
+    if (!mero) {
+      toast.error('Local node client is not ready yet');
+      return;
+    }
 
     const nsId = ns.namespaceId;
-    const isEnabled = haEnabled[nsId];
+    const isEnabled = !!haEnabled[nsId];
     setHaEnabling(true);
 
     try {
       if (isEnabled) {
-        // Find a context in this namespace to disable HA
-        // Use the namespace ID as a proxy context ID for now
-        await disableHa(token, nsId);
+        await disableHaNamespace(token, nsId);
         setHaEnabled((prev) => ({ ...prev, [nsId]: false }));
         toast.success('HA disabled — TEE nodes will stop replicating');
       } else {
-        await enableHaForNamespace(token, settings.nodeUrl, nsId, nsId);
+        // Enumerate groups + representative context from the local node so
+        // the cloud can register HA on each group.
+        const groupsInNs = await mero.admin.listNamespaceGroups(nsId);
+        if (!groupsInNs.length) {
+          throw new Error('This namespace has no groups');
+        }
+        const haGroups: NamespaceHaGroup[] = [];
+        for (const g of groupsInNs) {
+          const ctxs = await mero.admin.listGroupContexts(g.groupId);
+          if (!ctxs.length) continue; // skip groups with no contexts
+          haGroups.push({ group_id: g.groupId, context_id: ctxs[0].contextId });
+        }
+        if (!haGroups.length) {
+          throw new Error('No group in this namespace has a context yet');
+        }
+        await enableHaForNamespace(token, settings.nodeUrl, nsId, haGroups);
         setHaEnabled((prev) => ({ ...prev, [nsId]: true }));
-        toast.success('HA enabled — TEE fleet nodes will join this namespace');
+        toast.success(`HA enabled on ${haGroups.length} group${haGroups.length === 1 ? '' : 's'} — TEE fleet nodes will join`);
       }
     } catch (err: any) {
       if (err instanceof CloudSessionExpiredError) {
@@ -223,7 +250,7 @@ export default function Namespaces() {
     } finally {
       setHaEnabling(false);
     }
-  }, [haEnabled, toast]);
+  }, [haEnabled, mero, toast]);
 
   // View transitions
   const openNamespace = (ns: Namespace) => {

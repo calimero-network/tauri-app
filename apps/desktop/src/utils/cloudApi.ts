@@ -96,6 +96,7 @@ export async function getCloudSubscription(
 
 export interface CloudGroup {
   group_id: string;
+  namespace_id: string | null;
   contexts: string[];
   ha_status: string;
   ha_enabled_at: string | null;
@@ -147,7 +148,7 @@ export async function enableHa(
   contextId: string,
   groupId?: string,
 ): Promise<EnableHaResponse | null> {
-  const res = await cloudFetch(`/api/cloud/ha/enable/${contextId}`, idToken, {
+  const res = await cloudFetch(`/api/cloud/me/contexts/${contextId}/enable-ha`, idToken, {
     method: 'POST',
     body: JSON.stringify(groupId ? { group_id: groupId } : {}),
   });
@@ -168,12 +169,67 @@ export async function disableHa(
   idToken: string,
   contextId: string,
 ): Promise<void> {
-  const res = await cloudFetch(`/api/cloud/ha/disable/${contextId}`, idToken, {
+  const res = await cloudFetch(`/api/cloud/me/contexts/${contextId}/disable-ha`, idToken, {
     method: 'POST',
   });
   if (!res.ok) {
     const error = await res.json().catch(() => null);
     throw new Error(error?.detail || 'Failed to disable HA');
+  }
+}
+
+export interface NamespaceHaGroup {
+  group_id: string;
+  context_id: string;
+}
+
+export interface EnableHaNamespaceResponse {
+  status: string;
+  namespace_id: string;
+  groups: { group_id: string; context_id: string; status: string }[];
+}
+
+/**
+ * Enable HA for every group in a namespace in one call. Client is
+ * responsible for enumerating the groups and picking a representative
+ * context_id per group (manager needs the context for billing + row
+ * bookkeeping but does not itself know the namespace topology).
+ */
+export async function enableHaNamespace(
+  idToken: string,
+  namespaceId: string,
+  groups: NamespaceHaGroup[],
+): Promise<EnableHaNamespaceResponse> {
+  const res = await cloudFetch(
+    `/api/cloud/me/namespaces/${namespaceId}/enable-ha`,
+    idToken,
+    { method: 'POST', body: JSON.stringify({ groups }) },
+  );
+  if (!res.ok) {
+    const error = await res.json().catch(() => null);
+    if (res.status === 402) {
+      throw new Error(error?.detail?.message || 'Plan limit reached — upgrade to enable HA');
+    }
+    throw new Error(error?.detail || 'Failed to enable HA for namespace');
+  }
+  return res.json();
+}
+
+/**
+ * Disable HA for every group previously enabled under this namespace.
+ */
+export async function disableHaNamespace(
+  idToken: string,
+  namespaceId: string,
+): Promise<void> {
+  const res = await cloudFetch(
+    `/api/cloud/me/namespaces/${namespaceId}/disable-ha`,
+    idToken,
+    { method: 'POST' },
+  );
+  if (!res.ok) {
+    const error = await res.json().catch(() => null);
+    throw new Error(error?.detail || 'Failed to disable HA for namespace');
   }
 }
 
@@ -223,31 +279,37 @@ export async function setTeeAdmissionPolicy(
 }
 
 /**
- * Enable HA end-to-end:
- * 1. Fetch fleet measurements from cloud (trusted MRTD values)
- * 2. Set TEE admission policy on the local node with those values
- * 3. Register HA request with cloud for fleet node assignment
+ * Enable HA end-to-end for every group in a namespace:
+ * 1. Fetch fleet measurements from cloud once (trusted MRTD values)
+ * 2. Set TEE admission policy on the local node for each group
+ * 3. Register the whole namespace with cloud in one bulk call
+ *
+ * Caller supplies the list of groups; the tauri app uses mero-react's
+ * `mero.admin.listNamespaceGroups` + `listGroupContexts` to enumerate
+ * them before calling this.
  */
 export async function enableHaForNamespace(
   idToken: string,
   nodeUrl: string,
-  contextId: string,
-  groupId: string,
-): Promise<EnableHaResponse | null> {
-  // 1. Fetch the fleet's trusted measurements from the cloud.
+  namespaceId: string,
+  groups: NamespaceHaGroup[],
+): Promise<EnableHaNamespaceResponse> {
+  if (groups.length === 0) {
+    throw new Error('Namespace has no groups to enable HA on');
+  }
+
   const measurements = await getFleetMeasurements(idToken);
   if (!measurements.allowed_mrtd.length) {
     throw new Error('No fleet MRTD measurements available — cannot set admission policy');
   }
 
-  // 2. Set TEE admission policy on the local node with the fleet's
-  //    trusted MRTD values. Only TEE nodes matching these measurements
-  //    will be admitted.
-  await setTeeAdmissionPolicy(nodeUrl, groupId, measurements.allowed_mrtd);
+  // Apply local admission policy per group. If any fails we abort; the
+  // user can retry after fixing whatever is wrong on the local node.
+  for (const g of groups) {
+    await setTeeAdmissionPolicy(nodeUrl, g.group_id, measurements.allowed_mrtd);
+  }
 
-  // 3. Register HA request with the cloud — fleet nodes will poll
-  //    should-join and get assigned to this group.
-  return enableHa(idToken, contextId, groupId);
+  return enableHaNamespace(idToken, namespaceId, groups);
 }
 
 export { CloudSessionExpiredError };

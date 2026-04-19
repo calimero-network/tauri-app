@@ -2034,6 +2034,12 @@ fn secure_delete_token(key: String) -> Result<(), String> {
 }
 
 fn main() {
+    // Register the calimero:// URL scheme handler before Tauri builds.
+    // Required for tauri-plugin-deep-link to intercept OS-level scheme
+    // events (e.g. NSAppleEventManager on macOS) so a running app
+    // receives the deep link instead of a second instance launching.
+    tauri_plugin_deep_link::prepare("network.calimero.desktop");
+
     // Initialize logger - reads from RUST_LOG environment variable
     // Default: info level in release, debug level in debug builds
     env_logger::Builder::from_default_env()
@@ -2111,9 +2117,32 @@ fn main() {
             let pending = parse_open_app_args();
             app.manage(PendingOpenApp(std::sync::Mutex::new(pending.clone())));
 
-            // Check CLI args for calimero:// deep link URL (used by OS URL scheme handler)
+            // Check CLI args for calimero:// deep link URL (cold-launch case,
+            // e.g. macOS routes the URL via argv when the app was not running).
             let cloud_auth = parse_deep_link_arg();
             app.manage(PendingCloudAuth(std::sync::Mutex::new(cloud_auth)));
+
+            // Hot-launch case: the app is already running when the browser
+            // redirects to calimero://…. The plugin hooks NSAppleEventManager
+            // (macOS) / the registered scheme handler (Windows/Linux) and
+            // delivers the URL to the running process. We stash it in
+            // PendingCloudAuth and emit an event so the frontend can react
+            // without polling.
+            let deep_link_handle = app.handle();
+            if let Err(e) = tauri_plugin_deep_link::register("calimero", move |request| {
+                if let Some(state) = deep_link_handle.try_state::<PendingCloudAuth>() {
+                    if let Ok(mut g) = state.0.lock() {
+                        *g = Some(request.clone());
+                    }
+                }
+                let _ = deep_link_handle.emit_all("cloud-auth-callback", request);
+                if let Some(window) = deep_link_handle.get_window("main") {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+            }) {
+                log::warn!("deep-link register failed: {e}");
+            }
             // When launched from a desktop shortcut, hide the main window so only the app window is shown
             if pending.is_some() {
                 if let Some(window) = app.get_window("main") {

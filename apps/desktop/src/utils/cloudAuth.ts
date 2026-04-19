@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api';
+import { listen } from '@tauri-apps/api/event';
 import { getSettings, saveSettings } from './settings';
 import { getCloudNode } from './cloudApi';
 
@@ -101,28 +102,44 @@ export async function startCloudLogin(): Promise<CloudUserInfo | null> {
 }
 
 /**
- * Poll the Tauri backend for a pending cloud auth deep link.
- * The OS launches the app with calimero:// as a CLI arg, which
- * parse_deep_link_arg() catches and stores in PendingCloudAuth state.
+ * Wait for the deep-link callback via two channels:
+ *   - `cloud-auth-callback` Tauri event (hot-launch case: app already running,
+ *     the deep-link plugin forwards the URL from the OS handler)
+ *   - Polling `get_pending_cloud_auth` (cold-launch case: OS launched the
+ *     app with the URL in argv before any listener was set up)
  */
 async function pollForCloudAuth(): Promise<string | null> {
-  const deadline = Date.now() + LOGIN_TIMEOUT_MS;
+  return new Promise<string | null>(async (resolve) => {
+    let resolved = false;
+    const finish = (token: string | null) => {
+      if (resolved) return;
+      resolved = true;
+      if (unlisten) unlisten();
+      clearInterval(pollTimer);
+      clearTimeout(timeoutTimer);
+      resolve(token);
+    };
 
-  while (Date.now() < deadline) {
-    try {
-      const url = await invoke<string | null>('get_pending_cloud_auth');
-      if (url) {
-        await invoke('clear_pending_cloud_auth');
-        return extractTokenFromCallbackUrl(url);
+    const unlisten = await listen<string>('cloud-auth-callback', (event) => {
+      const token = extractTokenFromCallbackUrl(event.payload);
+      if (token) finish(token);
+    }).catch(() => null);
+
+    const pollTimer = setInterval(async () => {
+      try {
+        const url = await invoke<string | null>('get_pending_cloud_auth');
+        if (url) {
+          await invoke('clear_pending_cloud_auth');
+          const token = extractTokenFromCallbackUrl(url);
+          if (token) finish(token);
+        }
+      } catch {
+        // Command not available yet or error — keep polling
       }
-    } catch {
-      // Command not available yet or error — keep polling
-    }
+    }, LOGIN_POLL_INTERVAL_MS);
 
-    await new Promise((resolve) => setTimeout(resolve, LOGIN_POLL_INTERVAL_MS));
-  }
-
-  return null;
+    const timeoutTimer = setTimeout(() => finish(null), LOGIN_TIMEOUT_MS);
+  });
 }
 
 /**

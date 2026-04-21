@@ -279,14 +279,16 @@ export async function setTeeAdmissionPolicy(
 }
 
 /**
- * Enable HA end-to-end for every group in a namespace:
- * 1. Fetch fleet measurements from cloud once (trusted MRTD values)
- * 2. Set TEE admission policy on the local node for each group
- * 3. Register the whole namespace with cloud in one bulk call
- *
- * Caller supplies the list of groups; the tauri app uses mero-react's
- * `mero.admin.listNamespaceGroups` + `listGroupContexts` to enumerate
- * them before calling this.
+ * Enable HA end-to-end for a namespace:
+ * 1. Fetch fleet measurements from cloud once (trusted MRTD values).
+ * 2. Set the TEE admission policy on the *namespace root only*. Subgroup
+ *    policies are ignored by core (namespace-scoped since rc.29 /
+ *    calimero-network/core#2188) — applying them would error. Auto-follow
+ *    propagates fleet-node membership into subgroups without a second
+ *    admission check.
+ * 3. Register the namespace with cloud. MDMA still needs the full group
+ *    list for billing + per-group status rows until the server-side
+ *    flattening lands, so the caller keeps enumerating groups.
  */
 export async function enableHaForNamespace(
   idToken: string,
@@ -303,11 +305,9 @@ export async function enableHaForNamespace(
     throw new Error('No fleet MRTD measurements available — cannot set admission policy');
   }
 
-  // Apply local admission policy per group. If any fails we abort; the
-  // user can retry after fixing whatever is wrong on the local node.
-  for (const g of groups) {
-    await setTeeAdmissionPolicy(nodeUrl, g.group_id, measurements.allowed_mrtd);
-  }
+  // The namespace root's group_id equals the namespaceId. Set the policy
+  // there and only there — subgroups inherit it via resolve-to-root.
+  await setTeeAdmissionPolicy(nodeUrl, namespaceId, measurements.allowed_mrtd);
 
   return enableHaNamespace(idToken, namespaceId, groups);
 }

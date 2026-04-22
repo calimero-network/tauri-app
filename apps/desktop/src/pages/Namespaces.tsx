@@ -48,8 +48,9 @@ export default function Namespaces() {
 
   // HA state — keyed by namespaceId (not groupId). A namespace is
   // considered HA-enabled if at least one of its groups has HA enabled
-  // on the cloud side.
-  const [haEnabling, setHaEnabling] = useState(false);
+  // on the cloud side. `haEnabling` is a per-namespace map (not a single
+  // boolean) so toggling one namespace doesn't lock every other toggle.
+  const [haEnabling, setHaEnabling] = useState<Record<string, boolean>>({});
   const [haEnabled, setHaEnabled] = useState<Record<string, boolean>>({});
 
   // Hydrate HA state from the cloud so toggles reflect server truth on mount.
@@ -94,7 +95,7 @@ export default function Namespaces() {
 
     const nsId = ns.namespaceId;
     const isEnabled = !!haEnabled[nsId];
-    setHaEnabling(true);
+    setHaEnabling((prev) => ({ ...prev, [nsId]: true }));
 
     try {
       if (isEnabled) {
@@ -128,7 +129,11 @@ export default function Namespaces() {
         toast.error(err.message || 'Failed to toggle HA');
       }
     } finally {
-      setHaEnabling(false);
+      setHaEnabling((prev) => {
+        const next = { ...prev };
+        delete next[nsId];
+        return next;
+      });
     }
   }, [haEnabled, mero, toast]);
 
@@ -292,9 +297,9 @@ export default function Namespaces() {
               <button
                 className={`ha-toggle-btn ${haEnabled[ns.namespaceId] ? 'ha-enabled' : ''}`}
                 onClick={() => toggleHa(ns)}
-                disabled={haEnabling}
+                disabled={!!haEnabling[ns.namespaceId]}
               >
-                {haEnabling ? 'Working...' : haEnabled[ns.namespaceId] ? 'Disable HA' : 'Enable HA'}
+                {haEnabling[ns.namespaceId] ? 'Working...' : haEnabled[ns.namespaceId] ? 'Disable HA' : 'Enable HA'}
               </button>
             </div>
           </div>

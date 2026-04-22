@@ -10,12 +10,71 @@ const LOGIN_TIMEOUT_MS = 120_000; // 2 minutes
 
 // OAuth CSRF state — rotated per startCloudLogin() call and checked when
 // the deep link arrives. Blocks forged calimero:// callbacks.
-let pendingState: string | null = null;
+//
+// Persisted to localStorage instead of a module variable so it survives the
+// "cold-launch" case: if the user closes the app between clicking "Connect
+// Cloud" and the browser redirecting back via calimero://, the OS launches
+// a *new* process to handle the URL. A module-level variable would be null
+// in that fresh process and state validation would always fail closed —
+// correct security posture but a silent UX dead-end for a common flow.
+// localStorage survives process restart, so the new process can still
+// verify the nonce the old one generated.
+//
+// TTL guards against stale nonces from abandoned login attempts (10 min is
+// longer than any plausible interactive Google sign-in). Each new
+// startCloudLogin() overwrites the previous record; rapid repeat clicks
+// therefore invalidate earlier callbacks, which is the intended behavior.
+const OAUTH_STATE_KEY = 'calimero_oauth_pending_state';
+const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
+
+interface PendingOAuthState {
+  state: string;
+  expiresAt: number;
+}
 
 function generateState(): string {
   const buf = new Uint8Array(16);
   crypto.getRandomValues(buf);
   return Array.from(buf, (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+function savePendingState(state: string): void {
+  try {
+    const record: PendingOAuthState = {
+      state,
+      expiresAt: Date.now() + OAUTH_STATE_TTL_MS,
+    };
+    localStorage.setItem(OAUTH_STATE_KEY, JSON.stringify(record));
+  } catch {
+    // localStorage unavailable — CSRF check will fail closed on the
+    // callback side, which is safer than silently succeeding.
+  }
+}
+
+function consumePendingState(): string | null {
+  try {
+    const raw = localStorage.getItem(OAUTH_STATE_KEY);
+    if (!raw) return null;
+    // Clear immediately so the nonce cannot be replayed by a second
+    // callback (e.g. a slow redirect racing with a retry).
+    localStorage.removeItem(OAUTH_STATE_KEY);
+    const record = JSON.parse(raw) as Partial<PendingOAuthState>;
+    if (!record || typeof record.state !== 'string' || typeof record.expiresAt !== 'number') {
+      return null;
+    }
+    if (Date.now() > record.expiresAt) return null;
+    return record.state;
+  } catch {
+    return null;
+  }
+}
+
+function clearPendingState(): void {
+  try {
+    localStorage.removeItem(OAUTH_STATE_KEY);
+  } catch {
+    // Ignore — same rationale as savePendingState's silent failure.
+  }
 }
 
 export interface CloudUserInfo {
@@ -66,8 +125,9 @@ export function isTokenExpired(token: string): boolean {
  * 4. Store credentials in settings
  */
 export async function startCloudLogin(): Promise<CloudUserInfo | null> {
-  pendingState = generateState();
-  const callback = `${CLOUD_CALLBACK_SCHEME}?state=${pendingState}`;
+  const state = generateState();
+  savePendingState(state);
+  const callback = `${CLOUD_CALLBACK_SCHEME}?state=${state}`;
   const loginUrl = `${CLOUD_LOGIN_URL}/?callback-url=${encodeURIComponent(callback)}`;
 
   // Clear any stale pending auth
@@ -159,10 +219,10 @@ function extractTokenFromCallbackUrl(url: string): string | null {
       ? ''
       : url.substring(queryIndex + 1, queryEnd);
 
-    const expected = pendingState;
+    // `consumePendingState` atomically reads and clears the nonce, so it
+    // cannot be replayed by a second callback that arrives after the first.
+    const expected = consumePendingState();
     const got = query ? new URLSearchParams(query).get('state') : null;
-    // Clear nonce as soon as any callback is seen so it can't be replayed.
-    pendingState = null;
     if (!expected || got !== expected) return null;
 
     if (!fragment) return null;
@@ -176,6 +236,7 @@ function extractTokenFromCallbackUrl(url: string): string | null {
  * Disconnect from Calimero Cloud. Clears all cloud state from settings.
  */
 export function disconnectCloud(): void {
+  clearPendingState();
   const settings = getSettings();
   saveSettings({
     ...settings,

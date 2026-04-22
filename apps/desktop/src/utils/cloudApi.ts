@@ -11,19 +11,6 @@ export interface CloudNode {
   status: string;
 }
 
-export interface CloudContext {
-  context_id: string;
-  node_name: string;
-  node_url: string;
-  public_ip: string;
-  plan: string;
-  status: string;
-}
-
-export interface CloudProfile {
-  display_name: string | null;
-}
-
 export interface CloudSubscription {
   plan: string;
   status: string;
@@ -66,22 +53,6 @@ export async function getCloudNode(
   idToken: string,
 ): Promise<CloudNode | null> {
   const res = await cloudFetch('/api/cloud/me/node', idToken);
-  if (!res.ok) return null;
-  return res.json();
-}
-
-export async function getCloudContexts(
-  idToken: string,
-): Promise<CloudContext[]> {
-  const res = await cloudFetch('/api/cloud/me/contexts', idToken);
-  if (!res.ok) return [];
-  return res.json();
-}
-
-export async function getCloudProfile(
-  idToken: string,
-): Promise<CloudProfile | null> {
-  const res = await cloudFetch('/api/cloud/me/profile', idToken);
   if (!res.ok) return null;
   return res.json();
 }
@@ -148,10 +119,14 @@ export async function enableHa(
   contextId: string,
   groupId?: string,
 ): Promise<EnableHaResponse | null> {
-  const res = await cloudFetch(`/api/cloud/me/contexts/${contextId}/enable-ha`, idToken, {
-    method: 'POST',
-    body: JSON.stringify(groupId ? { group_id: groupId } : {}),
-  });
+  const res = await cloudFetch(
+    `/api/cloud/me/contexts/${encodeURIComponent(contextId)}/enable-ha`,
+    idToken,
+    {
+      method: 'POST',
+      body: JSON.stringify(groupId ? { group_id: groupId } : {}),
+    },
+  );
   if (!res.ok) {
     const error = await res.json().catch(() => null);
     if (res.status === 402) {
@@ -169,9 +144,11 @@ export async function disableHa(
   idToken: string,
   contextId: string,
 ): Promise<void> {
-  const res = await cloudFetch(`/api/cloud/me/contexts/${contextId}/disable-ha`, idToken, {
-    method: 'POST',
-  });
+  const res = await cloudFetch(
+    `/api/cloud/me/contexts/${encodeURIComponent(contextId)}/disable-ha`,
+    idToken,
+    { method: 'POST' },
+  );
   if (!res.ok) {
     const error = await res.json().catch(() => null);
     throw new Error(error?.detail || 'Failed to disable HA');
@@ -201,7 +178,7 @@ export async function enableHaNamespace(
   groups: NamespaceHaGroup[],
 ): Promise<EnableHaNamespaceResponse> {
   const res = await cloudFetch(
-    `/api/cloud/me/namespaces/${namespaceId}/enable-ha`,
+    `/api/cloud/me/namespaces/${encodeURIComponent(namespaceId)}/enable-ha`,
     idToken,
     { method: 'POST', body: JSON.stringify({ groups }) },
   );
@@ -223,7 +200,7 @@ export async function disableHaNamespace(
   namespaceId: string,
 ): Promise<void> {
   const res = await cloudFetch(
-    `/api/cloud/me/namespaces/${namespaceId}/disable-ha`,
+    `/api/cloud/me/namespaces/${encodeURIComponent(namespaceId)}/disable-ha`,
     idToken,
     { method: 'POST' },
   );
@@ -254,7 +231,7 @@ export async function setTeeAdmissionPolicy(
     throw new Error('Not authenticated to local node — sign in first');
   }
   const res = await fetch(
-    `${nodeUrl}/admin-api/groups/${groupId}/settings/tee-admission-policy`,
+    `${nodeUrl}/admin-api/groups/${encodeURIComponent(groupId)}/settings/tee-admission-policy`,
     {
       method: 'PUT',
       headers: {

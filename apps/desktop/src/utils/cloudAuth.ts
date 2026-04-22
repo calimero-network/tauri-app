@@ -188,15 +188,6 @@ export function disconnectCloud(): void {
 }
 
 /**
- * Check if the user has a valid (non-expired) cloud connection.
- */
-export function isCloudConnected(): boolean {
-  const settings = getSettings();
-  if (!settings.cloudConnected || !settings.cloudIdToken) return false;
-  return !isTokenExpired(settings.cloudIdToken);
-}
-
-/**
  * Get the stored cloud ID token if valid, or null if expired/missing.
  */
 export function getCloudIdToken(): string | null {

@@ -2,6 +2,9 @@ import { invoke } from '@tauri-apps/api';
 import { listen } from '@tauri-apps/api/event';
 import { getSettings, saveSettings } from './settings';
 import { CLOUD_BASE_URL, getCloudNode } from './cloudApi';
+import { parseJwtPayload, isMdmaSessionToken, isTokenExpired } from './jwt';
+
+export { isMdmaSessionToken, isTokenExpired };
 
 const CLOUD_LOGIN_URL = 'https://cloud.calimero.network';
 const CLOUD_CALLBACK_SCHEME = 'calimero://cloud-callback';
@@ -88,36 +91,13 @@ export interface CloudUserInfo {
  * No signature verification — the Cloud API server handles that.
  */
 export function decodeIdToken(token: string): CloudUserInfo | null {
-  try {
-    const parts = token.split('.');
-    if (parts.length !== 3) return null;
-    const payload = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')));
-    return {
-      email: payload.email ?? '',
-      name: payload.name ?? '',
-      picture: payload.picture ?? '',
-    };
-  } catch {
-    return null;
-  }
-}
-
-/**
- * `true` if the token was issued by MDMA (iss claim = "mdma"). MDMA
- * sessions have 7-day TTL with rolling refresh; raw Google tokens
- * expire after ~1 hour. Used to tell a pre-migration Google token
- * apart from a migrated session.
- */
-export function isMdmaSessionToken(token: string | undefined | null): boolean {
-  if (!token || typeof token !== 'string') return false;
-  const parts = token.split('.');
-  if (parts.length !== 3) return false;
-  try {
-    const payload = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')));
-    return payload?.iss === 'mdma';
-  } catch {
-    return false;
-  }
+  const payload = parseJwtPayload(token);
+  if (!payload) return null;
+  return {
+    email: typeof payload.email === 'string' ? payload.email : '',
+    name: typeof payload.name === 'string' ? payload.name : '',
+    picture: typeof payload.picture === 'string' ? payload.picture : '',
+  };
 }
 
 interface MdmaSessionResponse {
@@ -151,7 +131,21 @@ async function exchangeGoogleForMdmaSession(
       body: JSON.stringify({ id_token: googleIdToken }),
     });
     if (!res.ok) return null;
-    return (await res.json()) as MdmaSessionResponse;
+    const body = (await res.json()) as unknown;
+    // Validate the shape before trusting the cast. A 200 with an
+    // unexpected body (deployment mid-rollout, bad proxy) would
+    // otherwise fall through as `{ session_token: undefined }` and
+    // the nullish-coalesce in startCloudLogin would silently re-use
+    // the raw Google token — masking a server regression.
+    if (
+      !body ||
+      typeof body !== 'object' ||
+      typeof (body as { session_token?: unknown }).session_token !== 'string' ||
+      !(body as { session_token: string }).session_token
+    ) {
+      return null;
+    }
+    return body as MdmaSessionResponse;
   } catch {
     return null;
   }
@@ -172,24 +166,13 @@ export function revokeMdmaSession(sessionToken: string | undefined | null): void
   fetch(`${CLOUD_BASE_URL}/api/auth/logout`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${sessionToken}` },
-  }).catch(() => {});
-}
-
-/**
- * Check if a token (Google ID token or MDMA session JWT) has expired.
- * Both carry an `exp` claim in seconds since the epoch, so one parser
- * handles both.
- */
-export function isTokenExpired(token: string): boolean {
-  try {
-    const parts = token.split('.');
-    if (parts.length !== 3) return true;
-    const payload = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')));
-    if (!payload.exp) return true;
-    return Date.now() >= payload.exp * 1000;
-  } catch {
-    return true;
-  }
+  }).catch((err) => {
+    // Best-effort: we don't block logout on this. But a persistent
+    // failure (wrong URL, TLS issue, endpoint 500) leaves sessions
+    // unrevoked server-side — log so the dev console surfaces it
+    // rather than the failure being completely invisible.
+    console.warn('MDMA session revocation failed (best-effort):', err);
+  });
 }
 
 /**

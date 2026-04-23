@@ -1,5 +1,6 @@
 import { getAccessToken } from '../lib/token-storage';
 import { getSettings, saveSettings } from './settings';
+import { isMdmaSessionToken } from './jwt';
 
 // API lives at manager.cloud.calimero.network; cloud.calimero.network is
 // the static portal and does not proxy /api/*. Exported so cloudAuth
@@ -49,7 +50,12 @@ async function cloudFetch(
   // UI-level to re-derive, and routing refresh through render would
   // re-fire every useEffect that depends on the token.
   const refreshed = res.headers.get(MDMA_SESSION_REFRESH_HEADER);
-  if (refreshed) {
+  // Validate the header value before persisting it — a compromised or
+  // misbehaving server (or header-injecting MITM) could otherwise
+  // plant arbitrary strings as our session token. An MDMA-issued JWT
+  // is the only shape we should ever write to settings.cloudIdToken
+  // via this path; anything else we silently drop.
+  if (refreshed && isMdmaSessionToken(refreshed)) {
     const settings = getSettings();
     // Only update if the session we just used is still the active one;
     // avoids clobbering a fresh login that landed between the request

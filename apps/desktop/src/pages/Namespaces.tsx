@@ -36,44 +36,72 @@ type View =
  *
  * Fast path: most namespaces have a context in the root group
  * (group_id === namespace_id), so one admin-API call usually suffices.
- * Fallback: probe every subgroup in parallel and return the first with
- * a context. Parallel not sequential — the old code did O(N) round
- * trips serially, which scaled badly with subgroup count.
+ * Fallback: probe subgroups in bounded-concurrency batches and
+ * early-exit as soon as one batch returns a match. The old code did
+ * O(N) sequential round-trips; bounded batches keep the local admin
+ * API from seeing a burst of parallel requests on large namespaces
+ * while still amortising latency.
  */
+const PROBE_BATCH_SIZE = 6;
+
 async function findRepresentativeHaGroup(
   mero: NonNullable<ReturnType<typeof useMero>["mero"]>,
   namespaceId: string,
 ): Promise<NamespaceHaGroup> {
+  // Fast path failure is tolerated but logged — if it's a real
+  // connectivity issue the fallback path's listNamespaceGroups call
+  // will surface the same error with proper context. We don't
+  // distinguish "404 / no contexts" from other errors here because
+  // mero-js doesn't expose a stable error shape to switch on; the
+  // warning in dev console is what surfaces the cause.
   const rootCtxs = await mero.admin
     .listGroupContexts(namespaceId)
-    .catch(() => [] as { contextId: string }[]);
+    .catch((err: unknown) => {
+      console.warn(
+        `listGroupContexts(${namespaceId}) failed on fast path, falling through to subgroup probe:`,
+        err,
+      );
+      return [] as { contextId: string }[];
+    });
   if (rootCtxs.length) {
     return { group_id: namespaceId, context_id: rootCtxs[0].contextId };
   }
 
-  const subgroups = await mero.admin.listNamespaceGroups(namespaceId);
+  const allGroups = await mero.admin.listNamespaceGroups(namespaceId);
+  // Root already proven empty on the fast path — drop it so we don't
+  // re-probe it in the fallback.
+  const subgroups = allGroups.filter((g) => g.groupId !== namespaceId);
   if (!subgroups.length) {
     throw new Error("This namespace has no groups");
   }
 
-  const probes = await Promise.all(
-    subgroups.map((g) =>
-      mero.admin
-        .listGroupContexts(g.groupId)
-        .then(
-          (ctxs) =>
-            ctxs[0]
-              ? ({ group_id: g.groupId, context_id: ctxs[0].contextId } as NamespaceHaGroup)
-              : null,
-          () => null,
-        ),
-    ),
-  );
-  const found = probes.find((p): p is NamespaceHaGroup => p !== null);
-  if (!found) {
-    throw new Error("No group in this namespace has a context yet");
+  for (let i = 0; i < subgroups.length; i += PROBE_BATCH_SIZE) {
+    const batch = subgroups.slice(i, i + PROBE_BATCH_SIZE);
+    const probes = await Promise.all(
+      batch.map((g) =>
+        mero.admin
+          .listGroupContexts(g.groupId)
+          .then(
+            (ctxs) =>
+              ctxs[0]
+                ? ({ group_id: g.groupId, context_id: ctxs[0].contextId } as NamespaceHaGroup)
+                : null,
+            (err: unknown) => {
+              // Per-probe failure logged but non-fatal — another
+              // subgroup may still resolve. If every probe fails the
+              // caller sees the "no context yet" error below, and the
+              // dev console has the underlying reason.
+              console.warn(`listGroupContexts(${g.groupId}) failed:`, err);
+              return null;
+            },
+          ),
+      ),
+    );
+    const found = probes.find((p): p is NamespaceHaGroup => p !== null);
+    if (found) return found;
   }
-  return found;
+
+  throw new Error("No group in this namespace has a context yet");
 }
 
 export default function Namespaces() {

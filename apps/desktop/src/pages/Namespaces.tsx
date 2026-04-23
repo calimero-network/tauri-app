@@ -62,6 +62,55 @@ type View =
   | { type: "namespace"; ns: Namespace }
   | { type: "group"; ns: Namespace; groupId: string };
 
+/**
+ * Find any {group_id, context_id} pair owned by the user under this
+ * namespace. The manager only stores one HaRequest + HaContextStatus
+ * per namespace regardless of how many groups the client sends, so
+ * there is no reason to enumerate them all — we just need one entry
+ * to attach billing + fleet-join bookkeeping to.
+ *
+ * Fast path: most namespaces have a context in the root group
+ * (group_id === namespace_id), so one admin-API call usually suffices.
+ * Fallback: probe every subgroup in parallel and return the first with
+ * a context. Parallel not sequential — the old code did O(N) round
+ * trips serially, which scaled badly with subgroup count.
+ */
+async function findRepresentativeHaGroup(
+  mero: NonNullable<ReturnType<typeof useMero>["mero"]>,
+  namespaceId: string,
+): Promise<NamespaceHaGroup> {
+  const rootCtxs = await mero.admin
+    .listGroupContexts(namespaceId)
+    .catch(() => [] as { contextId: string }[]);
+  if (rootCtxs.length) {
+    return { group_id: namespaceId, context_id: rootCtxs[0].contextId };
+  }
+
+  const subgroups = await mero.admin.listNamespaceGroups(namespaceId);
+  if (!subgroups.length) {
+    throw new Error("This namespace has no groups");
+  }
+
+  const probes = await Promise.all(
+    subgroups.map((g) =>
+      mero.admin
+        .listGroupContexts(g.groupId)
+        .then(
+          (ctxs) =>
+            ctxs[0]
+              ? ({ group_id: g.groupId, context_id: ctxs[0].contextId } as NamespaceHaGroup)
+              : null,
+          () => null,
+        ),
+    ),
+  );
+  const found = probes.find((p): p is NamespaceHaGroup => p !== null);
+  if (!found) {
+    throw new Error("No group in this namespace has a context yet");
+  }
+  return found;
+}
+
 export default function Namespaces() {
   const toast = useToast();
   const { mero } = useMero();
@@ -223,24 +272,15 @@ export default function Namespaces() {
         setHaEnabled((prev) => ({ ...prev, [nsId]: false }));
         toast.success('HA disabled — TEE nodes will stop replicating');
       } else {
-        // Enumerate groups + representative context from the local node so
-        // the cloud can register HA on each group.
-        const groupsInNs = await mero.admin.listNamespaceGroups(nsId);
-        if (!groupsInNs.length) {
-          throw new Error('This namespace has no groups');
-        }
-        const haGroups: NamespaceHaGroup[] = [];
-        for (const g of groupsInNs) {
-          const ctxs = await mero.admin.listGroupContexts(g.groupId);
-          if (!ctxs.length) continue; // skip groups with no contexts
-          haGroups.push({ group_id: g.groupId, context_id: ctxs[0].contextId });
-        }
-        if (!haGroups.length) {
-          throw new Error('No group in this namespace has a context yet');
-        }
-        await enableHaForNamespace(token, settings.nodeUrl, nsId, haGroups);
+        // The cloud only needs ONE representative {group_id, context_id}
+        // per namespace (post mdma#30 / core rc.29 — one HaRequest row
+        // per namespace, auto-follow propagates fleet membership into
+        // subgroups). Find one quickly instead of enumerating every
+        // subgroup sequentially.
+        const haGroup = await findRepresentativeHaGroup(mero, nsId);
+        await enableHaForNamespace(token, settings.nodeUrl, nsId, [haGroup]);
         setHaEnabled((prev) => ({ ...prev, [nsId]: true }));
-        toast.success(`HA enabled on ${haGroups.length} group${haGroups.length === 1 ? '' : 's'} — TEE fleet nodes will join`);
+        toast.success('HA enabled — TEE fleet nodes will join');
       }
     } catch (err: any) {
       if (err instanceof CloudSessionExpiredError) {

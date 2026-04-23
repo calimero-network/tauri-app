@@ -1,10 +1,9 @@
 import { invoke } from '@tauri-apps/api';
 import { listen } from '@tauri-apps/api/event';
 import { getSettings, saveSettings } from './settings';
-import { getCloudNode } from './cloudApi';
+import { CLOUD_BASE_URL, getCloudNode } from './cloudApi';
 
 const CLOUD_LOGIN_URL = 'https://cloud.calimero.network';
-const CLOUD_API_BASE = 'https://manager.cloud.calimero.network';
 const CLOUD_CALLBACK_SCHEME = 'calimero://cloud-callback';
 const LOGIN_POLL_INTERVAL_MS = 1500;
 const LOGIN_TIMEOUT_MS = 120_000; // 2 minutes
@@ -146,7 +145,7 @@ async function exchangeGoogleForMdmaSession(
   googleIdToken: string,
 ): Promise<MdmaSessionResponse | null> {
   try {
-    const res = await fetch(`${CLOUD_API_BASE}/api/auth/google`, {
+    const res = await fetch(`${CLOUD_BASE_URL}/api/auth/google`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id_token: googleIdToken }),
@@ -170,7 +169,7 @@ async function exchangeGoogleForMdmaSession(
  */
 export function revokeMdmaSession(sessionToken: string | undefined | null): void {
   if (!sessionToken || !isMdmaSessionToken(sessionToken)) return;
-  fetch(`${CLOUD_API_BASE}/api/auth/logout`, {
+  fetch(`${CLOUD_BASE_URL}/api/auth/logout`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${sessionToken}` },
   }).catch(() => {});

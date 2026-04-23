@@ -2,8 +2,9 @@ import { getAccessToken } from '../lib/token-storage';
 import { getSettings, saveSettings } from './settings';
 
 // API lives at manager.cloud.calimero.network; cloud.calimero.network is
-// the static portal and does not proxy /api/*.
-const CLOUD_BASE_URL = 'https://manager.cloud.calimero.network';
+// the static portal and does not proxy /api/*. Exported so cloudAuth
+// can reuse it — we don't want two independent constants drifting.
+export const CLOUD_BASE_URL = 'https://manager.cloud.calimero.network';
 const MDMA_SESSION_REFRESH_HEADER = 'X-MDMA-Session-Refresh';
 
 export interface CloudNode {

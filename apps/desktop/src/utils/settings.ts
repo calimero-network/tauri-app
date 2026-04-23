@@ -10,7 +10,7 @@ export interface AppSettings {
   debugLogs?: boolean; // Enable debug-level logging for the merod node
   onboardingCompleted?: boolean; // True once user has completed first-time setup - never show onboarding again
   cloudConnected?: boolean; // Whether user is connected to Calimero Cloud
-  cloudIdToken?: string; // Google ID token for Cloud API auth
+  cloudIdToken?: string; // MDMA session token for Cloud API auth (7d TTL, rolling refresh). During the migration window may hold a Google ID token until exchange lands.
   cloudUserEmail?: string; // User's Google email (for display)
   cloudUserName?: string; // User's Google display name
   cloudUserPicture?: string; // User's Google profile picture URL

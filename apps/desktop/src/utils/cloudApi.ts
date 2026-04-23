@@ -1,8 +1,10 @@
 import { getAccessToken } from '../lib/token-storage';
+import { getSettings, saveSettings } from './settings';
 
 // API lives at manager.cloud.calimero.network; cloud.calimero.network is
 // the static portal and does not proxy /api/*.
 const CLOUD_BASE_URL = 'https://manager.cloud.calimero.network';
+const MDMA_SESSION_REFRESH_HEADER = 'X-MDMA-Session-Refresh';
 
 export interface CloudNode {
   name: string;
@@ -37,6 +39,24 @@ async function cloudFetch(
       ...options?.headers,
     },
   });
+
+  // Rolling refresh: the server re-issued our session silently because
+  // this one was past the refresh threshold. Persist the new token
+  // directly to settings — next call reads from settings.cloudIdToken
+  // and picks it up. We intentionally don't propagate via React state
+  // or events: same sid = same logical session, so there's nothing
+  // UI-level to re-derive, and routing refresh through render would
+  // re-fire every useEffect that depends on the token.
+  const refreshed = res.headers.get(MDMA_SESSION_REFRESH_HEADER);
+  if (refreshed) {
+    const settings = getSettings();
+    // Only update if the session we just used is still the active one;
+    // avoids clobbering a fresh login that landed between the request
+    // leaving and the response arriving.
+    if (settings.cloudIdToken === idToken) {
+      saveSettings({ ...settings, cloudIdToken: refreshed });
+    }
+  }
 
   if (res.status === 401) {
     throw new CloudSessionExpiredError();

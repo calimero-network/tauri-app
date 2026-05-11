@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   useNamespaces,
   useNamespaceGroups,
@@ -6,11 +6,47 @@ import {
   useGroupMembers,
   useGroupContexts,
   useSubgroups,
+  useCreateNamespace,
+  useCreateContext,
+  useMero,
   type Namespace,
 } from "@calimero-network/mero-react";
 import { useToast } from "../contexts/ToastContext";
-import { ArrowLeft, Users, Box, Layers, Copy, ChevronRight, Shield, Globe } from "lucide-react";
+import { ArrowLeft, Users, Box, Layers, Copy, ChevronRight, Shield, Globe, Plus, X, Play } from "lucide-react";
+import { apiClient } from "../lib/mero-client";
+import { saveContextKey, getContextKey } from "../utils/contextKeys";
+import { decodeMetadata, openAppFrontend } from "../utils/appUtils";
 import "./Namespaces.css";
+
+// Same default as battleships: CAN_CREATE_CONTEXT (1) | CAN_INVITE_MEMBERS (2) | MANAGE_MEMBERS (8).
+const DEFAULT_NAMESPACE_CAPABILITIES = 1 | 2 | 8;
+
+interface InstalledApp {
+  id: string;
+  name: string;
+  frontendUrl: string | null;
+  metadata?: unknown;
+}
+
+function readInstalledApps(): Promise<InstalledApp[]> {
+  return apiClient.node.listApplications().then((res) => {
+    if (res.error || !Array.isArray(res.data)) return [];
+    return res.data.map((app: any) => {
+      let name: string = app.id;
+      let frontendUrl: string | null = null;
+      try {
+        const meta = decodeMetadata(app.metadata);
+        if (meta) {
+          name = meta.name || meta.alias || app.id;
+          frontendUrl = meta?.links?.frontend ?? null;
+        }
+      } catch {
+        // ignore
+      }
+      return { id: app.id, name, frontendUrl };
+    });
+  });
+}
 
 type View =
   | { type: "list" }
@@ -19,6 +55,7 @@ type View =
 
 export default function Namespaces() {
   const toast = useToast();
+  const { mero } = useMero();
   const [view, setView] = useState<View>({ type: "list" });
 
   // Current namespace/group IDs for hooks
@@ -26,14 +63,99 @@ export default function Namespaces() {
   const activeGroupId = view.type === "group" ? view.groupId : null;
 
   // Hooks
-  const { namespaces, loading, error } = useNamespaces();
+  const { namespaces, loading, error, refetch: refetchNamespaces } = useNamespaces();
   const { groups: nsGroups, loading: nsLoadingGroups, error: nsGroupsError } = useNamespaceGroups(activeNsId);
   const { groupInfo, loading: groupInfoLoading } = useGroupInfo(activeGroupId);
   const { members: groupMembers } = useGroupMembers(activeGroupId);
-  const { contexts: groupContexts } = useGroupContexts(activeGroupId);
+  const { contexts: groupContexts, refetch: refetchGroupContexts } = useGroupContexts(activeGroupId);
+  // Contexts that live directly in a namespace's root group (battleships-style lobby contexts)
+  const { contexts: nsRootContexts, refetch: refetchNsRootContexts } = useGroupContexts(
+    view.type === "namespace" ? view.ns.namespaceId : null,
+  );
   const { subgroups: groupSubgroups } = useSubgroups(activeGroupId);
 
+  const { createNamespace, loading: creatingNamespace } = useCreateNamespace();
+  const { createContext, loading: creatingContext } = useCreateContext();
+
+  // Installed apps (loaded lazily for the Create-Namespace dropdown)
+  const [installedApps, setInstalledApps] = useState<InstalledApp[]>([]);
+  useEffect(() => {
+    readInstalledApps().then(setInstalledApps).catch(() => setInstalledApps([]));
+  }, []);
+
+  // Modals
+  const [nsModalOpen, setNsModalOpen] = useState(false);
+  const [ctxModalOpen, setCtxModalOpen] = useState<{ namespaceId: string; applicationId: string } | null>(null);
+
   const groupLoading = groupInfoLoading;
+
+  const onCreateNamespace = async (applicationId: string, alias: string | undefined) => {
+    if (!mero) {
+      toast.error("Node client not ready");
+      return;
+    }
+    try {
+      const result = await createNamespace({
+        applicationId,
+        upgradePolicy: "Automatic",
+        alias: alias?.trim() || undefined,
+      });
+      if (!result) throw new Error("createNamespace returned null");
+      try {
+        await mero.admin.setDefaultCapabilities(result.namespaceId, {
+          defaultCapabilities: DEFAULT_NAMESPACE_CAPABILITIES,
+        });
+      } catch (capErr) {
+        console.warn("setDefaultCapabilities failed:", capErr);
+      }
+      toast.success(`Namespace created: ${truncateId(result.namespaceId)}`);
+      setNsModalOpen(false);
+      await refetchNamespaces();
+    } catch (e: any) {
+      toast.error(`Failed to create namespace: ${e?.message ?? String(e)}`);
+    }
+  };
+
+  const onCreateContext = async (
+    namespaceId: string,
+    applicationId: string,
+    serviceName: string,
+    alias: string | undefined,
+  ) => {
+    try {
+      const result = await createContext({
+        applicationId,
+        groupId: namespaceId,
+        serviceName: serviceName.trim() || undefined,
+        initializationParams: [],
+        alias: alias?.trim() || undefined,
+      });
+      if (!result) throw new Error("createContext returned null");
+      saveContextKey(result.contextId, result.memberPublicKey, applicationId);
+      toast.success(`Context created: ${truncateId(result.contextId)}`);
+      setCtxModalOpen(null);
+      await Promise.all([
+        refetchGroupContexts?.(),
+        refetchNsRootContexts?.(),
+      ]);
+    } catch (e: any) {
+      toast.error(`Failed to create context: ${e?.message ?? String(e)}`);
+    }
+  };
+
+  const handleLaunchContext = async (contextId: string, applicationId: string) => {
+    const app = installedApps.find((a) => a.id === applicationId);
+    if (!app?.frontendUrl) {
+      toast.error("This application has no frontend URL");
+      return;
+    }
+    const key = getContextKey(contextId);
+    await openAppFrontend(app.frontendUrl, app.name, undefined, {
+      applicationId,
+      contextId,
+      executorPublicKey: key?.publicKey,
+    });
+  };
 
   // View transitions
   const openNamespace = (ns: Namespace) => {
@@ -68,12 +190,45 @@ export default function Namespaces() {
     }
   };
 
+  const modalOverlay = (
+    <>
+      {nsModalOpen && (
+        <CreateNamespaceModal
+          installedApps={installedApps}
+          loading={creatingNamespace}
+          onClose={() => setNsModalOpen(false)}
+          onSubmit={onCreateNamespace}
+        />
+      )}
+      {ctxModalOpen && (
+        <CreateContextModal
+          namespaceId={ctxModalOpen.namespaceId}
+          applicationId={ctxModalOpen.applicationId}
+          loading={creatingContext}
+          onClose={() => setCtxModalOpen(null)}
+          onSubmit={(serviceName, alias) =>
+            onCreateContext(ctxModalOpen.namespaceId, ctxModalOpen.applicationId, serviceName, alias)
+          }
+        />
+      )}
+    </>
+  );
+
   // ─── Namespace List View ───
   if (view.type === "list") {
     return (
+      <>
       <div className="ns-page">
         <header className="ns-header">
           <h1>Namespaces</h1>
+          <button
+            className="ns-action-btn"
+            onClick={() => setNsModalOpen(true)}
+            disabled={installedApps.length === 0}
+            title={installedApps.length === 0 ? "Install an application first" : "Create a new namespace"}
+          >
+            <Plus size={14} /> Create Namespace
+          </button>
         </header>
         <main className="ns-main">
           {error && <div className="error-message">{error.message}</div>}
@@ -84,8 +239,17 @@ export default function Namespaces() {
               <Globe size={48} style={{ opacity: 0.3, marginBottom: 12 }} />
               <p>No namespaces found</p>
               <p style={{ fontSize: "0.85rem" }}>
-                Namespaces are created when you install an application and create a context.
+                Create a namespace bound to an installed application, then create a context inside it.
               </p>
+              {installedApps.length === 0 ? (
+                <p style={{ fontSize: "0.85rem", opacity: 0.7 }}>
+                  Install an application first (Marketplace).
+                </p>
+              ) : (
+                <button className="ns-action-btn" onClick={() => setNsModalOpen(true)} style={{ marginTop: 12 }}>
+                  <Plus size={14} /> Create Namespace
+                </button>
+              )}
             </div>
           ) : (
             <div className="ns-grid">
@@ -128,6 +292,8 @@ export default function Namespaces() {
           )}
         </main>
       </div>
+      {modalOverlay}
+      </>
     );
   }
 
@@ -135,12 +301,13 @@ export default function Namespaces() {
   if (view.type === "namespace") {
     const { ns } = view;
     return (
+      <>
       <div className="ns-page">
         <header className="ns-header">
           <button className="ns-back" onClick={goBack}>
             <ArrowLeft size={16} /> Back
           </button>
-          <div>
+          <div style={{ flex: 1 }}>
             <h1>{(ns as any).alias || truncateId(ns.namespaceId)}</h1>
             <div className="ns-header-id">
               {truncateId(ns.namespaceId)}
@@ -149,6 +316,12 @@ export default function Namespaces() {
               </button>
             </div>
           </div>
+          <button
+            className="ns-action-btn"
+            onClick={() => setCtxModalOpen({ namespaceId: ns.namespaceId, applicationId: ns.targetApplicationId })}
+          >
+            <Plus size={14} /> Create Context
+          </button>
         </header>
 
         <main className="ns-main">
@@ -183,6 +356,39 @@ export default function Namespaces() {
           </div>
 
           <div className="ns-detail-section">
+            <h2><Box size={16} /> Contexts ({nsRootContexts.length})</h2>
+            {nsRootContexts.length === 0 ? (
+              <p className="empty-hint">No contexts in this namespace yet. Click "Create Context" to add one.</p>
+            ) : (
+              <div className="ns-context-list">
+                {nsRootContexts.map((c: any) => {
+                  const app = installedApps.find((a) => a.id === ns.targetApplicationId);
+                  const canLaunch = !!app?.frontendUrl;
+                  return (
+                    <div key={c.contextId} className="ns-context-item">
+                      <Box size={14} />
+                      <span className="context-name">{c.alias || truncateId(c.contextId)}</span>
+                      <span className="context-id mono">{truncateId(c.contextId)}</span>
+                      <button className="copy-btn" onClick={() => copyToClipboard(c.contextId)} title="Copy ID">
+                        <Copy size={12} />
+                      </button>
+                      {canLaunch && (
+                        <button
+                          className="ns-launch-btn"
+                          onClick={() => handleLaunchContext(c.contextId, ns.targetApplicationId)}
+                          title={`Launch ${app?.name ?? "app"} with this context`}
+                        >
+                          <Play size={12} /> Launch
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          <div className="ns-detail-section">
             <h2>Groups</h2>
             {nsLoadingGroups ? (
               <div className="loading">Loading groups...</div>
@@ -209,6 +415,8 @@ export default function Namespaces() {
           </div>
         </main>
       </div>
+      {modalOverlay}
+      </>
     );
   }
 
@@ -216,6 +424,7 @@ export default function Namespaces() {
   if (view.type === "group") {
     const { ns, groupId } = view;
     return (
+      <>
       <div className="ns-page">
         <header className="ns-header">
           <button className="ns-back" onClick={goBack}>
@@ -290,16 +499,29 @@ export default function Namespaces() {
                   <p className="empty-hint">No contexts in this group</p>
                 ) : (
                   <div className="ns-context-list">
-                    {groupContexts.map((c) => (
-                      <div key={c.contextId} className="ns-context-item">
-                        <Box size={14} />
-                        <span className="context-name">{(c as any).alias || truncateId(c.contextId)}</span>
-                        <span className="context-id mono">{truncateId(c.contextId)}</span>
-                        <button className="copy-btn" onClick={() => copyToClipboard(c.contextId)} title="Copy ID">
-                          <Copy size={12} />
-                        </button>
-                      </div>
-                    ))}
+                    {groupContexts.map((c: any) => {
+                      const app = installedApps.find((a) => a.id === ns.targetApplicationId);
+                      const canLaunch = !!app?.frontendUrl;
+                      return (
+                        <div key={c.contextId} className="ns-context-item">
+                          <Box size={14} />
+                          <span className="context-name">{c.alias || truncateId(c.contextId)}</span>
+                          <span className="context-id mono">{truncateId(c.contextId)}</span>
+                          <button className="copy-btn" onClick={() => copyToClipboard(c.contextId)} title="Copy ID">
+                            <Copy size={12} />
+                          </button>
+                          {canLaunch && (
+                            <button
+                              className="ns-launch-btn"
+                              onClick={() => handleLaunchContext(c.contextId, ns.targetApplicationId)}
+                              title={`Launch ${app?.name ?? "app"} with this context`}
+                            >
+                              <Play size={12} /> Launch
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
               </div>
@@ -328,8 +550,145 @@ export default function Namespaces() {
           )}
         </main>
       </div>
+      {modalOverlay}
+      </>
     );
   }
 
   return null;
+}
+
+// ─── Modals ───
+
+interface CreateNamespaceModalProps {
+  installedApps: InstalledApp[];
+  loading: boolean;
+  onClose: () => void;
+  onSubmit: (applicationId: string, alias: string | undefined) => void;
+}
+
+function CreateNamespaceModal({ installedApps, loading, onClose, onSubmit }: CreateNamespaceModalProps) {
+  const [applicationId, setApplicationId] = useState(installedApps[0]?.id ?? "");
+  const [alias, setAlias] = useState("");
+
+  return (
+    <div className="ns-modal-backdrop" onClick={onClose}>
+      <div className="ns-modal" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Create Namespace">
+        <div className="ns-modal-header">
+          <h2>Create Namespace</h2>
+          <button className="ns-modal-close" onClick={onClose} aria-label="Close">
+            <X size={16} />
+          </button>
+        </div>
+        <form
+          className="ns-modal-body"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (!applicationId) return;
+            onSubmit(applicationId, alias);
+          }}
+        >
+          <label className="ns-modal-field">
+            <span>Application</span>
+            <select
+              value={applicationId}
+              onChange={(e) => setApplicationId(e.target.value)}
+              required
+            >
+              {installedApps.length === 0 && <option value="">No applications installed</option>}
+              {installedApps.map((app) => (
+                <option key={app.id} value={app.id}>
+                  {app.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="ns-modal-field">
+            <span>Alias (optional)</span>
+            <input
+              type="text"
+              value={alias}
+              onChange={(e) => setAlias(e.target.value)}
+              placeholder="e.g. my-namespace"
+            />
+          </label>
+          <p className="ns-modal-hint">
+            Upgrade policy: <code>Automatic</code>. Default capabilities (create context, invite, manage members) will be applied to new members.
+          </p>
+          <div className="ns-modal-actions">
+            <button type="button" className="ns-modal-cancel" onClick={onClose} disabled={loading}>
+              Cancel
+            </button>
+            <button type="submit" className="ns-action-btn" disabled={loading || !applicationId}>
+              {loading ? "Creating..." : "Create Namespace"}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+interface CreateContextModalProps {
+  namespaceId: string;
+  applicationId: string;
+  loading: boolean;
+  onClose: () => void;
+  onSubmit: (serviceName: string, alias: string | undefined) => void;
+}
+
+function CreateContextModal({ namespaceId, applicationId, loading, onClose, onSubmit }: CreateContextModalProps) {
+  const [serviceName, setServiceName] = useState("");
+  const [alias, setAlias] = useState("");
+
+  return (
+    <div className="ns-modal-backdrop" onClick={onClose}>
+      <div className="ns-modal" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Create Context">
+        <div className="ns-modal-header">
+          <h2>Create Context</h2>
+          <button className="ns-modal-close" onClick={onClose} aria-label="Close">
+            <X size={16} />
+          </button>
+        </div>
+        <form
+          className="ns-modal-body"
+          onSubmit={(e) => {
+            e.preventDefault();
+            onSubmit(serviceName, alias);
+          }}
+        >
+          <div className="ns-modal-readonly">
+            <div><strong>Namespace:</strong> <code>{namespaceId.slice(0, 8)}…{namespaceId.slice(-8)}</code></div>
+            <div><strong>Application:</strong> <code>{applicationId.slice(0, 8)}…{applicationId.slice(-8)}</code></div>
+          </div>
+          <label className="ns-modal-field">
+            <span>Service name (optional)</span>
+            <input
+              type="text"
+              value={serviceName}
+              onChange={(e) => setServiceName(e.target.value)}
+              placeholder="e.g. lobby"
+            />
+          </label>
+          <label className="ns-modal-field">
+            <span>Alias (optional)</span>
+            <input
+              type="text"
+              value={alias}
+              onChange={(e) => setAlias(e.target.value)}
+              placeholder="e.g. main-lobby"
+            />
+          </label>
+          <div className="ns-modal-actions">
+            <button type="button" className="ns-modal-cancel" onClick={onClose} disabled={loading}>
+              Cancel
+            </button>
+            <button type="submit" className="ns-action-btn" disabled={loading}>
+              {loading ? "Creating..." : "Create Context"}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
 }

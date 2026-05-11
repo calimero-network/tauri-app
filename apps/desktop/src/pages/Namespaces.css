@@ -5,6 +5,205 @@
   animation: fadeUp 0.4s ease-out;
 }
 
+.ns-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--accent-primary, #a5ff11);
+  background: var(--accent-primary, #a5ff11);
+  color: #0a0a0a;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: filter 0.15s ease, transform 0.05s ease;
+  margin-left: auto;
+}
+
+.ns-action-btn:hover:not(:disabled) {
+  filter: brightness(1.05);
+}
+
+.ns-action-btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.ns-action-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.ns-launch-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-secondary, #999);
+  font-size: 12px;
+  cursor: pointer;
+  margin-left: 8px;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.ns-launch-btn:hover {
+  border-color: var(--accent-primary, #a5ff11);
+  color: var(--accent-primary, #a5ff11);
+}
+
+.ns-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  animation: fadeIn 0.15s ease-out;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.ns-modal {
+  background: var(--bg-primary, #141414);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  width: min(480px, calc(100vw - 32px));
+  max-height: calc(100vh - 64px);
+  overflow: auto;
+  box-shadow: 0 24px 48px rgba(0, 0, 0, 0.5);
+}
+
+.ns-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.ns-modal-header h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.ns-modal-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+
+.ns-modal-close:hover {
+  background: var(--bg-hover, rgba(255, 255, 255, 0.06));
+  color: var(--text-primary);
+}
+
+.ns-modal-body {
+  padding: 16px 20px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.ns-modal-readonly {
+  background: var(--bg-secondary, rgba(255, 255, 255, 0.03));
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ns-modal-readonly code {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.ns-modal-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.ns-modal-field input,
+.ns-modal-field select {
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-secondary, rgba(255, 255, 255, 0.03));
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: inherit;
+}
+
+.ns-modal-field input:focus,
+.ns-modal-field select:focus {
+  outline: none;
+  border-color: var(--accent-primary, #a5ff11);
+}
+
+.ns-modal-hint {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  margin: 0;
+  line-height: 1.5;
+}
+
+.ns-modal-hint code {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  padding: 1px 4px;
+  background: var(--bg-secondary, rgba(255, 255, 255, 0.05));
+  border-radius: 3px;
+}
+
+.ns-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.ns-modal-cancel {
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.ns-modal-cancel:hover:not(:disabled) {
+  color: var(--text-primary);
+}
+
+.ns-modal-cancel:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 .ns-header {
   display: flex;
   align-items: center;

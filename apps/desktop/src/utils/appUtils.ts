@@ -58,10 +58,17 @@ export function decodeMetadata(metadata: any): any {
  * @param onError - Optional error callback
  * @returns Promise that resolves with the window label when the window is created (for focusing)
  */
+export interface OpenAppFrontendContext {
+  applicationId?: string;
+  contextId?: string;
+  executorPublicKey?: string;
+}
+
 export async function openAppFrontend(
   frontendUrl: string,
   appName?: string,
-  onError?: (error: Error) => void
+  onError?: (error: Error) => void,
+  context?: OpenAppFrontendContext,
 ): Promise<string | void> {
   try {
     const settings = getSettings();
@@ -77,6 +84,9 @@ export async function openAppFrontend(
       hashParams.set('refresh_token', refreshToken);
       hashParams.set('expires_in', '3600');
     }
+    if (context?.applicationId) hashParams.set('application_id', context.applicationId);
+    if (context?.contextId) hashParams.set('context_id', context.contextId);
+    if (context?.executorPublicKey) hashParams.set('executor_public_key', context.executorPublicKey);
 
     const urlToOpen = `${frontendUrl}#${hashParams.toString()}`;
 

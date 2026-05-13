@@ -3,9 +3,12 @@ import { getSettings, saveSettings, clearAllAppData } from "../utils/settings";
 import { parseTauriError } from "../utils/appUtils";
 import { invoke } from "@tauri-apps/api/tauri";
 import { killAllMerodProcesses, deleteCalimeroDataDir, stopMerod } from "../utils/merod";
+import { startCloudLogin, disconnectCloud } from "../utils/cloudAuth";
+import { getCloudSubscription, CloudSessionExpiredError } from "../utils/cloudApi";
+import { isCloudEnabled } from "../utils/featureFlags";
 import { useTheme } from "../contexts/ThemeContext";
 import { useToast } from "../contexts/ToastContext";
-import { ArrowLeft, RotateCcw, Trash2 } from "lucide-react";
+import { ArrowLeft, RotateCcw, Trash2, Cloud } from "lucide-react";
 import "./Settings.css";
 
 interface SettingsProps {
@@ -19,9 +22,15 @@ export default function Settings({ onBack }: SettingsProps) {
   const [newRegistryUrl, setNewRegistryUrl] = useState("");
   
   // Node management state (removed - now in NodeManagement page)
-  const [activeTab, setActiveTab] = useState<'general' | 'registries'>('general');
+  const [activeTab, setActiveTab] = useState<'general' | 'registries' | 'cloud'>('general');
   const [developerMode, setDeveloperMode] = useState(false);
   const [debugLogs, setDebugLogs] = useState(false);
+  const [cloudConnected, setCloudConnected] = useState(false);
+  const [cloudEmail, setCloudEmail] = useState<string | undefined>();
+  const [cloudName, setCloudName] = useState<string | undefined>();
+  const [cloudPicture, setCloudPicture] = useState<string | undefined>();
+  const [cloudPlan, setCloudPlan] = useState<string | undefined>();
+  const [cloudLoading, setCloudLoading] = useState(false);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [resetConfirmed, setResetConfirmed] = useState(false);
   const [resetting, setResetting] = useState(false);
@@ -37,6 +46,27 @@ export default function Settings({ onBack }: SettingsProps) {
     setRegistries(settings.registries || []);
     setDeveloperMode(settings.developerMode ?? false);
     setDebugLogs(settings.debugLogs ?? false);
+    setCloudConnected(settings.cloudConnected ?? false);
+    setCloudEmail(settings.cloudUserEmail);
+    setCloudName(settings.cloudUserName);
+    setCloudPicture(settings.cloudUserPicture);
+
+    // Fetch cloud plan if connected
+    if (settings.cloudConnected && settings.cloudIdToken) {
+      getCloudSubscription(settings.cloudIdToken)
+        .then((sub) => { if (sub) setCloudPlan(sub.plan); })
+        .catch((err) => {
+          if (err instanceof CloudSessionExpiredError) {
+            // Persist the disconnect so stale credentials are cleared.
+            disconnectCloud();
+            setCloudConnected(false);
+            setCloudEmail(undefined);
+            setCloudName(undefined);
+            setCloudPicture(undefined);
+            setCloudPlan(undefined);
+          }
+        });
+    }
   }, []);
 
   useEffect(() => {
@@ -135,12 +165,21 @@ export default function Settings({ onBack }: SettingsProps) {
           >
             General
           </button>
-          <button 
+          <button
             className={`settings-tab ${activeTab === 'registries' ? 'active' : ''}`}
             onClick={() => setActiveTab('registries')}
           >
             Registries
+          </button>
+          {isCloudEnabled() && (
+            <button
+              className={`settings-tab ${activeTab === 'cloud' ? 'active' : ''}`}
+              onClick={() => setActiveTab('cloud')}
+            >
+              <Cloud size={14} style={{ marginRight: '4px', verticalAlign: 'middle' }} />
+              Cloud
             </button>
+          )}
         </div>
 
         {activeTab === 'general' && (
@@ -376,6 +415,109 @@ export default function Settings({ onBack }: SettingsProps) {
           </div>
         )}
 
+
+        {isCloudEnabled() && activeTab === 'cloud' && (
+          <div className="settings-content">
+            <div className="settings-card">
+              <h2>Calimero Cloud</h2>
+              {!cloudConnected ? (
+                <>
+                  <p className="field-hint" style={{ marginBottom: '16px' }}>
+                    Connect to Calimero Cloud for cloud-hosted contexts, High Availability replication,
+                    and managed infrastructure. Your local node stays primary — cloud features are additive.
+                  </p>
+                  <button
+                    className="button button-primary"
+                    onClick={async () => {
+                      setCloudLoading(true);
+                      try {
+                        const userInfo = await startCloudLogin();
+                        if (userInfo) {
+                          setCloudConnected(true);
+                          setCloudEmail(userInfo.email);
+                          setCloudName(userInfo.name);
+                          setCloudPicture(userInfo.picture);
+                          toast.success('Connected to Calimero Cloud');
+                          // Fetch plan
+                          const settings = getSettings();
+                          if (settings.cloudIdToken) {
+                            const sub = await getCloudSubscription(settings.cloudIdToken).catch(() => null);
+                            if (sub) setCloudPlan(sub.plan);
+                          }
+                        } else {
+                          toast.error('Cloud login timed out or was cancelled');
+                        }
+                      } catch (err: unknown) {
+                        toast.error(`Cloud login failed: ${String(err)}`);
+                      } finally {
+                        setCloudLoading(false);
+                      }
+                    }}
+                    disabled={cloudLoading}
+                  >
+                    {cloudLoading ? 'Waiting for sign-in...' : 'Sign in with Google'}
+                  </button>
+                  <p className="field-hint" style={{ marginTop: '12px', fontStyle: 'italic' }}>
+                    Your data stays on your device. Cloud features are optional.
+                  </p>
+                </>
+              ) : (
+                <>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
+                    {cloudPicture && (
+                      <img
+                        src={cloudPicture}
+                        alt=""
+                        style={{ width: 40, height: 40, borderRadius: '50%' }}
+                      />
+                    )}
+                    <div>
+                      <div style={{ fontWeight: 600 }}>{cloudName || 'Connected'}</div>
+                      <div style={{ fontSize: '0.85rem', opacity: 0.7 }}>{cloudEmail}</div>
+                    </div>
+                    {cloudPlan && (
+                      <span style={{
+                        marginLeft: 'auto',
+                        padding: '2px 10px',
+                        borderRadius: '12px',
+                        fontSize: '0.75rem',
+                        fontWeight: 600,
+                        textTransform: 'capitalize',
+                        background: 'var(--accent-bg, #1a3a1a)',
+                        color: 'var(--accent-color, #4ade80)',
+                        border: '1px solid var(--accent-border, #2d5a2d)',
+                      }}>
+                        {cloudPlan} plan
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <button
+                      className="button button-secondary"
+                      onClick={() => invoke('open_url_in_browser', { url: 'https://cloud.calimero.network' })}
+                    >
+                      Manage on cloud.calimero.network
+                    </button>
+                    <button
+                      className="button button-danger"
+                      onClick={() => {
+                        disconnectCloud();
+                        setCloudConnected(false);
+                        setCloudEmail(undefined);
+                        setCloudName(undefined);
+                        setCloudPicture(undefined);
+                        setCloudPlan(undefined);
+                        toast.success('Disconnected from Calimero Cloud');
+                      }}
+                    >
+                      Disconnect
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        )}
 
         {activeTab === 'registries' && (
           <div className="settings-content">

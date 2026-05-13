@@ -5,6 +5,7 @@ import { invoke } from "@tauri-apps/api/tauri";
 import { killAllMerodProcesses, deleteCalimeroDataDir, stopMerod } from "../utils/merod";
 import { startCloudLogin, disconnectCloud } from "../utils/cloudAuth";
 import { getCloudSubscription, CloudSessionExpiredError } from "../utils/cloudApi";
+import { isCloudEnabled } from "../utils/featureFlags";
 import { useTheme } from "../contexts/ThemeContext";
 import { useToast } from "../contexts/ToastContext";
 import { ArrowLeft, RotateCcw, Trash2, Cloud } from "lucide-react";
@@ -170,13 +171,15 @@ export default function Settings({ onBack }: SettingsProps) {
           >
             Registries
           </button>
-          <button
-            className={`settings-tab ${activeTab === 'cloud' ? 'active' : ''}`}
-            onClick={() => setActiveTab('cloud')}
-          >
-            <Cloud size={14} style={{ marginRight: '4px', verticalAlign: 'middle' }} />
-            Cloud
-          </button>
+          {isCloudEnabled() && (
+            <button
+              className={`settings-tab ${activeTab === 'cloud' ? 'active' : ''}`}
+              onClick={() => setActiveTab('cloud')}
+            >
+              <Cloud size={14} style={{ marginRight: '4px', verticalAlign: 'middle' }} />
+              Cloud
+            </button>
+          )}
         </div>
 
         {activeTab === 'general' && (
@@ -413,7 +416,7 @@ export default function Settings({ onBack }: SettingsProps) {
         )}
 
 
-        {activeTab === 'cloud' && (
+        {isCloudEnabled() && activeTab === 'cloud' && (
           <div className="settings-content">
             <div className="settings-card">
               <h2>Calimero Cloud</h2>

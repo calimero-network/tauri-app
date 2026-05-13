@@ -25,6 +25,7 @@ import {
   type NamespaceHaGroup,
 } from "../utils/cloudApi";
 import { getCloudIdToken } from "../utils/cloudAuth";
+import { isCloudEnabled } from "../utils/featureFlags";
 import "./Namespaces.css";
 
 // Same default as battleships: CAN_CREATE_CONTEXT (1) | CAN_INVITE_MEMBERS (2) | MANAGE_MEMBERS (8).
@@ -523,6 +524,7 @@ export default function Namespaces() {
             </div>
           </div>
 
+          <div className="ns-detail-section">
             <h2><Box size={16} /> Contexts ({nsRootContexts.length})</h2>
             {nsRootContexts.length === 0 ? (
               <p className="empty-hint">No contexts in this namespace yet. Click "Create Context" to add one.</p>
@@ -555,25 +557,27 @@ export default function Namespaces() {
             )}
           </div>
 
-          <div className="ns-detail-section">
-            <h2><Shield size={16} style={{ marginRight: 6, verticalAlign: -2 }} />High Availability</h2>
-            <p className="ha-description">
-              Enable TEE replication to have fleet nodes automatically join and replicate
-              your namespace data. Requires a Calimero Cloud account with a paid plan.
-            </p>
-            <div className="ha-toggle-row">
-              <span className="ha-status">
-                {haEnabled[ns.namespaceId] ? '✓ HA Enabled' : 'HA Disabled'}
-              </span>
-              <button
-                className={`ha-toggle-btn ${haEnabled[ns.namespaceId] ? 'ha-enabled' : ''}`}
-                onClick={() => toggleHa(ns)}
-                disabled={!!haEnabling[ns.namespaceId]}
-              >
-                {haEnabling[ns.namespaceId] ? 'Working...' : haEnabled[ns.namespaceId] ? 'Disable HA' : 'Enable HA'}
-              </button>
+          {isCloudEnabled() && (
+            <div className="ns-detail-section">
+              <h2><Shield size={16} style={{ marginRight: 6, verticalAlign: -2 }} />High Availability</h2>
+              <p className="ha-description">
+                Enable TEE replication to have fleet nodes automatically join and replicate
+                your namespace data. Requires a Calimero Cloud account with a paid plan.
+              </p>
+              <div className="ha-toggle-row">
+                <span className="ha-status">
+                  {haEnabled[ns.namespaceId] ? '✓ HA Enabled' : 'HA Disabled'}
+                </span>
+                <button
+                  className={`ha-toggle-btn ${haEnabled[ns.namespaceId] ? 'ha-enabled' : ''}`}
+                  onClick={() => toggleHa(ns)}
+                  disabled={!!haEnabling[ns.namespaceId]}
+                >
+                  {haEnabling[ns.namespaceId] ? 'Working...' : haEnabled[ns.namespaceId] ? 'Disable HA' : 'Enable HA'}
+                </button>
+              </div>
             </div>
-          </div>
+          )}
 
           <div className="ns-detail-section">
             <h2>Groups</h2>

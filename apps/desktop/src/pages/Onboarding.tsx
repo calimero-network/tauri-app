@@ -7,6 +7,7 @@ import { invoke } from "@tauri-apps/api/tauri";
 import { saveSettings, getSettings } from "../utils/settings";
 import { saveOnboardingProgress, loadOnboardingProgress } from "../utils/onboardingProgress";
 import { startCloudLogin } from "../utils/cloudAuth";
+import { isCloudEnabled } from "../utils/featureFlags";
 import { fetchAppsFromAllRegistries, fetchAppManifest, recordDownload, type AppSummary } from "../utils/registry";
 import { useToast } from "../contexts/ToastContext";
 import { useTheme } from "../contexts/ThemeContext";
@@ -23,7 +24,11 @@ interface OnboardingProps {
 
 type OnboardingStep = 'welcome' | 'what-is' | 'node-setup' | 'cloud-connect' | 'login' | 'install-app';
 
-const ONBOARDING_STEPS: OnboardingStep[] = ['welcome', 'what-is', 'node-setup', 'cloud-connect', 'login', 'install-app'];
+const ONBOARDING_STEPS: OnboardingStep[] = isCloudEnabled()
+  ? ['welcome', 'what-is', 'node-setup', 'cloud-connect', 'login', 'install-app']
+  : ['welcome', 'what-is', 'node-setup', 'login', 'install-app'];
+
+const STEP_AFTER_NODE_SETUP: OnboardingStep = isCloudEnabled() ? 'cloud-connect' : 'login';
 
 
 export default function Onboarding({ onComplete, onSettings }: OnboardingProps) {
@@ -180,7 +185,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
             }
             setTheme('dark');
             setCreatingNode(false);
-            setCurrentStep('cloud-connect');
+            setCurrentStep(STEP_AFTER_NODE_SETUP);
             return;
           } catch (err) {
             console.error('Failed to use existing node:', err);
@@ -234,10 +239,10 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
           try {
             const onboardingState = await checkOnboardingState();
             setState(onboardingState);
-            setCurrentStep('cloud-connect');
+            setCurrentStep(STEP_AFTER_NODE_SETUP);
           } catch (err) {
             console.error("Failed to check onboarding state:", err);
-            setCurrentStep('cloud-connect');
+            setCurrentStep(STEP_AFTER_NODE_SETUP);
           }
         }, 2000);
       };

@@ -102,13 +102,16 @@ export function decodeIdToken(token: string): CloudUserInfo | null {
 
 interface MdmaSessionResponse {
   session_token: string;
-  expires_at: number;
   // Nullable: if the server's `user` field is missing/malformed but the
   // session_token is otherwise valid (MDMA-issued JWT), we keep the
   // 7-day session and let the call site fall back to decodeIdToken(googleToken)
   // for the profile chip — see the shape-validation branch in
   // exchangeGoogleForMdmaSession.
   user: CloudUserInfo | null;
+  // Note: the server response also carries `expires_at`, but we deliberately
+  // do not surface it. Every expiry decision in this codebase reads `exp`
+  // from the JWT itself via isTokenExpired, so re-exposing a parallel field
+  // here would just be a trap for a future caller.
 }
 
 /**
@@ -181,10 +184,6 @@ async function exchangeGoogleForMdmaSession(
       typeof (userField as { picture?: unknown }).picture === 'string';
     return {
       session_token: (body as { session_token: string }).session_token,
-      expires_at:
-        typeof (body as { expires_at?: unknown }).expires_at === 'number'
-          ? (body as { expires_at: number }).expires_at
-          : 0,
       user: userValid ? (userField as CloudUserInfo) : null,
     };
   } catch {

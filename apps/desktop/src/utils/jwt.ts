@@ -19,8 +19,22 @@ export function parseJwtPayload(token: string | undefined | null): Record<string
   try {
     const b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
     const padded = b64 + '='.repeat((4 - (b64.length % 4)) % 4);
-    const decoded = JSON.parse(atob(padded));
-    if (!decoded || typeof decoded !== 'object') return null;
+    // atob returns a binary string (one char per byte). The payload is
+    // UTF-8, so non-ASCII claims (e.g., a `name` with é/ü/CJK) would
+    // misdecode if we JSON.parse(atob(...)) directly — each multi-byte
+    // sequence ends up as garbled characters. Round through Uint8Array
+    // + TextDecoder so the JSON parser sees real UTF-8.
+    const binary = atob(padded);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    const decoded = JSON.parse(new TextDecoder().decode(bytes));
+    // Reject anything that isn't a JSON object — JWT payloads are
+    // RFC-defined as a JSON object. Arrays pass `typeof === 'object'`
+    // but aren't a sensible claim set; null is caught by the truthy
+    // guard. Reject both so callers can rely on `Record<string, unknown>`.
+    if (!decoded || typeof decoded !== 'object' || Array.isArray(decoded)) {
+      return null;
+    }
     return decoded as Record<string, unknown>;
   } catch {
     return null;

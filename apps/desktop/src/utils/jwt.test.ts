@@ -5,9 +5,18 @@ function base64url(s: string): string {
   return btoa(s).replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_");
 }
 
+// UTF-8-aware base64url for payloads containing non-ASCII characters.
+// `btoa` only accepts Latin-1, so we have to encode to bytes first.
+function utf8Base64url(s: string): string {
+  const bytes = new TextEncoder().encode(s);
+  let binary = "";
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  return btoa(binary).replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_");
+}
+
 function makeJwt(payload: object): string {
   const header = base64url(JSON.stringify({ alg: "HS256", typ: "JWT" }));
-  const body = base64url(JSON.stringify(payload));
+  const body = utf8Base64url(JSON.stringify(payload));
   return `${header}.${body}.signature`;
 }
 
@@ -32,6 +41,19 @@ describe("parseJwtPayload", () => {
   it("returns null when the decoded JSON is the literal null", () => {
     const nullPayload = `header.${base64url("null")}.sig`;
     expect(parseJwtPayload(nullPayload)).toBeNull();
+  });
+
+  it("returns null when the decoded JSON is an array (not a claim set)", () => {
+    const arrayPayload = `header.${base64url(JSON.stringify(["a", "b"]))}.sig`;
+    expect(parseJwtPayload(arrayPayload)).toBeNull();
+  });
+
+  it("decodes non-ASCII claim values via TextDecoder (UTF-8 round-trip)", () => {
+    // Realistic Google ID token shape: 'name' often contains accented or
+    // non-Latin chars. atob alone misdecodes these as garbled Latin-1.
+    const payload = { iss: "mdma", name: "Xabi Losada — éñü 日本語" };
+    const jwt = makeJwt(payload);
+    expect(parseJwtPayload(jwt)).toEqual(payload);
   });
 
   it("decodes a standard MDMA session token correctly", () => {

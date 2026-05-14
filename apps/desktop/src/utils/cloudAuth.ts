@@ -145,6 +145,17 @@ async function exchangeGoogleForMdmaSession(
     ) {
       return null;
     }
+    // Belt-and-suspenders: confirm what we got back is actually an
+    // MDMA-issued JWT. A misconfigured backend (or a bug in the
+    // exchange handler) could return a 200 with a session_token that
+    // is a non-JWT string, a JWT with the wrong issuer, or even our
+    // own Google token echoed back — none of which should be allowed
+    // to land in settings.cloudIdToken. isMdmaSessionToken returns
+    // false on all of those so we reject and surface as a login
+    // failure at the call site.
+    if (!isMdmaSessionToken((body as { session_token: string }).session_token)) {
+      return null;
+    }
     return body as MdmaSessionResponse;
   } catch {
     return null;

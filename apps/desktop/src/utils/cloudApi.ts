@@ -1,6 +1,6 @@
 import { getAccessToken } from '../lib/token-storage';
 import { getSettings, saveSettings } from './settings';
-import { isMdmaSessionToken } from './jwt';
+import { isMdmaSessionToken, isTokenExpired } from './jwt';
 
 // API lives at manager.cloud.calimero.network; cloud.calimero.network is
 // the static portal and does not proxy /api/*. Exported so cloudAuth
@@ -42,6 +42,10 @@ async function cloudFetch(
     },
   });
 
+  if (res.status === 401) {
+    throw new CloudSessionExpiredError();
+  }
+
   // Rolling refresh: the server re-issued our session silently because
   // this one was past the refresh threshold. Persist the new token
   // directly to settings — next call reads from settings.cloudIdToken
@@ -49,13 +53,24 @@ async function cloudFetch(
   // or events: same sid = same logical session, so there's nothing
   // UI-level to re-derive, and routing refresh through render would
   // re-fire every useEffect that depends on the token.
+  //
+  // Only honoured on a successful response. A refresh header attached
+  // to a 4xx/5xx response is suspicious (either a misbehaving server
+  // or a header-injecting MITM trying to plant a token on us during a
+  // failure path) — the 401 branch above already threw, but the same
+  // logic applies to other non-ok statuses. Drop silently.
+  if (!res.ok) {
+    return res;
+  }
+
+  // Validate the header value before persisting it. An MDMA-issued
+  // JWT that is not yet expired is the only shape we should ever
+  // write to settings.cloudIdToken via this path; anything else
+  // (wrong issuer, malformed, already-expired) we silently drop and
+  // keep the current token, which the caller will detect as expired
+  // via isTokenExpired on the next request.
   const refreshed = res.headers.get(MDMA_SESSION_REFRESH_HEADER);
-  // Validate the header value before persisting it — a compromised or
-  // misbehaving server (or header-injecting MITM) could otherwise
-  // plant arbitrary strings as our session token. An MDMA-issued JWT
-  // is the only shape we should ever write to settings.cloudIdToken
-  // via this path; anything else we silently drop.
-  if (refreshed && isMdmaSessionToken(refreshed)) {
+  if (refreshed && isMdmaSessionToken(refreshed) && !isTokenExpired(refreshed)) {
     const settings = getSettings();
     // Only update if the session we just used is still the active one;
     // avoids clobbering a fresh login that landed between the request
@@ -63,10 +78,6 @@ async function cloudFetch(
     if (settings.cloudIdToken === idToken) {
       saveSettings({ ...settings, cloudIdToken: refreshed });
     }
-  }
-
-  if (res.status === 401) {
-    throw new CloudSessionExpiredError();
   }
 
   return res;
@@ -266,13 +277,21 @@ export async function setTeeAdmissionPolicy(
         Authorization: `Bearer ${accessToken}`,
       },
       body: JSON.stringify({
-        allowed_mrtd: allowedMrtd ?? [],
-        allowed_rtmr0: [],
-        allowed_rtmr1: [],
-        allowed_rtmr2: [],
-        allowed_rtmr3: [],
-        allowed_tcb_statuses: [],
-        accept_mock: false,
+        // The merod admin API deserialises this request with
+        // `#[serde(rename_all = "camelCase")]` (see
+        // SetTeeAdmissionPolicyApiRequest in
+        // calimero-network/core: crates/server/primitives/src/admin/mod.rs).
+        // Snake_case keys are silently ignored as unknown fields and every
+        // field falls through to its #[serde(default)] — so the server sees
+        // allowed_mrtd: [] and accept_mock: false, and validation rejects
+        // with a misleading "at least one MRTD must be specified" error.
+        allowedMrtd: allowedMrtd ?? [],
+        allowedRtmr0: [],
+        allowedRtmr1: [],
+        allowedRtmr2: [],
+        allowedRtmr3: [],
+        allowedTcbStatuses: [],
+        acceptMock: false,
       }),
     },
   );

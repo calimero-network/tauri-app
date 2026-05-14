@@ -103,7 +103,12 @@ export function decodeIdToken(token: string): CloudUserInfo | null {
 interface MdmaSessionResponse {
   session_token: string;
   expires_at: number;
-  user: CloudUserInfo;
+  // Nullable: if the server's `user` field is missing/malformed but the
+  // session_token is otherwise valid (MDMA-issued JWT), we keep the
+  // 7-day session and let the call site fall back to decodeIdToken(googleToken)
+  // for the profile chip — see the shape-validation branch in
+  // exchangeGoogleForMdmaSession.
+  user: CloudUserInfo | null;
 }
 
 /**
@@ -156,24 +161,32 @@ async function exchangeGoogleForMdmaSession(
     if (!isMdmaSessionToken((body as { session_token: string }).session_token)) {
       return null;
     }
-    // Validate the user claim shape too: startCloudLogin reads
-    // exchange.user.{email,name,picture} directly into settings, so a
-    // 200 body with a missing/malformed `user` field would persist
-    // `undefined` strings and surface as a blank profile chip in the
-    // UI. Returning null here triggers the Google-token fallback path
-    // (which calls decodeIdToken) so the user still gets a populated
-    // profile from the ID token's claims.
+    // Validate the user claim shape independently from the session_token.
+    // startCloudLogin reads exchange.user.{email,name,picture} directly
+    // into settings, so a 200 body with a missing/malformed `user` field
+    // would persist `undefined` strings and surface as a blank profile
+    // chip. Crucially we *don't* discard the whole response on a bad
+    // `user` — the session_token has already been validated as an
+    // MDMA-issued JWT above, and dropping the 7-day session because of
+    // a cosmetic profile field would silently degrade the user to the
+    // 1-hour Google fallback. Returning `user: null` lets the call site's
+    // `exchange?.user ?? decodeIdToken(googleToken)` fallback populate
+    // the profile from the ID-token claims while keeping the long session.
     const userField = (body as { user?: unknown }).user;
-    if (
-      !userField ||
-      typeof userField !== 'object' ||
-      typeof (userField as { email?: unknown }).email !== 'string' ||
-      typeof (userField as { name?: unknown }).name !== 'string' ||
-      typeof (userField as { picture?: unknown }).picture !== 'string'
-    ) {
-      return null;
-    }
-    return body as MdmaSessionResponse;
+    const userValid =
+      !!userField &&
+      typeof userField === 'object' &&
+      typeof (userField as { email?: unknown }).email === 'string' &&
+      typeof (userField as { name?: unknown }).name === 'string' &&
+      typeof (userField as { picture?: unknown }).picture === 'string';
+    return {
+      session_token: (body as { session_token: string }).session_token,
+      expires_at:
+        typeof (body as { expires_at?: unknown }).expires_at === 'number'
+          ? (body as { expires_at: number }).expires_at
+          : 0,
+      user: userValid ? (userField as CloudUserInfo) : null,
+    };
   } catch {
     return null;
   }

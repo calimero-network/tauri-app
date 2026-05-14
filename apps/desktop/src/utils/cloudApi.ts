@@ -76,7 +76,17 @@ async function cloudFetch(
     // avoids clobbering a fresh login that landed between the request
     // leaving and the response arriving.
     if (settings.cloudIdToken === idToken) {
-      saveSettings({ ...settings, cloudIdToken: refreshed });
+      // saveSettings can throw if localStorage is full or unavailable
+      // (Safari private mode, quota exceeded). The rolling refresh is a
+      // best-effort silent renewal — if we can't persist the new token
+      // the user keeps the old one and re-auths at its exp, which is
+      // strictly better than letting the network response surface a
+      // storage error to the caller.
+      try {
+        saveSettings({ ...settings, cloudIdToken: refreshed });
+      } catch (err) {
+        console.warn('Failed to persist refreshed MDMA session token:', err);
+      }
     }
   }
 

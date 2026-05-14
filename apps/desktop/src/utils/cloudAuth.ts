@@ -1,7 +1,10 @@
 import { invoke } from '@tauri-apps/api';
 import { listen } from '@tauri-apps/api/event';
 import { getSettings, saveSettings } from './settings';
-import { getCloudNode } from './cloudApi';
+import { CLOUD_BASE_URL, getCloudNode } from './cloudApi';
+import { parseJwtPayload, isMdmaSessionToken, isTokenExpired } from './jwt';
+
+export { isMdmaSessionToken, isTokenExpired };
 
 const CLOUD_LOGIN_URL = 'https://cloud.calimero.network';
 const CLOUD_CALLBACK_SCHEME = 'calimero://cloud-callback';
@@ -88,33 +91,99 @@ export interface CloudUserInfo {
  * No signature verification — the Cloud API server handles that.
  */
 export function decodeIdToken(token: string): CloudUserInfo | null {
+  const payload = parseJwtPayload(token);
+  if (!payload) return null;
+  return {
+    email: typeof payload.email === 'string' ? payload.email : '',
+    name: typeof payload.name === 'string' ? payload.name : '',
+    picture: typeof payload.picture === 'string' ? payload.picture : '',
+  };
+}
+
+interface MdmaSessionResponse {
+  session_token: string;
+  expires_at: number;
+  user: CloudUserInfo;
+}
+
+/**
+ * Exchange a Google OAuth ID token for an MDMA session token.
+ * Called once after the OAuth deep-link callback returns a Google
+ * credential. The resulting session token is what gets persisted in
+ * `settings.cloudIdToken` and used for every subsequent cloud API
+ * call — MDMA session tokens live for 7 days and are silently rolled
+ * forward by the server (see `cloudFetch`), so the user no longer
+ * has to re-authenticate every hour.
+ *
+ * Returns `null` if the exchange fails for any reason; callers should
+ * fall back to using the raw Google token during the backend's
+ * migration window (`_verify_session_or_google` still accepts Google
+ * tokens). Once the fallback is removed, the exchange becoming
+ * mandatory will surface as a login failure at the call site.
+ */
+async function exchangeGoogleForMdmaSession(
+  googleIdToken: string,
+): Promise<MdmaSessionResponse | null> {
   try {
-    const parts = token.split('.');
-    if (parts.length !== 3) return null;
-    const payload = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')));
-    return {
-      email: payload.email ?? '',
-      name: payload.name ?? '',
-      picture: payload.picture ?? '',
-    };
+    const res = await fetch(`${CLOUD_BASE_URL}/api/auth/google`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id_token: googleIdToken }),
+    });
+    if (!res.ok) return null;
+    const body = (await res.json()) as unknown;
+    // Validate the shape before trusting the cast. A 200 with an
+    // unexpected body (deployment mid-rollout, bad proxy) would
+    // otherwise fall through as `{ session_token: undefined }` and
+    // the nullish-coalesce in startCloudLogin would silently re-use
+    // the raw Google token — masking a server regression.
+    if (
+      !body ||
+      typeof body !== 'object' ||
+      typeof (body as { session_token?: unknown }).session_token !== 'string' ||
+      !(body as { session_token: string }).session_token
+    ) {
+      return null;
+    }
+    // Belt-and-suspenders: confirm what we got back is actually an
+    // MDMA-issued JWT. A misconfigured backend (or a bug in the
+    // exchange handler) could return a 200 with a session_token that
+    // is a non-JWT string, a JWT with the wrong issuer, or even our
+    // own Google token echoed back — none of which should be allowed
+    // to land in settings.cloudIdToken. isMdmaSessionToken returns
+    // false on all of those so we reject and surface as a login
+    // failure at the call site.
+    if (!isMdmaSessionToken((body as { session_token: string }).session_token)) {
+      return null;
+    }
+    return body as MdmaSessionResponse;
   } catch {
     return null;
   }
 }
 
 /**
- * Check if a Google ID token has expired.
+ * Fire-and-forget server-side session revocation. Adds the session's
+ * sid to the RevokedSession table so the same token can't be
+ * refreshed or re-used. No await / no error surfacing — the caller
+ * has already cleared local state and the worst case is a
+ * short-lived token staying usable until its exp.
+ *
+ * Safe to call with a Google token or undefined; non-MDMA tokens
+ * short-circuit without hitting the network.
  */
-export function isTokenExpired(token: string): boolean {
-  try {
-    const parts = token.split('.');
-    if (parts.length !== 3) return true;
-    const payload = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')));
-    if (!payload.exp) return true;
-    return Date.now() >= payload.exp * 1000;
-  } catch {
-    return true;
-  }
+export function revokeMdmaSession(sessionToken: string | undefined | null): void {
+  if (!sessionToken || !isMdmaSessionToken(sessionToken)) return;
+  fetch(`${CLOUD_BASE_URL}/api/auth/logout`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${sessionToken}` },
+  }).catch((err) => {
+    // Best-effort: we don't block logout on this. But a persistent
+    // failure (wrong URL, TLS issue, endpoint 500) leaves sessions
+    // unrevoked server-side — log so the dev console surfaces it
+    // rather than the failure being completely invisible.
+    console.warn('MDMA session revocation failed (best-effort):', err);
+  });
 }
 
 /**
@@ -137,11 +206,20 @@ export async function startCloudLogin(): Promise<CloudUserInfo | null> {
   await invoke('open_url_in_browser', { url: loginUrl });
 
   // Poll for the deep link callback
-  const token = await pollForCloudAuth();
-  if (!token) return null;
+  const googleToken = await pollForCloudAuth();
+  if (!googleToken) return null;
 
-  // Decode user info from token
-  const userInfo = decodeIdToken(token);
+  // Exchange the Google credential for a 7-day MDMA session. The
+  // session token is what gets persisted and used for every cloud API
+  // call — the Google token is one-shot. If the exchange fails
+  // (server temporarily unavailable, network blip) we fall back to
+  // the raw Google token; the backend's migration-window middleware
+  // still accepts Google tokens, so the user is not blocked. The
+  // fallback expires in ~1 hour and the user will re-auth at that
+  // point.
+  const exchange = await exchangeGoogleForMdmaSession(googleToken);
+  const token = exchange?.session_token ?? googleToken;
+  const userInfo = exchange?.user ?? decodeIdToken(googleToken);
   if (!userInfo) return null;
 
   // Auto-register by fetching cloud node (creates account on first call)
@@ -233,11 +311,16 @@ function extractTokenFromCallbackUrl(url: string): string | null {
 }
 
 /**
- * Disconnect from Calimero Cloud. Clears all cloud state from settings.
+ * Disconnect from Calimero Cloud. Clears all cloud state from settings
+ * and fires a best-effort server-side session revocation so the same
+ * sid can't be replayed.
  */
 export function disconnectCloud(): void {
   clearPendingState();
   const settings = getSettings();
+  // Revoke before clearing: once settings.cloudIdToken is undefined,
+  // we can't address the session on the server any more.
+  revokeMdmaSession(settings.cloudIdToken);
   saveSettings({
     ...settings,
     cloudConnected: false,

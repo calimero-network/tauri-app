@@ -68,11 +68,9 @@ describe('requestOwnershipProof', () => {
   it('POSTs camelCase body to merod and re-keys camelCase response to snake_case', async () => {
     const { calls, restore: r } = installFetch(() =>
       jsonResponse({
-        data: {
-          signerPublicKey: 'pk-base58',
-          signedPayload: 'sp-b64',
-          signature: 'sig-b64',
-        },
+        signerPublicKey: 'pk-base58',
+        signedPayload: 'sp-b64',
+        signature: 'sig-b64',
       }),
     );
     restore = r;
@@ -103,7 +101,7 @@ describe('requestOwnershipProof', () => {
   });
 
   it('throws when the merod response is malformed', async () => {
-    const { restore: r } = installFetch(() => jsonResponse({ data: {} }));
+    const { restore: r } = installFetch(() => jsonResponse({}));
     restore = r;
     await expect(
       requestOwnershipProof('http://node', 'group-1', {
@@ -210,10 +208,8 @@ describe('enableHaForNamespace silent-claim pre-flight', () => {
       route(url, init, {
         '/admin-api/groups/ns-root/members': () =>
           jsonResponse({
-            data: {
-              data: [{ identity: 'me', role: 'Member' }],
-              selfIdentity: 'me',
-            },
+            members: [{ identity: 'me', role: 'Member' }],
+            selfIdentity: 'me',
           }),
       }),
     );
@@ -232,18 +228,14 @@ describe('enableHaForNamespace silent-claim pre-flight', () => {
       return route(url, init, {
         '/admin-api/groups/ns-root/members': () =>
           jsonResponse({
-            data: {
-              data: [{ identity: 'me', role: 'Admin' }],
-              selfIdentity: 'me',
-            },
+            members: [{ identity: 'me', role: 'Admin' }],
+            selfIdentity: 'me',
           }),
         '/admin-api/groups/ns-root/issue-ownership-proof': () =>
           jsonResponse({
-            data: {
-              signerPublicKey: 'pk',
-              signedPayload: 'sp',
-              signature: 'sig',
-            },
+            signerPublicKey: 'pk',
+            signedPayload: 'sp',
+            signature: 'sig',
           }),
         '/api/cloud/me/contexts/claim': () =>
           jsonResponse({ claimed: ['ctx-1', 'ctx-2'] }),

@@ -346,8 +346,8 @@ interface GroupMemberEntry {
   role: string;
 }
 
-interface ListGroupMembersData {
-  data: GroupMemberEntry[];
+interface ListGroupMembersResponse {
+  members: GroupMemberEntry[];
   selfIdentity?: string;
 }
 
@@ -394,14 +394,17 @@ async function getSelfRoleInGroup(
     const text = await res.text().catch(() => '');
     throw new Error(`Failed to list group members: ${text || res.statusText}`);
   }
-  // Admin endpoints wrap the payload as `{ data: ... }`; here the
-  // inner object is `{ data: GroupMember[], selfIdentity? }`.
-  const body = (await res.json()) as { data?: ListGroupMembersData };
-  const payload = body?.data;
-  if (!payload || !Array.isArray(payload.data) || !payload.selfIdentity) {
+  // Core's ApiResponse serializes the payload struct directly — there is
+  // no `{ data: ... }` envelope (see ApiResponse::into_response in
+  // calimero-network/core crates/server/src/admin/service.rs, with its
+  // `//TODO add data to response`). The members payload is
+  // `{ members, selfIdentity }`; selfIdentity is camelCase because
+  // ListGroupMembersApiResponse has #[serde(rename_all = "camelCase")].
+  const body = (await res.json()) as ListGroupMembersResponse;
+  if (!body || !Array.isArray(body.members) || !body.selfIdentity) {
     return null;
   }
-  const me = payload.data.find((m) => m.identity === payload.selfIdentity);
+  const me = body.members.find((m) => m.identity === body.selfIdentity);
   return me?.role ?? null;
 }
 
@@ -453,8 +456,10 @@ export async function requestOwnershipProof(
     const text = await res.text().catch(() => '');
     throw new Error(`Failed to issue ownership proof: ${text || res.statusText}`);
   }
-  const body = (await res.json()) as { data?: IssueOwnershipProofResponseData };
-  const data = body?.data;
+  // No `{ data: ... }` envelope — ApiResponse serializes the payload
+  // struct directly and IssueOwnershipProofApiResponse has no `data`
+  // field. Keys are camelCase (#[serde(rename_all = "camelCase")]).
+  const data = (await res.json()) as IssueOwnershipProofResponseData;
   if (
     !data ||
     typeof data.signerPublicKey !== 'string' ||

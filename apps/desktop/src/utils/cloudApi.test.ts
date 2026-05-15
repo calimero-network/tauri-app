@@ -221,6 +221,43 @@ describe('enableHaForNamespace silent-claim pre-flight', () => {
     ).rejects.toThrow(/Only the namespace admin can register contexts/);
   });
 
+  it('gives a distinct error when our identity is not among the members', async () => {
+    const { restore: r } = installFetch((url, init) =>
+      route(url, init, {
+        '/admin-api/groups/ns-root/members': () =>
+          jsonResponse({
+            members: [{ identity: 'someone-else', role: 'Admin' }],
+            selfIdentity: 'me',
+          }),
+      }),
+    );
+    restore = r;
+    await expect(
+      enableHaForNamespace(makeJwt({ iss: 'mdma', email: 'u@e' }), 'http://node', 'ns-root', [
+        { group_id: 'g1', context_id: 'ctx-1' },
+      ]),
+    ).rejects.toThrow(/Could not determine your role in this namespace/);
+  });
+
+  it('throws (not silent-null → misleading not-admin) on a malformed members body', async () => {
+    // Regression guard for the {data}-envelope bug: a wrong-shaped 200
+    // must surface as a shape error, not masquerade as "not admin".
+    const { restore: r } = installFetch((url, init) =>
+      route(url, init, {
+        '/admin-api/groups/ns-root/members': () =>
+          jsonResponse({
+            data: { data: [{ identity: 'me', role: 'Admin' }], selfIdentity: 'me' },
+          }),
+      }),
+    );
+    restore = r;
+    await expect(
+      enableHaForNamespace(makeJwt({ iss: 'mdma', email: 'u@e' }), 'http://node', 'ns-root', [
+        { group_id: 'g1', context_id: 'ctx-1' },
+      ]),
+    ).rejects.toThrow(/Unexpected response from local node members endpoint/);
+  });
+
   it('runs members → proofs (parallel) → claim → measurements → tee-policy → enable in order', async () => {
     const calls: string[] = [];
     const { restore: r } = installFetch((url, init) => {

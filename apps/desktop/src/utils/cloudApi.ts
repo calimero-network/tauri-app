@@ -365,9 +365,16 @@ function generateProofNonce(): string {
 
 /**
  * Look up the caller's role in a group via the merod admin API.
- * Returns `null` if the caller isn't a member (selfIdentity missing
- * or no matching entry). The members endpoint follows the same
- * Bearer-auth + camelCase response pattern as setTeeAdmissionPolicy.
+ *
+ * Throws on auth failure, a non-2xx response (core's actor bails with
+ * an error when the node isn't a member of the group, so "not a
+ * member" surfaces here as a thrown error, not `null`), or a 200 whose
+ * body doesn't match the expected `{ members, selfIdentity }` shape —
+ * a silent `null` on a malformed body would later masquerade as "not
+ * the namespace admin", which is exactly the failure mode that masked
+ * the earlier `{data}`-envelope bug. Returns `null` only for the
+ * degenerate case of a well-formed response with no member entry
+ * matching `selfIdentity`.
  *
  * Co-located here rather than in a dedicated admin-api module because
  * this is the only consumer right now — the moment a second caller
@@ -402,7 +409,11 @@ async function getSelfRoleInGroup(
   // ListGroupMembersApiResponse has #[serde(rename_all = "camelCase")].
   const body = (await res.json()) as ListGroupMembersResponse;
   if (!body || !Array.isArray(body.members) || !body.selfIdentity) {
-    return null;
+    throw new Error(
+      'Unexpected response from local node members endpoint — ' +
+        'expected { members: [...], selfIdentity }. The node may be ' +
+        'an incompatible version.',
+    );
   }
   const me = body.members.find((m) => m.identity === body.selfIdentity);
   return me?.role ?? null;
@@ -552,12 +563,39 @@ export async function enableHaForNamespace(
   // Wire format is locked: GroupMemberRole in core serialises as
   // {Admin, Member, ReadOnly, ReadOnlyTee}. We require Admin only.
   const role = await getSelfRoleInGroup(nodeUrl, namespaceId);
+  if (role === null) {
+    // Well-formed response but our identity isn't among the members —
+    // distinct from "you're a Member not an Admin": this usually means
+    // the node isn't actually joined to this namespace root.
+    throw new Error(
+      'Could not determine your role in this namespace — ' +
+        'the node does not appear to be a member of the namespace root.',
+    );
+  }
   if (role !== 'Admin') {
     throw new Error('Only the namespace admin can register contexts with the cloud.');
   }
 
+  // Every proof is scoped to the *namespace root* (`namespaceId`), not
+  // each group's own `group_id`, even for contexts that live in
+  // subgroups. This is deliberate and consistent across the three
+  // coordinated repos:
+  //   • The ownership gate is "direct admin of the namespace root"
+  //     (the role check above), so the root is the authoritative
+  //     scope for the whole namespace.
+  //   • core's resolve_group_signing_key walks ancestors, so the
+  //     root's signing key signs proofs for subgroup contexts too.
+  //   • core's context↔namespace containment check (calimero#2362)
+  //     accepts any context within the namespace rooted at this
+  //     group_id — a strict per-group equality check would reject
+  //     subgroup contexts here.
+  // Same rationale as the "set TEE policy on the root only, subgroups
+  // inherit" step further below.
+  //
   // Issue one proof per group in parallel — they hit the local merod
-  // and are independent, so latency stacks linearly otherwise.
+  // and are independent, so latency stacks linearly otherwise. Note
+  // Promise.all is all-or-nothing: a single proof failure aborts the
+  // whole HA-enable and the user retries the flow.
   const proofs = await Promise.all(
     groups.map((g) =>
       requestOwnershipProof(nodeUrl, namespaceId, {

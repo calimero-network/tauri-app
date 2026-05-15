@@ -407,22 +407,29 @@ async function getSelfRoleInGroup(
   // `//TODO add data to response`). The members payload is
   // `{ members, selfIdentity }`; selfIdentity is camelCase because
   // ListGroupMembersApiResponse has #[serde(rename_all = "camelCase")].
-  const body = (await res.json()) as ListGroupMembersResponse;
-  const shapeOk =
-    body &&
-    Array.isArray(body.members) &&
-    typeof body.selfIdentity === 'string' &&
-    body.selfIdentity &&
-    // Each entry must be a well-formed { identity, role }; a `null` or
-    // partial entry would otherwise blow up the `.find` below with a
-    // raw TypeError instead of this descriptive error.
-    body.members.every(
+  // A non-JSON body parses to null here (not a throw), so the shapeOk
+  // check below produces the descriptive error rather than a raw
+  // SyntaxError escaping as an unhandled rejection.
+  const body = (await res
+    .json()
+    .catch(() => null)) as ListGroupMembersResponse | null;
+  // Negated inline guard (not a separate `shapeOk` const) so TS narrows
+  // `body` to non-null afterwards. Each member entry must be a
+  // well-formed { identity, role } — a `null`/partial entry would
+  // otherwise blow up the `.find` below with a raw TypeError instead of
+  // this descriptive error.
+  if (
+    !body ||
+    !Array.isArray(body.members) ||
+    typeof body.selfIdentity !== 'string' ||
+    !body.selfIdentity ||
+    !body.members.every(
       (m) =>
         m != null &&
         typeof m.identity === 'string' &&
         typeof m.role === 'string',
-    );
-  if (!shapeOk) {
+    )
+  ) {
     throw new Error(
       'Unexpected response from local node members endpoint — ' +
         'expected { members: [{ identity, role }], selfIdentity }. ' +
@@ -523,7 +530,10 @@ export async function claimContexts(
     const error = await res.json().catch(() => null);
     throw new Error(error?.detail || 'Failed to claim contexts with cloud');
   }
-  const body = (await res.json()) as { claimed?: string[] };
+  // Tolerate a 2xx with an empty/non-JSON body (e.g. 204): fall back to
+  // {} so the caller's claim-coverage check reports a meaningful
+  // "did not register" error instead of a raw JSON SyntaxError.
+  const body = (await res.json().catch(() => ({}))) as { claimed?: string[] };
   return Array.isArray(body?.claimed) ? body.claimed : [];
 }
 

@@ -464,6 +464,21 @@ describe('enableHaForNamespace silent-claim pre-flight', () => {
     expect(seen.some((u) => u.includes('/tee-admission-policy'))).toBe(false);
   });
 
+  it('throws the descriptive error (not a raw SyntaxError) on a non-JSON members body', async () => {
+    const { restore: r } = installFetch((url, init) =>
+      route(url, init, {
+        '/admin-api/groups/ns-root/members': () =>
+          new Response('<html>502 bad gateway</html>', { status: 200 }),
+      }),
+    );
+    restore = r;
+    await expect(
+      enableHaForNamespace(makeJwt({ iss: 'mdma', email: 'u@e' }), 'http://node', 'ns-root', [
+        { group_id: 'g1', context_id: 'ctx-1' },
+      ]),
+    ).rejects.toThrow(/Unexpected response from local node members endpoint/);
+  });
+
   it('throws a descriptive error (not a raw TypeError) on a malformed member entry', async () => {
     const { restore: r } = installFetch((url, init) =>
       route(url, init, {

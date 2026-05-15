@@ -566,22 +566,26 @@ export async function enableHaForNamespace(
     throw new Error('Cloud session has expired — reconnect in Settings');
   }
 
-  // mdma binds the proof to the account *email* (its verifier compares
-  // the proof subject against the authenticated user's email), so prefer
-  // `email`; MDMA session tokens may also carry it in `sub`. We don't
-  // decode via decodeIdToken from cloudAuth.ts because that would
-  // reintroduce the cloudApi → cloudAuth import cycle the codebase
-  // explicitly avoids (see jwt.ts header). The typeof guards already
-  // narrow to string, so no casts are needed.
+  // mdma's verifier compares the proof subject against the authenticated
+  // user's *email*, so the subject must be email-shaped. Prefer the
+  // `email` claim; accept `sub` only when it is itself an email (some
+  // MDMA tokens duplicate it there). A non-email `sub` (opaque user id)
+  // would otherwise produce a confusing cloud subject-mismatch later, so
+  // fail clearly here instead. We don't decode via decodeIdToken from
+  // cloudAuth.ts (would reintroduce the cloudApi → cloudAuth import
+  // cycle the codebase avoids — see jwt.ts header).
   const payload = parseJwtPayload(idToken);
-  const subject =
-    typeof payload?.email === 'string' && payload.email
-      ? payload.email
-      : typeof payload?.sub === 'string' && payload.sub
-        ? payload.sub
-        : null;
+  const emailClaim = typeof payload?.email === 'string' ? payload.email : '';
+  const subClaim = typeof payload?.sub === 'string' ? payload.sub : '';
+  const subject = emailClaim.includes('@')
+    ? emailClaim
+    : subClaim.includes('@')
+      ? subClaim
+      : null;
   if (!subject) {
-    throw new Error('Cloud session is missing the user identifier — reconnect in Settings');
+    throw new Error(
+      'Cloud session is missing the user identifier (no account email) — reconnect in Settings',
+    );
   }
 
   // Pre-flight role check on the namespace root. Only the admin can
@@ -643,12 +647,14 @@ export async function enableHaForNamespace(
   // later as a confusing "context not owned" failure.
   const claimed = await claimContexts(idToken, proofs);
   const claimedSet = new Set(claimed);
-  const missing = proofs
-    .map((p) => p.context_id)
-    .filter((id) => !claimedSet.has(id));
+  // Compare against *unique* submitted ids — duplicate context_ids in
+  // `groups` would otherwise count a single cloud-claimed id as multiple
+  // "missing" entries and falsely abort.
+  const submitted = [...new Set(proofs.map((p) => p.context_id))];
+  const missing = submitted.filter((id) => !claimedSet.has(id));
   if (missing.length > 0) {
     throw new Error(
-      `Cloud did not register ${missing.length} of ${proofs.length} ` +
+      `Cloud did not register ${missing.length} of ${submitted.length} ` +
         `context(s): ${missing.join(', ')}. HA was not enabled.`,
     );
   }

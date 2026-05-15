@@ -540,17 +540,31 @@ export async function enableHaForNamespace(
   }
 
   // ── Step 1: silent claim ──
-  // The MDMA session JWT carries the user's email in `sub` (and/or
-  // `email`); the cloud verifier uses it to bind the ownership proof
-  // to a specific MDMA account. We don't decode via decodeIdToken from
-  // cloudAuth.ts because that would reintroduce the cloudApi → cloudAuth
-  // import cycle the codebase explicitly avoids (see jwt.ts header).
+  // The cloud verifier is the authoritative trust boundary: it re-checks
+  // the proof signature and that the proof's subject == the authenticated
+  // bearer's MDMA account. Validating the token shape here is defence-in-
+  // depth + fail-fast — refuse to spend local merod round-trips (role
+  // check + N proof issuances) on a token the cloud will reject anyway.
+  if (!isMdmaSessionToken(idToken)) {
+    throw new Error('Not signed in to Calimero Cloud — connect in Settings');
+  }
+  if (isTokenExpired(idToken)) {
+    throw new Error('Cloud session has expired — reconnect in Settings');
+  }
+
+  // mdma binds the proof to the account *email* (its verifier compares
+  // the proof subject against the authenticated user's email), so prefer
+  // `email`; MDMA session tokens may also carry it in `sub`. We don't
+  // decode via decodeIdToken from cloudAuth.ts because that would
+  // reintroduce the cloudApi → cloudAuth import cycle the codebase
+  // explicitly avoids (see jwt.ts header). The typeof guards already
+  // narrow to string, so no casts are needed.
   const payload = parseJwtPayload(idToken);
   const subject =
     typeof payload?.email === 'string' && payload.email
-      ? (payload.email as string)
-      : typeof payload?.sub === 'string'
-        ? (payload.sub as string)
+      ? payload.email
+      : typeof payload?.sub === 'string' && payload.sub
+        ? payload.sub
         : null;
   if (!subject) {
     throw new Error('Cloud session is missing the user identifier — reconnect in Settings');

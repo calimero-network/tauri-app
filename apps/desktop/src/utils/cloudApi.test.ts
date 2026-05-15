@@ -435,4 +435,47 @@ describe('enableHaForNamespace silent-claim pre-flight', () => {
     ).rejects.toThrow(/Cloud session has expired/);
     expect(calls).toHaveLength(0); // failed fast, no merod/cloud round-trips
   });
+
+  it('throws (and does not enable HA) when the cloud only partially claims', async () => {
+    const seen: string[] = [];
+    const { restore: r } = installFetch((url, init) => {
+      seen.push(url);
+      return route(url, init, {
+        '/admin-api/groups/ns-root/members': () =>
+          jsonResponse({
+            members: [{ identity: 'me', role: 'Admin' }],
+            selfIdentity: 'me',
+          }),
+        '/admin-api/groups/ns-root/issue-ownership-proof': () =>
+          jsonResponse({ signerPublicKey: 'pk', signedPayload: 'sp', signature: 'sig' }),
+        // Submitted ctx-1 + ctx-2, cloud only claims ctx-1.
+        '/api/cloud/me/contexts/claim': () => jsonResponse({ claimed: ['ctx-1'] }),
+      });
+    });
+    restore = r;
+    await expect(
+      enableHaForNamespace(makeJwt({ iss: 'mdma', email: 'u@e' }), 'http://node', 'ns-root', [
+        { group_id: 'ns-root', context_id: 'ctx-1' },
+        { group_id: 'sub-1', context_id: 'ctx-2' },
+      ]),
+    ).rejects.toThrow(/did not register 1 of 2 context\(s\): ctx-2/);
+    // Must have stopped before the enable-ha / tee-policy steps.
+    expect(seen.some((u) => u.includes('/enable-ha'))).toBe(false);
+    expect(seen.some((u) => u.includes('/tee-admission-policy'))).toBe(false);
+  });
+
+  it('throws a descriptive error (not a raw TypeError) on a malformed member entry', async () => {
+    const { restore: r } = installFetch((url, init) =>
+      route(url, init, {
+        '/admin-api/groups/ns-root/members': () =>
+          jsonResponse({ members: [null], selfIdentity: 'me' }),
+      }),
+    );
+    restore = r;
+    await expect(
+      enableHaForNamespace(makeJwt({ iss: 'mdma', email: 'u@e' }), 'http://node', 'ns-root', [
+        { group_id: 'g1', context_id: 'ctx-1' },
+      ]),
+    ).rejects.toThrow(/Unexpected response from local node members endpoint/);
+  });
 });

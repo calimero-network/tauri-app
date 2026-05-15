@@ -408,11 +408,25 @@ async function getSelfRoleInGroup(
   // `{ members, selfIdentity }`; selfIdentity is camelCase because
   // ListGroupMembersApiResponse has #[serde(rename_all = "camelCase")].
   const body = (await res.json()) as ListGroupMembersResponse;
-  if (!body || !Array.isArray(body.members) || !body.selfIdentity) {
+  const shapeOk =
+    body &&
+    Array.isArray(body.members) &&
+    typeof body.selfIdentity === 'string' &&
+    body.selfIdentity &&
+    // Each entry must be a well-formed { identity, role }; a `null` or
+    // partial entry would otherwise blow up the `.find` below with a
+    // raw TypeError instead of this descriptive error.
+    body.members.every(
+      (m) =>
+        m != null &&
+        typeof m.identity === 'string' &&
+        typeof m.role === 'string',
+    );
+  if (!shapeOk) {
     throw new Error(
       'Unexpected response from local node members endpoint — ' +
-        'expected { members: [...], selfIdentity }. The node may be ' +
-        'an incompatible version.',
+        'expected { members: [{ identity, role }], selfIdentity }. ' +
+        'The node may be an incompatible version.',
     );
   }
   const me = body.members.find((m) => m.identity === body.selfIdentity);
@@ -623,8 +637,21 @@ export async function enableHaForNamespace(
   );
 
   // Single batched submit. Errors propagate to the caller (Namespaces
-  // page surfaces via toast).
-  await claimContexts(idToken, proofs);
+  // page surfaces via toast). Verify the cloud actually recorded every
+  // context we submitted — a partial `claimed[]` would otherwise let HA
+  // proceed for groups whose contexts were never registered, surfacing
+  // later as a confusing "context not owned" failure.
+  const claimed = await claimContexts(idToken, proofs);
+  const claimedSet = new Set(claimed);
+  const missing = proofs
+    .map((p) => p.context_id)
+    .filter((id) => !claimedSet.has(id));
+  if (missing.length > 0) {
+    throw new Error(
+      `Cloud did not register ${missing.length} of ${proofs.length} ` +
+        `context(s): ${missing.join(', ')}. HA was not enabled.`,
+    );
+  }
 
   // ── Step 2–4: existing flow ──
   const measurements = await getFleetMeasurements(idToken);

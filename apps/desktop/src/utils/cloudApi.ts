@@ -1,6 +1,6 @@
 import { getAccessToken } from '../lib/token-storage';
 import { getSettings, saveSettings } from './settings';
-import { isMdmaSessionToken, isTokenExpired } from './jwt';
+import { isMdmaSessionToken, isTokenExpired, parseJwtPayload } from './jwt';
 
 // API lives at manager.cloud.calimero.network; cloud.calimero.network is
 // the static portal and does not proxy /api/*. Exported so cloudAuth
@@ -311,15 +311,245 @@ export async function setTeeAdmissionPolicy(
   }
 }
 
+// ── Cloud claim (silent context registration) ──
+
+/**
+ * An ownership proof issued by the local merod for a single context.
+ * The triplet is opaque to the desktop — it round-trips through the
+ * cloud's claim endpoint, which forwards it to a verifier that checks
+ * the signature against the registered group signing key.
+ *
+ * Field names are snake_case because this object is embedded into the
+ * cloud /api/cloud/me/contexts/claim request body. Merod's admin API
+ * returns the same triplet in camelCase (see requestOwnershipProof
+ * below) and we re-key on the way out.
+ */
+export interface OwnershipProof {
+  signer_public_key: string;
+  signed_payload: string;
+  signature: string;
+}
+
+export interface ClaimedContext {
+  context_id: string;
+  ownership_proof: OwnershipProof;
+}
+
+interface IssueOwnershipProofResponseData {
+  signerPublicKey: string;
+  signedPayload: string;
+  signature: string;
+}
+
+interface GroupMemberEntry {
+  identity: string;
+  role: string;
+}
+
+interface ListGroupMembersResponse {
+  members: GroupMemberEntry[];
+  selfIdentity?: string;
+}
+
+/**
+ * Generate a 32-char hex nonce (16 random bytes). Used as the
+ * audience-binding nonce on the local ownership-proof request — the
+ * merod handler echoes it back inside `signed_payload` so the cloud
+ * verifier can confirm we didn't replay an old proof.
+ */
+function generateProofNonce(): string {
+  const buf = new Uint8Array(16);
+  crypto.getRandomValues(buf);
+  return Array.from(buf, (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+/**
+ * Look up the caller's role in a group via the merod admin API.
+ *
+ * Throws on auth failure, a non-2xx response (core's actor bails with
+ * an error when the node isn't a member of the group, so "not a
+ * member" surfaces here as a thrown error, not `null`), or a 200 whose
+ * body doesn't match the expected `{ members, selfIdentity }` shape —
+ * a silent `null` on a malformed body would later masquerade as "not
+ * the namespace admin", which is exactly the failure mode that masked
+ * the earlier `{data}`-envelope bug. Returns `null` only for the
+ * degenerate case of a well-formed response with no member entry
+ * matching `selfIdentity`.
+ *
+ * Co-located here rather than in a dedicated admin-api module because
+ * this is the only consumer right now — the moment a second caller
+ * appears, lift it out.
+ */
+async function getSelfRoleInGroup(
+  nodeUrl: string,
+  groupId: string,
+): Promise<string | null> {
+  const accessToken = getAccessToken();
+  if (!accessToken) {
+    throw new Error('Not authenticated to local node — sign in first');
+  }
+  const res = await fetch(
+    `${nodeUrl}/admin-api/groups/${encodeURIComponent(groupId)}/members`,
+    {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+    },
+  );
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`Failed to list group members: ${text || res.statusText}`);
+  }
+  // Core's ApiResponse serializes the payload struct directly — there is
+  // no `{ data: ... }` envelope (see ApiResponse::into_response in
+  // calimero-network/core crates/server/src/admin/service.rs, with its
+  // `//TODO add data to response`). The members payload is
+  // `{ members, selfIdentity }`; selfIdentity is camelCase because
+  // ListGroupMembersApiResponse has #[serde(rename_all = "camelCase")].
+  // A non-JSON body parses to null here (not a throw), so the shapeOk
+  // check below produces the descriptive error rather than a raw
+  // SyntaxError escaping as an unhandled rejection.
+  const body = (await res
+    .json()
+    .catch(() => null)) as ListGroupMembersResponse | null;
+  // Negated inline guard (not a separate `shapeOk` const) so TS narrows
+  // `body` to non-null afterwards. Each member entry must be a
+  // well-formed { identity, role } — a `null`/partial entry would
+  // otherwise blow up the `.find` below with a raw TypeError instead of
+  // this descriptive error.
+  if (
+    !body ||
+    !Array.isArray(body.members) ||
+    typeof body.selfIdentity !== 'string' ||
+    !body.selfIdentity ||
+    !body.members.every(
+      (m) =>
+        m != null &&
+        typeof m.identity === 'string' &&
+        typeof m.role === 'string',
+    )
+  ) {
+    throw new Error(
+      'Unexpected response from local node members endpoint — ' +
+        'expected { members: [{ identity, role }], selfIdentity }. ' +
+        'The node may be an incompatible version.',
+    );
+  }
+  const me = body.members.find((m) => m.identity === body.selfIdentity);
+  return me?.role ?? null;
+}
+
+/**
+ * Ask the local merod to issue a signed ownership proof for a context
+ * scoped to the given group. The proof is bound to {audience, subject,
+ * nonce, expiresAtMs} so a leaked proof can't be replayed against a
+ * different cloud user or after a short window.
+ *
+ * Returns the wire-snake-case triplet the cloud claim endpoint expects;
+ * the camelCase merod response is re-keyed inline. Note expiresAtMs is
+ * a *requested* expiry — the merod handler clamps to now+5min server
+ * side, so a generous client value is harmless. We ask for 60s to keep
+ * the window small.
+ */
+export async function requestOwnershipProof(
+  nodeUrl: string,
+  groupId: string,
+  opts: { contextId: string; subject: string },
+): Promise<OwnershipProof> {
+  const accessToken = getAccessToken();
+  if (!accessToken) {
+    throw new Error('Not authenticated to local node — sign in first');
+  }
+  const nonce = generateProofNonce();
+  const expiresAtMs = Date.now() + 60_000;
+  const res = await fetch(
+    `${nodeUrl}/admin-api/groups/${encodeURIComponent(groupId)}/issue-ownership-proof`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({
+        // Same camelCase contract as setTeeAdmissionPolicy: the merod
+        // admin types deserialise with #[serde(rename_all = "camelCase")].
+        // The literal audience "mdma:claim-context" is part of the
+        // proof-binding agreed with the cloud verifier.
+        audience: 'mdma:claim-context',
+        contextId: opts.contextId,
+        subject: opts.subject,
+        nonce,
+        expiresAtMs,
+      }),
+    },
+  );
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`Failed to issue ownership proof: ${text || res.statusText}`);
+  }
+  // No `{ data: ... }` envelope — ApiResponse serializes the payload
+  // struct directly and IssueOwnershipProofApiResponse has no `data`
+  // field. Keys are camelCase (#[serde(rename_all = "camelCase")]).
+  const data = (await res.json()) as IssueOwnershipProofResponseData;
+  if (
+    !data ||
+    typeof data.signerPublicKey !== 'string' ||
+    typeof data.signedPayload !== 'string' ||
+    typeof data.signature !== 'string'
+  ) {
+    throw new Error('Malformed ownership proof response from local node');
+  }
+  // Re-key camelCase → snake_case for the cloud request.
+  return {
+    signer_public_key: data.signerPublicKey,
+    signed_payload: data.signedPayload,
+    signature: data.signature,
+  };
+}
+
+/**
+ * Submit a batch of ownership proofs to the cloud so the contexts get
+ * recorded against the caller's MDMA user. Single batched call instead
+ * of one POST per context — the cloud verifier is the bottleneck and
+ * each proof is independent.
+ *
+ * 403 responses include `{detail: "Ownership proof failed: <reason>"}`;
+ * surface the detail string verbatim so the failure reason (signer
+ * mismatch, expired nonce, ...) reaches the operator.
+ */
+export async function claimContexts(
+  idToken: string,
+  claims: ClaimedContext[],
+): Promise<string[]> {
+  const res = await cloudFetch('/api/cloud/me/contexts/claim', idToken, {
+    method: 'POST',
+    body: JSON.stringify({ claims }),
+  });
+  if (!res.ok) {
+    const error = await res.json().catch(() => null);
+    throw new Error(error?.detail || 'Failed to claim contexts with cloud');
+  }
+  // Tolerate a 2xx with an empty/non-JSON body (e.g. 204): fall back to
+  // {} so the caller's claim-coverage check reports a meaningful
+  // "did not register" error instead of a raw JSON SyntaxError.
+  const body = (await res.json().catch(() => ({}))) as { claimed?: string[] };
+  return Array.isArray(body?.claimed) ? body.claimed : [];
+}
+
 /**
  * Enable HA end-to-end for a namespace:
- * 1. Fetch fleet measurements from cloud once (trusted MRTD values).
- * 2. Set the TEE admission policy on the *namespace root only*. Subgroup
+ * 1. Pre-flight: verify caller is namespace Admin and silently register
+ *    each group's representative context with the cloud (so the
+ *    subsequent enableHaNamespace call doesn't reject with
+ *    "Contexts not found or not owned by user").
+ * 2. Fetch fleet measurements from cloud once (trusted MRTD values).
+ * 3. Set the TEE admission policy on the *namespace root only*. Subgroup
  *    policies are ignored by core (namespace-scoped since rc.29 /
  *    calimero-network/core#2188) — applying them would error. Auto-follow
  *    propagates fleet-node membership into subgroups without a second
  *    admission check.
- * 3. Register the namespace with cloud. MDMA still needs the full group
+ * 4. Register the namespace with cloud. MDMA still needs the full group
  *    list for billing + per-group status rows until the server-side
  *    flattening lands, so the caller keeps enumerating groups.
  */
@@ -333,6 +563,113 @@ export async function enableHaForNamespace(
     throw new Error('Namespace has no groups to enable HA on');
   }
 
+  // ── Step 1: silent claim ──
+  // The cloud verifier is the authoritative trust boundary: it re-checks
+  // the proof signature and that the proof's subject == the authenticated
+  // bearer's MDMA account. Validating the token shape here is defence-in-
+  // depth + fail-fast — refuse to spend local merod round-trips (role
+  // check + N proof issuances) on a token the cloud will reject anyway.
+  if (!isMdmaSessionToken(idToken)) {
+    throw new Error('Not signed in to Calimero Cloud — connect in Settings');
+  }
+  if (isTokenExpired(idToken)) {
+    throw new Error('Cloud session has expired — reconnect in Settings');
+  }
+
+  // mdma's verifier compares the proof subject against the authenticated
+  // user's *email*, so the subject must be email-shaped. Prefer the
+  // `email` claim; accept `sub` only when it is itself an email (some
+  // MDMA tokens duplicate it there). A non-email `sub` (opaque user id)
+  // would otherwise produce a confusing cloud subject-mismatch later, so
+  // fail clearly here instead. We don't decode via decodeIdToken from
+  // cloudAuth.ts (would reintroduce the cloudApi → cloudAuth import
+  // cycle the codebase avoids — see jwt.ts header).
+  const payload = parseJwtPayload(idToken);
+  const emailClaim = typeof payload?.email === 'string' ? payload.email : '';
+  const subClaim = typeof payload?.sub === 'string' ? payload.sub : '';
+  const subject = emailClaim.includes('@')
+    ? emailClaim
+    : subClaim.includes('@')
+      ? subClaim
+      : null;
+  if (!subject) {
+    throw new Error(
+      'Cloud session is missing the user identifier (no account email) — reconnect in Settings',
+    );
+  }
+
+  // Pre-flight role check on the namespace root. Only the admin can
+  // hand out ownership proofs that the cloud verifier will accept —
+  // bailing early gives a clear error rather than a confusing 403
+  // later when the cloud rejects every proof in the batch.
+  // Wire format is locked: GroupMemberRole in core serialises as
+  // {Admin, Member, ReadOnly, ReadOnlyTee}. We require Admin only.
+  const role = await getSelfRoleInGroup(nodeUrl, namespaceId);
+  if (role === null) {
+    // Well-formed response but our identity isn't among the members —
+    // distinct from "you're a Member not an Admin": this usually means
+    // the node isn't actually joined to this namespace root.
+    throw new Error(
+      'Could not determine your role in this namespace — ' +
+        'the node does not appear to be a member of the namespace root.',
+    );
+  }
+  if (role !== 'Admin') {
+    throw new Error('Only the namespace admin can register contexts with the cloud.');
+  }
+
+  // Every proof is scoped to the *namespace root* (`namespaceId`), not
+  // each group's own `group_id`, even for contexts that live in
+  // subgroups. This is deliberate and consistent across the three
+  // coordinated repos:
+  //   • The ownership gate is "direct admin of the namespace root"
+  //     (the role check above), so the root is the authoritative
+  //     scope for the whole namespace.
+  //   • core's resolve_group_signing_key walks ancestors, so the
+  //     root's signing key signs proofs for subgroup contexts too.
+  //   • core's context↔namespace containment check (calimero#2362)
+  //     accepts any context within the namespace rooted at this
+  //     group_id — a strict per-group equality check would reject
+  //     subgroup contexts here.
+  // Same rationale as the "set TEE policy on the root only, subgroups
+  // inherit" step further below.
+  //
+  // Issue one proof per group in parallel — they hit the local merod
+  // and are independent, so latency stacks linearly otherwise. Note
+  // Promise.all is all-or-nothing: a single proof failure aborts the
+  // whole HA-enable and the user retries the flow.
+  const proofs = await Promise.all(
+    groups.map((g) =>
+      requestOwnershipProof(nodeUrl, namespaceId, {
+        contextId: g.context_id,
+        subject,
+      }).then<ClaimedContext>((proof) => ({
+        context_id: g.context_id,
+        ownership_proof: proof,
+      })),
+    ),
+  );
+
+  // Single batched submit. Errors propagate to the caller (Namespaces
+  // page surfaces via toast). Verify the cloud actually recorded every
+  // context we submitted — a partial `claimed[]` would otherwise let HA
+  // proceed for groups whose contexts were never registered, surfacing
+  // later as a confusing "context not owned" failure.
+  const claimed = await claimContexts(idToken, proofs);
+  const claimedSet = new Set(claimed);
+  // Compare against *unique* submitted ids — duplicate context_ids in
+  // `groups` would otherwise count a single cloud-claimed id as multiple
+  // "missing" entries and falsely abort.
+  const submitted = [...new Set(proofs.map((p) => p.context_id))];
+  const missing = submitted.filter((id) => !claimedSet.has(id));
+  if (missing.length > 0) {
+    throw new Error(
+      `Cloud did not register ${missing.length} of ${submitted.length} ` +
+        `context(s): ${missing.join(', ')}. HA was not enabled.`,
+    );
+  }
+
+  // ── Step 2–4: existing flow ──
   const measurements = await getFleetMeasurements(idToken);
   if (!measurements.allowed_mrtd.length) {
     throw new Error('No fleet MRTD measurements available — cannot set admission policy');

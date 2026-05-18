@@ -559,9 +559,14 @@ export async function enableHaForNamespace(
   namespaceId: string,
   groups: NamespaceHaGroup[],
 ): Promise<EnableHaNamespaceResponse> {
-  if (groups.length === 0) {
-    throw new Error('Namespace has no groups to enable HA on');
-  }
+  // SPIKE: allow HA-enable on a namespace with no context
+  // When the namespace has no groups, or no group has a real context yet,
+  // there is nothing to take an ownership proof for / claim with the cloud.
+  // Core can still admit a ReadOnlyTee fleet member at the root group
+  // (group_id == namespaceId) with zero contexts and auto-follow contexts
+  // created later, so skip the claim block entirely and register the
+  // namespace with a single root-group-only entry.
+  const hasRealContext = groups.some((g) => !!g.context_id);
 
   // ── Step 1: silent claim ──
   // The cloud verifier is the authoritative trust boundary: it re-checks
@@ -618,6 +623,11 @@ export async function enableHaForNamespace(
     throw new Error('Only the namespace admin can register contexts with the cloud.');
   }
 
+  // SPIKE: allow HA-enable on a namespace with no context
+  // Skip the ownership-proof + claimContexts block when there is nothing
+  // to claim. The Admin role check above still gates the operation, and
+  // the fleet-measurement + admission-policy steps below still run.
+  if (hasRealContext) {
   // Every proof is scoped to the *namespace root* (`namespaceId`), not
   // each group's own `group_id`, even for contexts that live in
   // subgroups. This is deliberate and consistent across the three
@@ -668,6 +678,7 @@ export async function enableHaForNamespace(
         `context(s): ${missing.join(', ')}. HA was not enabled.`,
     );
   }
+  } // SPIKE: allow HA-enable on a namespace with no context (end claim block)
 
   // ── Step 2–4: existing flow ──
   const measurements = await getFleetMeasurements(idToken);
@@ -679,7 +690,15 @@ export async function enableHaForNamespace(
   // there and only there — subgroups inherit it via resolve-to-root.
   await setTeeAdmissionPolicy(nodeUrl, namespaceId, measurements.allowed_mrtd);
 
-  return enableHaNamespace(idToken, namespaceId, groups);
+  // SPIKE: allow HA-enable on a namespace with no context
+  // With no real context, register the namespace with one root-group-only
+  // entry (group_id == namespaceId == the root group id, empty context_id).
+  // Core admits a ReadOnlyTee fleet member at the root and auto-follows
+  // contexts created later.
+  const haGroups: NamespaceHaGroup[] = hasRealContext
+    ? groups
+    : [{ group_id: namespaceId, context_id: '' }];
+  return enableHaNamespace(idToken, namespaceId, haGroups);
 }
 
 export { CloudSessionExpiredError };

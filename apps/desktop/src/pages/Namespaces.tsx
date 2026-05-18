@@ -108,7 +108,10 @@ async function findRepresentativeHaGroup(
   // re-probe it in the fallback.
   const subgroups = allGroups.filter((g) => g.groupId !== namespaceId);
   if (!subgroups.length) {
-    throw new Error("This namespace has no groups");
+    // SPIKE: allow HA-enable on a namespace with no context
+    // A fresh namespace has only the root group and no contexts. Don't
+    // throw — fall through to the root-group-only representative below.
+    return { group_id: namespaceId, context_id: "" };
   }
 
   for (let i = 0; i < subgroups.length; i += PROBE_BATCH_SIZE) {
@@ -137,7 +140,12 @@ async function findRepresentativeHaGroup(
     if (found) return found;
   }
 
-  throw new Error("No group in this namespace has a context yet");
+  // SPIKE: allow HA-enable on a namespace with no context
+  // No group has a context yet. Instead of throwing (which gated the
+  // Enable-HA button), return a root-group-only representative. The root
+  // group id == namespaceId; core admits a ReadOnlyTee fleet member there
+  // with zero contexts and auto-follows contexts created later.
+  return { group_id: namespaceId, context_id: "" };
 }
 
 export default function Namespaces() {

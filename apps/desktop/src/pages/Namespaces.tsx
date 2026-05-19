@@ -251,6 +251,15 @@ export default function Namespaces() {
         // core auto-follow propagates fleet membership into subgroups;
         // per-context registration via /contexts/claim remains a
         // separate concern handled elsewhere.
+        // .catch(() => []) is intentional, NOT silent error-swallowing:
+        // bundled mero-js 1.4.0 throws on namespace/group enumeration
+        // against newer core nodes (known packaging skew), so this probe
+        // is best-effort only. On error/empty we deliberately fall
+        // through to the context-less path, which is authorised
+        // server-side by a merod-signed namespace ownership proof (Phase
+        // 1) — the canonical HA authz, not a bypass/downgrade. Phase 4
+        // decouples HA from context registration, so this fallthrough is
+        // intended. Ref: NAMESPACE_NATIVE_READMODEL_PLAN.md §4.2.
         const rootCtxs = await mero.admin
           .listGroupContexts(nsId)
           .catch(() => [] as { contextId: string }[]);

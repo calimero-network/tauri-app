@@ -13,8 +13,12 @@
 }
 
 .sidebar-header {
-  padding: 12px 20px;
+  height: var(--header-height);
+  padding: 0 20px;
   border-bottom: 1px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
 }
 
 .sidebar-logo {

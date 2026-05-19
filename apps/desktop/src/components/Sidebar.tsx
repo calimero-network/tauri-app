@@ -1,5 +1,5 @@
 import { getSettings } from "../utils/settings";
-import { Home, Globe, Package, ShoppingCart, Settings as SettingsIcon, Server } from "lucide-react";
+import { Home, Layers, Package, Store, SettingsIcon, Server } from "./Icons";
 import calimeroLogo from "../assets/calimero-logo.svg";
 import "./Sidebar.css";
 
@@ -18,9 +18,9 @@ export default function Sidebar({ currentPage, onNavigate, onOpenSettings, nodeD
   const navItems = [
     { id: 'home' as const, label: 'Home', icon: Home },
     ...(developerMode || nodeDisconnected ? [{ id: 'nodes' as const, label: 'Nodes', icon: Server }] : []),
-    ...(developerMode ? [{ id: 'namespaces' as const, label: 'Namespaces', icon: Globe }] : []),
+    ...(developerMode ? [{ id: 'namespaces' as const, label: 'Namespaces', icon: Layers }] : []),
     { id: 'installed' as const, label: 'Applications', icon: Package },
-    { id: 'marketplace' as const, label: 'Marketplace', icon: ShoppingCart },
+    { id: 'marketplace' as const, label: 'Marketplace', icon: Store },
   ];
 
   return (

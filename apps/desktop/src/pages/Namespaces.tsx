@@ -259,10 +259,18 @@ export default function Namespaces() {
         // server-side by a merod-signed namespace ownership proof (Phase
         // 1) — the canonical HA authz, not a bypass/downgrade. Phase 4
         // decouples HA from context registration, so this fallthrough is
-        // intended. Ref: NAMESPACE_NATIVE_READMODEL_PLAN.md §4.2.
+        // intended. Ref: NAMESPACE_NATIVE_READMODEL_PLAN.md §4.2. The
+        // failure is now warn-logged so non-skew probe failures stay
+        // visible for diagnosis.
         const rootCtxs = await mero.admin
           .listGroupContexts(nsId)
-          .catch(() => [] as { contextId: string }[]);
+          .catch((err: unknown) => {
+            console.warn(
+              'listGroupContexts probe failed; treating namespace as context-less and falling through to the namespace-ownership-proof path (expected under mero-js↔core skew):',
+              err,
+            );
+            return [] as { contextId: string }[];
+          });
         const groups = rootCtxs.length
           ? [{ group_id: nsId, context_id: rootCtxs[0].contextId }]
           : [];

@@ -639,20 +639,29 @@ export async function claimContexts(
 }
 
 /**
- * Enable HA end-to-end for a namespace:
- * 1. Pre-flight: verify caller is namespace Admin and silently register
- *    each group's representative context with the cloud (so the
- *    subsequent enableHaNamespace call doesn't reject with
- *    "Contexts not found or not owned by user").
+ * Enable HA end-to-end for a namespace (Phase 4 — HA authz decoupled
+ * from context registration):
+ * 1. Pre-flight: verify the caller is the namespace-root Admin. This is
+ *    a UX fail-fast only — the authoritative gate is server-side (the
+ *    namespace ownership proof on the no-context path; a UserContext the
+ *    caller already claimed on the real-context path). HA enable no
+ *    longer silently claims contexts as a precondition: there is NO
+ *    `/contexts/claim` round-trip on either path. `/contexts/claim`
+ *    remains a separate, explicit context-registration concern (see
+ *    `claimContexts` / `requestOwnershipProof`) that callers invoke on
+ *    their own; it is not a hidden dependency of enabling HA.
  * 2. Fetch fleet measurements from cloud once (trusted MRTD values).
  * 3. Set the TEE admission policy on the *namespace root only*. Subgroup
  *    policies are ignored by core (namespace-scoped since rc.29 /
  *    calimero-network/core#2188) — applying them would error. Auto-follow
  *    propagates fleet-node membership into subgroups without a second
  *    admission check.
- * 4. Register the namespace with cloud. MDMA still needs the full group
- *    list for billing + per-group status rows until the server-side
- *    flattening lands, so the caller keeps enumerating groups.
+ * 4. Register the namespace with cloud:
+ *    • Real-context path: `groups` carries representative
+ *      {group_id, context_id} entries; the cloud authorises each context
+ *      against a UserContext the caller already claimed out-of-band.
+ *    • No-context path: `groups` is `[]` plus a single namespace-scoped
+ *      ownership proof — the authoritative server-verified namespace gate.
  */
 export async function enableHaForNamespace(
   idToken: string,
@@ -661,23 +670,22 @@ export async function enableHaForNamespace(
   groups: NamespaceHaGroup[],
 ): Promise<EnableHaNamespaceResponse> {
   // A context-less namespace is a first-class HA target. When no group
-  // has a real context yet there is nothing to claim per-context, so the
-  // per-context proof + claimContexts batch below is skipped; instead we
-  // send the cloud ONE namespace-scoped ownership proof and an empty
-  // group list. Core admits a ReadOnlyTee fleet member at the root group
-  // (group_id == namespaceId) with zero contexts and auto-follows
-  // contexts created later. The namespace proof is the authoritative
-  // server-verified ownership gate for this path (the cloud cannot
-  // authorise off a UserContext row because none exists yet) — without
-  // it, any authenticated user could enable HA on any namespace.
+  // has a real context the cloud authorises off ONE namespace-scoped
+  // ownership proof + an empty group list (the authoritative
+  // server-verified gate — no UserContext row exists to authorise
+  // against). When real contexts are supplied the cloud authorises each
+  // against a UserContext the caller already registered out-of-band via
+  // the separate /contexts/claim flow. Neither path claims contexts as a
+  // side effect of enabling HA (Phase 4 decouple).
   const hasRealContext = groups.some((g) => !!g.context_id);
 
-  // ── Step 1: silent claim ──
+  // ── Step 1: token-shape fail-fast + Admin pre-flight ──
   // The cloud verifier is the authoritative trust boundary: it re-checks
   // the proof signature and that the proof's subject == the authenticated
   // bearer's MDMA account. Validating the token shape here is defence-in-
-  // depth + fail-fast — refuse to spend local merod round-trips (role
-  // check + N proof issuances) on a token the cloud will reject anyway.
+  // depth + fail-fast — refuse to spend a local merod round-trip (role
+  // check, plus a namespace-proof issuance on the no-context path) on a
+  // token the cloud will reject anyway.
   if (!isMdmaSessionToken(idToken)) {
     throw new Error('Not signed in to Calimero Cloud — connect in Settings');
   }
@@ -707,10 +715,11 @@ export async function enableHaForNamespace(
     );
   }
 
-  // Pre-flight role check on the namespace root. Only the admin can
-  // hand out ownership proofs that the cloud verifier will accept —
-  // bailing early gives a clear error rather than a confusing 403
-  // later when the cloud rejects every proof in the batch.
+  // Pre-flight role check on the namespace root. Only the direct admin
+  // of the namespace root can enable HA — bailing early gives a clear
+  // error rather than a confusing 403/422 later when the cloud rejects
+  // the proof (no-context path) or the namespace registration. This is a
+  // UX fail-fast; the authoritative gate is server-side.
   // Wire format is locked: GroupMemberRole in core serialises as
   // {Admin, Member, ReadOnly, ReadOnlyTee}. We require Admin only.
   const role = await getSelfRoleInGroup(nodeUrl, namespaceId);
@@ -724,69 +733,20 @@ export async function enableHaForNamespace(
     );
   }
   if (role !== 'Admin') {
-    throw new Error('Only the namespace admin can register contexts with the cloud.');
+    throw new Error('Only the namespace admin can enable HA for this namespace.');
   }
 
-  // Real-context path (unchanged): per-context proof + claimContexts so
-  // the cloud can authorise each context against a claimed UserContext.
-  // The context-less path skips this entirely and instead supplies the
-  // single namespace proof to enableHaNamespace below; the Admin
-  // pre-flight above is a UX fail-fast for both, but the server-verified
-  // namespace proof is the authoritative gate for the context-less path.
-  if (hasRealContext) {
-  // Every proof is scoped to the *namespace root* (`namespaceId`), not
-  // each group's own `group_id`, even for contexts that live in
-  // subgroups. This is deliberate and consistent across the three
-  // coordinated repos:
-  //   • The ownership gate is "direct admin of the namespace root"
-  //     (the role check above), so the root is the authoritative
-  //     scope for the whole namespace.
-  //   • core's resolve_group_signing_key walks ancestors, so the
-  //     root's signing key signs proofs for subgroup contexts too.
-  //   • core's context↔namespace containment check (calimero#2362)
-  //     accepts any context within the namespace rooted at this
-  //     group_id — a strict per-group equality check would reject
-  //     subgroup contexts here.
-  // Same rationale as the "set TEE policy on the root only, subgroups
-  // inherit" step further below.
-  //
-  // Issue one proof per group in parallel — they hit the local merod
-  // and are independent, so latency stacks linearly otherwise. Note
-  // Promise.all is all-or-nothing: a single proof failure aborts the
-  // whole HA-enable and the user retries the flow.
-  const proofs = await Promise.all(
-    groups.map((g) =>
-      requestOwnershipProof(nodeUrl, namespaceId, {
-        contextId: g.context_id,
-        subject,
-      }).then<ClaimedContext>((proof) => ({
-        context_id: g.context_id,
-        ownership_proof: proof,
-      })),
-    ),
-  );
+  // NOTE (Phase 4 decouple): there is intentionally no per-context
+  // ownership-proof + /contexts/claim batch here anymore. Enabling HA no
+  // longer silently registers contexts as a precondition. The
+  // real-context path now sends `groups` straight to enableHaNamespace —
+  // the cloud authorises each context against a UserContext the caller
+  // already registered via the separate, explicit /contexts/claim flow
+  // (requestOwnershipProof + claimContexts remain available for that, but
+  // are not invoked from this HA path). The no-context path supplies a
+  // single namespace-scoped ownership proof below.
 
-  // Single batched submit. Errors propagate to the caller (Namespaces
-  // page surfaces via toast). Verify the cloud actually recorded every
-  // context we submitted — a partial `claimed[]` would otherwise let HA
-  // proceed for groups whose contexts were never registered, surfacing
-  // later as a confusing "context not owned" failure.
-  const claimed = await claimContexts(idToken, proofs);
-  const claimedSet = new Set(claimed);
-  // Compare against *unique* submitted ids — duplicate context_ids in
-  // `groups` would otherwise count a single cloud-claimed id as multiple
-  // "missing" entries and falsely abort.
-  const submitted = [...new Set(proofs.map((p) => p.context_id))];
-  const missing = submitted.filter((id) => !claimedSet.has(id));
-  if (missing.length > 0) {
-    throw new Error(
-      `Cloud did not register ${missing.length} of ${submitted.length} ` +
-        `context(s): ${missing.join(', ')}. HA was not enabled.`,
-    );
-  }
-  } // end real-context claim block
-
-  // ── Step 2–4: existing flow ──
+  // ── Step 2–4: measurements → tee-policy → register ──
   const measurements = await getFleetMeasurements(idToken);
   if (!measurements.allowed_mrtd.length) {
     throw new Error('No fleet MRTD measurements available — cannot set admission policy');
@@ -797,7 +757,9 @@ export async function enableHaForNamespace(
   await setTeeAdmissionPolicy(nodeUrl, namespaceId, measurements.allowed_mrtd);
 
   if (hasRealContext) {
-    // Real-context path: contexts already claimed above, no proof.
+    // Real-context path: the cloud authorises each context against a
+    // UserContext the caller registered out-of-band via /contexts/claim.
+    // No proof here, and HA no longer claims on the caller's behalf.
     return enableHaNamespace(idToken, namespaceId, groups);
   }
 

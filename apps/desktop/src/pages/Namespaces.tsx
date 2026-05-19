@@ -22,7 +22,6 @@ import {
   disableHaNamespace,
   getCloudGroups,
   CloudSessionExpiredError,
-  type NamespaceHaGroup,
 } from "../utils/cloudApi";
 import { getCloudIdToken } from "../utils/cloudAuth";
 import { isCloudEnabled } from "../utils/featureFlags";
@@ -62,95 +61,6 @@ type View =
   | { type: "list" }
   | { type: "namespace"; ns: Namespace }
   | { type: "group"; ns: Namespace; groupId: string };
-
-/**
- * Find any {group_id, context_id} pair owned by the user under this
- * namespace. The manager only stores one HaRequest + HaContextStatus
- * per namespace regardless of how many groups the client sends, so
- * there is no reason to enumerate them all — we just need one entry
- * to attach billing + fleet-join bookkeeping to.
- *
- * Fast path: most namespaces have a context in the root group
- * (group_id === namespace_id), so one admin-API call usually suffices.
- * Fallback: probe subgroups in bounded-concurrency batches and
- * early-exit as soon as one batch returns a match. The old code did
- * O(N) sequential round-trips; bounded batches keep the local admin
- * API from seeing a burst of parallel requests on large namespaces
- * while still amortising latency.
- */
-const PROBE_BATCH_SIZE = 6;
-
-async function findRepresentativeHaGroup(
-  mero: NonNullable<ReturnType<typeof useMero>["mero"]>,
-  namespaceId: string,
-): Promise<NamespaceHaGroup> {
-  // Fast path failure is tolerated but logged — if it's a real
-  // connectivity issue the fallback path's listNamespaceGroups call
-  // will surface the same error with proper context. We don't
-  // distinguish "404 / no contexts" from other errors here because
-  // mero-js doesn't expose a stable error shape to switch on; the
-  // warning in dev console is what surfaces the cause.
-  const rootCtxs = await mero.admin
-    .listGroupContexts(namespaceId)
-    .catch((err: unknown) => {
-      console.warn(
-        `listGroupContexts(${namespaceId}) failed on fast path, falling through to subgroup probe:`,
-        err,
-      );
-      return [] as { contextId: string }[];
-    });
-  if (rootCtxs.length) {
-    return { group_id: namespaceId, context_id: rootCtxs[0].contextId };
-  }
-
-  const allGroups = await mero.admin.listNamespaceGroups(namespaceId);
-  // Root already proven empty on the fast path — drop it so we don't
-  // re-probe it in the fallback.
-  const subgroups = allGroups.filter((g) => g.groupId !== namespaceId);
-  if (!subgroups.length) {
-    // A fresh namespace has only the root group and no contexts. This is
-    // a valid HA target: return the root-only representative (empty
-    // context_id). enableHaForNamespace detects the no-context case and
-    // authorises it with a server-verified namespace ownership proof
-    // rather than a per-context claim — there is intentionally no throw
-    // here.
-    return { group_id: namespaceId, context_id: "" };
-  }
-
-  for (let i = 0; i < subgroups.length; i += PROBE_BATCH_SIZE) {
-    const batch = subgroups.slice(i, i + PROBE_BATCH_SIZE);
-    const probes = await Promise.all(
-      batch.map((g) =>
-        mero.admin
-          .listGroupContexts(g.groupId)
-          .then(
-            (ctxs) =>
-              ctxs[0]
-                ? ({ group_id: g.groupId, context_id: ctxs[0].contextId } as NamespaceHaGroup)
-                : null,
-            (err: unknown) => {
-              // Per-probe failure logged but non-fatal — another
-              // subgroup may still resolve. If every probe fails the
-              // caller sees the "no context yet" error below, and the
-              // dev console has the underlying reason.
-              console.warn(`listGroupContexts(${g.groupId}) failed:`, err);
-              return null;
-            },
-          ),
-      ),
-    );
-    const found = probes.find((p): p is NamespaceHaGroup => p !== null);
-    if (found) return found;
-  }
-
-  // No group has a context yet. This is a valid HA target — return the
-  // root-only representative (empty context_id) rather than throwing.
-  // The root group id == namespaceId; enableHaForNamespace authorises
-  // this no-context case with a server-verified namespace ownership
-  // proof, and core admits a ReadOnlyTee fleet member at the root with
-  // zero contexts and auto-follows contexts created later.
-  return { group_id: namespaceId, context_id: "" };
-}
 
 export default function Namespaces() {
   const toast = useToast();
@@ -256,10 +166,12 @@ export default function Namespaces() {
     });
   };
 
-  // HA state — keyed by namespaceId (not groupId). A namespace is
-  // considered HA-enabled if at least one of its groups has HA enabled
-  // on the cloud side. `haEnabling` is a per-namespace map (not a single
-  // boolean) so toggling one namespace doesn't lock every other toggle.
+  // HA state — keyed by namespaceId. A namespace is HA-enabled when the
+  // cloud reports ha_status === "enabled" for it (namespace-scoped — the
+  // cloud collapses HA to one record per namespace; post Phase 4 the
+  // payload also carries zero-context namespaces). `haEnabling` is a
+  // per-namespace map (not a single boolean) so toggling one namespace
+  // doesn't lock every other toggle.
   const [haEnabling, setHaEnabling] = useState<Record<string, boolean>>({});
   const [haEnabled, setHaEnabled] = useState<Record<string, boolean>>({});
 
@@ -313,13 +225,56 @@ export default function Namespaces() {
         setHaEnabled((prev) => ({ ...prev, [nsId]: false }));
         toast.success('HA disabled — TEE nodes will stop replicating');
       } else {
-        // The cloud only needs ONE representative {group_id, context_id}
-        // per namespace (post mdma#30 / core rc.29 — one HaRequest row
-        // per namespace, auto-follow propagates fleet membership into
-        // subgroups). Find one quickly instead of enumerating every
-        // subgroup sequentially.
-        const haGroup = await findRepresentativeHaGroup(mero, nsId);
-        await enableHaForNamespace(token, settings.nodeUrl, nsId, [haGroup]);
+        // Root-only, SDK-skew-safe probe. We deliberately do NOT
+        // enumerate namespace groups/subgroups here anymore:
+        //
+        //  • Namespace-proof is the HA authority for the context-less
+        //    case (Phase 1, #80). enableHaForNamespace already routes an
+        //    empty group list to requestNamespaceOwnershipProof +
+        //    enableHaNamespace(nsId, [], proof) — admin-of-root proof
+        //    authorises the whole namespace, and core auto-follow
+        //    propagates fleet membership into subgroups. Group/subgroup
+        //    enumeration was legacy context-native bookkeeping and is
+        //    being decoupled here (pulling a slice of Phase 4 forward).
+        //  • Skew safety: bundled mero-js 1.4.0's listNamespaceGroups
+        //    throws "This namespace has no groups" against a
+        //    core-master/rc.40 node, and it was only ever reached on the
+        //    context-less path — exactly the path we now hand straight
+        //    to the namespace proof. listGroupContexts(nsId) is the one
+        //    call confirmed working against core master.
+        //
+        // Intentional behavioural change (NOT a regression): a namespace
+        // whose contexts live ONLY in subgroups (root group empty) now
+        // takes the namespace-proof path instead of the per-context
+        // claim path. This is consistent with the namespace-native
+        // model — admin-of-root proof authorises the whole namespace and
+        // core auto-follow propagates fleet membership into subgroups;
+        // per-context registration via /contexts/claim remains a
+        // separate concern handled elsewhere.
+        // .catch(() => []) is intentional, NOT silent error-swallowing:
+        // bundled mero-js 1.4.0 throws on namespace/group enumeration
+        // against newer core nodes (known packaging skew), so this probe
+        // is best-effort only. On error/empty we deliberately fall
+        // through to the context-less path, which is authorised
+        // server-side by a merod-signed namespace ownership proof (Phase
+        // 1) — the canonical HA authz, not a bypass/downgrade. Phase 4
+        // decouples HA from context registration, so this fallthrough is
+        // intended. Ref: NAMESPACE_NATIVE_READMODEL_PLAN.md §4.2. The
+        // failure is now warn-logged so non-skew probe failures stay
+        // visible for diagnosis.
+        const rootCtxs = await mero.admin
+          .listGroupContexts(nsId)
+          .catch((err: unknown) => {
+            console.warn(
+              'listGroupContexts probe failed; treating namespace as context-less and falling through to the namespace-ownership-proof path (expected under mero-js↔core skew):',
+              err,
+            );
+            return [] as { contextId: string }[];
+          });
+        const groups = rootCtxs.length
+          ? [{ group_id: nsId, context_id: rootCtxs[0].contextId }]
+          : [];
+        await enableHaForNamespace(token, settings.nodeUrl, nsId, groups);
         setHaEnabled((prev) => ({ ...prev, [nsId]: true }));
         toast.success('HA enabled — TEE fleet nodes will join');
       }
@@ -573,8 +528,9 @@ export default function Namespaces() {
             <div className="ns-detail-section">
               <h2><Shield size={16} style={{ marginRight: 6, verticalAlign: -2 }} />High Availability</h2>
               <p className="ha-description">
-                Enable TEE replication to have fleet nodes automatically join and replicate
-                your namespace data. Requires a Calimero Cloud account with a paid plan.
+                Enable TEE replication to have fleet nodes automatically join and
+                replicate this namespace. Requires a Calimero Cloud account with a
+                paid plan.
               </p>
               <div className="ha-toggle-row">
                 <span className="ha-status">

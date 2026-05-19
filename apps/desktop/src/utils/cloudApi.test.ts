@@ -181,12 +181,12 @@ describe('claimContexts', () => {
   });
 });
 
-describe('enableHaForNamespace silent-claim pre-flight', () => {
+describe('enableHaForNamespace (Phase 4 — HA decoupled from /contexts/claim)', () => {
   let restore: () => void;
   beforeEach(() => {
     // Deterministic but *distinct per call* — a counter advances each
-    // fill so parallel proof requests get different nonces (a constant
-    // mock would mask a per-batch duplicate-nonce regression).
+    // fill so the namespace-proof nonce is well-formed and a future
+    // multi-proof regression would still surface.
     let counter = 0;
     vi.spyOn(crypto, 'getRandomValues').mockImplementation((arr: any) => {
       for (let i = 0; i < arr.length; i++) arr[i] = (counter + i) & 0xff;
@@ -227,7 +227,7 @@ describe('enableHaForNamespace silent-claim pre-flight', () => {
       enableHaForNamespace(makeJwt({ iss: 'mdma', email: 'u@e' }), 'http://node', 'ns-root', [
         { group_id: 'g1', context_id: 'ctx-1' },
       ]),
-    ).rejects.toThrow(/Only the namespace admin can register contexts/);
+    ).rejects.toThrow(/Only the namespace admin can enable HA/);
   });
 
   it('gives a distinct error when our identity is not among the members', async () => {
@@ -267,7 +267,7 @@ describe('enableHaForNamespace silent-claim pre-flight', () => {
     ).rejects.toThrow(/Unexpected response from local node members endpoint/);
   });
 
-  it('runs members → proofs (parallel) → claim → measurements → tee-policy → enable in order', async () => {
+  it('real-context path: members → measurements → tee-policy → enable, NO proof, NO /contexts/claim', async () => {
     const calls: string[] = [];
     const { restore: r } = installFetch((url, init) => {
       calls.push(`${init?.method ?? 'GET'} ${url}`);
@@ -277,14 +277,6 @@ describe('enableHaForNamespace silent-claim pre-flight', () => {
             members: [{ identity: 'me', role: 'Admin' }],
             selfIdentity: 'me',
           }),
-        '/admin-api/groups/ns-root/issue-ownership-proof': () =>
-          jsonResponse({
-            signerPublicKey: 'pk',
-            signedPayload: 'sp',
-            signature: 'sig',
-          }),
-        '/api/cloud/me/contexts/claim': () =>
-          jsonResponse({ claimed: ['ctx-1', 'ctx-2'] }),
         '/api/cloud/fleet/measurements': () =>
           jsonResponse({
             release_tag: 'v1',
@@ -317,18 +309,14 @@ describe('enableHaForNamespace silent-claim pre-flight', () => {
     );
     expect(res.status).toBe('enabling');
 
-    // Order: members must come before any proof; proofs must come
-    // before the claim POST; claim must precede measurements; tee-
-    // policy must precede the final enable.
+    // Phase 4 decouple: HA enable performs NO context-claim preflight.
+    expect(calls.some((c) => c.includes('/issue-ownership-proof'))).toBe(false);
+    expect(calls.some((c) => c.includes('/contexts/claim'))).toBe(false);
+
+    // Order: members (UX fail-fast) → measurements → tee-policy → enable.
     const ordered = (substr: string) =>
       calls.findIndex((c) => c.includes(substr));
-    expect(ordered('/members')).toBeLessThan(ordered('/issue-ownership-proof'));
-    expect(ordered('/issue-ownership-proof')).toBeLessThan(
-      ordered('/contexts/claim'),
-    );
-    expect(ordered('/contexts/claim')).toBeLessThan(
-      ordered('/fleet/measurements'),
-    );
+    expect(ordered('/members')).toBeLessThan(ordered('/fleet/measurements'));
     expect(ordered('/fleet/measurements')).toBeLessThan(
       ordered('/tee-admission-policy'),
     );
@@ -336,20 +324,85 @@ describe('enableHaForNamespace silent-claim pre-flight', () => {
       ordered('/enable-ha'),
     );
 
-    // Exactly two proof requests (one per group) — parallel, but both
-    // present in the call list.
-    const proofCalls = calls.filter((c) =>
-      c.includes('/issue-ownership-proof'),
-    );
-    expect(proofCalls).toHaveLength(2);
+    // Real-context path sends the groups straight through, no proof key.
+    const enableCall = calls.find((c) => c.includes('/enable-ha'));
+    expect(enableCall).toBeDefined();
+  });
 
-    // *Every* proof call must precede the claim — findIndex only checks
-    // the first, so a bug where one proof lands after the claim would
-    // otherwise slip through.
-    const claimIdx = calls.findIndex((c) => c.includes('/contexts/claim'));
-    for (const pc of proofCalls) {
-      expect(calls.indexOf(pc)).toBeLessThan(claimIdx);
-    }
+  it('no-context path ([] groups): members → measurements → tee-policy → ONE namespace proof → enable, NO /contexts/claim', async () => {
+    const calls: string[] = [];
+    let enableBody: any;
+    const { restore: r } = installFetch((url, init) => {
+      calls.push(`${init?.method ?? 'GET'} ${url}`);
+      if (url.includes('/enable-ha')) {
+        enableBody = JSON.parse(String(init?.body));
+      }
+      return route(url, init, {
+        '/admin-api/groups/ns-root/members': () =>
+          jsonResponse({
+            members: [{ identity: 'me', role: 'Admin' }],
+            selfIdentity: 'me',
+          }),
+        '/admin-api/groups/ns-root/issue-namespace-ownership-proof': () =>
+          jsonResponse({
+            signerPublicKey: 'pk',
+            signedPayload: 'sp',
+            signature: 'sig',
+          }),
+        '/api/cloud/fleet/measurements': () =>
+          jsonResponse({
+            release_tag: 'v1',
+            allowed_mrtd: ['mrtd-1'],
+            allowed_rtmr0: [],
+            allowed_rtmr1: [],
+            allowed_rtmr2: [],
+            allowed_rtmr3: [],
+          }),
+        '/admin-api/groups/ns-root/settings/tee-admission-policy': () =>
+          new Response('{}', { status: 200 }),
+        '/api/cloud/me/namespaces/ns-root/enable-ha': () =>
+          jsonResponse({
+            status: 'enabling',
+            namespace_id: 'ns-root',
+            groups: [],
+          }),
+      });
+    });
+    restore = r;
+
+    const res = await enableHaForNamespace(
+      makeJwt({ iss: 'mdma', email: 'u@e' }),
+      'http://node',
+      'ns-root',
+      [], // zero-context namespace
+    );
+    expect(res.status).toBe('enabling');
+
+    // No /contexts/claim on the no-context path either.
+    expect(calls.some((c) => c.includes('/contexts/claim'))).toBe(false);
+
+    // Exactly one namespace-scoped ownership proof, after tee-policy.
+    const nsProofCalls = calls.filter((c) =>
+      c.includes('/issue-namespace-ownership-proof'),
+    );
+    expect(nsProofCalls).toHaveLength(1);
+    const ordered = (substr: string) =>
+      calls.findIndex((c) => c.includes(substr));
+    expect(ordered('/tee-admission-policy')).toBeLessThan(
+      ordered('/issue-namespace-ownership-proof'),
+    );
+    expect(ordered('/issue-namespace-ownership-proof')).toBeLessThan(
+      ordered('/enable-ha'),
+    );
+
+    // The namespace proof is sent as ownership_proof with an empty group
+    // list — the authoritative server-verified gate for this path.
+    expect(enableBody.groups).toEqual([]);
+    expect(enableBody.ownership_proof).toEqual({
+      signer_public_key: 'pk',
+      signed_payload: 'sp',
+      signature: 'sig',
+    });
   });
 
   it('throws a clear error when the MDMA session JWT lacks an identifier', async () => {
@@ -365,11 +418,11 @@ describe('enableHaForNamespace silent-claim pre-flight', () => {
     ).rejects.toThrow(/missing the user identifier/);
   });
 
-  it('issues a distinct nonce per parallel proof request', async () => {
-    const bodies: any[] = [];
+  it('the no-context namespace proof carries a well-formed nonce + the enable-ha audience', async () => {
+    let proofBody: any;
     const { restore: r } = installFetch((url, init) => {
-      if (url.includes('/issue-ownership-proof')) {
-        bodies.push(JSON.parse(String(init?.body)));
+      if (url.includes('/issue-namespace-ownership-proof')) {
+        proofBody = JSON.parse(String(init?.body));
       }
       return route(url, init, {
         '/admin-api/groups/ns-root/members': () =>
@@ -377,14 +430,73 @@ describe('enableHaForNamespace silent-claim pre-flight', () => {
             members: [{ identity: 'me', role: 'Admin' }],
             selfIdentity: 'me',
           }),
-        '/admin-api/groups/ns-root/issue-ownership-proof': () =>
+        '/admin-api/groups/ns-root/issue-namespace-ownership-proof': () =>
           jsonResponse({
             signerPublicKey: 'pk',
             signedPayload: 'sp',
             signature: 'sig',
           }),
-        '/api/cloud/me/contexts/claim': () =>
-          jsonResponse({ claimed: ['ctx-1', 'ctx-2'] }),
+        '/api/cloud/fleet/measurements': () =>
+          jsonResponse({
+            release_tag: 'v1',
+            allowed_mrtd: ['mrtd-1'],
+            allowed_rtmr0: [],
+            allowed_rtmr1: [],
+            allowed_rtmr2: [],
+            allowed_rtmr3: [],
+          }),
+        '/admin-api/groups/ns-root/settings/tee-admission-policy': () =>
+          new Response('{}', { status: 200 }),
+        '/api/cloud/me/namespaces/ns-root/enable-ha': () =>
+          jsonResponse({ status: 'enabling', namespace_id: 'ns-root', groups: [] }),
+      });
+    });
+    restore = r;
+    await enableHaForNamespace(
+      makeJwt({ iss: 'mdma', email: 'u@e' }),
+      'http://node',
+      'ns-root',
+      [],
+    );
+    expect(proofBody).toBeDefined();
+    expect(proofBody.audience).toBe('mdma:enable-ha-namespace');
+    expect(proofBody.subject).toBe('u@e');
+    expect(proofBody.nonce).toMatch(/^[0-9a-f]{32}$/);
+    // No contextId on a namespace-scoped proof.
+    expect(proofBody.contextId).toBeUndefined();
+  });
+
+  it('rejects a non-MDMA or expired session token before any network call', async () => {
+    const { calls, restore: r } = installFetch(() => jsonResponse({}));
+    restore = r;
+    // iss != "mdma"
+    await expect(
+      enableHaForNamespace(makeJwt({ iss: 'google', email: 'u@e' }), 'http://node', 'ns', [
+        { group_id: 'g', context_id: 'c' },
+      ]),
+    ).rejects.toThrow(/Not signed in to Calimero Cloud/);
+    // mdma but expired
+    await expect(
+      enableHaForNamespace(
+        makeJwt({ iss: 'mdma', email: 'u@e', exp: Math.floor(Date.now() / 1000) - 10 }),
+        'http://node',
+        'ns',
+        [{ group_id: 'g', context_id: 'c' }],
+      ),
+    ).rejects.toThrow(/Cloud session has expired/);
+    expect(calls).toHaveLength(0); // failed fast, no merod/cloud round-trips
+  });
+
+  it('does not call /contexts/claim even when real contexts are supplied', async () => {
+    const seen: string[] = [];
+    const { restore: r } = installFetch((url, init) => {
+      seen.push(url);
+      return route(url, init, {
+        '/admin-api/groups/ns-root/members': () =>
+          jsonResponse({
+            members: [{ identity: 'me', role: 'Admin' }],
+            selfIdentity: 'me',
+          }),
         '/api/cloud/fleet/measurements': () =>
           jsonResponse({
             release_tag: 'v1',
@@ -410,58 +522,10 @@ describe('enableHaForNamespace silent-claim pre-flight', () => {
         { group_id: 'sub-1', context_id: 'ctx-2' },
       ],
     );
-    expect(bodies).toHaveLength(2);
-    expect(bodies[0].nonce).not.toBe(bodies[1].nonce);
-    for (const b of bodies) expect(b.nonce).toMatch(/^[0-9a-f]{32}$/);
-  });
-
-  it('rejects a non-MDMA or expired session token before any network call', async () => {
-    const { calls, restore: r } = installFetch(() => jsonResponse({}));
-    restore = r;
-    // iss != "mdma"
-    await expect(
-      enableHaForNamespace(makeJwt({ iss: 'google', email: 'u@e' }), 'http://node', 'ns', [
-        { group_id: 'g', context_id: 'c' },
-      ]),
-    ).rejects.toThrow(/Not signed in to Calimero Cloud/);
-    // mdma but expired
-    await expect(
-      enableHaForNamespace(
-        makeJwt({ iss: 'mdma', email: 'u@e', exp: Math.floor(Date.now() / 1000) - 10 }),
-        'http://node',
-        'ns',
-        [{ group_id: 'g', context_id: 'c' }],
-      ),
-    ).rejects.toThrow(/Cloud session has expired/);
-    expect(calls).toHaveLength(0); // failed fast, no merod/cloud round-trips
-  });
-
-  it('throws (and does not enable HA) when the cloud only partially claims', async () => {
-    const seen: string[] = [];
-    const { restore: r } = installFetch((url, init) => {
-      seen.push(url);
-      return route(url, init, {
-        '/admin-api/groups/ns-root/members': () =>
-          jsonResponse({
-            members: [{ identity: 'me', role: 'Admin' }],
-            selfIdentity: 'me',
-          }),
-        '/admin-api/groups/ns-root/issue-ownership-proof': () =>
-          jsonResponse({ signerPublicKey: 'pk', signedPayload: 'sp', signature: 'sig' }),
-        // Submitted ctx-1 + ctx-2, cloud only claims ctx-1.
-        '/api/cloud/me/contexts/claim': () => jsonResponse({ claimed: ['ctx-1'] }),
-      });
-    });
-    restore = r;
-    await expect(
-      enableHaForNamespace(makeJwt({ iss: 'mdma', email: 'u@e' }), 'http://node', 'ns-root', [
-        { group_id: 'ns-root', context_id: 'ctx-1' },
-        { group_id: 'sub-1', context_id: 'ctx-2' },
-      ]),
-    ).rejects.toThrow(/did not register 1 of 2 context\(s\): ctx-2/);
-    // Must have stopped before the enable-ha / tee-policy steps.
-    expect(seen.some((u) => u.includes('/enable-ha'))).toBe(false);
-    expect(seen.some((u) => u.includes('/tee-admission-policy'))).toBe(false);
+    // The decouple invariant: no /contexts/claim and no per-context
+    // /issue-ownership-proof anywhere in the HA-enable flow.
+    expect(seen.some((u) => u.includes('/contexts/claim'))).toBe(false);
+    expect(seen.some((u) => u.includes('/issue-ownership-proof'))).toBe(false);
   });
 
   it('throws the descriptive error (not a raw SyntaxError) on a non-JSON members body', async () => {

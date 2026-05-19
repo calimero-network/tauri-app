@@ -1,18 +1,18 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { apiClient } from "../lib/mero-client";
 import { useToast } from "../contexts/ToastContext";
 import DataTable from "../components/DataTable";
 import ContextMenu from "../components/ContextMenu";
-import { SkeletonTable } from "../components/Skeleton";
+import Skeleton from "../components/Skeleton";
 import { decodeMetadata, openAppFrontend, parseTauriError } from "../utils/appUtils";
-import { invoke } from "@tauri-apps/api/tauri";
+import { RefreshCw, MoreHorizontal, Trash2, Copy } from "lucide-react";
 import "./InstalledApps.css";
 
 interface InstalledApplication {
   id: string;
   name?: string;
   version?: string;
-  metadata: number[] | string; // Can be array of bytes or base64 string
+  metadata: number[] | string;
   blob?: {
     bytecode: string;
     compiled: string;
@@ -27,12 +27,30 @@ export interface InstalledAppsProps {
   clientReady?: boolean;
 }
 
+const SKELETON_MIN_MS = 1000;
+
 const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirmUninstall, clientReady = true }) => {
   const toast = useToast();
   const [apps, setApps] = useState<InstalledApplication[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; app: InstalledApplication } | null>(null);
+  const [openMenuAppId, setOpenMenuAppId] = useState<string | null>(null);
+  const [menuPos, setMenuPos] = useState<{ top: number; right: number } | null>(null);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    if (!openMenuAppId) return;
+    const close = () => setOpenMenuAppId(null);
+    document.addEventListener('click', close);
+    return () => document.removeEventListener('click', close);
+  }, [openMenuAppId]);
 
   useEffect(() => {
     if (clientReady) {
@@ -43,44 +61,47 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
   const loadInstalledApps = async () => {
     setLoading(true);
     setError(null);
+    const start = Date.now();
 
     try {
       const response = await apiClient.node.listApplications();
-      
+
       if (response.error) {
-        // If 401, trigger login redirect
         if (response.error.code === '401') {
           console.warn("📦 InstalledApps: 401 Unauthorized - token may be expired");
           onAuthRequired?.();
           return;
         }
-        setError(response.error.message);
-        setApps([]);
+        if (mountedRef.current) {
+          setError(response.error.message);
+          setApps([]);
+        }
         return;
       }
 
       if (response.data) {
-        // The client now returns { data: apps[] } where apps is already extracted
-        const appsList = Array.isArray(response.data) 
-          ? response.data 
-          : [];
-        setApps(appsList);
+        const appsList = Array.isArray(response.data) ? response.data : [];
+        if (mountedRef.current) setApps(appsList);
       } else {
-        console.warn("📦 No data in response");
-        setApps([]);
+        if (mountedRef.current) setApps([]);
       }
     } catch (err: any) {
-      // Check for 401 in error object
       if (err?.status === 401 || err?.code === '401') {
-        console.warn("📦 InstalledApps: 401 Unauthorized - triggering login");
         onAuthRequired?.();
         return;
       }
-      setError(parseTauriError(err, "Failed to load installed applications"));
-      console.error("Failed to load installed apps:", err);
-      setApps([]);
+      if (mountedRef.current) {
+        setError(parseTauriError(err, "Failed to load installed applications"));
+        setApps([]);
+      }
     } finally {
-      setLoading(false);
+      // Ensure skeleton shows for at least SKELETON_MIN_MS
+      const elapsed = Date.now() - start;
+      const remaining = SKELETON_MIN_MS - elapsed;
+      if (remaining > 0) {
+        await new Promise((r) => setTimeout(r, remaining));
+      }
+      if (mountedRef.current) setLoading(false);
     }
   };
 
@@ -93,29 +114,23 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
             toast.error(`Failed to uninstall: ${response.error.message}`);
             return;
           }
-
-          toast.success(`Application "${appName}" uninstalled successfully`);
-          // Reload the list
+          toast.success(`"${appName}" uninstalled`);
           await loadInstalledApps();
         } catch (err) {
-          toast.error(`Failed to uninstall application: ${parseTauriError(err, "Unknown error")}`);
-          console.error("Uninstall error:", err);
+          toast.error(`Failed to uninstall: ${parseTauriError(err, "Unknown error")}`);
         }
       });
     } else {
-      // Fallback if onConfirmUninstall is not provided
       try {
         const response = await apiClient.node.uninstallApplication(appId);
         if (response.error) {
           toast.error(`Failed to uninstall: ${response.error.message}`);
           return;
         }
-
-        toast.success(`Application "${appName}" uninstalled successfully`);
+        toast.success(`"${appName}" uninstalled`);
         await loadInstalledApps();
       } catch (err) {
-        toast.error(`Failed to uninstall application: ${err instanceof Error ? err.message : "Unknown error"}`);
-        console.error("Uninstall error:", err);
+        toast.error(`Failed to uninstall: ${err instanceof Error ? err.message : "Unknown error"}`);
       }
     }
   };
@@ -124,18 +139,6 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
     await openAppFrontend(frontendUrl, appName, (error) => {
       toast.error(`Failed to open frontend: ${error.message}`);
     });
-  };
-
-  const handleCreateDesktopShortcut = async (appName: string, frontendUrl: string) => {
-    try {
-      await invoke<string>("create_desktop_shortcut", {
-        appName,
-        frontendUrl,
-      });
-      toast.success("Desktop shortcut created on your Desktop");
-    } catch (err) {
-      toast.error(parseTauriError(err, "Failed to create desktop shortcut"));
-    }
   };
 
   const handleRowContextMenu = useCallback((e: React.MouseEvent, app: InstalledApplication) => {
@@ -147,39 +150,34 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
   return (
     <div className="installed-apps-page">
       <header className="installed-apps-header">
-        <h2>Installed Applications</h2>
-        <button onClick={loadInstalledApps} className="button" disabled={loading}>
-          {loading ? "Loading..." : "Refresh"}
+        <div>
+          <h1>Applications</h1>
+          <p>Manage your installed applications</p>
+        </div>
+        <button
+          onClick={loadInstalledApps}
+          className="installed-refresh-btn"
+          disabled={loading}
+          title="Refresh"
+        >
+          <RefreshCw size={15} className={loading ? 'spinning' : ''} />
         </button>
       </header>
 
       <main className="installed-apps-main">
         {error && (
-          <div className="error-message">
-            {error}
-          </div>
+          <div className="error-message">{error}</div>
         )}
 
         {contextMenu && (() => {
           const metadata = decodeMetadata(contextMenu.app.metadata);
           const appName = metadata?.name || contextMenu.app.name || contextMenu.app.id;
           const frontendUrl = metadata?.links?.frontend;
-          const items = [];
+          const items: { label: string; onClick: () => void; danger?: boolean }[] = [];
           if (frontendUrl) {
-            items.push({
-              label: 'Open',
-              onClick: () => handleOpenFrontend(frontendUrl, appName),
-            });
-            items.push({
-              label: 'Create desktop shortcut',
-              onClick: () => handleCreateDesktopShortcut(appName, frontendUrl),
-            });
+            items.push({ label: 'Open', onClick: () => handleOpenFrontend(frontendUrl, appName) });
           }
-          items.push({
-            label: 'Uninstall',
-            onClick: () => handleUninstall(contextMenu.app.id, appName),
-            danger: true,
-          });
+          items.push({ label: 'Uninstall', onClick: () => handleUninstall(contextMenu.app.id, appName), danger: true });
           return (
             <ContextMenu
               x={contextMenu.x}
@@ -191,7 +189,45 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
         })()}
 
         {loading ? (
-          <SkeletonTable rows={5} columns={5} showHeader={true} />
+          <div className="data-table-container data-table-compact">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th style={{ width: '25%' }}>Name</th>
+                  <th style={{ width: '12%' }}>Version</th>
+                  <th style={{ width: '10%' }}>Size</th>
+                  <th style={{ width: '33%' }}>Description</th>
+                  <th style={{ width: '20%' }}></th>
+                </tr>
+              </thead>
+              <tbody>
+                {Array.from({ length: 8 }).map((_, i) => (
+                  <tr key={i}>
+                    <td>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                        <Skeleton variant="text" width={`${55 + (i % 3) * 12}%`} height="13px" />
+                        <Skeleton variant="text" width={`${35 + (i % 4) * 8}%`} height="11px" />
+                      </div>
+                    </td>
+                    <td><Skeleton variant="text" width={`${40 + (i % 3) * 15}%`} height="13px" /></td>
+                    <td><Skeleton variant="text" width={`${50 + (i % 2) * 20}%`} height="13px" /></td>
+                    <td>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                        <Skeleton variant="text" width={`${70 + (i % 3) * 10}%`} height="13px" />
+                        <Skeleton variant="text" width={`${45 + (i % 4) * 10}%`} height="13px" />
+                      </div>
+                    </td>
+                    <td>
+                      <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end' }}>
+                        <Skeleton variant="rectangular" width="52px" height="26px" borderRadius="6px" />
+                        <Skeleton variant="rectangular" width="28px" height="26px" borderRadius="6px" />
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         ) : (
           <DataTable
             data={apps}
@@ -222,7 +258,7 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
                 key: 'version',
                 label: 'Version',
                 sortable: true,
-                width: '15%',
+                width: '12%',
                 sortValue: (app) => {
                   const metadata = decodeMetadata(app.metadata);
                   return metadata?.version || app.version || "Unknown";
@@ -236,28 +272,25 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
                 key: 'size',
                 label: 'Size',
                 sortable: true,
-                width: '12%',
-                sortValue: (app) => app.size ?? 0, // Sort by raw byte value
+                width: '10%',
+                sortValue: (app) => app.size ?? 0,
                 render: (app) => {
                   if (!app.size) return '—';
                   const sizeKB = app.size / 1024;
-                  if (sizeKB < 1024) {
-                    return `${sizeKB.toFixed(2)} KB`;
-                  }
-                  return `${(sizeKB / 1024).toFixed(2)} MB`;
+                  return sizeKB < 1024 ? `${sizeKB.toFixed(2)} KB` : `${(sizeKB / 1024).toFixed(2)} MB`;
                 },
               },
               {
                 key: 'description',
                 label: 'Description',
                 sortable: false,
-                width: '28%',
+                width: '33%',
                 render: (app) => {
                   const metadata = decodeMetadata(app.metadata);
                   return metadata?.description ? (
                     <div className="table-cell-description" title={metadata.description}>
-                      {metadata.description.length > 60
-                        ? `${metadata.description.substring(0, 60)}...`
+                      {metadata.description.length > 80
+                        ? `${metadata.description.substring(0, 80)}...`
                         : metadata.description}
                     </div>
                   ) : (
@@ -267,62 +300,70 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
               },
               {
                 key: 'actions',
-                label: 'Actions',
+                label: '',
                 sortable: false,
                 width: '20%',
                 render: (app) => {
-              const metadata = decodeMetadata(app.metadata);
-              const appName = metadata?.name || app.name || app.id;
-              const frontendUrl = metadata?.links?.frontend;
-              
-              return (
+                  const metadata = decodeMetadata(app.metadata);
+                  const appName = metadata?.name || app.name || app.id;
+                  const frontendUrl = metadata?.links?.frontend;
+
+                  return (
                     <div className="table-cell-actions">
-                    {frontendUrl && (
-                      <>
+                      {frontendUrl && (
                         <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleOpenFrontend(frontendUrl, appName);
-                          }}
-                          className="button button-primary button-small"
-                          title={`Open ${appName} frontend`}
+                          onClick={(e) => { e.stopPropagation(); handleOpenFrontend(frontendUrl, appName); }}
+                          className="btn-open"
                         >
                           Open
                         </button>
+                      )}
+                      <div className="app-actions-more" onClick={(e) => e.stopPropagation()}>
                         <button
+                          className="btn-more"
+                          title="More options"
                           onClick={(e) => {
-                            e.stopPropagation();
-                            handleCreateDesktopShortcut(appName, frontendUrl);
+                            const rect = e.currentTarget.getBoundingClientRect();
+                            setMenuPos({ top: rect.bottom + 4, right: window.innerWidth - rect.right });
+                            setOpenMenuAppId(openMenuAppId === app.id ? null : app.id);
                           }}
-                          className="button button-secondary button-small"
-                          title="Create a desktop shortcut that opens this app"
                         >
-                          Shortcut
+                          <MoreHorizontal size={15} />
                         </button>
-                      </>
-                    )}
-                    <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleUninstall(app.id, appName);
-                        }}
-                        className="button button-danger button-small"
-                    >
-                      Uninstall
-                    </button>
-                </div>
-              );
+                        {openMenuAppId === app.id && menuPos && (
+                          <div
+                            className="app-actions-dropdown"
+                            style={{ position: 'fixed', top: menuPos.top, right: menuPos.right }}
+                          >
+                            <button
+                              className="dropdown-item"
+                              onClick={() => { setOpenMenuAppId(null); navigator.clipboard.writeText(app.id); toast.success('ID copied'); }}
+                            >
+                              <Copy size={13} />
+                              Copy ID
+                            </button>
+                            <div className="dropdown-divider" />
+                            <button
+                              className="dropdown-item dropdown-item-danger"
+                              onClick={() => { setOpenMenuAppId(null); handleUninstall(app.id, appName); }}
+                            >
+                              <Trash2 size={13} />
+                              Uninstall
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
                 },
               },
             ]}
-            keyExtractor={(app, index) =>
-              app.id || app.name || app.source || `installed-${index}`
-            }
+            keyExtractor={(app, index) => app.id || app.name || app.source || `installed-${index}`}
             emptyMessage={
               <div className="empty-state">
                 <p>No applications installed.</p>
                 <p>Visit the <a href="#marketplace">Marketplace</a> to install applications.</p>
-          </div>
+              </div>
             }
           />
         )}
@@ -332,4 +373,3 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
 };
 
 export default InstalledApps;
-

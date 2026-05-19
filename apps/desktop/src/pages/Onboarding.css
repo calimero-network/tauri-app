@@ -1030,6 +1030,10 @@
 }
 
 /* Legacy styles for node setup form compatibility */
+.onboarding-step-login {
+  min-height: 480px;
+}
+
 .onboarding-card {
   background: transparent;
   border: none;

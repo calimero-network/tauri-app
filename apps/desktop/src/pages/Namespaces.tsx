@@ -8,11 +8,10 @@ import {
   useGroupContexts,
   useSubgroups,
   useCreateNamespace,
-  useCreateContext,
   type Namespace,
 } from "@calimero-network/mero-react";
 import { useToast } from "../contexts/ToastContext";
-import { ArrowLeft, Users, Box, Layers, Copy, ChevronRight, Shield, Globe, Plus, X, Play } from "lucide-react";
+import { ChevronLeft, Users, Box, Layers, Copy, ChevronRight, Shield, Globe, Plus, X, Play } from "lucide-react";
 import { apiClient } from "../lib/mero-client";
 import { saveContextKey, getContextKey } from "../utils/contextKeys";
 import { decodeMetadata, openAppFrontend } from "../utils/appUtils";
@@ -70,21 +69,43 @@ export default function Namespaces() {
   // Current namespace/group IDs for hooks
   const activeNsId = view.type === "namespace" || view.type === "group" ? view.ns.namespaceId : null;
   const activeGroupId = view.type === "group" ? view.groupId : null;
+  const activeNsRootId = view.type === "namespace" ? view.ns.namespaceId : null;
 
   // Hooks
   const { namespaces, loading, error, refetch: refetchNamespaces } = useNamespaces();
   const { groups: nsGroups, loading: nsLoadingGroups, error: nsGroupsError } = useNamespaceGroups(activeNsId);
   const { groupInfo, loading: groupInfoLoading } = useGroupInfo(activeGroupId);
+  const { groupInfo: nsRootGroupInfo } = useGroupInfo(activeNsRootId);
   const { members: groupMembers } = useGroupMembers(activeGroupId);
+  const [nsMembers, setNsMembers] = useState<any[]>([]);
+  const [nsMembersLoading, setNsMembersLoading] = useState(false);
+
+  useEffect(() => {
+    if (!activeNsRootId) { setNsMembers([]); return; }
+    const settings = getSettings();
+    const token = localStorage.getItem('calimero_access_token');
+    if (!settings.nodeUrl || !token) return;
+    setNsMembersLoading(true);
+    fetch(`${settings.nodeUrl}/admin-api/groups/${activeNsRootId}/members`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((r) => r.json())
+      .then((json) => {
+        const members = json?.members ?? json?.data?.members ?? [];
+        setNsMembers(Array.isArray(members) ? members : []);
+      })
+      .catch(() => { setNsMembers([]); })
+      .finally(() => setNsMembersLoading(false));
+  }, [activeNsRootId]);
   const { contexts: groupContexts, refetch: refetchGroupContexts } = useGroupContexts(activeGroupId);
   // Contexts that live directly in a namespace's root group (battleships-style lobby contexts)
   const { contexts: nsRootContexts, refetch: refetchNsRootContexts } = useGroupContexts(
     view.type === "namespace" ? view.ns.namespaceId : null,
   );
-  const { subgroups: groupSubgroups } = useSubgroups(activeGroupId);
+  const { subgroups: groupSubgroups = [] } = useSubgroups(activeGroupId);
 
   const { createNamespace, loading: creatingNamespace } = useCreateNamespace();
-  const { createContext, loading: creatingContext } = useCreateContext();
+  const [creatingContext, setCreatingContext] = useState(false);
 
   // Installed apps (loaded lazily for the Create-Namespace dropdown)
   const [installedApps, setInstalledApps] = useState<InstalledApp[]>([]);
@@ -92,9 +113,24 @@ export default function Namespaces() {
     readInstalledApps().then(setInstalledApps).catch(() => setInstalledApps([]));
   }, []);
 
+  const appById = installedApps.reduce<Record<string, InstalledApp>>((acc, a) => {
+    acc[a.id] = a;
+    return acc;
+  }, {});
+
+  const nsDisplayName = (ns: Namespace) => {
+    const fromList = (ns as any).name as string | undefined;
+    const fromGroupMeta = nsRootGroupInfo && ns.namespaceId === activeNsRootId
+      ? nsRootGroupInfo.metadata?.name as string | undefined
+      : undefined;
+    const fromApp = appById[ns.targetApplicationId]?.name;
+    return fromList || fromGroupMeta || fromApp || truncateId(ns.namespaceId);
+  };
+
   // Modals
   const [nsModalOpen, setNsModalOpen] = useState(false);
   const [ctxModalOpen, setCtxModalOpen] = useState<{ namespaceId: string; applicationId: string } | null>(null);
+  const [expandedMemberId, setExpandedMemberId] = useState<string | null>(null);
 
   const groupLoading = groupInfoLoading;
 
@@ -107,8 +143,8 @@ export default function Namespaces() {
       const result = await createNamespace({
         applicationId,
         upgradePolicy: "Automatic",
-        alias: alias?.trim() || undefined,
-      });
+        name: alias?.trim() || undefined,
+      } as any);
       if (!result) throw new Error("createNamespace returned null");
       try {
         await mero.admin.setDefaultCapabilities(result.namespaceId, {
@@ -130,16 +166,20 @@ export default function Namespaces() {
     applicationId: string,
     serviceName: string,
     alias: string | undefined,
+    initArgs: string,
   ) => {
+    if (!mero) return;
+    setCreatingContext(true);
     try {
-      const result = await createContext({
+      const argsJson = initArgs.trim() || '{}';
+      const result = await (mero.admin as any).createContext({
         applicationId,
         groupId: namespaceId,
         serviceName: serviceName.trim() || undefined,
-        initializationParams: [],
+        initializationParams: Array.from(new TextEncoder().encode(argsJson)),
         alias: alias?.trim() || undefined,
       });
-      if (!result) throw new Error("createContext returned null");
+      if (!result) throw new Error('createContext returned null');
       saveContextKey(result.contextId, result.memberPublicKey, applicationId);
       toast.success(`Context created: ${truncateId(result.contextId)}`);
       setCtxModalOpen(null);
@@ -148,7 +188,10 @@ export default function Namespaces() {
         refetchNsRootContexts?.(),
       ]);
     } catch (e: any) {
-      toast.error(`Failed to create context: ${e?.message ?? String(e)}`);
+      const msg = e?.bodyText ?? e?.message ?? String(e);
+      toast.error(`Failed to create context: ${msg}`);
+    } finally {
+      setCreatingContext(false);
     }
   };
 
@@ -342,8 +385,8 @@ export default function Namespaces() {
           applicationId={ctxModalOpen.applicationId}
           loading={creatingContext}
           onClose={() => setCtxModalOpen(null)}
-          onSubmit={(serviceName, alias) =>
-            onCreateContext(ctxModalOpen.namespaceId, ctxModalOpen.applicationId, serviceName, alias)
+          onSubmit={(serviceName, alias, initArgs) =>
+            onCreateContext(ctxModalOpen.namespaceId, ctxModalOpen.applicationId, serviceName, alias, initArgs)
           }
         />
       )}
@@ -399,7 +442,7 @@ export default function Namespaces() {
                   onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") openNamespace(ns); }}
                 >
                   <div className="ns-card-header">
-                    <h3>{(ns as any).alias || truncateId(ns.namespaceId)}</h3>
+                    <h3>{nsDisplayName(ns)}</h3>
                     <ChevronRight size={16} className="ns-card-chevron" />
                   </div>
                   <div className="ns-card-id" title={ns.namespaceId}>
@@ -441,10 +484,10 @@ export default function Namespaces() {
       <div className="ns-page">
         <header className="ns-header">
           <button className="ns-back" onClick={goBack}>
-            <ArrowLeft size={16} /> Back
+            <ChevronLeft size={16} /> Back
           </button>
           <div style={{ flex: 1 }}>
-            <h1>{(ns as any).alias || truncateId(ns.namespaceId)}</h1>
+            <h1>{nsDisplayName(ns)}</h1>
             <div className="ns-header-id">
               {truncateId(ns.namespaceId)}
               <button className="copy-btn" onClick={() => copyToClipboard(ns.namespaceId)} title="Copy ID">
@@ -462,16 +505,19 @@ export default function Namespaces() {
 
         <main className="ns-main">
           <div className="ns-detail-stats">
+            <button
+              className="stat-card stat-card-clickable"
+              onClick={() => document.getElementById('ns-members-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+            >
+              <div className="stat-value">{nsMembersLoading ? '…' : nsMembers.length > 0 ? nsMembers.length : ((ns as any).memberCount ?? 0)}</div>
+              <div className="stat-label">Members ↓</div>
+            </button>
             <div className="stat-card">
-              <div className="stat-value">{(ns as any).memberCount ?? 0}</div>
-              <div className="stat-label">Members</div>
-            </div>
-            <div className="stat-card">
-              <div className="stat-value">{(ns as any).contextCount ?? 0}</div>
+              <div className="stat-value">{nsRootContexts.length > 0 ? nsRootContexts.length : ((ns as any).contextCount ?? 0)}</div>
               <div className="stat-label">Contexts</div>
             </div>
             <div className="stat-card">
-              <div className="stat-value">{(ns as any).subgroupCount ?? 0}</div>
+              <div className="stat-value">{nsGroups.length > 0 ? nsGroups.length : ((ns as any).subgroupCount ?? 0)}</div>
               <div className="stat-label">Groups</div>
             </div>
             <div className="stat-card">
@@ -503,7 +549,7 @@ export default function Namespaces() {
                   return (
                     <div key={c.contextId} className="ns-context-item">
                       <Box size={14} />
-                      <span className="context-name">{c.alias || truncateId(c.contextId)}</span>
+                      <span className="context-name">{c.name || truncateId(c.contextId)}</span>
                       <span className="context-id mono">{truncateId(c.contextId)}</span>
                       <button className="copy-btn" onClick={() => copyToClipboard(c.contextId)} title="Copy ID">
                         <Copy size={12} />
@@ -524,28 +570,98 @@ export default function Namespaces() {
             )}
           </div>
 
-          {isCloudEnabled() && (
-            <div className="ns-detail-section">
-              <h2><Shield size={16} style={{ marginRight: 6, verticalAlign: -2 }} />High Availability</h2>
-              <p className="ha-description">
-                Enable TEE replication to have fleet nodes automatically join and
-                replicate this namespace. Requires a Calimero Cloud account with a
-                paid plan.
-              </p>
-              <div className="ha-toggle-row">
-                <span className="ha-status">
-                  {haEnabled[ns.namespaceId] ? '✓ HA Enabled' : 'HA Disabled'}
-                </span>
-                <button
-                  className={`ha-toggle-btn ${haEnabled[ns.namespaceId] ? 'ha-enabled' : ''}`}
-                  onClick={() => toggleHa(ns)}
-                  disabled={!!haEnabling[ns.namespaceId]}
-                >
-                  {haEnabling[ns.namespaceId] ? 'Working...' : haEnabled[ns.namespaceId] ? 'Disable HA' : 'Enable HA'}
-                </button>
+          {isCloudEnabled() && (() => {
+            const cloudConnected = !!getCloudIdToken();
+            const nsHaEnabled = !!haEnabled[ns.namespaceId];
+            const nsHaEnabling = !!haEnabling[ns.namespaceId];
+            return (
+              <div className="ns-detail-section ns-ha-section">
+                <div className="ns-ha-header">
+                  <Shield size={18} className="ns-ha-icon" />
+                  <div>
+                    <h2>High Availability</h2>
+                    <p className="ha-description">
+                      Enable TEE replication to have fleet nodes automatically join and replicate
+                      your namespace data. Requires a Calimero Cloud account with a paid plan.
+                    </p>
+                  </div>
+                  <div className="ha-badge-wrap">
+                    <span className={`ha-badge ${nsHaEnabled ? 'ha-badge-enabled' : 'ha-badge-disabled'}`}>
+                      {nsHaEnabled ? 'Enabled' : 'Disabled'}
+                    </span>
+                  </div>
+                </div>
+                {!cloudConnected && !nsHaEnabled && (
+                  <div className="ha-cloud-required-banner">
+                    <Globe size={13} className="ha-cloud-banner-icon" />
+                    <span>Connect to Calimero Cloud first — <strong>Settings → Cloud</strong></span>
+                  </div>
+                )}
+                <div className="ha-toggle-row">
+                  <button
+                    className={`ha-toggle-btn ${nsHaEnabled ? 'ha-enabled' : ''}`}
+                    onClick={() => toggleHa(ns)}
+                    disabled={nsHaEnabling || (!cloudConnected && !nsHaEnabled)}
+                    title={!cloudConnected && !nsHaEnabled ? 'Connect to Calimero Cloud first (Settings → Cloud)' : undefined}
+                  >
+                    {nsHaEnabling ? 'Working...' : nsHaEnabled ? 'Disable HA' : 'Enable High Availability'}
+                  </button>
+                </div>
               </div>
-            </div>
-          )}
+            );
+          })()}
+
+          <div id="ns-members-section" className="ns-detail-section">
+            <h2><Users size={16} /> Members ({nsMembersLoading ? '…' : nsMembers.length})</h2>
+            {nsMembersLoading ? (
+              <p className="empty-hint">Loading members…</p>
+            ) : nsMembers.length === 0 ? (
+              <p className="empty-hint">No members</p>
+            ) : (
+              <div className="ns-member-list">
+                {nsMembers.map((m) => {
+                  const isExpanded = expandedMemberId === m.identity;
+                  return (
+                    <div key={m.identity} className={`ns-member-item ns-member-clickable${isExpanded ? ' ns-member-expanded' : ''}`}>
+                      <div className="ns-member-row" onClick={() => setExpandedMemberId(isExpanded ? null : m.identity)}>
+                        <div className="member-info">
+                          <span className="member-name">{m.name || truncateId(m.identity)}</span>
+                          <span className="member-id mono">{truncateId(m.identity)}</span>
+                        </div>
+                        <span className="member-role" style={{ color: roleColor(m.role) }}>
+                          {m.role}
+                        </span>
+                        <ChevronRight size={14} className={`member-chevron${isExpanded ? ' member-chevron-open' : ''}`} />
+                      </div>
+                      {isExpanded && (
+                        <div className="ns-member-detail">
+                          <div className="ns-member-detail-row">
+                            <span className="ns-member-detail-label">Full Identity</span>
+                            <div className="ns-member-detail-value">
+                              <span className="mono ns-member-full-id">{m.identity}</span>
+                              <button className="copy-btn" onClick={(e) => { e.stopPropagation(); copyToClipboard(m.identity); }} title="Copy full identity">
+                                <Copy size={12} />
+                              </button>
+                            </div>
+                          </div>
+                          <div className="ns-member-detail-row">
+                            <span className="ns-member-detail-label">Role</span>
+                            <span className="ns-member-detail-value" style={{ color: roleColor(m.role) }}>{m.role}</span>
+                          </div>
+                          {m.name && (
+                            <div className="ns-member-detail-row">
+                              <span className="ns-member-detail-label">Name</span>
+                              <span className="ns-member-detail-value">{m.name}</span>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
 
           <div className="ns-detail-section">
             <h2>Groups</h2>
@@ -564,7 +680,7 @@ export default function Namespaces() {
                     onClick={() => openGroup(ns, g.groupId)}
                   >
                     <Layers size={16} />
-                    <span className="group-name">{(g as any).alias || truncateId(g.groupId)}</span>
+                    <span className="group-name">{(g as any).name || (g as any).metadata?.name || truncateId(g.groupId)}</span>
                     <span className="group-id mono">{truncateId(g.groupId)}</span>
                     <ChevronRight size={14} className="ns-card-chevron" />
                   </button>
@@ -587,10 +703,10 @@ export default function Namespaces() {
       <div className="ns-page">
         <header className="ns-header">
           <button className="ns-back" onClick={goBack}>
-            <ArrowLeft size={16} /> Back to {(ns as any).alias || "namespace"}
+            <ChevronLeft size={16} /> Back to {nsDisplayName(ns)}
           </button>
           <div>
-            <h1>{groupInfo?.alias || truncateId(groupId)}</h1>
+            <h1>{groupInfo?.metadata?.name || truncateId(groupId)}</h1>
             <div className="ns-header-id">
               {truncateId(groupId)}
               <button className="copy-btn" onClick={() => copyToClipboard(groupId)} title="Copy ID">
@@ -620,7 +736,7 @@ export default function Namespaces() {
                     <div className="stat-label">Upgrade Policy</div>
                   </div>
                   <div className="stat-card">
-                    <div className="stat-value" style={{ fontSize: "0.85rem" }}>{groupInfo.defaultVisibility || "—"}</div>
+                    <div className="stat-value" style={{ fontSize: "0.85rem" }}>{groupInfo.subgroupVisibility || "—"}</div>
                     <div className="stat-label">Visibility</div>
                   </div>
                 </div>
@@ -636,7 +752,7 @@ export default function Namespaces() {
                     {groupMembers.map((m) => (
                       <div key={m.identity} className="ns-member-item">
                         <div className="member-info">
-                          <span className="member-name">{(m as any).alias || truncateId(m.identity)}</span>
+                          <span className="member-name">{m.name || truncateId(m.identity)}</span>
                           <span className="member-id mono">{truncateId(m.identity)}</span>
                         </div>
                         <span className="member-role" style={{ color: roleColor(m.role) }}>
@@ -664,7 +780,7 @@ export default function Namespaces() {
                       return (
                         <div key={c.contextId} className="ns-context-item">
                           <Box size={14} />
-                          <span className="context-name">{c.alias || truncateId(c.contextId)}</span>
+                          <span className="context-name">{c.name || truncateId(c.contextId)}</span>
                           <span className="context-id mono">{truncateId(c.contextId)}</span>
                           <button className="copy-btn" onClick={() => copyToClipboard(c.contextId)} title="Copy ID">
                             <Copy size={12} />
@@ -697,7 +813,7 @@ export default function Namespaces() {
                         onClick={() => openGroup(ns, g.groupId)}
                       >
                         <Layers size={16} />
-                        <span className="group-name">{(g as any).alias || truncateId(g.groupId)}</span>
+                        <span className="group-name">{(g as any).name || (g as any).metadata?.name || truncateId(g.groupId)}</span>
                         <span className="group-id mono">{truncateId(g.groupId)}</span>
                         <ChevronRight size={14} className="ns-card-chevron" />
                       </button>
@@ -763,11 +879,15 @@ function CreateNamespaceModal({ installedApps, loading, onClose, onSubmit }: Cre
             </select>
           </label>
           <label className="ns-modal-field">
-            <span>Alias (optional)</span>
+            <div className="ns-modal-field-header">
+              <span>Alias (optional)</span>
+              <span className="ns-char-counter">{alias.length}/64</span>
+            </div>
             <input
               type="text"
               value={alias}
-              onChange={(e) => setAlias(e.target.value)}
+              onChange={(e) => setAlias(e.target.value.slice(0, 64))}
+              maxLength={64}
               placeholder="e.g. my-namespace"
             />
           </label>
@@ -793,12 +913,22 @@ interface CreateContextModalProps {
   applicationId: string;
   loading: boolean;
   onClose: () => void;
-  onSubmit: (serviceName: string, alias: string | undefined) => void;
+  onSubmit: (serviceName: string, alias: string | undefined, initArgs: string) => void;
 }
 
 function CreateContextModal({ namespaceId, applicationId, loading, onClose, onSubmit }: CreateContextModalProps) {
   const [serviceName, setServiceName] = useState("");
   const [alias, setAlias] = useState("");
+  const [initArgs, setInitArgs] = useState("");
+  const [argsError, setArgsError] = useState<string | null>(null);
+
+  const validateArgs = (val: string) => {
+    if (!val.trim()) { setArgsError(null); return; }
+    try { JSON.parse(val); setArgsError(null); }
+    catch { setArgsError("Invalid JSON"); }
+  };
+
+  const canSubmit = !argsError;
 
   return (
     <div className="ns-modal-backdrop" onClick={onClose}>
@@ -813,7 +943,8 @@ function CreateContextModal({ namespaceId, applicationId, loading, onClose, onSu
           className="ns-modal-body"
           onSubmit={(e) => {
             e.preventDefault();
-            onSubmit(serviceName, alias);
+            if (!canSubmit) return;
+            onSubmit(serviceName, alias || undefined, initArgs);
           }}
         >
           <div className="ns-modal-readonly">
@@ -821,7 +952,7 @@ function CreateContextModal({ namespaceId, applicationId, loading, onClose, onSu
             <div><strong>Application:</strong> <code>{applicationId.slice(0, 8)}…{applicationId.slice(-8)}</code></div>
           </div>
           <label className="ns-modal-field">
-            <span>Service name (optional)</span>
+            <span>Service name <span className="ns-optional">(optional)</span></span>
             <input
               type="text"
               value={serviceName}
@@ -830,7 +961,7 @@ function CreateContextModal({ namespaceId, applicationId, loading, onClose, onSu
             />
           </label>
           <label className="ns-modal-field">
-            <span>Alias (optional)</span>
+            <span>Alias <span className="ns-optional">(optional)</span></span>
             <input
               type="text"
               value={alias}
@@ -838,11 +969,24 @@ function CreateContextModal({ namespaceId, applicationId, loading, onClose, onSu
               placeholder="e.g. main-lobby"
             />
           </label>
+          <label className="ns-modal-field">
+            <span>Init arguments <span className="ns-optional">(optional JSON)</span></span>
+            <textarea
+              className={`ns-modal-textarea${argsError ? ' ns-input-error' : ''}`}
+              value={initArgs}
+              onChange={(e) => { setInitArgs(e.target.value); validateArgs(e.target.value); }}
+              onBlur={() => validateArgs(initArgs)}
+              placeholder='{}'
+              rows={3}
+              spellCheck={false}
+            />
+            {argsError && <span className="ns-field-error">{argsError}</span>}
+          </label>
           <div className="ns-modal-actions">
             <button type="button" className="ns-modal-cancel" onClick={onClose} disabled={loading}>
               Cancel
             </button>
-            <button type="submit" className="ns-action-btn" disabled={loading}>
+            <button type="submit" className="ns-action-btn" disabled={loading || !canSubmit}>
               {loading ? "Creating..." : "Create Context"}
             </button>
           </div>

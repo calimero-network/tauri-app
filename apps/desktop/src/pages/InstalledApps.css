@@ -1,5 +1,5 @@
 .installed-apps-page {
-  padding: 20px;
+  padding: 24px;
   max-width: 1400px;
   margin: 0 auto;
   animation: fadeUp 0.4s ease-out;
@@ -10,16 +10,45 @@
   justify-content: space-between;
   align-items: center;
   margin-bottom: 24px;
-  padding-bottom: 16px;
-  border-bottom: 1px solid var(--border-color);
 }
 
-.installed-apps-header h2 {
-  margin: 0;
+.installed-apps-header h1 {
+  margin: 0 0 4px 0;
   font-size: 24px;
   font-weight: 700;
   color: var(--text-primary);
   letter-spacing: -0.4px;
+}
+
+.installed-apps-header p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+
+.installed-refresh-btn {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s;
+  flex-shrink: 0;
+}
+
+.installed-refresh-btn:hover:not(:disabled) {
+  border-color: var(--border-hover);
+  color: var(--text-primary);
+}
+
+.installed-refresh-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .installed-apps-main {
@@ -33,12 +62,6 @@
   border-radius: var(--radius-md);
   margin-bottom: 16px;
   border: 1px solid rgba(239, 68, 68, 0.2);
-}
-
-.loading {
-  text-align: center;
-  padding: 40px;
-  color: var(--text-secondary);
 }
 
 .empty-state {
@@ -60,6 +83,8 @@
 .empty-state a:hover {
   text-decoration: underline;
 }
+
+/* ── Table cells ── */
 
 .table-cell-name {
   display: flex;
@@ -91,48 +116,103 @@
 
 .table-cell-actions {
   display: flex;
-  gap: 8px;
+  gap: 6px;
   align-items: center;
+  justify-content: flex-end;
 }
 
-.button-small {
-  padding: 6px 12px;
-  font-size: 12px;
-}
+/* ── Open button ── */
 
-.button {
-  padding: 8px 16px;
-  border: 1px solid rgba(165, 255, 17, 0.18);
+.btn-open {
+  padding: 5px 12px;
+  border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
-  background: var(--button-glass);
-  color: var(--accent-primary);
-  cursor: pointer;
-  font-size: 14px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
   font-weight: 500;
-  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
 }
 
-.button:hover:not(:disabled) {
-  background: var(--button-glass-hover);
-  border-color: rgba(165, 255, 17, 0.28);
-  transform: translateY(-1px);
-  box-shadow: var(--shadow-sm);
+.btn-open:hover {
+  border-color: var(--accent-dim);
+  color: var(--accent-primary);
+  background: var(--accent-light);
 }
 
-.button:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
+/* ── Three-dot more menu ── */
+
+.app-actions-more {
+  position: relative;
 }
 
-.button-danger {
-  background: var(--error);
-  color: white;
-  border-color: var(--error);
+.btn-more {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition: all 0.15s;
+  flex-shrink: 0;
 }
 
-.button-danger:hover:not(:disabled) {
-  background: #dc2626;
-  border-color: #dc2626;
+.btn-more:hover {
+  border-color: var(--border-color);
+  color: var(--text-secondary);
+  background: var(--surface-glass-soft);
+}
+
+.app-actions-dropdown {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  z-index: 9999;
+  min-width: 160px;
+  padding: 4px;
+  animation: fadeIn 0.1s ease-out;
+}
+
+.dropdown-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 10px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.12s;
+  text-align: left;
+  color: var(--text-secondary);
+}
+
+.dropdown-item:hover {
+  background: var(--surface-glass-soft);
+  color: var(--text-primary);
+}
+
+.dropdown-item-danger {
+  color: var(--error);
+}
+
+.dropdown-item-danger:hover {
+  background: rgba(239, 68, 68, 0.08);
+  color: var(--error);
+}
+
+.dropdown-divider {
+  height: 1px;
+  background: var(--border-color);
+  margin: 4px 0;
 }

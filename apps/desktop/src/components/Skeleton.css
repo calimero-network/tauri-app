@@ -1,7 +1,11 @@
 .skeleton {
-  background: var(--surface-glass-soft);
+  background: rgba(255, 255, 255, 0.07);
   position: relative;
   overflow: hidden;
+}
+
+[data-theme="light"] .skeleton {
+  background: rgba(0, 0, 0, 0.07);
 }
 
 .skeleton-pulse {
@@ -23,7 +27,7 @@
   background: linear-gradient(
     90deg,
     transparent,
-    rgba(255, 255, 255, 0.05),
+    rgba(255, 255, 255, 0.12),
     transparent
   );
   animation: skeleton-wave 1.5s ease-in-out infinite;

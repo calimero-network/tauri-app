@@ -421,16 +421,7 @@
   border-color: var(--border-hover);
 }
 
-.button-danger {
-  background: var(--error);
-  color: white;
-}
 
-.button-danger:hover:not(:disabled) {
-  background: #dc2626;
-  transform: translateY(-1px);
-  box-shadow: var(--shadow-md);
-}
 
 .reset-confirm-form {
   margin-top: 12px;
@@ -463,17 +454,55 @@
 .reset-confirm-checkbox {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   margin-bottom: 16px;
   cursor: pointer;
   font-size: 14px;
   color: var(--text-primary);
+  user-select: none;
 }
 
-.reset-confirm-checkbox input {
-  width: 16px;
-  height: 16px;
-  cursor: pointer;
+/* Hide native checkbox */
+.reset-confirm-checkbox input[type="checkbox"] {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+
+/* Custom checkbox box */
+.reset-confirm-checkbox input[type="checkbox"] + span::before {
+  content: '';
+  display: inline-block;
+  width: 20px;
+  height: 20px;
+  min-width: 20px;
+  border-radius: 5px;
+  border: 2px solid var(--border-color);
+  background: var(--surface-glass-soft);
+  margin-right: 10px;
+  vertical-align: middle;
+  transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
+  position: relative;
+  top: -1px;
+}
+
+/* Checked state */
+.reset-confirm-checkbox input[type="checkbox"]:checked + span::before {
+  background: var(--error);
+  border-color: var(--error);
+  box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.18);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 10'%3E%3Cpolyline points='1,5 4.5,8.5 11,1' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 65%;
+}
+
+/* Hover state */
+.reset-confirm-checkbox:hover input[type="checkbox"] + span::before {
+  border-color: var(--error);
+  box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.1);
 }
 
 .reset-confirm-actions {

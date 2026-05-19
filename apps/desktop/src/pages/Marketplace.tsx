@@ -644,15 +644,16 @@ export default function Marketplace({ clientReady = true }: MarketplaceProps) {
               </div>
               <div className="modal-meta-row">
                 <span className="modal-meta-label">Registry</span>
-                <a
-                  href={(() => { try { return `${new URL(selectedApp.registry).origin}/apps/${selectedApp.id}`; } catch { return `${selectedApp.registry.replace(/\/$/, '')}/apps/${selectedApp.id}`; } })()}
-                  target="_blank"
-                  rel="noopener noreferrer"
+                <button
                   className="modal-meta-link"
-                  onClick={(e) => e.stopPropagation()}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const url = (() => { try { return `${new URL(selectedApp.registry).origin}/apps/${selectedApp.id}`; } catch { return `${selectedApp.registry.replace(/\/$/, '')}/apps/${selectedApp.id}`; } })();
+                    invoke('open_url_in_browser', { url });
+                  }}
                 >
                   View on Registry
-                </a>
+                </button>
               </div>
             </div>
             <div className="modal-actions">

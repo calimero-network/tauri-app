@@ -655,19 +655,12 @@
   background: var(--accent-light);
 }
 
-.app-card-mini-wrapper {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 6px;
-}
-
 .app-card-mini {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
-  padding: 18px;
+  gap: 10px;
+  padding: 20px 14px 16px;
   background: var(--gradient-surface), var(--surface-glass);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-lg);
@@ -677,21 +670,7 @@
   width: 100%;
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
-}
-
-.app-card-shortcut-link {
-  font-size: 11px;
-  color: var(--text-tertiary);
-  background: none;
-  border: none;
-  cursor: pointer;
-  padding: 2px 0;
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-
-.app-card-shortcut-link:hover {
-  color: var(--accent-primary);
+  position: relative;
 }
 
 .app-card-mini:hover {
@@ -708,12 +687,25 @@
 
 .app-card-mini .app-name {
   font-size: 13px;
-  font-weight: 500;
+  font-weight: 600;
   color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   width: 100%;
+}
+
+.app-card-open-hint {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-weight: 400;
+  letter-spacing: 0.3px;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.app-card-mini:hover .app-card-open-hint {
+  opacity: 1;
 }
 
 /* ── Empty State ── */
@@ -757,6 +749,37 @@
   display: inline-flex;
   align-items: center;
   gap: 8px;
+}
+
+.btn-browse-marketplace {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 22px;
+  background: transparent;
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1), border-color 0.2s, box-shadow 0.2s;
+  letter-spacing: 0.2px;
+}
+
+.btn-browse-marketplace:hover {
+  border-color: var(--border-hover);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-sm);
+}
+
+.btn-browse-marketplace:hover .browse-icon {
+  transform: translateX(3px);
+  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.btn-browse-marketplace .browse-icon {
+  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .node-info h3 {

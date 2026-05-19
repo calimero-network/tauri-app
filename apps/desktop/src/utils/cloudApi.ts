@@ -215,20 +215,34 @@ export interface EnableHaNamespaceResponse {
 }
 
 /**
- * Enable HA for every group in a namespace in one call. Client is
- * responsible for enumerating the groups and picking a representative
- * context_id per group (manager needs the context for billing + row
- * bookkeeping but does not itself know the namespace topology).
+ * Enable HA for a namespace in one call.
+ *
+ * Two mutually-exclusive shapes, picked by the caller:
+ *  • Real-context path: `groups` carries the namespace's representative
+ *    {group_id, context_id} entries; no `ownershipProof`. The cloud
+ *    authorises by matching each context to a UserContext the caller
+ *    already claimed (unchanged behaviour).
+ *  • Context-less path: `groups` is `[]` and a single namespace-scoped
+ *    `ownershipProof` is supplied. There is no context to bill/claim,
+ *    so the cloud authorises off the server-verified namespace proof
+ *    instead — this is the authoritative namespace-ownership gate.
+ *
+ * The `ownership_proof` key is only emitted when a proof is passed, so
+ * the real-context request body is byte-for-byte unchanged.
  */
 export async function enableHaNamespace(
   idToken: string,
   namespaceId: string,
   groups: NamespaceHaGroup[],
+  ownershipProof?: OwnershipProof,
 ): Promise<EnableHaNamespaceResponse> {
+  const body = ownershipProof
+    ? { groups, ownership_proof: ownershipProof }
+    : { groups };
   const res = await cloudFetch(
     `/api/cloud/me/namespaces/${encodeURIComponent(namespaceId)}/enable-ha`,
     idToken,
-    { method: 'POST', body: JSON.stringify({ groups }) },
+    { method: 'POST', body: JSON.stringify(body) },
   );
   if (!res.ok) {
     const error = await res.json().catch(() => null);
@@ -364,6 +378,19 @@ function generateProofNonce(): string {
 }
 
 /**
+ * Proof-binding audiences. These literals are part of the wire contract
+ * shared with the cloud verifier (mdma) and merod — they must stay
+ * byte-identical across the three repos.
+ *
+ * Audience separation is a confused-deputy defence: a context-claim
+ * proof must never be replayable to enable HA on a namespace, and
+ * vice-versa. The cloud verifier rejects a proof whose embedded audience
+ * doesn't match the endpoint it was presented to.
+ */
+const PROOF_AUDIENCE_CLAIM_CONTEXT = 'mdma:claim-context';
+const PROOF_AUDIENCE_ENABLE_HA_NAMESPACE = 'mdma:enable-ha-namespace';
+
+/**
  * Look up the caller's role in a group via the merod admin API.
  *
  * Throws on auth failure, a non-2xx response (core's actor bails with
@@ -474,9 +501,9 @@ export async function requestOwnershipProof(
       body: JSON.stringify({
         // Same camelCase contract as setTeeAdmissionPolicy: the merod
         // admin types deserialise with #[serde(rename_all = "camelCase")].
-        // The literal audience "mdma:claim-context" is part of the
-        // proof-binding agreed with the cloud verifier.
-        audience: 'mdma:claim-context',
+        // The audience is part of the proof-binding agreed with the
+        // cloud verifier (see PROOF_AUDIENCE_* above).
+        audience: PROOF_AUDIENCE_CLAIM_CONTEXT,
         contextId: opts.contextId,
         subject: opts.subject,
         nonce,
@@ -491,6 +518,80 @@ export async function requestOwnershipProof(
   // No `{ data: ... }` envelope — ApiResponse serializes the payload
   // struct directly and IssueOwnershipProofApiResponse has no `data`
   // field. Keys are camelCase (#[serde(rename_all = "camelCase")]).
+  const data = (await res.json()) as IssueOwnershipProofResponseData;
+  if (
+    !data ||
+    typeof data.signerPublicKey !== 'string' ||
+    typeof data.signedPayload !== 'string' ||
+    typeof data.signature !== 'string'
+  ) {
+    throw new Error('Malformed ownership proof response from local node');
+  }
+  // Re-key camelCase → snake_case for the cloud request.
+  return {
+    signer_public_key: data.signerPublicKey,
+    signed_payload: data.signedPayload,
+    signature: data.signature,
+  };
+}
+
+/**
+ * Ask the local merod to issue a signed ownership proof scoped to a
+ * *namespace root* with no context. This is the authoritative signal
+ * that the caller is a direct admin of the namespace: merod gates the
+ * issuance on `is_direct_group_admin(namespaceId)` and signs with the
+ * namespace root's signing key — there is no context to bind, so the
+ * payload's context_id is empty.
+ *
+ * Used by the context-less HA-enable path: a namespace with no context
+ * yet has nothing to claim per-context, but the cloud still needs a
+ * server-verifiable proof that this user owns the namespace before it
+ * will enable HA (the cloud-side namespace-ownership gate / IDOR fix).
+ *
+ * Distinct audience from requestOwnershipProof so a context-claim proof
+ * can never be replayed against the enable-ha endpoint. Same camelCase
+ * request / camelCase response contract as requestOwnershipProof; the
+ * triplet is re-keyed to snake_case for the cloud body.
+ */
+export async function requestNamespaceOwnershipProof(
+  nodeUrl: string,
+  namespaceId: string,
+  opts: { subject: string },
+): Promise<OwnershipProof> {
+  const accessToken = getAccessToken();
+  if (!accessToken) {
+    throw new Error('Not authenticated to local node — sign in first');
+  }
+  const nonce = generateProofNonce();
+  const expiresAtMs = Date.now() + 60_000;
+  const res = await fetch(
+    `${nodeUrl}/admin-api/groups/${encodeURIComponent(namespaceId)}/issue-namespace-ownership-proof`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({
+        // camelCase per the merod admin contract (#[serde(rename_all =
+        // "camelCase")]). No contextId field — this proof is scoped to
+        // the namespace root only; the audience binds it to the cloud's
+        // enable-ha-namespace endpoint.
+        audience: PROOF_AUDIENCE_ENABLE_HA_NAMESPACE,
+        subject: opts.subject,
+        nonce,
+        expiresAtMs,
+      }),
+    },
+  );
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(
+      `Failed to issue namespace ownership proof: ${text || res.statusText}`,
+    );
+  }
+  // Same response shape as issue-ownership-proof: no `{ data }` envelope,
+  // camelCase keys (#[serde(rename_all = "camelCase")]).
   const data = (await res.json()) as IssueOwnershipProofResponseData;
   if (
     !data ||
@@ -559,9 +660,17 @@ export async function enableHaForNamespace(
   namespaceId: string,
   groups: NamespaceHaGroup[],
 ): Promise<EnableHaNamespaceResponse> {
-  if (groups.length === 0) {
-    throw new Error('Namespace has no groups to enable HA on');
-  }
+  // A context-less namespace is a first-class HA target. When no group
+  // has a real context yet there is nothing to claim per-context, so the
+  // per-context proof + claimContexts batch below is skipped; instead we
+  // send the cloud ONE namespace-scoped ownership proof and an empty
+  // group list. Core admits a ReadOnlyTee fleet member at the root group
+  // (group_id == namespaceId) with zero contexts and auto-follows
+  // contexts created later. The namespace proof is the authoritative
+  // server-verified ownership gate for this path (the cloud cannot
+  // authorise off a UserContext row because none exists yet) — without
+  // it, any authenticated user could enable HA on any namespace.
+  const hasRealContext = groups.some((g) => !!g.context_id);
 
   // ── Step 1: silent claim ──
   // The cloud verifier is the authoritative trust boundary: it re-checks
@@ -618,6 +727,13 @@ export async function enableHaForNamespace(
     throw new Error('Only the namespace admin can register contexts with the cloud.');
   }
 
+  // Real-context path (unchanged): per-context proof + claimContexts so
+  // the cloud can authorise each context against a claimed UserContext.
+  // The context-less path skips this entirely and instead supplies the
+  // single namespace proof to enableHaNamespace below; the Admin
+  // pre-flight above is a UX fail-fast for both, but the server-verified
+  // namespace proof is the authoritative gate for the context-less path.
+  if (hasRealContext) {
   // Every proof is scoped to the *namespace root* (`namespaceId`), not
   // each group's own `group_id`, even for contexts that live in
   // subgroups. This is deliberate and consistent across the three
@@ -668,6 +784,7 @@ export async function enableHaForNamespace(
         `context(s): ${missing.join(', ')}. HA was not enabled.`,
     );
   }
+  } // end real-context claim block
 
   // ── Step 2–4: existing flow ──
   const measurements = await getFleetMeasurements(idToken);
@@ -679,7 +796,23 @@ export async function enableHaForNamespace(
   // there and only there — subgroups inherit it via resolve-to-root.
   await setTeeAdmissionPolicy(nodeUrl, namespaceId, measurements.allowed_mrtd);
 
-  return enableHaNamespace(idToken, namespaceId, groups);
+  if (hasRealContext) {
+    // Real-context path: contexts already claimed above, no proof.
+    return enableHaNamespace(idToken, namespaceId, groups);
+  }
+
+  // Context-less path: no contexts to bill/claim, so send an empty group
+  // list plus exactly ONE namespace-scoped ownership proof. merod gates
+  // proof issuance on direct admin of the namespace root and signs with
+  // the root signing key; the cloud re-verifies the proof (signature,
+  // subject == authenticated email, audience, group_id == path namespace)
+  // before any write — this server-side check is the authoritative
+  // namespace-ownership gate. Core admits a ReadOnlyTee fleet member at
+  // the root and auto-follows contexts created later.
+  const proof = await requestNamespaceOwnershipProof(nodeUrl, namespaceId, {
+    subject,
+  });
+  return enableHaNamespace(idToken, namespaceId, [], proof);
 }
 
 export { CloudSessionExpiredError };

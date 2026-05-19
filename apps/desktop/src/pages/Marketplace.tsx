@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import { invoke } from "@tauri-apps/api/tauri";
 import { getSettings } from "../utils/settings";
 import { fetchAppsFromAllRegistries, recordDownload, type AppSummary } from "../utils/registry";
 import { apiClient } from "../lib/mero-client";
@@ -12,7 +13,7 @@ import {
 import { truncateText } from "../utils/string";
 import { useToast } from "../contexts/ToastContext";
 import Skeleton from "../components/Skeleton";
-import { Search, RefreshCw, Package, Download, CheckCircle2, X } from "lucide-react";
+import { Search, RefreshCw, Package, Download, CheckCircle2, X, ExternalLink } from "lucide-react";
 import bs58 from "bs58";
 import "./Marketplace.css";
 
@@ -36,6 +37,7 @@ export default function Marketplace({ clientReady = true }: MarketplaceProps) {
   const [installingAppId, setInstallingAppId] = useState<string | null>(null);
   // Track whether a background refresh is in progress (no skeleton shown)
   const [refreshing, setRefreshing] = useState(false);
+  const [selectedApp, setSelectedApp] = useState<MarketplaceApp | null>(null);
   const mountedRef = useRef(true);
 
   // Cleanup on unmount
@@ -385,17 +387,10 @@ export default function Marketplace({ clientReady = true }: MarketplaceProps) {
       // Record download with registry (fire-and-forget)
       recordDownload(app.registry, app.id, app.latest_version);
 
-      // Reload installed apps and refetch marketplace so download count updates
-      const installed = await loadInstalledApps();
-      await loadMarketplaceApps(installed, true);
-      // Also explicitly mark this app as installed immediately for instant UI feedback
-      setApps((prevApps) =>
-        prevApps.map((a) =>
-          a.id === app.id || a.name === app.name
-            ? { ...a, installed: true }
-            : a
-        )
-      );
+      // Update just the changed card — no full reload, no flicker.
+      // loadInstalledApps updates installedAppIds, which the sync useEffect
+      // uses to flip installed:true on the affected card only.
+      await loadInstalledApps();
     } catch (err) {
       console.error("📦 Marketplace: Install exception:", err);
       const msg = truncateText(err instanceof Error ? err.message : "Unknown error", 120);
@@ -406,11 +401,28 @@ export default function Marketplace({ clientReady = true }: MarketplaceProps) {
   };
 
 
+  const registryUrl = useMemo(() => {
+    const reg = getSettings().registries?.[0];
+    if (!reg) return null;
+    try { return new URL(reg).origin; } catch { return reg.replace(/\/$/, ''); }
+  }, []);
+
   return (
     <div className="marketplace-page">
       <header className="marketplace-header">
         <h1>Application Marketplace</h1>
-        <p>Browse and install applications from configured registries</p>
+        <div className="marketplace-header-row">
+          <p>Browse and install applications from configured registries</p>
+          {registryUrl && (
+            <button
+              className="explore-registry-btn"
+              onClick={() => invoke('open_url_in_browser', { url: registryUrl })}
+            >
+              <ExternalLink size={13} />
+              Explore Registry on web
+            </button>
+          )}
+        </div>
       </header>
 
       <main className="marketplace-main">
@@ -436,24 +448,25 @@ export default function Marketplace({ clientReady = true }: MarketplaceProps) {
           </div>
           
           <div className="marketplace-filters">
-            <select
-              value={filterInstalled}
-              onChange={(e) => setFilterInstalled(e.target.value as any)}
-              className="filter-select"
-            >
-              <option value="all">All Apps</option>
-              <option value="installed">Installed</option>
-              <option value="not-installed">Not Installed</option>
-            </select>
-            
-            <button 
-              onClick={handleForceRefresh} 
-              className="button button-secondary"
+            <div className="filter-pills">
+              {(['all', 'installed', 'not-installed'] as const).map((f) => (
+                <button
+                  key={f}
+                  className={`filter-pill${filterInstalled === f ? ' active' : ''}`}
+                  onClick={() => setFilterInstalled(f)}
+                >
+                  {f === 'all' ? 'All' : f === 'installed' ? 'Installed' : 'Not Installed'}
+                </button>
+              ))}
+            </div>
+            <button
+              onClick={handleForceRefresh}
+              className="refresh-btn"
               disabled={loading || refreshing}
-              title="Refresh applications"
+              title="Refresh"
             >
-              <RefreshCw size={16} className={loading || refreshing ? 'spinning' : ''} />
-          </button>
+              <RefreshCw size={15} className={loading || refreshing ? 'spinning' : ''} />
+            </button>
           </div>
         </div>
 
@@ -468,17 +481,25 @@ export default function Marketplace({ clientReady = true }: MarketplaceProps) {
             {Array.from({ length: 6 }).map((_, index) => (
               <div key={index} className="app-card skeleton-card">
                 <div className="app-card-header">
-                  <Skeleton variant="text" width="60%" height="20px" />
-                  <Skeleton variant="rectangular" width="70px" height="24px" borderRadius="12px" />
+                  <Skeleton variant="rectangular" width="40px" height="40px" borderRadius="10px" />
+                  <div className="app-title-section">
+                    <Skeleton variant="text" width="70%" height="16px" />
+                    <Skeleton variant="text" width="40%" height="12px" />
+                  </div>
                 </div>
-                <div className="app-card-body">
-                  <Skeleton variant="text" width="80%" height="14px" />
-                  <Skeleton variant="text" width="50%" height="14px" />
-                  <Skeleton variant="text" width="70%" height="14px" />
-                  <Skeleton variant="text" width="60%" height="14px" />
+                <div className="app-card-description">
+                  <Skeleton variant="text" width="100%" height="13px" />
+                  <div style={{ marginTop: 6 }}><Skeleton variant="text" width="85%" height="13px" /></div>
+                  <div style={{ marginTop: 6 }}><Skeleton variant="text" width="60%" height="13px" /></div>
                 </div>
-                <div className="skeleton-card-actions">
-                  <Skeleton variant="rectangular" width="100px" height="36px" borderRadius="4px" />
+                <div className="app-card-footer">
+                  <div className="app-meta">
+                    <Skeleton variant="text" width="80%" height="12px" />
+                    <div style={{ marginTop: 4 }}><Skeleton variant="text" width="60%" height="12px" /></div>
+                  </div>
+                </div>
+                <div className="app-card-actions">
+                  <Skeleton variant="rectangular" width="100%" height="38px" borderRadius="10px" />
                 </div>
               </div>
             ))}
@@ -500,40 +521,39 @@ export default function Marketplace({ clientReady = true }: MarketplaceProps) {
         ) : (
           <div className="apps-grid">
             {filteredAndSortedApps.map((app, index) => {
-              // Shorten developer pubkey for display
               const shortPubkey = app.developer_pubkey && app.developer_pubkey.length > 12
                 ? `${app.developer_pubkey.slice(0, 6)}...${app.developer_pubkey.slice(-4)}`
                 : app.developer_pubkey;
-              
+              const description = app.description || "No description available.";
+
               return (
-              <div key={`${app.developer_pubkey}-${app.name}-${index}`} className="app-card" data-testid="app-card">
-                <div className="app-card-header">
+                <div
+                  key={`${app.developer_pubkey}-${app.name}-${index}`}
+                  className="app-card"
+                  data-testid="app-card"
+                  onClick={() => setSelectedApp(app)}
+                >
+                  <div className="app-card-header">
                     <div className="app-icon-wrapper">
                       <Package className="app-icon" size={20} />
                     </div>
                     <div className="app-title-section">
-                  <h3>{app.alias || app.name}</h3>
+                      <h3>{app.alias || app.name}</h3>
                       {app.latest_version && (
                         <span className="app-version-badge">v{app.latest_version}</span>
                       )}
                     </div>
-                  {app.installed && (
+                    {app.installed && (
                       <CheckCircle2 className="installed-icon" size={18} />
                     )}
                   </div>
-                  
-                  {app.description && (
-                    <div className="app-card-description">
-                      <p>{app.description}</p>
-                    </div>
-                  )}
+
+                  <div className="app-card-description">
+                    <p>{description}</p>
+                  </div>
 
                   <div className="app-card-footer">
                     <div className="app-meta">
-                      <div className="app-meta-row">
-                        <span className="app-meta-label">Package:</span>
-                        <span className="app-meta-value" title={app.id}>{app.id}</span>
-                      </div>
                       <div className="app-meta-row">
                         <span className="app-meta-label">Author:</span>
                         <span className="app-meta-value">
@@ -546,17 +566,17 @@ export default function Marketplace({ clientReady = true }: MarketplaceProps) {
                       </div>
                     </div>
                   </div>
-                  
-                <div className="app-card-actions">
-                  {app.installed ? (
+
+                  <div className="app-card-actions" onClick={(e) => e.stopPropagation()}>
+                    {app.installed ? (
                       <button className="button button-success" disabled>
                         <CheckCircle2 size={16} />
-                      Installed
-                    </button>
-                  ) : (
-                    <button
-                      onClick={() => handleInstall(app)}
-                      className="button button-primary"
+                        Installed
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => handleInstall(app)}
+                        className="button button-primary"
                         disabled={installingAppId === app.id}
                       >
                         {installingAppId === app.id ? (
@@ -566,19 +586,101 @@ export default function Marketplace({ clientReady = true }: MarketplaceProps) {
                           </>
                         ) : (
                           <>
-                            <Download size={16} />
-                      Install
+                            <span className="install-icon-wrap"><Download size={16} /></span>
+                            Install
                           </>
                         )}
-                    </button>
-                  )}
+                      </button>
+                    )}
+                  </div>
                 </div>
-              </div>
               );
             })}
           </div>
         )}
       </main>
+
+      {selectedApp && (
+        <div className="app-detail-overlay" onClick={() => setSelectedApp(null)}>
+          <div className="app-detail-modal" onClick={(e) => e.stopPropagation()}>
+            <button className="modal-close" onClick={() => setSelectedApp(null)}>
+              <X size={18} />
+            </button>
+            <div className="modal-header">
+              <div className="app-icon-wrapper modal-icon">
+                <Package size={28} className="app-icon" />
+              </div>
+              <div className="modal-title">
+                <h2>{selectedApp.alias || selectedApp.name}</h2>
+                {selectedApp.latest_version && (
+                  <span className="app-version-badge">v{selectedApp.latest_version}</span>
+                )}
+              </div>
+              {selectedApp.installed && (
+                <CheckCircle2 className="installed-icon" size={22} />
+              )}
+            </div>
+            <p className="modal-description">
+              {selectedApp.description || "No description available."}
+            </p>
+            <div className="modal-meta">
+              <div className="modal-meta-row">
+                <span className="modal-meta-label">Package ID</span>
+                <span className="modal-meta-value mono">{selectedApp.id}</span>
+              </div>
+              <div className="modal-meta-row">
+                <span className="modal-meta-label">Author</span>
+                <span className="modal-meta-value">
+                  {selectedApp.author || (
+                    selectedApp.developer_pubkey
+                      ? `${selectedApp.developer_pubkey.slice(0, 8)}...${selectedApp.developer_pubkey.slice(-6)}`
+                      : '—'
+                  )}
+                </span>
+              </div>
+              <div className="modal-meta-row">
+                <span className="modal-meta-label">Downloads</span>
+                <span className="modal-meta-value">{(selectedApp.downloads ?? 0).toLocaleString()}</span>
+              </div>
+              <div className="modal-meta-row">
+                <span className="modal-meta-label">Registry</span>
+                <a
+                  href={(() => { try { return `${new URL(selectedApp.registry).origin}/apps/${selectedApp.id}`; } catch { return `${selectedApp.registry.replace(/\/$/, '')}/apps/${selectedApp.id}`; } })()}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="modal-meta-link"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  View on Registry
+                </a>
+              </div>
+            </div>
+            <div className="modal-actions">
+              {selectedApp.installed ? (
+                <button className="button button-success" disabled>
+                  <CheckCircle2 size={16} />
+                  Installed
+                </button>
+              ) : (
+                <button
+                  onClick={() => { handleInstall(selectedApp); setSelectedApp(null); }}
+                  className="button button-primary"
+                  disabled={installingAppId === selectedApp.id}
+                >
+                  {installingAppId === selectedApp.id ? (
+                    <><RefreshCw size={16} className="spinning" /> Installing...</>
+                  ) : (
+                    <><span className="install-icon-wrap"><Download size={16} /></span>Install</>
+                  )}
+                </button>
+              )}
+              <button className="button button-secondary" onClick={() => setSelectedApp(null)}>
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

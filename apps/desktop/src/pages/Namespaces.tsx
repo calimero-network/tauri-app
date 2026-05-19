@@ -166,10 +166,12 @@ export default function Namespaces() {
     });
   };
 
-  // HA state — keyed by namespaceId (not groupId). A namespace is
-  // considered HA-enabled if at least one of its groups has HA enabled
-  // on the cloud side. `haEnabling` is a per-namespace map (not a single
-  // boolean) so toggling one namespace doesn't lock every other toggle.
+  // HA state — keyed by namespaceId. A namespace is HA-enabled when the
+  // cloud reports ha_status === "enabled" for it (namespace-scoped — the
+  // cloud collapses HA to one record per namespace; post Phase 4 the
+  // payload also carries zero-context namespaces). `haEnabling` is a
+  // per-namespace map (not a single boolean) so toggling one namespace
+  // doesn't lock every other toggle.
   const [haEnabling, setHaEnabling] = useState<Record<string, boolean>>({});
   const [haEnabled, setHaEnabled] = useState<Record<string, boolean>>({});
 
@@ -509,8 +511,9 @@ export default function Namespaces() {
             <div className="ns-detail-section">
               <h2><Shield size={16} style={{ marginRight: 6, verticalAlign: -2 }} />High Availability</h2>
               <p className="ha-description">
-                Enable TEE replication to have fleet nodes automatically join and replicate
-                your namespace data. Requires a Calimero Cloud account with a paid plan.
+                Enable TEE replication to have fleet nodes automatically join and
+                replicate this namespace. Requires a Calimero Cloud account with a
+                paid plan.
               </p>
               <div className="ha-toggle-row">
                 <span className="ha-status">

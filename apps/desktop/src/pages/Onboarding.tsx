@@ -11,8 +11,7 @@ import { isCloudEnabled } from "../utils/featureFlags";
 import { fetchAppsFromAllRegistries, fetchAppManifest, recordDownload, type AppSummary } from "../utils/registry";
 import { useToast } from "../contexts/ToastContext";
 import { useTheme } from "../contexts/ThemeContext";
-import { ArrowLeft, ArrowRight, Check, Package, Download, CheckCircle2, ChevronDown, ChevronUp, Search, AlertTriangle } from "lucide-react";
-import { ScrollHint } from "../components/ScrollHint";
+import { ArrowLeft, ArrowRight, Check, Package, Download, CheckCircle2, ChevronDown, ChevronUp, AlertTriangle } from "lucide-react";
 import calimeroLogo from "../assets/calimero-logo.svg";
 import bs58 from "bs58";
 import "./Onboarding.css";
@@ -76,12 +75,10 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
   }, [setTheme]);
   
   // App installation state
-  const [allApps, setAllApps] = useState<AppSummary[]>([]);
   const [apps, setApps] = useState<AppSummary[]>([]);
   const [loadingApps, setLoadingApps] = useState(false);
   const [installingAppId, setInstallingAppId] = useState<string | null>(null);
   const [installedAppIds, setInstalledAppIds] = useState<Set<string>>(new Set());
-  const [searchQuery, setSearchQuery] = useState("");
 
   // Node setup state - restore from saved progress if available
   const [dataDir, setDataDir] = useState(() => loadOnboardingProgress()?.dataDir ?? "~/.calimero");
@@ -349,8 +346,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
         });
       });
       
-      setAllApps(fetchedApps);
-      setApps(fetchedApps.slice(0, 4)); // Show first 4 apps by default
+      setApps(fetchedApps.slice(0, 4));
       
       // Load installed apps
       try {
@@ -591,7 +587,6 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
               <ArrowRight size={18} />
             </button>
           </div>
-          <ScrollHint containerRef={stepContainerRef} />
         </div>
       </div>
     );
@@ -647,7 +642,6 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
               </button>
             </div>
           </div>
-          <ScrollHint containerRef={stepContainerRef} />
         </div>
       </div>
     );
@@ -898,7 +892,6 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
             </div>
             )}
           </div>
-          <ScrollHint containerRef={stepContainerRef} />
         </div>
       </div>
     );
@@ -979,7 +972,6 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
               </button>
             </div>
           </div>
-          <ScrollHint containerRef={stepContainerRef} />
         </div>
       </div>
     );
@@ -1022,8 +1014,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
                 )}
               </div>
             </div>
-            <ScrollHint containerRef={stepContainerRef} />
-          </div>
+            </div>
         </div>
       );
     }
@@ -1044,98 +1035,57 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
               <div className="apps-loading">
                 <p>Loading applications...</p>
               </div>
-            ) : allApps.length === 0 ? (
+            ) : apps.length === 0 ? (
               <div className="apps-empty">
                 <p>No applications available. You can install apps later from the Marketplace.</p>
               </div>
             ) : (
-              <>
-                <div className="onboarding-app-search">
-                  <Search size={18} className="search-icon" />
-                  <input
-                    type="text"
-                    placeholder="Search applications..."
-                    value={searchQuery}
-                    onChange={(e) => {
-                      const query = e.target.value.toLowerCase();
-                      setSearchQuery(e.target.value);
-                      if (query.trim() === "") {
-                        setApps(allApps.slice(0, 4));
-                      } else {
-                        const filtered = allApps.filter(app => 
-                          app.name.toLowerCase().includes(query) ||
-                          (app as any).description?.toLowerCase().includes(query)
-                        );
-                        setApps(filtered.slice(0, 4));
-                      }
-                    }}
-                    className="app-search-input"
-                  />
-                </div>
-                {apps.length === 0 ? (
-                  <div className="apps-empty">
-                    <p>No applications found matching your search.</p>
-                    <button
-                      onClick={() => {
-                        setSearchQuery("");
-                        setApps(allApps.slice(0, 4));
-                      }}
-                      className="step-button step-button-secondary"
-                    >
-                      Clear Search
-                    </button>
-                  </div>
-                ) : (
-                  <div className="onboarding-apps-grid">
-                    {apps.map((app) => {
-                      const isInstalled = installedAppIds.has(app.id);
-                      const isInstalling = installingAppId === app.id;
-                      const settings = getSettings();
-                      const registry = settings.registries?.[0] || '';
-                      
-                      return (
-                        <div key={app.id} className="onboarding-app-card">
-                          <div className="app-card-header">
-                            <div className="app-icon-placeholder">
-                              <Package size={24} />
-                            </div>
-                            <div className="app-info">
-                              <h3>{app.name}</h3>
-                              <p className="app-version">v{app.latest_version}</p>
-                            </div>
-                          </div>
-                          {(app as any).description && (
-                            <p className="app-description">{(app as any).description}</p>
-                          )}
-                          <p className="app-downloads">{(app as any).downloads ?? 0} downloads</p>
-                          <button
-                            onClick={() => handleInstallApp(app, registry)}
-                            className="app-install-button"
-                            disabled={isInstalled || isInstalling}
-                          >
-                            {isInstalled ? (
-                              <>
-                                <CheckCircle2 size={16} />
-                                Installed
-                              </>
-                            ) : isInstalling ? (
-                              <>
-                                <Download size={16} />
-                                Installing...
-                              </>
-                            ) : (
-                              <>
-                                <Download size={16} />
-                                Install
-                              </>
-                            )}
-                          </button>
+              <div className="onboarding-apps-grid">
+                {apps.map((app) => {
+                  const isInstalled = installedAppIds.has(app.id);
+                  const isInstalling = installingAppId === app.id;
+                  const settings = getSettings();
+                  const registry = settings.registries?.[0] || '';
+                  const description = (app as any).description || "No description available.";
+
+                  return (
+                    <div key={app.id} className="onboarding-app-card">
+                      <div className="app-card-header">
+                        <div className="app-icon-placeholder">
+                          <Package size={24} />
                         </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </>
+                        <div className="app-info">
+                          <h3>{app.name}</h3>
+                          <p className="app-version">v{app.latest_version}</p>
+                        </div>
+                      </div>
+                      <p className="app-description">{description}</p>
+                      <button
+                        onClick={() => handleInstallApp(app, registry)}
+                        className="app-install-button"
+                        disabled={isInstalled || isInstalling}
+                      >
+                        {isInstalled ? (
+                          <>
+                            <CheckCircle2 size={16} />
+                            Installed
+                          </>
+                        ) : isInstalling ? (
+                          <>
+                            <Download size={16} />
+                            Installing...
+                          </>
+                        ) : (
+                          <>
+                            <Download size={16} />
+                            Install
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
             )}
 
             <div className="step-actions" style={{ marginTop: '24px' }}>
@@ -1150,8 +1100,8 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
                 Skip for now
               </button>
             </div>
+            <div className="step-content-spacer" aria-hidden="true" />
           </div>
-          <ScrollHint containerRef={stepContainerRef} />
         </div>
       </div>
     );

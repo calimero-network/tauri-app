@@ -190,12 +190,18 @@
   align-items: center;
   justify-content: flex-start;
   text-align: center;
-  padding: 32px 0;
+  padding: 32px;
   min-height: 0;
   width: 100%;
   overflow: visible;
   position: relative;
   gap: 0;
+}
+
+.step-content-spacer {
+  height: 48px;
+  flex-shrink: 0;
+  width: 100%;
 }
 
 .step-icon-wrapper {
@@ -1501,6 +1507,7 @@
   max-width: 500px;
   margin-left: auto;
   margin-right: auto;
+  align-items: stretch;
 }
 
 @media (max-width: 768px) {
@@ -1552,6 +1559,9 @@
   transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
+  height: 100%;
+  box-sizing: border-box;
+  text-align: left;
 }
 
 .onboarding-app-card:hover {

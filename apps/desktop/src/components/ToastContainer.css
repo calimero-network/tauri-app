@@ -68,7 +68,10 @@
   font-size: 14px;
   line-height: 1.5;
   color: var(--text-primary);
-  word-wrap: break-word;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  max-height: 120px;
+  overflow-y: auto;
 }
 
 .toast-close {

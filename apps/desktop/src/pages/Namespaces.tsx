@@ -30,14 +30,33 @@ import "./Namespaces.css";
 
 function parseApiError(e: any): string {
   if (!e) return 'Unknown error';
-  const msg: string = e?.message ?? String(e);
-  try { const p = JSON.parse(msg); if (p?.error) return String(p.error); } catch {}
-  if (e?.body?.error) return String(e.body.error);
-  if (typeof e?.bodyText === 'string') {
-    try { const p = JSON.parse(e.bodyText); if (p?.error) return String(p.error); } catch {}
-    return e.bodyText;
+  const status = e?.status ? `${e.status}: ` : '';
+
+  // SDK HTTPError — bodyText is the raw response body
+  if (typeof e?.bodyText === 'string' && e.bodyText) {
+    try {
+      const p = JSON.parse(e.bodyText);
+      const human = p?.error ?? p?.message ?? p?.msg ?? p?.detail ?? p?.details ?? p?.reason;
+      if (human) return `${status}${String(human)}`;
+      // Whole body is JSON but no known field — compact it, cap at 200 chars
+      const compact = JSON.stringify(p);
+      return `${status}${compact.length > 200 ? compact.slice(0, 200) + '…' : compact}`;
+    } catch {
+      const t = e.bodyText.trim();
+      return `${status}${t.length > 200 ? t.slice(0, 200) + '…' : t}`;
+    }
   }
-  return msg;
+
+  // Plain JS Error whose message happens to be JSON
+  const msg: string = e?.message ?? String(e);
+  try {
+    const p = JSON.parse(msg);
+    const human = p?.error ?? p?.message ?? p?.msg;
+    if (human) return `${status}${String(human)}`;
+  } catch {}
+
+  if (e?.body?.error) return `${status}${String(e.body.error)}`;
+  return `${status}${msg}`;
 }
 
 const DEFAULT_NAMESPACE_CAPABILITIES = 1 | 2 | 8;
@@ -319,8 +338,10 @@ export default function Namespaces() {
     if (!mero) return;
     setActionLoading(true);
     try {
-      const invitation = JSON.parse(atob(invitationText));
-      await (mero.admin as any).joinNamespace(invitation);
+      const decoded = JSON.parse(atob(invitationText.trim()));
+      const namespaceId = (decoded.invitation.invitation.group_id as number[])
+        .map((b: number) => b.toString(16).padStart(2, '0')).join('');
+      await mero.admin.joinNamespace(namespaceId, decoded);
       toast.success('Joined namespace');
       setJoinNsModal(false);
       await refetchNamespaces();
@@ -331,11 +352,12 @@ export default function Namespaces() {
     }
   };
 
-  const handleJoinContext = async (contextId: string, refetch: () => void) => {
+  const handleJoinContext = async (invitationText: string, refetch: () => void) => {
     if (!mero) return;
     setActionLoading(true);
     try {
-      await (mero.admin as any).joinContext(contextId.trim());
+      const decoded = JSON.parse(atob(invitationText.trim()));
+      await mero.admin.joinGroup(decoded);
       toast.success('Joined context');
       setJoinCtxModal(null);
       refetch();
@@ -1277,7 +1299,7 @@ function JoinNamespaceModal({ loading, onClose, onSubmit }: JoinNamespaceModalPr
           </label>
           <div className="ns-modal-actions">
             <button type="button" className="ns-modal-cancel" onClick={onClose} disabled={loading}>Cancel</button>
-            <button type="submit" className="ns-action-btn" style={{ marginLeft: 0 }} disabled={loading || !payload.trim()}>
+            <button type="submit" className="ns-action-btn" disabled={loading || !payload.trim()}>
               {loading ? 'Joining...' : 'Join Namespace'}
             </button>
           </div>
@@ -1290,37 +1312,39 @@ function JoinNamespaceModal({ loading, onClose, onSubmit }: JoinNamespaceModalPr
 interface JoinContextModalProps {
   loading: boolean;
   onClose: () => void;
-  onSubmit: (contextId: string) => void;
+  onSubmit: (invitationText: string) => void;
 }
 
 function JoinContextModal({ loading, onClose, onSubmit }: JoinContextModalProps) {
-  const [contextId, setContextId] = useState('');
+  const [payload, setPayload] = useState('');
 
   return (
     <div className="ns-modal-backdrop" onClick={onClose}>
-      <div className="ns-modal" onClick={(e) => e.stopPropagation()} role="dialog">
+      <div className="ns-modal ns-modal-wide" onClick={(e) => e.stopPropagation()} role="dialog">
         <div className="ns-modal-header">
           <h2>Join Context</h2>
           <button className="ns-modal-close" onClick={onClose} aria-label="Close"><X size={16} /></button>
         </div>
         <form
           className="ns-modal-body"
-          onSubmit={(e) => { e.preventDefault(); if (!contextId.trim()) return; onSubmit(contextId.trim()); }}
+          onSubmit={(e) => { e.preventDefault(); if (!payload.trim()) return; onSubmit(payload.trim()); }}
         >
-          <p className="ns-modal-hint">Enter the ID of an existing context to join it.</p>
+          <p className="ns-modal-hint">Paste the invitation payload you received from a context admin.</p>
           <label className="ns-modal-field">
-            <span>Context ID</span>
-            <input
-              type="text"
-              value={contextId}
-              onChange={(e) => setContextId(e.target.value)}
-              placeholder="e.g. a1b2c3d4e5f6..."
+            <span>Invitation Payload</span>
+            <textarea
+              className="ns-invite-payload"
+              value={payload}
+              onChange={(e) => setPayload(e.target.value)}
+              placeholder="Paste invitation payload here..."
+              rows={4}
+              spellCheck={false}
               autoFocus
             />
           </label>
           <div className="ns-modal-actions">
             <button type="button" className="ns-modal-cancel" onClick={onClose} disabled={loading}>Cancel</button>
-            <button type="submit" className="ns-action-btn" style={{ marginLeft: 0 }} disabled={loading || !contextId.trim()}>
+            <button type="submit" className="ns-action-btn" disabled={loading || !payload.trim()}>
               {loading ? 'Joining...' : 'Join Context'}
             </button>
           </div>

@@ -181,8 +181,17 @@
 .ns-modal-actions {
   display: flex;
   justify-content: flex-end;
+  align-items: center;
   gap: 8px;
   margin-top: 4px;
+  flex-wrap: nowrap;
+}
+
+.ns-modal-actions .ns-action-btn {
+  margin-left: 0;
+  flex-shrink: 0;
+  min-width: 120px;
+  justify-content: center;
 }
 
 .ns-modal-cancel {
@@ -195,6 +204,8 @@
   font-weight: 500;
   cursor: pointer;
   transition: all 0.15s;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .ns-modal-cancel:hover:not(:disabled) {

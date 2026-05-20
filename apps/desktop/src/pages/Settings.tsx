@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { getSettings, saveSettings, clearAllAppData } from "../utils/settings";
 import { parseTauriError } from "../utils/appUtils";
 import { invoke } from "@tauri-apps/api/tauri";
-import { killAllMerodProcesses, deleteCalimeroDataDir, stopMerod } from "../utils/merod";
+import { killAllMerodProcesses, deleteCalimeroDataDir, stopMerod, getMerodStatus } from "../utils/merod";
 import { startCloudLogin, disconnectCloud } from "../utils/cloudAuth";
 import { getCloudSubscription, CloudSessionExpiredError } from "../utils/cloudApi";
 import { isCloudEnabled } from "../utils/featureFlags";
@@ -37,6 +37,7 @@ export default function Settings({ onBack }: SettingsProps) {
   const [showNukeConfirm, setShowNukeConfirm] = useState(false);
   const [nukeConfirmed, setNukeConfirmed] = useState(false);
   const [nuking, setNuking] = useState(false);
+  const [nukeStatus, setNukeStatus] = useState('');
   const [startAtLogin, setStartAtLogin] = useState(false);
   const [startAtLoginLoading, setStartAtLoginLoading] = useState(true);
   const [startAtLoginAvailable, setStartAtLoginAvailable] = useState(true);
@@ -378,15 +379,44 @@ export default function Settings({ onBack }: SettingsProps) {
                         onClick={async () => {
                           if (!nukeConfirmed) return;
                           setNuking(true);
+
+                          // Step 1: graceful stop of the embedded node
+                          setNukeStatus('Stopping nodes...');
+                          try {
+                            await stopMerod();
+                          } catch {
+                            // not running — ok
+                          }
+
+                          // Step 2: force-kill any remaining merod processes
                           try {
                             await killAllMerodProcesses();
                           } catch (err: unknown) {
                             toast.error(parseTauriError(err));
                             setNuking(false);
+                            setNukeStatus('');
                             return;
                           }
-                          // Delete both the settings path and default ~/.calimero.
+
+                          // Step 3: wait until the embedded node reports stopped (max 10s)
+                          setNukeStatus('Waiting for nodes to stop...');
+                          const deadline = Date.now() + 10_000;
+                          while (Date.now() < deadline) {
+                            try {
+                              const status = await getMerodStatus();
+                              if (!status.running) break;
+                            } catch {
+                              break; // process gone — treat as stopped
+                            }
+                            await new Promise((r) => setTimeout(r, 500));
+                          }
+
+                          // Step 4: brief OS-level settle so file handles are released
+                          await new Promise((r) => setTimeout(r, 500));
+
+                          // Step 5: delete both the settings path and default ~/.calimero.
                           // After clearAllAppData(), onboarding uses ~/.calimero, so we must remove it.
+                          setNukeStatus('Deleting...');
                           const settingsDataDir = getSettings().embeddedNodeDataDir || "~/.calimero";
                           const defaultDataDir = "~/.calimero";
                           const dirsToDelete = [...new Set([settingsDataDir, defaultDataDir])];
@@ -397,15 +427,17 @@ export default function Settings({ onBack }: SettingsProps) {
                           } catch (err: unknown) {
                             toast.error(parseTauriError(err));
                             setNuking(false);
+                            setNukeStatus('');
                             return;
                           }
+
                           clearAllAppData();
                           window.location.reload();
                         }}
                         className="button button-danger"
                         disabled={!nukeConfirmed || nuking}
                       >
-                        {nuking ? 'Deleting...' : 'Delete everything and reset'}
+                        {nuking ? (nukeStatus || 'Deleting...') : 'Delete everything and reset'}
                       </button>
                     </div>
                   </div>

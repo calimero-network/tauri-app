@@ -55,14 +55,38 @@
     // Intercept fetch API IMMEDIATELY - React makes calls during initialization
     window.fetch = async function(url, init) {
         const urlStr = typeof url === 'string' ? url : (url instanceof URL ? url.href : url.toString());
-        
+
         // Debug: log all fetch calls to see what's happening
         console.log('[Tauri Proxy] Fetch called:', urlStr);
-        
+
         // Proxy any HTTP localhost request (any port) to avoid mixed content blocking.
         // The Rust backend validates the URL before proxying.
         const shouldProxy = isHttpLocalhost(urlStr);
         console.log('[Tauri Proxy] Should proxy?', shouldProxy, 'for URL:', urlStr);
+
+        // Never proxy streaming (SSE) requests. The Tauri IPC proxy calls
+        // response.text() on the Rust side which buffers the entire body —
+        // for a never-ending SSE stream this hangs forever, so SseClient
+        // never receives the connect message, session_id stays null, and no
+        // subscriptions reach the server.
+        // App windows are served from http://, not tauri://, so the original
+        // fetch can reach http://localhost:* directly with no mixed-content block.
+        if (shouldProxy && init) {
+            var acceptHeader = '';
+            if (init.headers instanceof Headers) {
+                acceptHeader = init.headers.get('Accept') || init.headers.get('accept') || '';
+            } else if (Array.isArray(init.headers)) {
+                var found = init.headers.find(function(h) { return h[0].toLowerCase() === 'accept'; });
+                if (found) acceptHeader = found[1];
+            } else if (init.headers && typeof init.headers === 'object') {
+                acceptHeader = init.headers['Accept'] || init.headers['accept'] || '';
+            }
+            if (acceptHeader === 'text/event-stream') {
+                console.log('[Tauri Proxy] SSE request — bypassing proxy for streaming:', urlStr);
+                return originalFetch.apply(this, arguments);
+            }
+        }
+
         if (shouldProxy) {
             // Reject immediately if signal is already aborted
             if (init && init.signal && init.signal.aborted) {

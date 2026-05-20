@@ -13,7 +13,7 @@ import {
 } from "../utils/merod";
 import { invoke } from "@tauri-apps/api/tauri";
 import { useToast } from "../contexts/ToastContext";
-import { Play, Square, RefreshCw, Check, FileText } from "lucide-react";
+import { Play, Square, RefreshCw, Check, FileText, ChevronDown } from "lucide-react";
 import { LogsViewer } from "../components/LogsViewer";
 import { ScrollHint } from "../components/ScrollHint";
 import "./NodeManagement.css";
@@ -36,6 +36,8 @@ export default function NodeManagement() {
   const [authUrl, setAuthUrl] = useState("");
   const [saved, setSaved] = useState(false);
   const mainScrollRef = useRef<HTMLElement>(null);
+  const [nodeDropdownOpen, setNodeDropdownOpen] = useState(false);
+  const nodeDropdownRef = useRef<HTMLDivElement>(null);
   const [showLogsModal, setShowLogsModal] = useState(false);
   const [logsContent, setLogsContent] = useState("");
   const [logsLoading, setLogsLoading] = useState(false);
@@ -79,6 +81,17 @@ export default function NodeManagement() {
     setServerPort(maxServerPort + 1);
     setSwarmPort(maxSwarmPort + 1);
   }, [selectedNode, runningNodes, serverPort, swarmPort]);
+
+  useEffect(() => {
+    if (!nodeDropdownOpen) return;
+    const handleClick = (e: MouseEvent) => {
+      if (nodeDropdownRef.current && !nodeDropdownRef.current.contains(e.target as Node)) {
+        setNodeDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, [nodeDropdownOpen]);
 
   const loadNodes = async () => {
     try {
@@ -391,20 +404,48 @@ export default function NodeManagement() {
               <h3 className="node-card-title">Manage Nodes</h3>
               <div className="form-field">
                 <label>Select node</label>
-                <select
-                  value={selectedNode}
-                  onChange={(e) => setSelectedNode(e.target.value)}
-                  disabled={loading}
-                >
-                  {safeAvailableNodes.map((node) => {
-                    const nodeInfo = getRunningNodeInfo(node);
-                    return (
-                      <option key={node} value={node}>
-                        {node} {nodeInfo.running ? `• Port ${nodeInfo.port}` : '• Stopped'}
-                      </option>
-                    );
-                  })}
-                </select>
+                <div className="node-select-wrapper" ref={nodeDropdownRef}>
+                  <button
+                    type="button"
+                    className={`node-select-trigger${nodeDropdownOpen ? ' open' : ''}`}
+                    onClick={() => !loading && setNodeDropdownOpen(o => !o)}
+                    disabled={loading}
+                  >
+                    <span className="node-select-trigger-left">
+                      <span className={`node-select-dot${getRunningNodeInfo(selectedNode).running ? ' running' : ''}`} />
+                      <span className="node-select-name">{selectedNode || 'Select a node'}</span>
+                      {selectedNode && (
+                        <span className="node-select-badge">
+                          {getRunningNodeInfo(selectedNode).running ? `Port ${getRunningNodeInfo(selectedNode).port}` : 'Stopped'}
+                        </span>
+                      )}
+                    </span>
+                    <ChevronDown size={15} className={`node-select-chevron${nodeDropdownOpen ? ' open' : ''}`} />
+                  </button>
+                  {nodeDropdownOpen && (
+                    <div className="node-select-menu">
+                      {safeAvailableNodes.map((node) => {
+                        const nodeInfo = getRunningNodeInfo(node);
+                        const isSelected = node === selectedNode;
+                        return (
+                          <button
+                            key={node}
+                            type="button"
+                            className={`node-select-option${isSelected ? ' selected' : ''}${nodeInfo.running ? ' running' : ''}`}
+                            onClick={() => { setSelectedNode(node); setNodeDropdownOpen(false); }}
+                          >
+                            <span className={`node-select-dot${nodeInfo.running ? ' running' : ''}`} />
+                            <span className="node-select-option-name">{node}</span>
+                            <span className="node-select-option-badge">
+                              {nodeInfo.running ? `Port ${nodeInfo.port}` : 'Stopped'}
+                            </span>
+                            {isSelected && <Check size={13} className="node-select-check" />}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
               </div>
               <div className="form-row">
                 <div className="form-field">
@@ -432,25 +473,20 @@ export default function NodeManagement() {
                   />
                 </div>
               </div>
-              <div className="node-status-cards">
-                {safeAvailableNodes.map((node) => {
-                  const nodeInfo = getRunningNodeInfo(node);
-                  return (
-                    <div
-                      key={node}
-                      className={`node-status-card ${nodeInfo.running ? 'running' : 'stopped'}`}
-                    >
-                      <div className="node-status-card-header">
-                        <span className="node-status-dot" />
-                        <span className="node-status-name">{node}</span>
-                        <span className="node-status-badge">
-                          {nodeInfo.running ? `Port ${nodeInfo.port}` : 'Stopped'}
-                        </span>
-                      </div>
+              {selectedNode && (() => {
+                const nodeInfo = getRunningNodeInfo(selectedNode);
+                return (
+                  <div className={`node-status-card ${nodeInfo.running ? 'running' : 'stopped'}`}>
+                    <div className="node-status-card-header">
+                      <span className="node-status-dot" />
+                      <span className="node-status-name">{selectedNode}</span>
+                      <span className="node-status-badge">
+                        {nodeInfo.running ? `Port ${nodeInfo.port}` : 'Stopped'}
+                      </span>
                     </div>
-                  );
-                })}
-              </div>
+                  </div>
+                );
+              })()}
               <div className="node-actions">
                 <button
                   onClick={handleStartNode}

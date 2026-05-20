@@ -9,12 +9,13 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 24px 32px;
+  height: var(--header-height);
+  padding: 0 32px;
   border-bottom: 1px solid var(--border-color);
   background: var(--header-glass);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
-  animation: fadeUp 0.4s ease-out;
+  flex-shrink: 0;
 }
 
 [data-theme="light"] .settings-header {
@@ -27,9 +28,29 @@
   gap: 16px;
 }
 
-.settings-header h1 {
-  margin: 0;
-  font-size: 28px;
+.settings-back-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 500;
+  font-family: inherit;
+  transition: color 0.2s;
+}
+
+.settings-back-btn:hover {
+  background: none;
+  color: var(--accent-primary);
+}
+
+.settings-title {
+  margin: 0 0 24px 0;
+  font-size: 24px;
   font-weight: 700;
   color: var(--text-primary);
   letter-spacing: -0.5px;

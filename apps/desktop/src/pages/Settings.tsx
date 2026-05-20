@@ -148,16 +148,16 @@ export default function Settings({ onBack }: SettingsProps) {
       <header className="settings-header">
         <div className="settings-header-left">
           {onBack && (
-            <button onClick={onBack} className="button button-secondary">
-              <ArrowLeft size={16} style={{ marginRight: '4px', verticalAlign: 'middle' }} />
+            <button onClick={onBack} className="settings-back-btn">
+              <ArrowLeft size={16} />
               Back
             </button>
           )}
-          <h1>Settings</h1>
         </div>
       </header>
 
       <main className="settings-main">
+        <h1 className="settings-title">Settings</h1>
         <div className="settings-tabs">
           <button 
             className={`settings-tab ${activeTab === 'general' ? 'active' : ''}`}

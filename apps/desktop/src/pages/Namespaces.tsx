@@ -24,6 +24,7 @@ import {
 } from "../utils/cloudApi";
 import { getCloudIdToken } from "../utils/cloudAuth";
 import { getAccessToken } from "../lib/token-storage";
+import { parseJwtPayload } from "../utils/jwt";
 import { isCloudEnabled } from "../utils/featureFlags";
 import "./Namespaces.css";
 
@@ -96,14 +97,14 @@ export default function Namespaces() {
     const controller = new AbortController();
     const settings = getSettings();
     const token = getAccessToken();
-    if (!settings.nodeUrl || !token) return;
+    if (!settings.nodeUrl || !token) { setNsMembers([]); return; }
     setNsMembersLoading(true);
     // TODO: replace with mero.admin.listGroupMembers once mero-react hook parsing is fixed
     fetch(`${settings.nodeUrl}/admin-api/groups/${encodeURIComponent(activeNsRootId)}/members`, {
       headers: { Authorization: `Bearer ${token}` },
       signal: controller.signal,
     })
-      .then((r) => r.json())
+      .then((r) => { if (!r.ok) throw new Error(`${r.status}`); return r.json(); })
       .then((json) => {
         const members = json?.members ?? json?.data?.members ?? [];
         setNsMembers(Array.isArray(members) ? members : []);
@@ -136,13 +137,9 @@ export default function Namespaces() {
 
   const [myIdentity, setMyIdentity] = useState<string | null>(null);
   useEffect(() => {
-    try {
-      const token = getAccessToken();
-      if (!token) return;
-      const payload = JSON.parse(atob(token.split('.')[1]));
-      const id = payload.sub || payload.identity || payload.public_key;
-      if (id) setMyIdentity(id);
-    } catch {}
+    const payload = parseJwtPayload(getAccessToken());
+    const id = payload?.sub || payload?.identity || payload?.public_key;
+    if (id && typeof id === 'string') setMyIdentity(id);
   }, []);
 
   const [installedApps, setInstalledApps] = useState<InstalledApp[]>([]);
@@ -699,15 +696,15 @@ export default function Namespaces() {
               className="stat-card stat-card-clickable"
               onClick={() => document.getElementById('ns-members-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
             >
-              <div className="stat-value">{nsMembersLoading ? '…' : nsMembers.length > 0 ? nsMembers.length : ((ns as any).memberCount ?? 0)}</div>
+              <div className="stat-value">{nsMembersLoading ? '…' : nsMembers.length}</div>
               <div className="stat-label">Members ↓</div>
             </button>
             <div className="stat-card">
-              <div className="stat-value">{nsRootContexts.length > 0 ? nsRootContexts.length : ((ns as any).contextCount ?? 0)}</div>
+              <div className="stat-value">{nsRootContexts.length}</div>
               <div className="stat-label">Contexts</div>
             </div>
             <div className="stat-card">
-              <div className="stat-value">{nsGroups.length > 0 ? nsGroups.length : ((ns as any).subgroupCount ?? 0)}</div>
+              <div className="stat-value">{nsLoadingGroups ? '…' : nsGroups.length}</div>
               <div className="stat-label">Groups</div>
             </div>
             <div className="stat-card">

@@ -53,9 +53,8 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
   }, [openMenuAppId]);
 
   useEffect(() => {
-    if (clientReady) {
-      loadInstalledApps();
-    }
+    if (!clientReady) { setLoading(false); return; }
+    loadInstalledApps();
   }, [clientReady]);
 
   const loadInstalledApps = async () => {

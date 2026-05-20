@@ -391,6 +391,8 @@ export default function Marketplace({ clientReady = true }: MarketplaceProps) {
       // loadInstalledApps updates installedAppIds, which the sync useEffect
       // uses to flip installed:true on the affected card only.
       await loadInstalledApps();
+      // Refresh the open modal so it shows "Installed" instead of "Install".
+      setSelectedApp((prev) => prev?.id === app.id ? { ...prev, installed: true } : prev);
     } catch (err) {
       console.error("📦 Marketplace: Install exception:", err);
       const msg = truncateText(err instanceof Error ? err.message : "Unknown error", 120);

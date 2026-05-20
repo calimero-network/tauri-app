@@ -80,7 +80,7 @@ export default function Namespaces() {
 
   const activeNsId = view.type === "namespace" || view.type === "group" ? view.ns.namespaceId : null;
   const activeGroupId = view.type === "group" ? view.groupId : null;
-  const activeNsRootId = view.type === "namespace" ? view.ns.namespaceId : null;
+  const activeNsRootId = (view.type === "namespace" || view.type === "group") ? view.ns.namespaceId : null;
 
   const { namespaces, loading, error, refetch: refetchNamespaces } = useNamespaces();
   const { groups: nsGroups, loading: nsLoadingGroups, error: nsGroupsError, refetch: refetchNsGroups } = useNamespaceGroups(activeNsId) as any;
@@ -92,7 +92,8 @@ export default function Namespaces() {
   const [nsMembersVersion, setNsMembersVersion] = useState(0);
 
   useEffect(() => {
-    if (!activeNsRootId) { setNsMembers([]); return; }
+    if (view.type !== "namespace" || !activeNsRootId) { setNsMembers([]); return; }
+    const controller = new AbortController();
     const settings = getSettings();
     const token = getAccessToken();
     if (!settings.nodeUrl || !token) return;
@@ -100,15 +101,17 @@ export default function Namespaces() {
     // TODO: replace with mero.admin.listGroupMembers once mero-react hook parsing is fixed
     fetch(`${settings.nodeUrl}/admin-api/groups/${encodeURIComponent(activeNsRootId)}/members`, {
       headers: { Authorization: `Bearer ${token}` },
+      signal: controller.signal,
     })
       .then((r) => r.json())
       .then((json) => {
         const members = json?.members ?? json?.data?.members ?? [];
         setNsMembers(Array.isArray(members) ? members : []);
       })
-      .catch(() => { setNsMembers([]); })
+      .catch((e) => { if (e?.name !== 'AbortError') setNsMembers([]); })
       .finally(() => setNsMembersLoading(false));
-  }, [activeNsRootId, nsMembersVersion]);
+    return () => controller.abort();
+  }, [activeNsRootId, nsMembersVersion, view.type]);
 
   const { contexts: groupContexts, refetch: refetchGroupContexts } = useGroupContexts(activeGroupId);
   const { contexts: nsRootContexts, refetch: refetchNsRootContexts } = useGroupContexts(
@@ -220,7 +223,7 @@ export default function Namespaces() {
         groupId: namespaceId,
         serviceName: serviceName.trim() || undefined,
         initializationParams: Array.from(new TextEncoder().encode(argsJson)),
-        alias: alias?.trim() || undefined,
+        name: alias?.trim() || undefined,
       });
       if (!result) throw new Error('createContext returned null');
       saveContextKey(result.contextId, result.memberPublicKey, applicationId);
@@ -228,7 +231,7 @@ export default function Namespaces() {
       setCtxModalOpen(null);
       await Promise.all([refetchGroupContexts?.(), refetchNsRootContexts?.()]);
     } catch (e: any) {
-      toast.error(`Failed to create context: ${e?.bodyText ?? e?.message ?? String(e)}`);
+      toast.error(`Failed to create context: ${parseApiError(e)}`);
     } finally {
       setCreatingContext(false);
     }

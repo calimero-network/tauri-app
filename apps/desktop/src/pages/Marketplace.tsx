@@ -648,7 +648,7 @@ export default function Marketplace({ clientReady = true }: MarketplaceProps) {
                   className="modal-meta-link"
                   onClick={(e) => {
                     e.stopPropagation();
-                    const url = (() => { try { return `${new URL(selectedApp.registry).origin}/apps/${selectedApp.id}`; } catch { return `${selectedApp.registry.replace(/\/$/, '')}/apps/${selectedApp.id}`; } })();
+                    const url = (() => { try { return `${new URL(selectedApp.registry).origin}/apps/${encodeURIComponent(selectedApp.id)}`; } catch { return `${selectedApp.registry.replace(/\/$/, '')}/apps/${encodeURIComponent(selectedApp.id)}`; } })();
                     invoke('open_url_in_browser', { url });
                   }}
                 >
@@ -664,7 +664,7 @@ export default function Marketplace({ clientReady = true }: MarketplaceProps) {
                 </button>
               ) : (
                 <button
-                  onClick={() => { handleInstall(selectedApp); setSelectedApp(null); }}
+                  onClick={() => handleInstall(selectedApp)}
                   className="button button-primary"
                   disabled={installingAppId === selectedApp.id}
                 >

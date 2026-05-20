@@ -13,7 +13,7 @@ function validateUsername(value: string): string | null {
 }
 
 function validatePassword(value: string): string | null {
-  if (!value) return 'Password is required';
+  if (!value || !value.trim()) return 'Password is required';
   if (value.length < MIN_PASSWORD_LENGTH) return `Password must be at least ${MIN_PASSWORD_LENGTH} characters`;
   return null;
 }
@@ -66,7 +66,7 @@ export function UsernamePasswordForm({
     onSubmit(username.trim(), password);
   };
 
-  const isEmpty = !username.trim() || !password;
+  const isEmpty = !username.trim() || !password.trim();
 
   const containerStyle: React.CSSProperties = { maxWidth: 420, width: '100%' };
   const cardStyle: React.CSSProperties = isDark

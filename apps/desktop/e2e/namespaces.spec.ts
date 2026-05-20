@@ -45,7 +45,7 @@ test.describe("Namespaces – page rendering", () => {
 
   test("renders the Namespaces heading inside the page", async ({ page }) => {
     await expect(
-      page.locator(".ns-header h1"),
+      page.locator(".ns-page-top h1"),
     ).toHaveText("Namespaces");
   });
 

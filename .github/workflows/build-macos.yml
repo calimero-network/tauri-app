@@ -44,7 +44,7 @@ env:
 jobs:
   build:
     name: Build macOS Universal
-    runs-on: macos-latest
+    runs-on: macos-14
     outputs:
       artifact-name: macos-build
 
@@ -127,6 +127,9 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: apps/desktop/src-tauri
+
+      - name: Install create-dmg
+        run: brew install create-dmg
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile

@@ -11,8 +11,7 @@ import { isCloudEnabled } from "../utils/featureFlags";
 import { fetchAppsFromAllRegistries, fetchAppManifest, recordDownload, type AppSummary } from "../utils/registry";
 import { useToast } from "../contexts/ToastContext";
 import { useTheme } from "../contexts/ThemeContext";
-import { ArrowLeft, ArrowRight, Check, Package, Download, CheckCircle2, ChevronDown, ChevronUp, Search, AlertTriangle } from "lucide-react";
-import { ScrollHint } from "../components/ScrollHint";
+import { ArrowLeft, ArrowRight, Check, Package, Download, CheckCircle2, ChevronDown, ChevronUp, AlertTriangle } from "lucide-react";
 import calimeroLogo from "../assets/calimero-logo.svg";
 import bs58 from "bs58";
 import "./Onboarding.css";
@@ -76,12 +75,10 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
   }, [setTheme]);
   
   // App installation state
-  const [allApps, setAllApps] = useState<AppSummary[]>([]);
   const [apps, setApps] = useState<AppSummary[]>([]);
   const [loadingApps, setLoadingApps] = useState(false);
   const [installingAppId, setInstallingAppId] = useState<string | null>(null);
   const [installedAppIds, setInstalledAppIds] = useState<Set<string>>(new Set());
-  const [searchQuery, setSearchQuery] = useState("");
 
   // Node setup state - restore from saved progress if available
   const [dataDir, setDataDir] = useState(() => loadOnboardingProgress()?.dataDir ?? "~/.calimero");
@@ -349,8 +346,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
         });
       });
       
-      setAllApps(fetchedApps);
-      setApps(fetchedApps.slice(0, 4)); // Show first 4 apps by default
+      setApps(fetchedApps.slice(0, 4));
       
       // Load installed apps
       try {
@@ -591,7 +587,6 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
               <ArrowRight size={18} />
             </button>
           </div>
-          <ScrollHint containerRef={stepContainerRef} />
         </div>
       </div>
     );
@@ -647,7 +642,6 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
               </button>
             </div>
           </div>
-          <ScrollHint containerRef={stepContainerRef} />
         </div>
       </div>
     );
@@ -898,7 +892,6 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
             </div>
             )}
           </div>
-          <ScrollHint containerRef={stepContainerRef} />
         </div>
       </div>
     );
@@ -931,8 +924,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
                 </div>
               ) : (
                 <button
-                  className="button button-primary"
-                  style={{ fontSize: '1rem', padding: '12px 32px' }}
+                  className="google-signin-btn"
                   onClick={async () => {
                     setCloudConnecting(true);
                     try {
@@ -950,6 +942,12 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
                     }
                   }}
                 >
+                  <svg width="18" height="18" viewBox="0 0 18 18" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: 0 }}>
+                    <path d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.875 2.684-6.615z" fill="#4285F4"/>
+                    <path d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z" fill="#34A853"/>
+                    <path d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332z" fill="#FBBC05"/>
+                    <path d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 6.29C4.672 4.163 6.656 3.58 9 3.58z" fill="#EA4335"/>
+                  </svg>
                   Sign in with Google
                 </button>
               )}
@@ -979,7 +977,6 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
               </button>
             </div>
           </div>
-          <ScrollHint containerRef={stepContainerRef} />
         </div>
       </div>
     );
@@ -990,14 +987,14 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
       return (
         <div className="onboarding-page" data-testid="onboarding-page">
         <ProgressIndicator />
-          <div ref={stepContainerRef} className="onboarding-step-container">
-            <div className="step-content">
+          <div ref={stepContainerRef} className="onboarding-step-container onboarding-step-login">
+            <div className="step-content" style={{ justifyContent: 'center' }}>
               <h1 className="step-title">Set Up Authentication</h1>
               <p className="step-description">
-                Create a username and password to authenticate with your Calimero node. 
+                Create a username and password to authenticate with your Calimero node.
                 This account will be used to securely access your node and manage your applications.
               </p>
-              <div className="onboarding-card">
+              <div className="onboarding-card" style={{ alignItems: 'center' }}>
                 {loginTransitioning ? (
                   <div className="loading-spinner">
                     <div className="spinner" />
@@ -1022,8 +1019,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
                 )}
               </div>
             </div>
-            <ScrollHint containerRef={stepContainerRef} />
-          </div>
+            </div>
         </div>
       );
     }
@@ -1044,98 +1040,57 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
               <div className="apps-loading">
                 <p>Loading applications...</p>
               </div>
-            ) : allApps.length === 0 ? (
+            ) : apps.length === 0 ? (
               <div className="apps-empty">
                 <p>No applications available. You can install apps later from the Marketplace.</p>
               </div>
             ) : (
-              <>
-                <div className="onboarding-app-search">
-                  <Search size={18} className="search-icon" />
-                  <input
-                    type="text"
-                    placeholder="Search applications..."
-                    value={searchQuery}
-                    onChange={(e) => {
-                      const query = e.target.value.toLowerCase();
-                      setSearchQuery(e.target.value);
-                      if (query.trim() === "") {
-                        setApps(allApps.slice(0, 4));
-                      } else {
-                        const filtered = allApps.filter(app => 
-                          app.name.toLowerCase().includes(query) ||
-                          (app as any).description?.toLowerCase().includes(query)
-                        );
-                        setApps(filtered.slice(0, 4));
-                      }
-                    }}
-                    className="app-search-input"
-                  />
-                </div>
-                {apps.length === 0 ? (
-                  <div className="apps-empty">
-                    <p>No applications found matching your search.</p>
-                    <button
-                      onClick={() => {
-                        setSearchQuery("");
-                        setApps(allApps.slice(0, 4));
-                      }}
-                      className="step-button step-button-secondary"
-                    >
-                      Clear Search
-                    </button>
-                  </div>
-                ) : (
-                  <div className="onboarding-apps-grid">
-                    {apps.map((app) => {
-                      const isInstalled = installedAppIds.has(app.id);
-                      const isInstalling = installingAppId === app.id;
-                      const settings = getSettings();
-                      const registry = settings.registries?.[0] || '';
-                      
-                      return (
-                        <div key={app.id} className="onboarding-app-card">
-                          <div className="app-card-header">
-                            <div className="app-icon-placeholder">
-                              <Package size={24} />
-                            </div>
-                            <div className="app-info">
-                              <h3>{app.name}</h3>
-                              <p className="app-version">v{app.latest_version}</p>
-                            </div>
-                          </div>
-                          {(app as any).description && (
-                            <p className="app-description">{(app as any).description}</p>
-                          )}
-                          <p className="app-downloads">{(app as any).downloads ?? 0} downloads</p>
-                          <button
-                            onClick={() => handleInstallApp(app, registry)}
-                            className="app-install-button"
-                            disabled={isInstalled || isInstalling}
-                          >
-                            {isInstalled ? (
-                              <>
-                                <CheckCircle2 size={16} />
-                                Installed
-                              </>
-                            ) : isInstalling ? (
-                              <>
-                                <Download size={16} />
-                                Installing...
-                              </>
-                            ) : (
-                              <>
-                                <Download size={16} />
-                                Install
-                              </>
-                            )}
-                          </button>
+              <div className="onboarding-apps-grid">
+                {apps.map((app) => {
+                  const isInstalled = installedAppIds.has(app.id);
+                  const isInstalling = installingAppId === app.id;
+                  const settings = getSettings();
+                  const registry = settings.registries?.[0] || '';
+                  const description = (app as any).description || "No description available.";
+
+                  return (
+                    <div key={app.id} className="onboarding-app-card">
+                      <div className="app-card-header">
+                        <div className="app-icon-placeholder">
+                          <Package size={24} />
                         </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </>
+                        <div className="app-info">
+                          <h3>{app.name}</h3>
+                          <p className="app-version">v{app.latest_version}</p>
+                        </div>
+                      </div>
+                      <p className="app-description">{description}</p>
+                      <button
+                        onClick={() => handleInstallApp(app, registry)}
+                        className="app-install-button"
+                        disabled={isInstalled || isInstalling}
+                      >
+                        {isInstalled ? (
+                          <>
+                            <CheckCircle2 size={16} />
+                            Installed
+                          </>
+                        ) : isInstalling ? (
+                          <>
+                            <Download size={16} />
+                            Installing...
+                          </>
+                        ) : (
+                          <>
+                            <Download size={16} />
+                            Install
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
             )}
 
             <div className="step-actions" style={{ marginTop: '24px' }}>
@@ -1150,8 +1105,8 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
                 Skip for now
               </button>
             </div>
+            <div className="step-content-spacer" aria-hidden="true" />
           </div>
-          <ScrollHint containerRef={stepContainerRef} />
         </div>
       </div>
     );

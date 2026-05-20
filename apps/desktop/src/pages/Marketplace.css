@@ -19,10 +19,40 @@
   letter-spacing: -0.4px;
 }
 
+.marketplace-header-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
 .marketplace-header p {
   margin: 0;
   color: var(--text-secondary);
   font-size: 14px;
+}
+
+.explore-registry-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.explore-registry-btn:hover {
+  border-color: var(--accent-dim);
+  color: var(--accent-primary);
+  background: var(--accent-light);
 }
 
 .marketplace-main {
@@ -99,26 +129,65 @@
   gap: 12px;
   align-items: center;
   flex-wrap: wrap;
+  justify-content: space-between;
 }
 
-.filter-select {
-  padding: 8px 12px;
+.filter-pills {
+  display: flex;
+  gap: 6px;
+}
+
+.filter-pill {
+  height: 32px;
+  padding: 0 14px;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  background: transparent;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+}
+
+.filter-pill:hover {
+  border-color: var(--border-hover);
+  color: var(--text-primary);
+}
+
+.filter-pill.active {
+  background: var(--accent-light);
+  border-color: var(--accent-dim);
+  color: var(--accent-primary);
+  font-weight: 600;
+}
+
+.refresh-btn {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
-  font-size: 13px;
-  background: var(--surface-glass-soft);
-  color: var(--text-primary);
+  color: var(--text-secondary);
   cursor: pointer;
-  transition: all 0.2s;
+  transition: all 0.15s;
+  flex-shrink: 0;
 }
 
-.filter-select:focus {
-  outline: none;
-  border-color: var(--accent-primary);
-}
-
-.filter-select:hover {
+.refresh-btn:hover:not(:disabled) {
   border-color: var(--border-hover);
+  color: var(--text-primary);
+}
+
+.refresh-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .error-message {
@@ -183,6 +252,7 @@
   flex-direction: column;
   transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
   position: relative;
+  cursor: pointer;
   min-width: 0;
   max-width: 100%;
   width: 100%;
@@ -391,6 +461,31 @@
   font-weight: 500;
 }
 
+/* Install icon: hidden by default, slides in on hover */
+.install-icon-wrap {
+  display: flex;
+  align-items: center;
+  width: 0;
+  overflow: hidden;
+  opacity: 0;
+  transition: width 0.18s ease, opacity 0.15s ease;
+  flex-shrink: 0;
+}
+
+.app-card-actions .button-primary:hover:not(:disabled) .install-icon-wrap,
+.modal-actions .button-primary:hover:not(:disabled) .install-icon-wrap {
+  width: 16px;
+  opacity: 1;
+}
+
+/* Fix install button hover: solid fill with good text contrast */
+.app-card-actions .button-primary:hover:not(:disabled),
+.modal-actions .button-primary:hover:not(:disabled) {
+  background: var(--accent-primary);
+  color: #111;
+  border-color: var(--accent-primary);
+}
+
 .button-success {
   background: var(--success);
   color: white;
@@ -434,8 +529,8 @@
     align-items: stretch;
   }
 
-  .filter-select {
-    width: 100%;
+  .filter-pills {
+    flex-wrap: wrap;
   }
 
   .apps-grid {
@@ -443,3 +538,187 @@
     max-width: 100%;
   }
 }
+
+/* ── App Detail Modal ── */
+.app-detail-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+  padding: 24px;
+  animation: fadeIn 0.15s ease-out;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.app-detail-modal {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-xl);
+  padding: 32px;
+  width: 100%;
+  max-width: 520px;
+  position: relative;
+  animation: modalSlideUp 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: var(--shadow-xl);
+}
+
+@keyframes modalSlideUp {
+  from { opacity: 0; transform: translateY(16px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.modal-close {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  background: var(--surface-glass-soft);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  cursor: pointer;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+}
+
+.modal-close:hover {
+  background: var(--accent-light);
+  color: var(--accent-primary);
+  border-color: var(--accent-dim);
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 20px;
+}
+
+.modal-icon {
+  width: 52px;
+  height: 52px;
+  border-radius: var(--radius-lg);
+  flex-shrink: 0;
+}
+
+.modal-title {
+  flex: 1;
+  min-width: 0;
+}
+
+.modal-title h2 {
+  margin: 0 0 6px 0;
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: -0.3px;
+}
+
+.modal-description {
+  font-size: 14px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  margin: 0 0 24px 0;
+}
+
+.modal-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  background: var(--surface-glass-soft);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  margin-bottom: 24px;
+}
+
+.modal-meta-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 13px;
+  min-width: 0;
+}
+
+.modal-meta-label {
+  color: var(--text-tertiary);
+  font-weight: 500;
+  flex-shrink: 0;
+  width: 90px;
+}
+
+.modal-meta-value {
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.modal-meta-value.mono {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 12px;
+}
+
+.modal-meta-link {
+  color: var(--accent-primary);
+  text-decoration: none;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+}
+
+.modal-meta-link:hover {
+  text-decoration: underline;
+}
+
+.modal-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.modal-actions .button {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 11px 20px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+/* Close button in modal: green accent */
+.modal-actions .button-secondary {
+  background: var(--accent-light);
+  color: var(--accent-primary);
+  border: 1px solid var(--accent-dim);
+}
+
+.modal-actions .button-secondary:hover {
+  background: var(--accent-primary);
+  color: #111;
+  border-color: var(--accent-primary);
+  transform: translateY(-1px);
+}
+

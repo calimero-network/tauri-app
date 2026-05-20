@@ -34,11 +34,13 @@ export function decodeMetadata(metadata: any): any {
     let jsonString: string;
     
     if (typeof metadata === 'string') {
-      // Assume it's base64 encoded string
-      jsonString = atob(metadata);
+      // base64 → bytes → UTF-8 string (avoids mojibake from Latin-1 atob)
+      const binary = atob(metadata);
+      const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0));
+      jsonString = new TextDecoder('utf-8').decode(bytes);
     } else if (Array.isArray(metadata)) {
-      // Convert array of bytes to string
-      jsonString = String.fromCharCode(...metadata);
+      // byte array → UTF-8 string (fixes garbled multi-byte chars like em-dash)
+      jsonString = new TextDecoder('utf-8').decode(new Uint8Array(metadata));
     } else {
       // Unknown format, return null
       return null;

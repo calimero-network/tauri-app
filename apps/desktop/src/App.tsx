@@ -343,14 +343,13 @@ function App() {
     });
   }, []);
 
+  // Health-only check — no app loading. Keeps the status indicator up to date
+  // without triggering re-renders of the app list on every tick.
   const checkConnection = useCallback(async () => {
     try {
       setError(null);
-      
-      // Check health endpoint (admin API)
       const healthResponse = await apiClient.node.healthCheck();
       if (healthResponse.error) {
-        // If 401, show login
         if (healthResponse.error.code === '401') {
           setShowLogin(true);
           setConnected(false);
@@ -362,14 +361,9 @@ function App() {
         updateTrayIcon(false);
         return;
       }
-      
       setConnected(true);
       setError(null);
       updateTrayIcon(true);
-
-      // Load contexts and apps after successful connection
-        await loadContexts();
-      await loadInstalledApps();
     } catch (err) {
       setConnected(false);
       const errorMessage = parseTauriError(err);
@@ -377,7 +371,7 @@ function App() {
       console.error("Connection error:", err);
       updateTrayIcon(false);
     }
-  }, [loadContexts, loadInstalledApps, updateTrayIcon]);
+  }, [updateTrayIcon]);
 
   const handleRestartNode = useCallback(async () => {
     const settings = getSettings();
@@ -407,32 +401,25 @@ function App() {
     }
   }, []);
 
-  const handleCreateDesktopShortcut = useCallback(async (appName: string, frontendUrl: string) => {
-    try {
-      await invoke("create_desktop_shortcut", { appName, frontendUrl });
-      toast.success("Desktop shortcut created on your Desktop");
-    } catch (err) {
-      toast.error(parseTauriError(err, "Failed to create desktop shortcut"));
-    }
-  }, [toast]);
 
-  // Auto-check node status every 5 seconds (runs on all main app pages for global indicator)
-  // Skip when on login, settings, or onboarding - those screens don't need the periodic check,
-  // and it would redirect back to login on 401 while user is intentionally on those screens
+
+  // Health-check interval — lightweight, just updates the connected indicator.
+  // Skip on login/settings/onboarding screens.
   useEffect(() => {
     if (showLogin || showSettings || showOnboarding) return;
-
-    // Initial check
     checkConnection();
-
-    // Set up interval to check every 5 seconds
-    const interval = setInterval(() => {
-      checkConnection();
-    }, 5000);
-
-    // Cleanup interval on unmount
+    const interval = setInterval(checkConnection, 10000);
     return () => clearInterval(interval);
   }, [checkConnection, showLogin, showSettings, showOnboarding]);
+
+  // Load apps + contexts only when the user is on the home page.
+  // Fires once on navigation — not on every health-check tick.
+  useEffect(() => {
+    if (showLogin || showSettings || showOnboarding) return;
+    if (currentPage !== 'home') return;
+    loadContexts().catch(() => {});
+    loadInstalledApps().catch(() => {});
+  }, [currentPage, showLogin, showSettings, showOnboarding, loadContexts, loadInstalledApps]);
 
   // When launched from a desktop shortcut (--open-app-url / --open-app-name): open app, focus it, then hide main window
   useEffect(() => {
@@ -944,39 +931,23 @@ function App() {
                 }
                 
                 return (
-                  <div
+                  <button
                     key={`${app?.id != null && String(app.id) !== '' ? String(app.id) : 'app'}-${index}`}
-                    className="app-card-mini-wrapper"
+                    type="button"
+                    onClick={() => {
+                      if (frontendUrl) {
+                        handleOpenAppFrontend(frontendUrl, appName);
+                      } else {
+                        setCurrentPage('installed');
+                      }
+                    }}
+                    className="app-card-mini"
+                    title={frontendUrl ? `Open ${appName}` : `View ${appName} details`}
                   >
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (frontendUrl) {
-                          handleOpenAppFrontend(frontendUrl, appName);
-                        } else {
-                          setCurrentPage('installed');
-                        }
-                      }}
-                      className="app-card-mini"
-                      title={frontendUrl ? `Open ${appName}` : `View ${appName} details`}
-                    >
-                      <Package className="app-icon" size={20} />
-                      <span className="app-name">{appName}</span>
-                    </button>
-                    {frontendUrl && (
-                      <button
-                        type="button"
-                        className="app-card-shortcut-link"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleCreateDesktopShortcut(appName, frontendUrl);
-                        }}
-                        title="Create desktop shortcut"
-                      >
-                        Shortcut
-                      </button>
-                    )}
-                  </div>
+                    <Package className="app-icon" size={28} />
+                    <span className="app-name">{appName}</span>
+                    {frontendUrl && <span className="app-card-open-hint">Open</span>}
+                  </button>
                 );
               })}
             </div>
@@ -989,11 +960,11 @@ function App() {
             <Package size={48} className="empty-icon" />
             <h3>No Applications Installed</h3>
             <p>Get started by browsing the marketplace and installing your first app.</p>
-            <button 
-              onClick={() => setCurrentPage('marketplace')} 
-              className="button button-primary"
+            <button
+              onClick={() => setCurrentPage('marketplace')}
+              className="btn-browse-marketplace"
             >
-              <ShoppingCart size={16} />
+              <ShoppingCart size={16} className="browse-icon" />
               Browse Marketplace
             </button>
           </div>

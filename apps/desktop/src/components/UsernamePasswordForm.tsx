@@ -13,7 +13,7 @@ function validateUsername(value: string): string | null {
 }
 
 function validatePassword(value: string): string | null {
-  if (!value) return 'Password is required';
+  if (!value || !value.trim()) return 'Password is required';
   if (value.length < MIN_PASSWORD_LENGTH) return `Password must be at least ${MIN_PASSWORD_LENGTH} characters`;
   return null;
 }
@@ -66,7 +66,7 @@ export function UsernamePasswordForm({
     onSubmit(username.trim(), password);
   };
 
-  const displayError = usernameError || passwordError || error;
+  const isEmpty = !username.trim() || !password.trim();
 
   const containerStyle: React.CSSProperties = { maxWidth: 420, width: '100%' };
   const cardStyle: React.CSSProperties = isDark
@@ -81,11 +81,6 @@ export function UsernamePasswordForm({
         <h2 style={{ marginTop: 0, marginBottom: '24px', fontSize: '18px', fontWeight: 600, color: isDark ? DARK.text : 'var(--text-primary)' }}>Sign in</h2>
         <form onSubmit={handleSubmit}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-            {displayError && (
-              <div style={{ padding: '12px 16px', background: 'rgba(248, 113, 113, 0.15)', color: isDark ? DARK.error : 'var(--error)', borderRadius: '8px', fontSize: '14px', border: `1px solid ${isDark ? DARK.error : 'var(--error)'}` }}>
-                {displayError}
-              </div>
-            )}
             <div>
               <label htmlFor="username" style={{ display: 'block', marginBottom: '8px', fontSize: '13px', fontWeight: 500, color: isDark ? '#e2e8f0' : 'var(--text-primary)' }}>
                 Username <span style={{ color: isDark ? DARK.error : 'var(--error)' }}>*</span>
@@ -100,15 +95,20 @@ export function UsernamePasswordForm({
               <input id="password" type="password" value={password} onChange={(e) => { setPassword(e.target.value); setPasswordError(null); }} onBlur={() => setPasswordError(validatePassword(password))} placeholder={`At least ${MIN_PASSWORD_LENGTH} characters`} disabled={loading} autoComplete="current-password" autoCorrect="off" autoCapitalize="off" spellCheck={false} style={{ width: '100%', padding: '14px 16px', border: `1px solid ${passwordError ? (isDark ? DARK.error : 'var(--error)') : isDark ? DARK.border : 'var(--border-color)'}`, borderRadius: '10px', fontSize: '15px', boxSizing: 'border-box', background: isDark ? DARK.bgInput : 'var(--bg-tertiary)', color: isDark ? DARK.text : 'var(--text-primary)' }} />
               {passwordError && <p style={{ margin: '6px 0 0 0', fontSize: '12px', color: isDark ? DARK.error : 'var(--error)' }}>{passwordError}</p>}
             </div>
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', marginTop: '8px' }}>
-              {onBack && (
-                <button type="button" onClick={onBack} disabled={loading} style={{ padding: '12px 24px', background: isDark ? DARK.bgButton : 'var(--bg-tertiary)', color: isDark ? DARK.text : 'var(--text-primary)', border: `1px solid ${isDark ? '#475569' : 'var(--border-color)'}`, borderRadius: '10px', fontSize: '15px', fontWeight: 500, cursor: loading ? 'not-allowed' : 'pointer', opacity: loading ? 0.6 : 1 }}>
-                  Back
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '8px' }}>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
+                {onBack && (
+                  <button type="button" onClick={onBack} disabled={loading} style={{ padding: '12px 24px', background: isDark ? DARK.bgButton : 'var(--bg-tertiary)', color: isDark ? DARK.text : 'var(--text-primary)', border: `1px solid ${isDark ? '#475569' : 'var(--border-color)'}`, borderRadius: '10px', fontSize: '15px', fontWeight: 500, cursor: loading ? 'not-allowed' : 'pointer', opacity: loading ? 0.6 : 1 }}>
+                    Back
+                  </button>
+                )}
+                <button type="submit" disabled={loading || isEmpty || !!usernameError || !!passwordError} style={{ padding: '12px 24px', background: loading || isEmpty || !!usernameError || !!passwordError ? (isDark ? DARK.bgButton : 'var(--bg-tertiary)') : (isDark ? DARK.bgButtonPrimary : 'var(--accent-primary)'), color: loading || isEmpty || !!usernameError || !!passwordError ? (isDark ? DARK.textMuted : 'var(--text-tertiary)') : '#09090b', border: 'none', borderRadius: '10px', fontSize: '15px', fontWeight: 600, cursor: loading || isEmpty || !!usernameError || !!passwordError ? 'not-allowed' : 'pointer', opacity: loading ? 0.6 : 1 }}>
+                  {loading ? 'Signing In...' : 'Sign In'}
                 </button>
+              </div>
+              {error && !usernameError && !passwordError && (
+                <p style={{ margin: 0, fontSize: '13px', color: isDark ? DARK.error : 'var(--error)', textAlign: 'right' }}>{error}</p>
               )}
-              <button type="submit" disabled={loading || !!validateUsername(username) || !!validatePassword(password)} style={{ padding: '12px 24px', background: loading || !!validateUsername(username) || !!validatePassword(password) ? (isDark ? DARK.bgButton : 'var(--bg-tertiary)') : (isDark ? DARK.bgButtonPrimary : 'var(--accent-primary)'), color: loading || !!validateUsername(username) || !!validatePassword(password) ? (isDark ? DARK.textMuted : 'var(--text-tertiary)') : '#09090b', border: 'none', borderRadius: '10px', fontSize: '15px', fontWeight: 600, cursor: loading || !!validateUsername(username) || !!validatePassword(password) ? 'not-allowed' : 'pointer', opacity: loading ? 0.6 : 1 }}>
-                {loading ? 'Signing In...' : 'Sign In'}
-              </button>
             </div>
           </div>
         </form>

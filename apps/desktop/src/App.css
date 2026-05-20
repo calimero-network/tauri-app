@@ -161,7 +161,8 @@
   background: var(--header-glass);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
-  padding: 14px 24px;
+  height: var(--header-height);
+  padding: 0 24px;
   border-bottom: 1px solid var(--border-color);
   flex-shrink: 0;
   position: relative;
@@ -501,6 +502,60 @@
   transform: translateY(0) scale(0.98);
 }
 
+/* ── Danger modifier — overrides green defaults from .button ── */
+.button.button-danger {
+  background: var(--error);
+  color: #fff;
+  border-color: var(--error);
+}
+
+.button.button-danger:hover:not(:disabled) {
+  background: #dc2626;
+  border-color: #dc2626;
+  color: #fff;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.35);
+}
+
+.button.button-danger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+/* ── Google Sign-In button ── */
+.google-signin-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 20px;
+  background: #fff;
+  color: #3c4043;
+  border: 1px solid #dadce0;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  transition: box-shadow 0.15s, background 0.15s;
+  letter-spacing: 0.01em;
+}
+
+.google-signin-btn:hover:not(:disabled) {
+  background: #f8f9fa;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+}
+
+.google-signin-btn:active:not(:disabled) {
+  background: #f1f3f4;
+}
+
+.google-signin-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 /* ── Error ── */
 .error {
   margin-top: 16px;
@@ -655,19 +710,12 @@
   background: var(--accent-light);
 }
 
-.app-card-mini-wrapper {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 6px;
-}
-
 .app-card-mini {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
-  padding: 18px;
+  gap: 10px;
+  padding: 20px 14px 16px;
   background: var(--gradient-surface), var(--surface-glass);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-lg);
@@ -677,21 +725,7 @@
   width: 100%;
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
-}
-
-.app-card-shortcut-link {
-  font-size: 11px;
-  color: var(--text-tertiary);
-  background: none;
-  border: none;
-  cursor: pointer;
-  padding: 2px 0;
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-
-.app-card-shortcut-link:hover {
-  color: var(--accent-primary);
+  position: relative;
 }
 
 .app-card-mini:hover {
@@ -708,12 +742,25 @@
 
 .app-card-mini .app-name {
   font-size: 13px;
-  font-weight: 500;
+  font-weight: 600;
   color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   width: 100%;
+}
+
+.app-card-open-hint {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-weight: 400;
+  letter-spacing: 0.3px;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.app-card-mini:hover .app-card-open-hint {
+  opacity: 1;
 }
 
 /* ── Empty State ── */
@@ -757,6 +804,37 @@
   display: inline-flex;
   align-items: center;
   gap: 8px;
+}
+
+.btn-browse-marketplace {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 22px;
+  background: transparent;
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1), border-color 0.2s, box-shadow 0.2s;
+  letter-spacing: 0.2px;
+}
+
+.btn-browse-marketplace:hover {
+  border-color: var(--border-hover);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-sm);
+}
+
+.btn-browse-marketplace:hover .browse-icon {
+  transform: translateX(3px);
+  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.btn-browse-marketplace .browse-icon {
+  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .node-info h3 {

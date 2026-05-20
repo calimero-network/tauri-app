@@ -31,7 +31,7 @@ test.describe("Marketplace – browsing & searching", () => {
     page,
   }) => {
     await expect(page.locator('input[placeholder="Search applications..."]')).toBeVisible();
-    await expect(page.locator("select")).toBeVisible();
+    await expect(page.locator(".filter-pill").first()).toBeVisible();
   });
 
   test("displays apps fetched from registry", async ({ page }) => {
@@ -65,7 +65,7 @@ test.describe("Marketplace – browsing & searching", () => {
   });
 
   test("refresh button is present and clickable", async ({ page }) => {
-    const refreshBtn = page.locator('button[title="Refresh applications"]');
+    const refreshBtn = page.locator('.marketplace-filters button[title="Refresh"]');
     await expect(refreshBtn).toBeVisible();
     await refreshBtn.click();
   });
@@ -103,7 +103,7 @@ test.describe("Installed Applications – listing", () => {
     await setupAuthenticatedPage(page);
     await navigateVia(page, "Applications");
     await expect(
-      page.getByRole("heading", { name: "Installed Applications", level: 2 }),
+      page.locator(".installed-apps-header h1"),
     ).toBeVisible();
   });
 
@@ -158,7 +158,7 @@ test.describe("Installed Applications – empty state", () => {
 
     await navigateVia(page, "Applications");
     await expect(
-      page.getByRole("heading", { name: "Installed Applications", level: 2 }),
+      page.locator(".installed-apps-header h1"),
     ).toBeVisible();
     await expect(page.getByText("No applications installed.")).toBeVisible();
   });
@@ -175,13 +175,15 @@ describeAfter35("Installed Applications – row variants", () => {
     await setupAuthenticatedPage(page);
     await navigateVia(page, "Applications");
     await expect(
-      page.getByRole("heading", { name: "Installed Applications", level: 2 }),
+      page.locator(".installed-apps-header h1"),
     ).toBeVisible();
 
     const demoRow = page.locator("tr", { hasText: "Blockchain Demo" });
-    await expect(demoRow.getByRole("button", { name: "Uninstall" })).toBeVisible();
-    await expect(demoRow.getByRole("button", { name: "Open" })).toHaveCount(0);
-    await expect(demoRow.getByRole("button", { name: "Shortcut" })).toHaveCount(0);
+    // No frontend URL → no Open button directly in row
+    await expect(demoRow.locator('button.btn-open')).toHaveCount(0);
+    // Uninstall lives inside the More dropdown
+    await demoRow.locator('.btn-more').click();
+    await expect(page.locator('.app-actions-dropdown .dropdown-item', { hasText: "Uninstall" })).toBeVisible();
   });
 });
 
@@ -192,7 +194,7 @@ describeAfter35("Installed Applications – actions", () => {
     await setupAuthenticatedPage(page);
     await navigateVia(page, "Applications");
     await expect(
-      page.getByRole("heading", { name: "Installed Applications", level: 2 }),
+      page.locator(".installed-apps-header h1"),
     ).toBeVisible();
   });
 
@@ -204,24 +206,27 @@ describeAfter35("Installed Applications – actions", () => {
     await expect(openBtn).toBeVisible();
   });
 
-  test("Shortcut button is visible for apps with frontend URLs", async ({
+  test("dropdown menu has Uninstall for apps with frontend URLs", async ({
     page,
   }) => {
     const chatRow = page.locator("tr", { hasText: "Only Peers Chat" });
-    const shortcutBtn = chatRow.locator('button:has-text("Shortcut")');
-    await expect(shortcutBtn).toBeVisible();
+    await chatRow.locator('.btn-more').click();
+    await expect(page.locator('.app-actions-dropdown .dropdown-item', { hasText: "Uninstall" })).toBeVisible();
   });
 
-  test("Uninstall button is visible for all installed apps", async ({
+  test("Uninstall is in dropdown for all installed apps", async ({
     page,
   }) => {
     for (const app of MOCK_INSTALLED_APPS) {
       const meta = JSON.parse(atob(app.metadata));
       const displayName = meta.name || app.name;
       const row = page.locator("tr", { hasText: displayName });
+      await row.locator('.btn-more').click();
       await expect(
-        row.locator('button:has-text("Uninstall")'),
+        page.locator('.app-actions-dropdown .dropdown-item', { hasText: "Uninstall" }),
       ).toBeVisible();
+      // close dropdown before next iteration
+      await page.locator('.installed-apps-header').click();
     }
   });
 });
@@ -242,7 +247,7 @@ describeAfter35("Marketplace ↔ Applications navigation", () => {
 
     await navigateVia(page, "Applications");
     await expect(
-      page.getByRole("heading", { name: "Installed Applications", level: 2 }),
+      page.locator(".installed-apps-header h1"),
     ).toBeVisible();
 
     await navigateVia(page, "Marketplace");

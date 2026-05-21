@@ -437,6 +437,88 @@ async fn proxy_http_request_inner(request: HttpRequest, configured_node_url: Opt
     })
 }
 
+// Registry of active SSE streams, keyed by stream_id, for cancellation support.
+type SseCancelRegistry = std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, tokio::sync::oneshot::Sender<()>>>>;
+
+/// Open an SSE connection to `url` on the Rust side (bypasses mixed-content
+/// restrictions for HTTPS-hosted app windows) and relay each chunk back to the
+/// JS layer as a `sse-chunk-{stream_id}` window event.  Fires `sse-end-{stream_id}`
+/// when the stream closes or errors.  Designed to be fire-and-forget from JS
+/// (do not await the return value for data — use the window events).
+#[tauri::command]
+async fn proxy_sse_stream(
+    window: tauri::Window,
+    url: String,
+    auth_header: String,
+    stream_id: String,
+    cancel_registry: tauri::State<'_, SseCancelRegistry>,
+) -> Result<(), TauriError> {
+    use futures_util::StreamExt;
+
+    let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel::<()>();
+    {
+        let mut registry = cancel_registry.lock().unwrap_or_else(|p| p.into_inner());
+        registry.insert(stream_id.clone(), cancel_tx);
+    }
+
+    let chunk_event = format!("sse-chunk-{}", stream_id);
+    let end_event   = format!("sse-end-{}", stream_id);
+
+    let client = http_client();
+    let result = client
+        .get(&url)
+        .header("Authorization", &auth_header)
+        .header("Accept", "text/event-stream")
+        .header("Cache-Control", "no-cache")
+        .send()
+        .await;
+
+    let response = match result {
+        Ok(r) => r,
+        Err(e) => {
+            cancel_registry.lock().unwrap_or_else(|p| p.into_inner()).remove(&stream_id);
+            let _ = window.emit(&end_event, "");
+            return Err(TauriError::with_details(
+                TauriErrorCode::HttpRequestFailed,
+                format!("SSE connection to {} failed", url),
+                e.to_string(),
+            ));
+        }
+    };
+
+    let mut stream = response.bytes_stream();
+    loop {
+        tokio::select! {
+            chunk = stream.next() => {
+                match chunk {
+                    Some(Ok(bytes)) => {
+                        let text = String::from_utf8_lossy(&bytes).to_string();
+                        if window.emit(&chunk_event, text).is_err() {
+                            break; // window closed
+                        }
+                    }
+                    Some(Err(_)) | None => break,
+                }
+            }
+            _ = &mut cancel_rx => break,
+        }
+    }
+
+    cancel_registry.lock().unwrap_or_else(|p| p.into_inner()).remove(&stream_id);
+    let _ = window.emit(&end_event, "");
+    Ok(())
+}
+
+/// Cancel a running SSE stream started by `proxy_sse_stream`.
+#[tauri::command]
+fn cancel_sse_stream(stream_id: String, cancel_registry: tauri::State<'_, SseCancelRegistry>) {
+    if let Ok(mut registry) = cancel_registry.lock() {
+        if let Some(sender) = registry.remove(&stream_id) {
+            let _ = sender.send(());
+        }
+    }
+}
+
 #[tauri::command]
 fn get_pending_open_app(state: tauri::State<'_, PendingOpenApp>) -> Option<(String, String)> {
     state.0.lock().ok().and_then(|g| g.clone())
@@ -2193,6 +2275,7 @@ fn main() {
             Ok(())
         })
         .manage(MerodState::default())
+        .manage(SseCancelRegistry::new(std::sync::Mutex::new(std::collections::HashMap::new())))
         .invoke_handler(tauri::generate_handler![
             get_pending_open_app,
             clear_pending_open_app,
@@ -2202,6 +2285,8 @@ fn main() {
             create_app_window,
             open_devtools,
             proxy_http_request,
+            proxy_sse_stream,
+            cancel_sse_stream,
             start_merod,
             stop_merod,
             stop_merod_by_pid_command,

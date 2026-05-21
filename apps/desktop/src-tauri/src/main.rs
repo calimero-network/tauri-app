@@ -2412,4 +2412,128 @@ mod tests {
         assert!(validate_allowed_url("http://user@localhost:2528/", None).is_err());
         assert!(validate_allowed_url("http://localhost:2528@evil.com/", None).is_err());
     }
+
+    // SSE streaming tests — spin up a real TCP listener and drive reqwest's
+    // bytes_stream() + tokio::select! cancellation, verifying the mechanism
+    // used by proxy_sse_stream without needing a live tauri::Window.
+
+    #[tokio::test]
+    async fn test_sse_stream_delivers_chunks() {
+        use futures_util::StreamExt;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            // drain request headers
+            let mut buf = vec![0u8; 4096];
+            let mut total = Vec::new();
+            loop {
+                let n = sock.read(&mut buf).await.unwrap_or(0);
+                if n == 0 { break; }
+                total.extend_from_slice(&buf[..n]);
+                if total.windows(4).any(|w| w == b"\r\n\r\n") { break; }
+            }
+            // send SSE headers + two chunked events + terminal chunk
+            sock.write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n"
+            ).await.unwrap();
+            for event in &["data: hello\n\n", "data: world\n\n"] {
+                let frame = format!("{:x}\r\n{}\r\n", event.len(), event);
+                sock.write_all(frame.as_bytes()).await.unwrap();
+            }
+            sock.write_all(b"0\r\n\r\n").await.unwrap();
+        });
+
+        let client = reqwest::Client::new();
+        let resp = client
+            .get(format!("http://127.0.0.1:{port}/sse"))
+            .header("Accept", "text/event-stream")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status().as_u16(), 200);
+
+        let mut body = String::new();
+        let mut stream = resp.bytes_stream();
+        while let Some(Ok(chunk)) = stream.next().await {
+            body.push_str(&String::from_utf8_lossy(&chunk));
+        }
+
+        assert!(body.contains("data: hello"), "unexpected body: {body:?}");
+        assert!(body.contains("data: world"), "unexpected body: {body:?}");
+    }
+
+    #[tokio::test]
+    async fn test_sse_stream_stops_on_cancel() {
+        use futures_util::StreamExt;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+        use tokio::sync::oneshot;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        // Server sends one chunk then stalls (infinite stream)
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 4096];
+            let mut total = Vec::new();
+            loop {
+                let n = sock.read(&mut buf).await.unwrap_or(0);
+                if n == 0 { break; }
+                total.extend_from_slice(&buf[..n]);
+                if total.windows(4).any(|w| w == b"\r\n\r\n") { break; }
+            }
+            sock.write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n"
+            ).await.unwrap();
+            let event = "data: first\n\n";
+            let frame = format!("{:x}\r\n{}\r\n", event.len(), event);
+            sock.write_all(frame.as_bytes()).await.unwrap();
+            sock.flush().await.unwrap();
+            // stall until the test drops the connection
+            tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+        });
+
+        let (cancel_tx, mut cancel_rx) = oneshot::channel::<()>();
+        let mut cancel_tx_opt = Some(cancel_tx);
+
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .unwrap();
+        let resp = client
+            .get(format!("http://127.0.0.1:{port}/sse"))
+            .header("Accept", "text/event-stream")
+            .send()
+            .await
+            .unwrap();
+
+        let mut received: Vec<String> = Vec::new();
+        let mut stream = resp.bytes_stream();
+        loop {
+            tokio::select! {
+                chunk = stream.next() => {
+                    match chunk {
+                        Some(Ok(bytes)) => {
+                            received.push(String::from_utf8_lossy(&bytes).into_owned());
+                            if let Some(tx) = cancel_tx_opt.take() {
+                                let _ = tx.send(());
+                            }
+                        }
+                        Some(Err(_)) | None => break,
+                    }
+                }
+                _ = &mut cancel_rx => break,
+            }
+        }
+
+        assert!(!received.is_empty(), "expected at least one chunk before cancel");
+        let body = received.concat();
+        assert!(body.contains("data: first"), "unexpected: {body:?}");
+    }
 }

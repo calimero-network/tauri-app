@@ -9,6 +9,7 @@ use std::sync::OnceLock;
 use thiserror::Error;
 
 static HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+static SSE_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 
 fn http_client() -> &'static reqwest::Client {
     HTTP_CLIENT.get_or_init(|| {
@@ -17,6 +18,17 @@ fn http_client() -> &'static reqwest::Client {
             .timeout(std::time::Duration::from_secs(30))
             .build()
             .expect("Failed to build HTTP client")
+    })
+}
+
+// SSE streams are long-lived; no request timeout is set so the connection
+// is only closed when the server ends the stream or the stream is cancelled.
+fn sse_client() -> &'static reqwest::Client {
+    SSE_CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .danger_accept_invalid_certs(false)
+            .build()
+            .expect("Failed to build SSE HTTP client")
     })
 }
 
@@ -435,6 +447,94 @@ async fn proxy_http_request_inner(request: HttpRequest, configured_node_url: Opt
         headers: response_headers,
         body,
     })
+}
+
+// Registry of active SSE streams, keyed by stream_id, for cancellation support.
+type SseCancelRegistry = std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, tokio::sync::oneshot::Sender<()>>>>;
+
+/// Open an SSE connection to `url` on the Rust side (bypasses mixed-content
+/// restrictions for HTTPS-hosted app windows) and relay each chunk back to the
+/// JS layer as a `sse-chunk-{stream_id}` window event.  Fires `sse-end-{stream_id}`
+/// when the stream closes or errors.  Designed to be fire-and-forget from JS
+/// (do not await the return value for data — use the window events).
+#[tauri::command]
+async fn proxy_sse_stream(
+    window: tauri::Window,
+    url: String,
+    auth_header: String,
+    stream_id: String,
+    cancel_registry: tauri::State<'_, SseCancelRegistry>,
+) -> Result<(), TauriError> {
+    use futures_util::StreamExt;
+
+    let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel::<()>();
+    {
+        let mut registry = cancel_registry.lock().unwrap_or_else(|p| p.into_inner());
+        registry.insert(stream_id.clone(), cancel_tx);
+    }
+
+    let chunk_event = format!("sse-chunk-{}", stream_id);
+    let end_event   = format!("sse-end-{}", stream_id);
+
+    if let Err(reason) = validate_allowed_url(&url, None) {
+        cancel_registry.lock().unwrap_or_else(|p| p.into_inner()).remove(&stream_id);
+        let _ = window.emit(&end_event, "");
+        return Err(TauriError::new(TauriErrorCode::UrlNotAllowed, reason));
+    }
+
+    let mut request = sse_client()
+        .get(&url)
+        .header("Accept", "text/event-stream")
+        .header("Cache-Control", "no-cache");
+    if !auth_header.is_empty() {
+        request = request.header("Authorization", &auth_header);
+    }
+    let result = request.send().await;
+
+    let response = match result {
+        Ok(r) => r,
+        Err(e) => {
+            cancel_registry.lock().unwrap_or_else(|p| p.into_inner()).remove(&stream_id);
+            let _ = window.emit(&end_event, "");
+            return Err(TauriError::with_details(
+                TauriErrorCode::HttpRequestFailed,
+                format!("SSE connection to {} failed", url),
+                e.to_string(),
+            ));
+        }
+    };
+
+    let mut stream = response.bytes_stream();
+    loop {
+        tokio::select! {
+            chunk = stream.next() => {
+                match chunk {
+                    Some(Ok(bytes)) => {
+                        let text = String::from_utf8_lossy(&bytes).to_string();
+                        if window.emit(&chunk_event, text).is_err() {
+                            break; // window closed
+                        }
+                    }
+                    Some(Err(_)) | None => break,
+                }
+            }
+            _ = &mut cancel_rx => break,
+        }
+    }
+
+    cancel_registry.lock().unwrap_or_else(|p| p.into_inner()).remove(&stream_id);
+    let _ = window.emit(&end_event, "");
+    Ok(())
+}
+
+/// Cancel a running SSE stream started by `proxy_sse_stream`.
+#[tauri::command]
+fn cancel_sse_stream(stream_id: String, cancel_registry: tauri::State<'_, SseCancelRegistry>) {
+    if let Ok(mut registry) = cancel_registry.lock() {
+        if let Some(sender) = registry.remove(&stream_id) {
+            let _ = sender.send(());
+        }
+    }
 }
 
 #[tauri::command]
@@ -2193,6 +2293,7 @@ fn main() {
             Ok(())
         })
         .manage(MerodState::default())
+        .manage(SseCancelRegistry::new(std::sync::Mutex::new(std::collections::HashMap::new())))
         .invoke_handler(tauri::generate_handler![
             get_pending_open_app,
             clear_pending_open_app,
@@ -2202,6 +2303,8 @@ fn main() {
             create_app_window,
             open_devtools,
             proxy_http_request,
+            proxy_sse_stream,
+            cancel_sse_stream,
             start_merod,
             stop_merod,
             stop_merod_by_pid_command,
@@ -2326,5 +2429,129 @@ mod tests {
         // Userinfo attacks
         assert!(validate_allowed_url("http://user@localhost:2528/", None).is_err());
         assert!(validate_allowed_url("http://localhost:2528@evil.com/", None).is_err());
+    }
+
+    // SSE streaming tests — spin up a real TCP listener and drive reqwest's
+    // bytes_stream() + tokio::select! cancellation, verifying the mechanism
+    // used by proxy_sse_stream without needing a live tauri::Window.
+
+    #[tokio::test]
+    async fn test_sse_stream_delivers_chunks() {
+        use futures_util::StreamExt;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            // drain request headers
+            let mut buf = vec![0u8; 4096];
+            let mut total = Vec::new();
+            loop {
+                let n = sock.read(&mut buf).await.unwrap_or(0);
+                if n == 0 { break; }
+                total.extend_from_slice(&buf[..n]);
+                if total.windows(4).any(|w| w == b"\r\n\r\n") { break; }
+            }
+            // send SSE headers + two chunked events + terminal chunk
+            sock.write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n"
+            ).await.unwrap();
+            for event in &["data: hello\n\n", "data: world\n\n"] {
+                let frame = format!("{:x}\r\n{}\r\n", event.len(), event);
+                sock.write_all(frame.as_bytes()).await.unwrap();
+            }
+            sock.write_all(b"0\r\n\r\n").await.unwrap();
+        });
+
+        let client = reqwest::Client::new();
+        let resp = client
+            .get(format!("http://127.0.0.1:{port}/sse"))
+            .header("Accept", "text/event-stream")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status().as_u16(), 200);
+
+        let mut body = String::new();
+        let mut stream = resp.bytes_stream();
+        while let Some(Ok(chunk)) = stream.next().await {
+            body.push_str(&String::from_utf8_lossy(&chunk));
+        }
+
+        assert!(body.contains("data: hello"), "unexpected body: {body:?}");
+        assert!(body.contains("data: world"), "unexpected body: {body:?}");
+    }
+
+    #[tokio::test]
+    async fn test_sse_stream_stops_on_cancel() {
+        use futures_util::StreamExt;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+        use tokio::sync::oneshot;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        // Server sends one chunk then stalls (infinite stream)
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 4096];
+            let mut total = Vec::new();
+            loop {
+                let n = sock.read(&mut buf).await.unwrap_or(0);
+                if n == 0 { break; }
+                total.extend_from_slice(&buf[..n]);
+                if total.windows(4).any(|w| w == b"\r\n\r\n") { break; }
+            }
+            sock.write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n"
+            ).await.unwrap();
+            let event = "data: first\n\n";
+            let frame = format!("{:x}\r\n{}\r\n", event.len(), event);
+            sock.write_all(frame.as_bytes()).await.unwrap();
+            sock.flush().await.unwrap();
+            // stall until the test drops the connection
+            tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+        });
+
+        let (cancel_tx, mut cancel_rx) = oneshot::channel::<()>();
+        let mut cancel_tx_opt = Some(cancel_tx);
+
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .unwrap();
+        let resp = client
+            .get(format!("http://127.0.0.1:{port}/sse"))
+            .header("Accept", "text/event-stream")
+            .send()
+            .await
+            .unwrap();
+
+        let mut received: Vec<String> = Vec::new();
+        let mut stream = resp.bytes_stream();
+        loop {
+            tokio::select! {
+                chunk = stream.next() => {
+                    match chunk {
+                        Some(Ok(bytes)) => {
+                            received.push(String::from_utf8_lossy(&bytes).into_owned());
+                            if let Some(tx) = cancel_tx_opt.take() {
+                                let _ = tx.send(());
+                            }
+                        }
+                        Some(Err(_)) | None => break,
+                    }
+                }
+                _ = &mut cancel_rx => break,
+            }
+        }
+
+        assert!(!received.is_empty(), "expected at least one chunk before cancel");
+        let body = received.concat();
+        assert!(body.contains("data: first"), "unexpected: {body:?}");
     }
 }

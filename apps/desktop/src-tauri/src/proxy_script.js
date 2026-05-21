@@ -1,7 +1,7 @@
 (function() {
     if (window.__TAURI_FETCH_PROXY_INJECTED__) return;
     window.__TAURI_FETCH_PROXY_INJECTED__ = true;
-    
+
     // Get configured node URL (injected by Rust backend)
     // This is replaced at runtime by Rust when creating the window
     const configuredNodeUrl = '__CONFIGURED_NODE_URL__';
@@ -11,30 +11,169 @@
     console.log('[Tauri Proxy] Configured node URL for interception:', nodeUrl);
 
     // Check if a URL is an HTTP localhost request that needs proxying
-    // Any http://localhost:* or http://127.0.0.1:* request from an HTTPS page
-    // will be blocked by mixed content rules, so we proxy all of them
     function isHttpLocalhost(urlStr) {
         try {
-            var u = new URL(urlStr);
+            const u = new URL(urlStr);
             return u.protocol === 'http:' && (u.hostname === 'localhost' || u.hostname === '127.0.0.1');
         } catch (e) {
             return false;
         }
     }
-    
-    // Helper function to proxy HTTP requests through Tauri
+
+    // Normalize the first fetch() argument: string | URL | Request → string URL
+    function normalizeUrl(urlArg) {
+        if (typeof urlArg === 'string') return urlArg;
+        if (urlArg instanceof URL) return urlArg.href;
+        if (typeof Request !== 'undefined' && urlArg instanceof Request) return urlArg.url;
+        return String(urlArg);
+    }
+
+    // Extract the Accept header value from a fetch init (or Request) headers bag.
+    // Returns '' when not present.
+    function getAcceptHeader(headers) {
+        if (!headers) return '';
+        // Headers object — .get() is case-insensitive per spec
+        if (headers instanceof Headers) return headers.get('accept') || '';
+        if (Array.isArray(headers)) {
+            const found = headers.find(h => h[0].toLowerCase() === 'accept');
+            return found ? found[1] : '';
+        }
+        if (typeof headers === 'object') return headers['Accept'] || headers['accept'] || '';
+        return '';
+    }
+
+    // Extract the Authorization header value from a headers bag.
+    function getAuthHeader(headers) {
+        if (!headers) return '';
+        if (headers instanceof Headers) return headers.get('authorization') || '';
+        if (Array.isArray(headers)) {
+            const found = headers.find(h => h[0].toLowerCase() === 'authorization');
+            return found ? found[1] : '';
+        }
+        if (typeof headers === 'object') return headers['Authorization'] || headers['authorization'] || '';
+        return '';
+    }
+
+    // Get the Tauri invoke function (resolves both API shapes)
+    function getTauriInvoke() {
+        if (typeof window.__TAURI_INVOKE__ === 'function') return window.__TAURI_INVOKE__;
+        if (typeof window.__TAURI__ !== 'undefined' && typeof window.__TAURI__.invoke === 'function') {
+            return window.__TAURI__.invoke.bind(window.__TAURI__);
+        }
+        return null;
+    }
+
+    // Low-level Tauri event listener that works with just window.__TAURI_INVOKE__
+    // (always injected natively) without needing window.__TAURI__.event (which
+    // requires the @tauri-apps/api JS bundle to be loaded by the page — Vercel
+    // hosted apps don't load it, so window.__TAURI__ is undefined there).
+    //
+    // Mirrors what @tauri-apps/api/event does internally:
+    //   1. Register a callback on window['_<id>'] — Tauri calls it when the event fires.
+    //   2. Tell the Tauri runtime to route the named event to that callback id.
+    async function tauriListen(eventName, handler, invokeFn) {
+        // Happy-path: @tauri-apps/api is loaded (e.g. localhost dev or app with bundled API).
+        if (window.__TAURI__ && window.__TAURI__.event && typeof window.__TAURI__.event.listen === 'function') {
+            return window.__TAURI__.event.listen(eventName, handler);
+        }
+        // Fallback: use __TAURI_INVOKE__ directly.
+        const id = Math.random() * 2147483647 | 0;
+        const prop = '_' + id;
+        Object.defineProperty(window, prop, {
+            value: handler,
+            writable: false,
+            configurable: true,
+        });
+        await invokeFn('tauri', {
+            __tauriModule: 'Event',
+            message: { cmd: 'listen', event: eventName, windowLabel: null, handler: id },
+        });
+        return function unlisten() {
+            Reflect.deleteProperty(window, prop);
+            invokeFn('tauri', {
+                __tauriModule: 'Event',
+                message: { cmd: 'unlisten', event: eventName, eventId: id },
+            }).catch(() => {});
+        };
+    }
+
+    // Proxy an SSE request through Tauri IPC so it works even from HTTPS-hosted
+    // app windows (where native fetch → http://localhost would be blocked by
+    // mixed-content rules).  The Rust side streams chunks back as window events;
+    // we expose them as a ReadableStream so SseClient.readStream() needs no changes.
+    async function proxySSEViaTauri(url, authHeader, signal, invokeFn) {
+        const streamId = 'sse-' + Date.now() + '-' + Math.random().toString(36).slice(2, 9);
+        const encoder = new TextEncoder();
+        let streamController = null;
+        let unlistenChunk = null;
+        let unlistenEnd = null;
+
+        const readableStream = new ReadableStream({
+            start(c) { streamController = c; },
+        });
+
+        function cleanup() {
+            if (unlistenChunk) { unlistenChunk(); unlistenChunk = null; }
+            if (unlistenEnd)   { unlistenEnd();   unlistenEnd   = null; }
+        }
+
+        // Register listeners BEFORE invoking so we never miss the first chunk
+        try {
+            [unlistenChunk, unlistenEnd] = await Promise.all([
+                tauriListen('sse-chunk-' + streamId, (event) => {
+                    if (event.payload && streamController) {
+                        try { streamController.enqueue(encoder.encode(event.payload)); } catch (_) {}
+                    }
+                }, invokeFn),
+                tauriListen('sse-end-' + streamId, () => {
+                    try { if (streamController) streamController.close(); } catch (_) {}
+                    cleanup();
+                }, invokeFn),
+            ]);
+        } catch (err) {
+            console.warn('[Tauri Proxy] SSE: event listen failed:', err);
+            try { if (streamController) streamController.error(new Error('SSE listen setup failed: ' + err)); } catch (_) {}
+            cleanup();
+            return new Response(new ReadableStream({ start(c) { c.error(new Error('SSE unavailable')); } }), { status: 503 });
+        }
+
+        // Wire up AbortSignal → cancel_sse_stream
+        if (signal) {
+            const onAbort = () => {
+                invokeFn('cancel_sse_stream', { streamId }).catch(() => {});
+                try { if (streamController) streamController.error(new DOMException('Aborted', 'AbortError')); } catch (_) {}
+                cleanup();
+            };
+            if (signal.aborted) {
+                onAbort();
+            } else {
+                signal.addEventListener('abort', onAbort, { once: true });
+            }
+        }
+
+        // Fire-and-forget the Rust streaming command
+        invokeFn('proxy_sse_stream', { url, authHeader, streamId }).catch((err) => {
+            console.error('[Tauri Proxy] SSE proxy_sse_stream error:', err);
+            try { if (streamController) streamController.error(new Error('SSE proxy error: ' + err)); } catch (_) {}
+            cleanup();
+        });
+
+        console.log('[Tauri Proxy] SSE stream started via Tauri IPC, stream_id:', streamId);
+        return new Response(readableStream, {
+            status: 200,
+            statusText: 'OK',
+            headers: new Headers({ 'content-type': 'text/event-stream', 'cache-control': 'no-cache' }),
+        });
+    }
+
+    // Helper function to proxy regular HTTP requests through Tauri
     async function proxyRequest(url, method, headers, body) {
-        // Get Tauri invoke function - check at call time, not script load time
-        let invokeFn = null;
-        if (typeof window.__TAURI_INVOKE__ === 'function') {
-            invokeFn = window.__TAURI_INVOKE__;
-        } else if (typeof window.__TAURI__ !== 'undefined' && typeof window.__TAURI__.invoke === 'function') {
-            invokeFn = window.__TAURI__.invoke.bind(window.__TAURI__);
-        } else {
+        const invokeFn = getTauriInvoke();
+        if (!invokeFn) {
             console.error('[Tauri Proxy] Tauri invoke API not available!');
             throw new Error('Tauri invoke API not available');
         }
-        
+
         console.log('[Tauri Proxy] Calling Tauri proxy with headers:', Object.keys(headers || {}));
         const response = await invokeFn('proxy_http_request', {
             request: {
@@ -45,27 +184,57 @@
             },
             configured_node_url: nodeUrl
         });
-        
+
         return response;
     }
-    
+
     // Store original fetch IMMEDIATELY before React loads
     const originalFetch = window.fetch.bind(window);
-    
+
     // Intercept fetch API IMMEDIATELY - React makes calls during initialization
-    window.fetch = async function(url, init) {
-        const urlStr = typeof url === 'string' ? url : (url instanceof URL ? url.href : url.toString());
-        
-        // Debug: log all fetch calls to see what's happening
+    window.fetch = async function(urlArg, init) {
+        // Normalise url — could be a string, URL object, or Request object
+        const urlStr = normalizeUrl(urlArg);
+
+        // When fetch() receives a Request object as the sole argument, pull its
+        // headers so the SSE / proxy logic can inspect them without init
+        const effectiveHeaders = (init && init.headers)
+            || (typeof Request !== 'undefined' && urlArg instanceof Request ? urlArg.headers : null);
+        const effectiveSignal = (init && init.signal)
+            || (typeof Request !== 'undefined' && urlArg instanceof Request ? urlArg.signal : null);
+
         console.log('[Tauri Proxy] Fetch called:', urlStr);
-        
+
         // Proxy any HTTP localhost request (any port) to avoid mixed content blocking.
         // The Rust backend validates the URL before proxying.
         const shouldProxy = isHttpLocalhost(urlStr);
         console.log('[Tauri Proxy] Should proxy?', shouldProxy, 'for URL:', urlStr);
+
         if (shouldProxy) {
+            // Route SSE requests through the Tauri streaming command so they work
+            // even from HTTPS-hosted app windows (e.g. Vercel frontends).
+            // Strict proxy buffering (response.text()) would hang an SSE stream,
+            // and a plain originalFetch() call fails with mixed-content when the
+            // app window is served over HTTPS.
+            const acceptHeader = getAcceptHeader(effectiveHeaders);
+            if (acceptHeader.includes('text/event-stream')) {
+                const invokeFn = getTauriInvoke();
+                if (invokeFn) {
+                    console.log('[Tauri Proxy] SSE request — routing via Tauri IPC streaming:', urlStr);
+                    return proxySSEViaTauri(
+                        urlStr,
+                        getAuthHeader(effectiveHeaders),
+                        effectiveSignal,
+                        invokeFn,
+                    );
+                }
+                // No Tauri IPC (shouldn't happen in app windows) — fall through to originalFetch
+                console.warn('[Tauri Proxy] SSE: no Tauri IPC, falling back to originalFetch for:', urlStr);
+                return originalFetch.apply(this, arguments);
+            }
+
             // Reject immediately if signal is already aborted
-            if (init && init.signal && init.signal.aborted) {
+            if (effectiveSignal && effectiveSignal.aborted) {
                 return Promise.reject(new DOMException('The operation was aborted.', 'AbortError'));
             }
 
@@ -73,13 +242,9 @@
                 const headers = {};
                 if (init && init.headers) {
                     if (init.headers instanceof Headers) {
-                        init.headers.forEach((value, key) => {
-                            headers[key] = value;
-                        });
+                        init.headers.forEach((value, key) => { headers[key] = value; });
                     } else if (Array.isArray(init.headers)) {
-                        init.headers.forEach(([key, value]) => {
-                            headers[key] = value;
-                        });
+                        init.headers.forEach(([key, value]) => { headers[key] = value; });
                     } else {
                         Object.assign(headers, init.headers);
                     }
@@ -103,17 +268,15 @@
                 const requestPromise = proxyRequest(urlStr, (init && init.method) || 'GET', headers, bodyStr);
 
                 let response;
-                if (init && init.signal) {
-                    // Race the request against the abort signal
+                if (effectiveSignal) {
                     const abortPromise = new Promise((_, reject) => {
                         const onAbort = () => {
-                            init.signal.removeEventListener('abort', onAbort);
+                            effectiveSignal.removeEventListener('abort', onAbort);
                             reject(new DOMException('The operation was aborted.', 'AbortError'));
                         };
-                        init.signal.addEventListener('abort', onAbort);
-                        // Clean up listener when request wins
-                        requestPromise.then(() => init.signal.removeEventListener('abort', onAbort))
-                                      .catch(() => init.signal.removeEventListener('abort', onAbort));
+                        effectiveSignal.addEventListener('abort', onAbort);
+                        requestPromise.then(() => effectiveSignal.removeEventListener('abort', onAbort))
+                                      .catch(() => effectiveSignal.removeEventListener('abort', onAbort));
                     });
                     response = await Promise.race([requestPromise, abortPromise]);
                 } else {
@@ -129,23 +292,19 @@
                 });
             } catch (error) {
                 console.error('[Tauri Proxy] Fetch proxy failed:', error, 'URL:', urlStr);
-                // In non-Tauri environments (tests, dev server), Tauri invoke isn't
-                // available — fall back so Playwright mocks and dev server still work.
                 const isTauri = typeof window.__TAURI_INVOKE__ === 'function' ||
                     (typeof window.__TAURI__ !== 'undefined' && typeof window.__TAURI__.invoke === 'function');
                 if (!isTauri) {
                     return originalFetch.apply(this, arguments);
                 }
-                // In Tauri, falling back always produces HTTP 0 (mixed content).
-                // Re-throw so the caller gets the real error.
                 throw error;
             }
         }
-        
+
         // For non-localhost requests, use original fetch
         return originalFetch.apply(this, arguments);
     };
-    
+
     // Also intercept XMLHttpRequest for libraries that use XHR instead of fetch
     const OriginalXHR = window.XMLHttpRequest;
     window.XMLHttpRequest = function() {
@@ -184,7 +343,7 @@
                         Object.defineProperty(xhr, 'response', { value: response.body || '', writable: false });
                         Object.defineProperty(xhr, 'readyState', { value: 4, writable: false });
 
-                        var headerStr = '';
+                        let headerStr = '';
                         if (response.headers) {
                             Object.keys(response.headers).forEach(function(key) {
                                 headerStr += key + ': ' + response.headers[key] + '\r\n';
@@ -231,7 +390,6 @@
     console.log('[Tauri Proxy] Fetch + XHR interceptors injected');
     console.log('[Tauri Proxy] Original fetch stored:', typeof originalFetch);
 
-    // Check Tauri API availability - it might not be ready immediately
     function checkTauriAPI() {
         if (typeof window.__TAURI_INVOKE__ === 'function') {
             console.log('[Tauri Proxy] Tauri invoke available: YES');
@@ -244,7 +402,6 @@
             return null;
         }
     }
-    
-    // Check immediately
+
     checkTauriAPI();
 })();

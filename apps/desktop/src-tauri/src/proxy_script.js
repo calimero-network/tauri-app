@@ -63,21 +63,45 @@
         return null;
     }
 
+    // Low-level Tauri event listener that works with just window.__TAURI_INVOKE__
+    // (always injected natively) without needing window.__TAURI__.event (which
+    // requires the @tauri-apps/api JS bundle to be loaded by the page — Vercel
+    // hosted apps don't load it, so window.__TAURI__ is undefined there).
+    //
+    // Mirrors what @tauri-apps/api/event does internally:
+    //   1. Register a callback on window['_<id>'] — Tauri calls it when the event fires.
+    //   2. Tell the Tauri runtime to route the named event to that callback id.
+    async function tauriListen(eventName, handler, invokeFn) {
+        // Happy-path: @tauri-apps/api is loaded (e.g. localhost dev or app with bundled API).
+        if (window.__TAURI__ && window.__TAURI__.event && typeof window.__TAURI__.event.listen === 'function') {
+            return window.__TAURI__.event.listen(eventName, handler);
+        }
+        // Fallback: use __TAURI_INVOKE__ directly.
+        const id = Math.random() * 2147483647 | 0;
+        const prop = '_' + id;
+        Object.defineProperty(window, prop, {
+            value: handler,
+            writable: false,
+            configurable: true,
+        });
+        await invokeFn('tauri', {
+            __tauriModule: 'Event',
+            message: { cmd: 'listen', event: eventName, windowLabel: null, handler: id },
+        });
+        return function unlisten() {
+            Reflect.deleteProperty(window, prop);
+            invokeFn('tauri', {
+                __tauriModule: 'Event',
+                message: { cmd: 'unlisten', event: eventName, eventId: id },
+            }).catch(() => {});
+        };
+    }
+
     // Proxy an SSE request through Tauri IPC so it works even from HTTPS-hosted
     // app windows (where native fetch → http://localhost would be blocked by
     // mixed-content rules).  The Rust side streams chunks back as window events;
     // we expose them as a ReadableStream so SseClient.readStream() needs no changes.
     async function proxySSEViaTauri(url, authHeader, signal, invokeFn) {
-        const tauriEvent = window.__TAURI__ && window.__TAURI__.event;
-        if (!tauriEvent) {
-            // Tauri event API not available — fall back to direct fetch (HTTP windows only)
-            console.warn('[Tauri Proxy] SSE: Tauri event API unavailable, falling back to originalFetch');
-            return originalFetch(url, {
-                headers: { 'Authorization': authHeader, 'Accept': 'text/event-stream' },
-                signal,
-            });
-        }
-
         const streamId = 'sse-' + Date.now() + '-' + Math.random().toString(36).slice(2, 9);
         const encoder = new TextEncoder();
         let streamController = null;
@@ -96,22 +120,21 @@
         // Register listeners BEFORE invoking so we never miss the first chunk
         try {
             [unlistenChunk, unlistenEnd] = await Promise.all([
-                tauriEvent.listen('sse-chunk-' + streamId, (event) => {
+                tauriListen('sse-chunk-' + streamId, (event) => {
                     if (event.payload && streamController) {
                         try { streamController.enqueue(encoder.encode(event.payload)); } catch (_) {}
                     }
-                }),
-                tauriEvent.listen('sse-end-' + streamId, () => {
+                }, invokeFn),
+                tauriListen('sse-end-' + streamId, () => {
                     try { if (streamController) streamController.close(); } catch (_) {}
                     cleanup();
-                }),
+                }, invokeFn),
             ]);
         } catch (err) {
-            console.warn('[Tauri Proxy] SSE: event.listen failed, falling back to originalFetch', err);
-            return originalFetch(url, {
-                headers: { 'Authorization': authHeader, 'Accept': 'text/event-stream' },
-                signal,
-            });
+            console.warn('[Tauri Proxy] SSE: event listen failed:', err);
+            try { if (streamController) streamController.error(new Error('SSE listen setup failed: ' + err)); } catch (_) {}
+            cleanup();
+            return new Response(new ReadableStream({ start(c) { c.error(new Error('SSE unavailable')); } }), { status: 503 });
         }
 
         // Wire up AbortSignal → cancel_sse_stream

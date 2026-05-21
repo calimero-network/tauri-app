@@ -9,6 +9,7 @@ use std::sync::OnceLock;
 use thiserror::Error;
 
 static HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+static SSE_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 
 fn http_client() -> &'static reqwest::Client {
     HTTP_CLIENT.get_or_init(|| {
@@ -17,6 +18,17 @@ fn http_client() -> &'static reqwest::Client {
             .timeout(std::time::Duration::from_secs(30))
             .build()
             .expect("Failed to build HTTP client")
+    })
+}
+
+// SSE streams are long-lived; no request timeout is set so the connection
+// is only closed when the server ends the stream or the stream is cancelled.
+fn sse_client() -> &'static reqwest::Client {
+    SSE_CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .danger_accept_invalid_certs(false)
+            .build()
+            .expect("Failed to build SSE HTTP client")
     })
 }
 
@@ -464,14 +476,20 @@ async fn proxy_sse_stream(
     let chunk_event = format!("sse-chunk-{}", stream_id);
     let end_event   = format!("sse-end-{}", stream_id);
 
-    let client = http_client();
-    let result = client
+    if let Err(reason) = validate_allowed_url(&url, None) {
+        cancel_registry.lock().unwrap_or_else(|p| p.into_inner()).remove(&stream_id);
+        let _ = window.emit(&end_event, "");
+        return Err(TauriError::new(TauriErrorCode::UrlNotAllowed, reason));
+    }
+
+    let mut request = sse_client()
         .get(&url)
-        .header("Authorization", &auth_header)
         .header("Accept", "text/event-stream")
-        .header("Cache-Control", "no-cache")
-        .send()
-        .await;
+        .header("Cache-Control", "no-cache");
+    if !auth_header.is_empty() {
+        request = request.header("Authorization", &auth_header);
+    }
+    let result = request.send().await;
 
     let response = match result {
         Ok(r) => r,

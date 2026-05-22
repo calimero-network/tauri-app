@@ -21,6 +21,8 @@ fn main() {
 }
 
 /// Minimal JSON string field extractor — avoids a serde_json build dep.
+/// Sufficient for merod-config.json which contains only a semver string value;
+/// semver values never contain escaped quotes or nested JSON, so this parser is correct for this use.
 fn extract_json_string(json: &str, field: &str) -> Option<String> {
     let key = format!("\"{}\"", field);
     let key_idx = json.find(&key)?;

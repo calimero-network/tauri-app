@@ -1853,7 +1853,7 @@ pub(crate) fn merod_target_triple() -> &'static str {
 /// Lower score = better match. Returns `None` if the asset is not for this platform.
 pub(crate) fn score_merod_asset(name: &str, target_triple: &str) -> Option<u32> {
     let lower = name.to_lowercase();
-    if !lower.starts_with("merod") {
+    if !lower.starts_with("merod-") {
         return None;
     }
     if !lower.contains(&target_triple.to_lowercase()) {
@@ -1943,8 +1943,10 @@ async fn extract_merod_binary(
             }
         }
     } else {
-        // Plain binary — just use it directly
-        return Ok(archive_path.to_path_buf());
+        return Err(TauriError::new(
+            TauriErrorCode::InternalError,
+            format!("Unknown archive format '{}': expected .tar.gz, .tgz, or .zip", asset_name),
+        ));
     }
 
     find_merod_binary_in_dir(&extract_dir)
@@ -1971,7 +1973,7 @@ async fn download_and_replace_merod(app_handle: tauri::AppHandle) -> Result<serd
 
     // Fast path: already correct
     if let Some(current) = get_merod_version_at(&binary_path).await {
-        if current.contains(expected) {
+        if current.split_whitespace().any(|p| p == expected) {
             return Ok(serde_json::json!({
                 "replaced": false,
                 "expected_version": expected,
@@ -1987,7 +1989,9 @@ async fn download_and_replace_merod(app_handle: tauri::AppHandle) -> Result<serd
         "https://api.github.com/repos/calimero-network/core/releases/tags/{}",
         expected
     );
-    let client = reqwest::Client::new();
+    // HTTPS to api.github.com ensures transport security; no auth token needed
+    // for public releases (60 req/hr unauthenticated is ample for a rare update path).
+    let client = http_client();
     let release: serde_json::Value = client
         .get(&release_url)
         .header("Accept", "application/vnd.github+json")
@@ -2016,18 +2020,26 @@ async fn download_and_replace_merod(app_handle: tauri::AppHandle) -> Result<serd
 
     info!("[Updater] Downloading {} for {}", asset_name, target);
 
-    // Download to a temp directory
+    // Sanitize asset name: strip any path components to prevent path traversal
+    let safe_asset_name: String = std::path::Path::new(&asset_name)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("merod-asset")
+        .to_string();
+
+    // Use nanoseconds for uniqueness in case two updates run back-to-back
     let temp_dir = std::env::temp_dir().join(format!(
         "merod-update-{}",
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
-            .as_secs()
+            .as_nanos()
     ));
     tokio::fs::create_dir_all(&temp_dir).await
         .map_err(|e| TauriError::new(TauriErrorCode::DirectoryError, format!("create temp dir: {}", e)))?;
 
-    let archive_path = temp_dir.join(&asset_name);
+    let archive_path = temp_dir.join(&safe_asset_name);
+    // merod binaries are a few MB; loading into memory before writing is acceptable for a desktop app.
     let bytes = client
         .get(&asset_url)
         .header("User-Agent", "calimero-desktop")
@@ -2039,7 +2051,7 @@ async fn download_and_replace_merod(app_handle: tauri::AppHandle) -> Result<serd
         .map_err(|e| TauriError::new(TauriErrorCode::FileReadError, format!("write archive: {}", e)))?;
 
     // Extract
-    let extracted = extract_merod_binary(&archive_path, &asset_name, &temp_dir).await?;
+    let extracted = extract_merod_binary(&archive_path, &safe_asset_name, &temp_dir).await?;
 
     // Atomic replace: copy to .tmp, set +x, rename over the old binary
     let tmp_path = binary_path.with_extension("tmp");
@@ -2053,6 +2065,12 @@ async fn download_and_replace_merod(app_handle: tauri::AppHandle) -> Result<serd
             .map_err(|e| TauriError::new(TauriErrorCode::InternalError, format!("set +x: {}", e)))?;
     }
 
+    // Windows does not allow rename over an existing file; remove it first.
+    #[cfg(windows)]
+    if binary_path.exists() {
+        tokio::fs::remove_file(&binary_path).await
+            .map_err(|e| TauriError::new(TauriErrorCode::InternalError, format!("remove old binary (Windows): {}", e)))?;
+    }
     tokio::fs::rename(&tmp_path, &binary_path).await
         .map_err(|e| TauriError::new(TauriErrorCode::InternalError, format!("replace binary: {}", e)))?;
 
@@ -2063,7 +2081,7 @@ async fn download_and_replace_merod(app_handle: tauri::AppHandle) -> Result<serd
     let new_version = get_merod_version_at(&binary_path).await
         .unwrap_or_else(|| "unknown".to_string());
 
-    if !new_version.contains(expected) {
+    if !new_version.split_whitespace().any(|p| p == expected) {
         return Err(TauriError::new(
             TauriErrorCode::InternalError,
             format!("Version mismatch after replace: expected '{}', binary reports '{}'", expected, new_version),
@@ -2084,19 +2102,7 @@ async fn download_and_replace_merod(app_handle: tauri::AppHandle) -> Result<serd
 async fn get_merod_binary_version(app_handle: tauri::AppHandle) -> Result<String, TauriError> {
     let merod_binary = get_merod_binary_path(&app_handle)
         .map_err(|e| TauriError::new(TauriErrorCode::FileNotFound, e))?;
-
-    let output = std::process::Command::new(&merod_binary)
-        .arg("--version")
-        .output()
-        .map_err(|e| TauriError::new(TauriErrorCode::InternalError, format!("Failed to run merod --version: {}", e)))?;
-
-    let raw = if output.status.success() {
-        String::from_utf8_lossy(&output.stdout).trim().to_string()
-    } else {
-        String::from_utf8_lossy(&output.stderr).trim().to_string()
-    };
-
-    Ok(if raw.is_empty() { "unknown".to_string() } else { raw })
+    Ok(get_merod_version_at(&merod_binary).await.unwrap_or_else(|| "unknown".to_string()))
 }
 
 /// Read merod logs for a node. Logs are only available for nodes started by the app.

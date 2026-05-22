@@ -65,8 +65,8 @@ export async function installUpdate(onStatus: (status: string) => void = () => {
 
   // 1. Stop node
   onStatus('Stopping nodes...');
-  try { await stopMerod(); } catch { /* not running — ok */ }
-  try { await killAllMerodProcesses(); } catch { /* best-effort */ }
+  try { await stopMerod(); } catch (e) { console.warn('[updater] stopMerod failed (node may not be running):', e); }
+  try { await killAllMerodProcesses(); } catch (e) { console.warn('[updater] killAllMerodProcesses failed:', e); }
 
   // 2. Download + replace merod binary
   onStatus('Downloading merod binary...');

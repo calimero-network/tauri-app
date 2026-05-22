@@ -126,6 +126,12 @@ describe('installUpdate', () => {
     expect(mockRelaunch).toHaveBeenCalledOnce();
   });
 
+  it('warns and continues when merod download fails with a non-object rejection (falls through to String(e))', async () => {
+    mockDownloadAndReplace.mockRejectedValue(42);
+    await expect(installUpdate()).resolves.toBeUndefined();
+    expect(mockRelaunch).toHaveBeenCalledOnce();
+  });
+
   it('throws and does NOT relaunch when tauriInstallUpdate fails', async () => {
     mockTauriInstallUpdate.mockRejectedValue(new Error('no update package'));
     await expect(installUpdate()).rejects.toThrow('no update package');

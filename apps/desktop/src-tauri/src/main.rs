@@ -1889,7 +1889,7 @@ fn find_merod_binary_in_dir(dir: &std::path::Path) -> Option<std::path::PathBuf>
             if let Some(found) = find_merod_binary_in_dir(&path) {
                 return Some(found);
             }
-        } else if name == "merod" || name == "merod.exe" {
+        } else if (name == "merod" || name == "merod.exe") && !path.is_symlink() {
             return Some(path);
         }
     }
@@ -2028,14 +2028,21 @@ async fn download_and_replace_merod(app_handle: tauri::AppHandle) -> Result<serd
     // HTTPS to api.github.com ensures transport security; no auth token needed
     // for public releases (60 req/hr unauthenticated is ample for a rare update path).
     let client = http_client();
-    let release: serde_json::Value = client
+    let api_resp = client
         .get(&release_url)
         .header("Accept", "application/vnd.github+json")
         .header("User-Agent", "calimero-desktop")
         .send().await
-        .map_err(|e| TauriError::new(TauriErrorCode::InternalError, format!("GitHub API: {}", e)))?
+        .map_err(|e| TauriError::new(TauriErrorCode::InternalError, format!("GitHub API: {}", e)))?;
+    let api_status = api_resp.status();
+    let release: serde_json::Value = api_resp
         .json().await
         .map_err(|e| TauriError::new(TauriErrorCode::InternalError, format!("Parse release JSON: {}", e)))?;
+    if !api_status.is_success() {
+        let msg = release["message"].as_str().unwrap_or("unknown error");
+        return Err(TauriError::new(TauriErrorCode::InternalError,
+            format!("GitHub API returned {}: {}", api_status, msg)));
+    }
 
     let assets = release["assets"].as_array()
         .ok_or_else(|| TauriError::new(TauriErrorCode::InternalError, "No assets in GitHub release"))?;
@@ -2104,11 +2111,16 @@ async fn download_and_replace_merod(app_handle: tauri::AppHandle) -> Result<serd
         .timeout(std::time::Duration::from_secs(300))
         .build()
         .map_err(|e| TauriError::new(TauriErrorCode::InternalError, format!("build download client: {}", e)))?;
-    let bytes = download_client
+    let dl_resp = download_client
         .get(&asset_url)
         .header("User-Agent", "calimero-desktop")
         .send().await
-        .map_err(|e| TauriError::new(TauriErrorCode::InternalError, format!("download: {}", e)))?
+        .map_err(|e| TauriError::new(TauriErrorCode::InternalError, format!("download: {}", e)))?;
+    if !dl_resp.status().is_success() {
+        return Err(TauriError::new(TauriErrorCode::InternalError,
+            format!("Asset download returned HTTP {}", dl_resp.status())));
+    }
+    let bytes = dl_resp
         .bytes().await
         .map_err(|e| TauriError::new(TauriErrorCode::InternalError, format!("read download: {}", e)))?;
     tokio::fs::write(&archive_path, &bytes).await

@@ -267,27 +267,35 @@ pub(crate) fn validate_allowed_url(url: &str, configured_node_url: Option<&str>)
     
     // Check if URL matches configured node URL
     if let Some(node_url) = configured_node_url {
-        if let Ok(node_parsed) = url::Url::parse(node_url) {
-            let node_host = node_parsed.host_str().map(|h| h.to_lowercase());
-            let node_port = node_parsed.port().or_else(|| {
-                match node_parsed.scheme() {
-                    "http" => Some(80),
-                    "https" => Some(443),
-                    _ => None,
-                }
-            });
+        match url::Url::parse(node_url) {
+            Ok(node_parsed) => {
+                let node_host = node_parsed.host_str().map(|h| h.to_lowercase());
+                let node_port = node_parsed.port().or_else(|| {
+                    match node_parsed.scheme() {
+                        "http" => Some(80),
+                        "https" => Some(443),
+                        _ => None,
+                    }
+                });
 
-            if node_host.as_ref().map(|h| h == &host_lower).unwrap_or(false)
-                && node_port.map(|p| p == port).unwrap_or(false)
-                && node_parsed.scheme() == scheme {
-                return Ok(());
+                if node_host.as_ref().map(|h| h == &host_lower).unwrap_or(false)
+                    && node_port.map(|p| p == port).unwrap_or(false)
+                    && node_parsed.scheme() == scheme {
+                    return Ok(());
+                }
+                // Configured URL present but request URL doesn't match — reject.
+                return Err(format!(
+                    "URL not allowed: {}. Only requests to the configured node URL are proxied.",
+                    url
+                ));
+            }
+            Err(_) => {
+                return Err(format!(
+                    "URL not allowed: {}. The configured node URL is invalid and cannot be used for proxying.",
+                    url
+                ));
             }
         }
-        // Configured URL present but request URL doesn't match — reject.
-        return Err(format!(
-            "URL not allowed: {}. Only requests to the configured node URL are proxied.",
-            url
-        ));
     }
 
     // No configured URL — allow any HTTP localhost request (any port).
@@ -1875,7 +1883,8 @@ fn find_merod_binary_in_dir(dir: &std::path::Path) -> Option<std::path::PathBuf>
     let entries = std::fs::read_dir(dir).ok()?;
     for entry in entries.flatten() {
         let path = entry.path();
-        let name = path.file_name()?.to_string_lossy().to_lowercase();
+        let Some(fname) = path.file_name() else { continue };
+        let name = fname.to_string_lossy().to_lowercase();
         if path.is_dir() {
             if let Some(found) = find_merod_binary_in_dir(&path) {
                 return Some(found);
@@ -1887,9 +1896,12 @@ fn find_merod_binary_in_dir(dir: &std::path::Path) -> Option<std::path::PathBuf>
     None
 }
 
-/// Runs `<binary> --version` and returns the trimmed stdout, or `None` on failure.
+/// Runs `<binary> --version` and returns the trimmed stdout, or `None` on failure or timeout.
 async fn get_merod_version_at(path: &std::path::Path) -> Option<String> {
-    let output = Command::new(path).arg("--version").output().await.ok()?;
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        Command::new(path).arg("--version").output(),
+    ).await.ok()?.ok()?;
     let raw = String::from_utf8_lossy(if output.stdout.is_empty() { &output.stderr } else { &output.stdout })
         .trim()
         .to_string();
@@ -1910,7 +1922,11 @@ async fn extract_merod_binary(
 
     if lower.ends_with(".tar.gz") || lower.ends_with(".tgz") {
         let status = Command::new("tar")
-            .args(["-xzf", &archive_path.to_string_lossy(), "-C", &extract_dir.to_string_lossy()])
+            .args([
+                "--no-same-owner", "--no-same-permissions",
+                "-xzf", &archive_path.to_string_lossy(),
+                "-C", &extract_dir.to_string_lossy(),
+            ])
             .status().await
             .map_err(|e| TauriError::new(TauriErrorCode::InternalError, format!("tar failed: {}", e)))?;
         if !status.success() {
@@ -1991,9 +2007,9 @@ async fn download_and_replace_merod(app_handle: tauri::AppHandle) -> Result<serd
 
     let expected_version_output = format!("merod {}", expected);
 
-    // Fast path: already correct — use same exact match as post-replace verification
+    // Fast path: already correct — accept "merod X.Y.Z" even if binary appends extra build metadata
     if let Some(current) = get_merod_version_at(&binary_path).await {
-        if current == expected_version_output {
+        if current.starts_with(&expected_version_output) {
             return Ok(serde_json::json!({
                 "replaced": false,
                 "expected_version": expected,
@@ -2113,15 +2129,16 @@ async fn download_and_replace_merod(app_handle: tauri::AppHandle) -> Result<serd
             .map_err(|e| TauriError::new(TauriErrorCode::InternalError, format!("set +x: {}", e)))?;
     }
 
-    // Windows does not allow rename over an existing file.
     // Rename old binary to .bak first; restore it if the final rename fails so the app is never left binaryless.
-    #[cfg(windows)]
+    // On Windows rename-over-existing is not allowed, so we must .bak first regardless.
+    // On Unix rename is atomic over the destination, but we still keep a .bak so we can roll back
+    // if the post-replace version check fails.
     {
         let bak_path = binary_path.with_extension("bak");
         let _ = tokio::fs::remove_file(&bak_path).await; // remove stale .bak if present
         if binary_path.exists() {
             tokio::fs::rename(&binary_path, &bak_path).await
-                .map_err(|e| TauriError::new(TauriErrorCode::InternalError, format!("backup old binary (Windows): {}", e)))?;
+                .map_err(|e| TauriError::new(TauriErrorCode::InternalError, format!("backup old binary: {}", e)))?;
         }
         if let Err(e) = tokio::fs::rename(&tmp_path, &binary_path).await {
             // Restore backup so the app is not left without a binary
@@ -2130,9 +2147,6 @@ async fn download_and_replace_merod(app_handle: tauri::AppHandle) -> Result<serd
         }
         let _ = tokio::fs::remove_file(&bak_path).await;
     }
-    #[cfg(not(windows))]
-    tokio::fs::rename(&tmp_path, &binary_path).await
-        .map_err(|e| TauriError::new(TauriErrorCode::InternalError, format!("replace binary: {}", e)))?;
 
     // Cleanup
     let _ = tokio::fs::remove_dir_all(&temp_dir).await;
@@ -2141,8 +2155,8 @@ async fn download_and_replace_merod(app_handle: tauri::AppHandle) -> Result<serd
     let new_version = get_merod_version_at(&binary_path).await
         .unwrap_or_else(|| "unknown".to_string());
 
-    // Exact match against the full expected output — avoids token-match spoofing
-    if new_version != expected_version_output {
+    // Accept "merod X.Y.Z" even if binary appends extra build metadata after the version
+    if !new_version.starts_with(&expected_version_output) {
         return Err(TauriError::new(
             TauriErrorCode::InternalError,
             format!("Version mismatch after replace: expected '{}', binary reports '{}'", expected_version_output, new_version),

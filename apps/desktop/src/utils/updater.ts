@@ -70,10 +70,7 @@ export async function installUpdate(onStatus: (status: string) => void = () => {
 
   // 2. Download + replace merod binary
   onStatus('Downloading merod binary...');
-  const result = await downloadAndReplaceMerod();
-  if (result.replaced) {
-    onStatus(`Verified merod ${result.current_version}`);
-  }
+  await downloadAndReplaceMerod();
 
   // 3. Install Tauri app update (new shell / frontend bundle)
   onStatus('Installing app update...');

@@ -115,7 +115,7 @@ describe('installUpdate', () => {
     expect(mockRelaunch).not.toHaveBeenCalled();
   });
 
-  it('does not emit "Verified" status when binary was already at correct version', async () => {
+  it('still relaunches when binary was already at the correct version (replaced=false)', async () => {
     mockDownloadAndReplace.mockResolvedValue({
       replaced: false,
       expected_version: '0.10.1-rc.42',
@@ -124,7 +124,6 @@ describe('installUpdate', () => {
     });
     const statuses: string[] = [];
     await installUpdate((s) => statuses.push(s));
-    expect(statuses.some((s) => s.startsWith('Verified merod'))).toBe(false);
     expect(mockRelaunch).toHaveBeenCalledOnce();
   });
 });

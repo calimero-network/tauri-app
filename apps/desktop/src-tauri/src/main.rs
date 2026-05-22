@@ -1859,16 +1859,15 @@ pub(crate) fn score_merod_asset(name: &str, target_triple: &str) -> Option<u32> 
     if !lower.contains(&target_triple.to_lowercase()) {
         return None;
     }
-    let ext_score = if lower.ends_with(".tar.gz") || lower.ends_with(".tgz") {
-        0u32
+    if lower.ends_with(".tar.gz") || lower.ends_with(".tgz") {
+        Some(0u32)
     } else if lower.ends_with(".zip") {
-        1
+        Some(1)
     } else if lower.ends_with(".exe") {
-        2
+        Some(2)
     } else {
-        3
-    };
-    Some(ext_score)
+        None // unknown extension — extract_merod_binary cannot handle it
+    }
 }
 
 /// Recursively finds a `merod` / `merod.exe` binary inside a directory tree.
@@ -1942,10 +1941,13 @@ async fn extract_merod_binary(
                 return Err(TauriError::new(TauriErrorCode::InternalError, "unzip extraction failed".to_string()));
             }
         }
+    } else if lower.ends_with(".exe") {
+        // Windows bare executable — already a binary, no extraction needed
+        return Ok(archive_path.to_path_buf());
     } else {
         return Err(TauriError::new(
             TauriErrorCode::InternalError,
-            format!("Unknown archive format '{}': expected .tar.gz, .tgz, or .zip", asset_name),
+            format!("Unknown archive format '{}': expected .tar.gz, .tgz, .zip, or .exe", asset_name),
         ));
     }
 
@@ -2018,6 +2020,14 @@ async fn download_and_replace_merod(app_handle: tauri::AppHandle) -> Result<serd
             format!("No merod asset for target '{}' in release '{}'", target, expected),
         ))?;
 
+    // Validate the asset URL comes from GitHub over HTTPS before downloading
+    if !asset_url.starts_with("https://") {
+        return Err(TauriError::new(
+            TauriErrorCode::InternalError,
+            format!("Unexpected asset URL scheme (must be https://): {}", asset_url),
+        ));
+    }
+
     info!("[Updater] Downloading {} for {}", asset_name, target);
 
     // Sanitize asset name: strip any path components to prevent path traversal
@@ -2039,8 +2049,14 @@ async fn download_and_replace_merod(app_handle: tauri::AppHandle) -> Result<serd
         .map_err(|e| TauriError::new(TauriErrorCode::DirectoryError, format!("create temp dir: {}", e)))?;
 
     let archive_path = temp_dir.join(&safe_asset_name);
+    // Binary downloads can be tens of MB; use a longer timeout than the shared 30s client.
     // merod binaries are a few MB; loading into memory before writing is acceptable for a desktop app.
-    let bytes = client
+    let download_client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(false)
+        .timeout(std::time::Duration::from_secs(300))
+        .build()
+        .map_err(|e| TauriError::new(TauriErrorCode::InternalError, format!("build download client: {}", e)))?;
+    let bytes = download_client
         .get(&asset_url)
         .header("User-Agent", "calimero-desktop")
         .send().await

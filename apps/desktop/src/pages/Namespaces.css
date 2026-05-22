@@ -532,12 +532,6 @@
   white-space: nowrap;
 }
 
-.ns-row-name-muted {
-  color: var(--text-tertiary);
-  font-style: italic;
-  font-weight: 400;
-}
-
 .ns-row-id {
   color: var(--text-tertiary);
   font-size: 11px;

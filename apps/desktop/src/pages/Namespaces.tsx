@@ -256,6 +256,9 @@ export default function Namespaces() {
   const handleLaunchContext = async (contextId: string, applicationId: string) => {
     const app = installedApps.find((a) => a.id === applicationId);
     if (!app?.frontendUrl) { toast.error("This application has no frontend URL"); return; }
+    // Warm up the token — if it's expired the node will return 401+token_expired,
+    // mero-js refreshes and writes fresh tokens back to localStorage before we read them.
+    try { await apiClient.node.listApplications(); } catch {}
     const key = getContextKey(contextId);
     await openAppFrontend(app.frontendUrl, app.name, undefined, {
       applicationId,

@@ -135,6 +135,8 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
   };
 
   const handleOpenFrontend = async (frontendUrl: string, appName?: string, applicationId?: string) => {
+    // Warm up the token so any refresh completes before we read it from localStorage.
+    try { await apiClient.node.listApplications(); } catch {}
     await openAppFrontend(frontendUrl, appName, (error) => {
       toast.error(`Failed to open frontend: ${error.message}`);
     }, applicationId ? { applicationId } : undefined);

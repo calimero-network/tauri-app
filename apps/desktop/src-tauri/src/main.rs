@@ -1919,9 +1919,12 @@ async fn extract_merod_binary(
     } else if lower.ends_with(".zip") {
         #[cfg(windows)]
         {
+            // Escape single quotes in paths to prevent PowerShell injection
+            let archive_esc = archive_path.display().to_string().replace('\'', "''");
+            let dest_esc = extract_dir.display().to_string().replace('\'', "''");
             let cmd = format!(
                 "Expand-Archive -Path '{}' -DestinationPath '{}' -Force",
-                archive_path.display(), extract_dir.display()
+                archive_esc, dest_esc
             );
             let status = Command::new("powershell")
                 .args(["-NoProfile", "-Command", &cmd])
@@ -1951,8 +1954,18 @@ async fn extract_merod_binary(
         ));
     }
 
-    find_merod_binary_in_dir(&extract_dir)
-        .ok_or_else(|| TauriError::new(TauriErrorCode::FileNotFound, "merod binary not found in extracted archive"))
+    let found = find_merod_binary_in_dir(&extract_dir)
+        .ok_or_else(|| TauriError::new(TauriErrorCode::FileNotFound, "merod binary not found in extracted archive"))?;
+
+    // Guard against symlinks that escape the extraction directory (zip slip / symlink attack)
+    let canonical_dir = extract_dir.canonicalize()
+        .map_err(|e| TauriError::new(TauriErrorCode::DirectoryError, format!("canonicalize extract dir: {}", e)))?;
+    let canonical_bin = found.canonicalize()
+        .map_err(|e| TauriError::new(TauriErrorCode::FileNotFound, format!("canonicalize binary path: {}", e)))?;
+    if !canonical_bin.starts_with(&canonical_dir) {
+        return Err(TauriError::new(TauriErrorCode::PathNotAllowed, "Extracted binary path escapes extraction directory"));
+    }
+    Ok(canonical_bin)
 }
 
 /// Downloads the merod binary matching `MEROD_CONFIG_VERSION` from GitHub,
@@ -2020,12 +2033,19 @@ async fn download_and_replace_merod(app_handle: tauri::AppHandle) -> Result<serd
             format!("No merod asset for target '{}' in release '{}'", target, expected),
         ))?;
 
-    // Validate the asset URL comes from GitHub over HTTPS before downloading
-    if !asset_url.starts_with("https://") {
-        return Err(TauriError::new(
-            TauriErrorCode::InternalError,
-            format!("Unexpected asset URL scheme (must be https://): {}", asset_url),
-        ));
+    // Validate the asset URL is an HTTPS GitHub URL before downloading
+    {
+        let parsed = url::Url::parse(&asset_url)
+            .map_err(|e| TauriError::new(TauriErrorCode::InternalError, format!("parse asset URL: {}", e)))?;
+        if parsed.scheme() != "https" {
+            return Err(TauriError::new(TauriErrorCode::InternalError,
+                format!("Asset URL must use https, got: {}", asset_url)));
+        }
+        let host = parsed.host_str().unwrap_or("");
+        if host != "github.com" && !host.ends_with(".github.com") && !host.ends_with(".githubusercontent.com") {
+            return Err(TauriError::new(TauriErrorCode::InternalError,
+                format!("Asset URL hostname '{}' is not from github.com or githubusercontent.com", host)));
+        }
     }
 
     info!("[Updater] Downloading {} for {}", asset_name, target);
@@ -2081,14 +2101,23 @@ async fn download_and_replace_merod(app_handle: tauri::AppHandle) -> Result<serd
             .map_err(|e| TauriError::new(TauriErrorCode::InternalError, format!("set +x: {}", e)))?;
     }
 
-    // Windows does not allow rename over an existing file; remove it first.
+    // Windows does not allow rename over an existing file.
+    // Rename old binary to .bak first so it can be recovered if the final rename fails.
     #[cfg(windows)]
-    if binary_path.exists() {
-        tokio::fs::remove_file(&binary_path).await
-            .map_err(|e| TauriError::new(TauriErrorCode::InternalError, format!("remove old binary (Windows): {}", e)))?;
+    {
+        let bak_path = binary_path.with_extension("bak");
+        let _ = tokio::fs::remove_file(&bak_path).await; // remove stale .bak if present
+        if binary_path.exists() {
+            tokio::fs::rename(&binary_path, &bak_path).await
+                .map_err(|e| TauriError::new(TauriErrorCode::InternalError, format!("backup old binary (Windows): {}", e)))?;
+        }
     }
     tokio::fs::rename(&tmp_path, &binary_path).await
         .map_err(|e| TauriError::new(TauriErrorCode::InternalError, format!("replace binary: {}", e)))?;
+    #[cfg(windows)]
+    {
+        let _ = tokio::fs::remove_file(binary_path.with_extension("bak")).await;
+    }
 
     // Cleanup
     let _ = tokio::fs::remove_dir_all(&temp_dir).await;
@@ -2097,10 +2126,12 @@ async fn download_and_replace_merod(app_handle: tauri::AppHandle) -> Result<serd
     let new_version = get_merod_version_at(&binary_path).await
         .unwrap_or_else(|| "unknown".to_string());
 
-    if !new_version.split_whitespace().any(|p| p == expected) {
+    // Exact match against the full expected output — avoids token-match spoofing
+    let expected_version_output = format!("merod {}", expected);
+    if new_version != expected_version_output {
         return Err(TauriError::new(
             TauriErrorCode::InternalError,
-            format!("Version mismatch after replace: expected '{}', binary reports '{}'", expected, new_version),
+            format!("Version mismatch after replace: expected '{}', binary reports '{}'", expected_version_output, new_version),
         ));
     }
 

@@ -58,7 +58,8 @@ export default function UpdateNotification({
       await installUpdate((status) => setInstallStatus(status));
       // relaunch() is called inside installUpdate — app closes here
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to install update");
+      const msg = err instanceof Error ? err.message : (err && typeof err === 'object' && typeof (err as any).message === 'string' ? (err as any).message : "Failed to install update");
+      setError(msg);
       setInstalling(false);
       setInstallStatus("");
     }

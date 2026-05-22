@@ -1885,7 +1885,7 @@ fn find_merod_binary_in_dir(dir: &std::path::Path) -> Option<std::path::PathBuf>
         let path = entry.path();
         let Some(fname) = path.file_name() else { continue };
         let name = fname.to_string_lossy().to_lowercase();
-        if path.is_dir() {
+        if path.is_dir() && !path.is_symlink() {
             if let Some(found) = find_merod_binary_in_dir(&path) {
                 return Some(found);
             }

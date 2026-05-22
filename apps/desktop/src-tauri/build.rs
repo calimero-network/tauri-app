@@ -1,4 +1,13 @@
 fn main() {
+    // tauri::generate_context!() panics at compile time if distDir doesn't exist,
+    // which breaks `cargo test`. Create a stub so tests compile without a frontend build.
+    let dist = std::path::Path::new("../dist");
+    if !dist.exists() {
+        std::fs::create_dir_all(dist).ok();
+        std::fs::write(dist.join("index.html"), "").ok();
+    }
+    println!("cargo:rerun-if-changed=../dist");
+
     // Embed merod target version at compile time so the binary knows what to download at runtime.
     let config_path = std::path::Path::new("../../../merod-config.json");
     if let Ok(content) = std::fs::read_to_string(config_path) {

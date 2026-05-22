@@ -276,18 +276,21 @@ pub(crate) fn validate_allowed_url(url: &str, configured_node_url: Option<&str>)
                     _ => None,
                 }
             });
-            
-            // Check if the request URL matches the configured node URL
-            if node_host.as_ref().map(|h| h == &host_lower).unwrap_or(false) 
+
+            if node_host.as_ref().map(|h| h == &host_lower).unwrap_or(false)
                 && node_port.map(|p| p == port).unwrap_or(false)
                 && node_parsed.scheme() == scheme {
                 return Ok(());
             }
         }
+        // Configured URL present but request URL doesn't match — reject.
+        return Err(format!(
+            "URL not allowed: {}. Only requests to the configured node URL are proxied.",
+            url
+        ));
     }
-    
-    // Allow any HTTP localhost request (any port) - these need proxying to avoid
-    // mixed content blocking when the app is loaded from HTTPS
+
+    // No configured URL — allow any HTTP localhost request (any port).
     match (scheme, host_lower.as_str()) {
         ("http", "localhost") | ("http", "127.0.0.1") => Ok(()),
         _ => {

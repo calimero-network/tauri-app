@@ -9,6 +9,7 @@ import {
   stopMerodByPid,
   detectRunningMerodNodes,
   getMerodLogs,
+  getMerodBinaryVersion,
   type RunningMerodNode,
 } from "../utils/merod";
 import { invoke } from "@tauri-apps/api/tauri";
@@ -41,6 +42,7 @@ export default function NodeManagement() {
   const [showLogsModal, setShowLogsModal] = useState(false);
   const [logsContent, setLogsContent] = useState("");
   const [logsLoading, setLogsLoading] = useState(false);
+  const [merodBinaryVersion, setMerodBinaryVersion] = useState<string>("");
   const developerMode = getSettings().developerMode ?? false;
   const safeAvailableNodes = Array.isArray(availableNodes) ? availableNodes : [];
   const safeRunningNodes = Array.isArray(runningNodes) ? runningNodes : [];
@@ -50,6 +52,9 @@ export default function NodeManagement() {
     setHomeDir(settings.embeddedNodeDataDir || "~/.calimero");
     setNodeUrl(settings.nodeUrl || "");
     setAuthUrl(settings.authUrl || "");
+    getMerodBinaryVersion()
+      .then(setMerodBinaryVersion)
+      .catch(() => setMerodBinaryVersion("unknown"));
   }, []);
 
   useEffect(() => {
@@ -358,7 +363,14 @@ export default function NodeManagement() {
         {/* Section 2: Local nodes - create & manage */}
         <section className="node-section">
           <h2 className="node-section-title">Local Nodes</h2>
-          <p className="node-section-desc">Create and run merod nodes on this machine.</p>
+          <p className="node-section-desc">
+            Create and run merod nodes on this machine.
+            {merodBinaryVersion && (
+              <span style={{ marginLeft: '8px', opacity: 0.6, fontSize: '0.85em' }}>
+                Bundled binary: <code style={{ fontFamily: 'monospace' }}>{merodBinaryVersion}</code>
+              </span>
+            )}
+          </p>
 
           <div className="node-management-card">
             <h3 className="node-card-title">Create New Node</h3>

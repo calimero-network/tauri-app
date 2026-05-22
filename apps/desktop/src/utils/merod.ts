@@ -125,3 +125,26 @@ export async function killAllMerodProcesses(): Promise<string> {
 export async function deleteCalimeroDataDir(dataDir: string): Promise<string> {
   return await invoke('delete_calimero_data_dir', { dataDir });
 }
+
+/**
+ * Get the version string of the bundled merod binary by running `merod --version`.
+ */
+export async function getMerodBinaryVersion(): Promise<string> {
+  return await invoke('get_merod_binary_version');
+}
+
+export interface MerodUpdateResult {
+  replaced: boolean;
+  expected_version: string;
+  current_version: string;
+  message: string;
+}
+
+/**
+ * Download the merod binary matching the build-time MEROD_CONFIG_VERSION from
+ * GitHub, replace the bundled binary, and verify the version.
+ * Throws if the version after replacement does not match.
+ */
+export async function downloadAndReplaceMerod(): Promise<MerodUpdateResult> {
+  return await invoke('download_and_replace_merod');
+}

@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/tauri";
 import { getSettings } from "./settings";
-import { getAccessToken, getRefreshToken } from "../lib/token-storage";
+import { getAccessToken, getRefreshToken, getTokenExpiresAt } from "../lib/token-storage";
 
 /**
  * Extract a human-readable message from a Tauri command error.
@@ -84,9 +84,9 @@ export async function openAppFrontend(
     if (accessToken && refreshToken) {
       hashParams.set('access_token', accessToken);
       hashParams.set('refresh_token', refreshToken);
-      hashParams.set('expires_in', '3600');
+      hashParams.set('expires_at', String(getTokenExpiresAt() ?? Date.now() + 3600_000));
     }
-    if (context?.applicationId) hashParams.set('application_id', context.applicationId);
+    if (context?.applicationId) hashParams.set('app-id', context.applicationId);
     if (context?.contextId) hashParams.set('context_id', context.contextId);
     if (context?.executorPublicKey) hashParams.set('executor_public_key', context.executorPublicKey);
 

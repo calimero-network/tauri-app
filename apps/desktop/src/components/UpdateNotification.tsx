@@ -20,6 +20,7 @@ export default function UpdateNotification({
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
   const [currentVersion, setCurrentVersion] = useState<string>("");
   const [installing, setInstalling] = useState(false);
+  const [installStatus, setInstallStatus] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
   const [dismissed, setDismissed] = useState(false);
 
@@ -53,13 +54,14 @@ export default function UpdateNotification({
   const handleInstall = async () => {
     setInstalling(true);
     setError(null);
-
     try {
-      await installUpdate();
-      // If we get here, the app should restart
+      await installUpdate((status) => setInstallStatus(status));
+      // relaunch() is called inside installUpdate — app closes here
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to install update");
+      const msg = err instanceof Error ? err.message : (err && typeof err === 'object' && typeof (err as any).message === 'string' ? (err as any).message : "Failed to install update");
+      setError(msg);
       setInstalling(false);
+      setInstallStatus("");
     }
   };
 
@@ -113,7 +115,7 @@ export default function UpdateNotification({
             onClick={handleInstall}
             disabled={installing}
           >
-            {installing ? "Installing..." : "Update Now"}
+            {installing ? (installStatus || "Installing...") : "Update Now"}
           </button>
         </div>
       </div>

@@ -3,9 +3,10 @@
  * Handles checking for updates and installing them
  */
 
-// Check if we're running in Tauri
+import { stopMerod, killAllMerodProcesses, downloadAndReplaceMerod } from './merod';
+
 export function isTauri(): boolean {
-  return typeof window !== "undefined" && "__TAURI__" in window;
+  return typeof window !== 'undefined' && '__TAURI__' in window;
 }
 
 export interface UpdateInfo {
@@ -20,80 +21,95 @@ export interface UpdateStatus {
   error?: string;
 }
 
-/**
- * Check for available updates
- * Returns update info if an update is available
- */
 export async function checkForUpdates(): Promise<UpdateStatus> {
   if (!isTauri()) {
-    return { available: false, error: "Not running in Tauri environment" };
+    return { available: false, error: 'Not running in Tauri environment' };
   }
-
   try {
-    // Dynamic import to avoid issues in non-Tauri environments
-    const { checkUpdate } = await import("@tauri-apps/api/updater");
+    const { checkUpdate } = await import('@tauri-apps/api/updater');
     const { shouldUpdate, manifest } = await checkUpdate();
-
     if (shouldUpdate && manifest) {
       return {
         available: true,
         info: {
           version: manifest.version,
           date: manifest.date || new Date().toISOString(),
-          body: manifest.body || "A new version is available.",
+          body: manifest.body || 'A new version is available.',
         },
       };
     }
-
     return { available: false };
   } catch (error) {
-    console.error("Failed to check for updates:", error);
+    console.error('Failed to check for updates:', error);
     return {
       available: false,
-      error: error instanceof Error ? error.message : "Unknown error",
+      error: error instanceof Error ? error.message : 'Unknown error',
     };
   }
 }
 
 /**
- * Install the available update
- * This will download and install the update, then restart the app
+ * Full update sequence:
+ *   1. Stop the embedded merod node (graceful + force-kill)
+ *   2. Download the correct merod binary from GitHub and replace the bundled one
+ *   3. Verify the binary version matches the build-time config
+ *   4. Install the Tauri app update (new frontend + Rust shell)
+ *   5. Relaunch
+ *
+ * @param onStatus  Optional callback receiving a human-readable status string at each step.
  */
-export async function installUpdate(): Promise<void> {
+export async function installUpdate(onStatus: (status: string) => void = () => {}): Promise<void> {
   if (!isTauri()) {
-    throw new Error("Not running in Tauri environment");
+    throw new Error('Not running in Tauri environment');
   }
 
+  // 1. Stop node
+  onStatus('Stopping nodes...');
+  try { await stopMerod(); } catch (e) { console.warn('[updater] stopMerod failed (node may not be running):', e); }
+  try { await killAllMerodProcesses(); } catch (e) { console.warn('[updater] killAllMerodProcesses failed:', e); }
+
+  // 2. Download + replace merod binary
+  onStatus('Downloading merod binary...');
   try {
-    const { installUpdate: tauriInstallUpdate } = await import(
-      "@tauri-apps/api/updater"
-    );
-    const { relaunch } = await import("@tauri-apps/api/process");
-
-    // Install the update
-    await tauriInstallUpdate();
-
-    // Relaunch the app to apply the update
-    await relaunch();
-  } catch (error) {
-    console.error("Failed to install update:", error);
-    throw error;
+    const merodResult = await downloadAndReplaceMerod();
+    if (merodResult.replaced) {
+      console.info('[updater] merod binary updated to', merodResult.current_version);
+    } else {
+      console.info('[updater] merod binary already at correct version:', merodResult.current_version);
+    }
+  } catch (e) {
+    // Tauri invoke() rejects with a serialized error object {message, code}, not a JS Error instance.
+    const msg = e instanceof Error
+      ? e.message
+      : (e && typeof e === 'object' && typeof (e as any).message === 'string'
+          ? (e as any).message
+          : String(e));
+    if (msg.includes('Version mismatch after replace')) {
+      throw e;
+    }
+    console.warn('[updater] merod download/replace failed (proceeding with app update):', msg);
   }
+
+  // 3. Install Tauri app update (new shell / frontend bundle)
+  onStatus('Installing app update...');
+  const { installUpdate: tauriInstallUpdate } = await import('@tauri-apps/api/updater');
+  const { relaunch } = await import('@tauri-apps/api/process');
+  await tauriInstallUpdate();
+
+  // 4. Relaunch — app closes and reopens with the new binary
+  onStatus('Restarting...');
+  await relaunch();
 }
 
-/**
- * Get the current app version
- */
 export async function getCurrentVersion(): Promise<string> {
   if (!isTauri()) {
-    return "0.0.0-dev";
+    return '0.0.0-dev';
   }
-
   try {
-    const { getVersion } = await import("@tauri-apps/api/app");
+    const { getVersion } = await import('@tauri-apps/api/app');
     return await getVersion();
   } catch (error) {
-    console.error("Failed to get app version:", error);
-    return "unknown";
+    console.error('Failed to get app version:', error);
+    return 'unknown';
   }
 }

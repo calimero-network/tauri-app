@@ -1820,6 +1820,26 @@ async fn detect_running_merod_nodes() -> Result<Vec<serde_json::Value>, TauriErr
     }
 }
 
+/// Return the version string reported by the bundled merod binary (`merod --version`).
+#[tauri::command]
+async fn get_merod_binary_version(app_handle: tauri::AppHandle) -> Result<String, TauriError> {
+    let merod_binary = get_merod_binary_path(&app_handle)
+        .map_err(|e| TauriError::new(TauriErrorCode::FileNotFound, e))?;
+
+    let output = std::process::Command::new(&merod_binary)
+        .arg("--version")
+        .output()
+        .map_err(|e| TauriError::new(TauriErrorCode::InternalError, format!("Failed to run merod --version: {}", e)))?;
+
+    let raw = if output.status.success() {
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    } else {
+        String::from_utf8_lossy(&output.stderr).trim().to_string()
+    };
+
+    Ok(if raw.is_empty() { "unknown".to_string() } else { raw })
+}
+
 /// Read merod logs for a node. Logs are only available for nodes started by the app.
 #[tauri::command]
 async fn get_merod_logs(
@@ -2315,6 +2335,7 @@ fn main() {
             init_merod_node,
             detect_running_merod_nodes,
             get_merod_logs,
+            get_merod_binary_version,
             set_tray_icon_connected,
             delete_calimero_data_dir,
             kill_all_merod_processes,

@@ -5,6 +5,7 @@ import {
   getCurrentVersion,
   type UpdateInfo,
 } from "../utils/updater";
+import { stopMerod, killAllMerodProcesses } from "../utils/merod";
 import "./UpdateNotification.css";
 
 interface UpdateNotificationProps {
@@ -20,6 +21,7 @@ export default function UpdateNotification({
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
   const [currentVersion, setCurrentVersion] = useState<string>("");
   const [installing, setInstalling] = useState(false);
+  const [installStatus, setInstallStatus] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
   const [dismissed, setDismissed] = useState(false);
 
@@ -55,11 +57,26 @@ export default function UpdateNotification({
     setError(null);
 
     try {
+      // Stop the embedded node before updating so the new binary can replace it cleanly
+      setInstallStatus("Stopping nodes...");
+      try {
+        await stopMerod();
+      } catch {
+        // node may not be running — ok
+      }
+      try {
+        await killAllMerodProcesses();
+      } catch {
+        // best-effort
+      }
+
+      setInstallStatus("Installing update, app will restart...");
       await installUpdate();
-      // If we get here, the app should restart
+      // relaunch() is called inside installUpdate — app closes and reopens here
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to install update");
       setInstalling(false);
+      setInstallStatus("");
     }
   };
 
@@ -113,7 +130,7 @@ export default function UpdateNotification({
             onClick={handleInstall}
             disabled={installing}
           >
-            {installing ? "Installing..." : "Update Now"}
+            {installing ? (installStatus || "Installing...") : "Update Now"}
           </button>
         </div>
       </div>

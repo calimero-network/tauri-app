@@ -3,9 +3,10 @@
  * Handles checking for updates and installing them
  */
 
-// Check if we're running in Tauri
+import { stopMerod, killAllMerodProcesses, downloadAndReplaceMerod } from './merod';
+
 export function isTauri(): boolean {
-  return typeof window !== "undefined" && "__TAURI__" in window;
+  return typeof window !== 'undefined' && '__TAURI__' in window;
 }
 
 export interface UpdateInfo {
@@ -20,80 +21,80 @@ export interface UpdateStatus {
   error?: string;
 }
 
-/**
- * Check for available updates
- * Returns update info if an update is available
- */
 export async function checkForUpdates(): Promise<UpdateStatus> {
   if (!isTauri()) {
-    return { available: false, error: "Not running in Tauri environment" };
+    return { available: false, error: 'Not running in Tauri environment' };
   }
-
   try {
-    // Dynamic import to avoid issues in non-Tauri environments
-    const { checkUpdate } = await import("@tauri-apps/api/updater");
+    const { checkUpdate } = await import('@tauri-apps/api/updater');
     const { shouldUpdate, manifest } = await checkUpdate();
-
     if (shouldUpdate && manifest) {
       return {
         available: true,
         info: {
           version: manifest.version,
           date: manifest.date || new Date().toISOString(),
-          body: manifest.body || "A new version is available.",
+          body: manifest.body || 'A new version is available.',
         },
       };
     }
-
     return { available: false };
   } catch (error) {
-    console.error("Failed to check for updates:", error);
+    console.error('Failed to check for updates:', error);
     return {
       available: false,
-      error: error instanceof Error ? error.message : "Unknown error",
+      error: error instanceof Error ? error.message : 'Unknown error',
     };
   }
 }
 
 /**
- * Install the available update
- * This will download and install the update, then restart the app
+ * Full update sequence:
+ *   1. Stop the embedded merod node (graceful + force-kill)
+ *   2. Download the correct merod binary from GitHub and replace the bundled one
+ *   3. Verify the binary version matches the build-time config
+ *   4. Install the Tauri app update (new frontend + Rust shell)
+ *   5. Relaunch
+ *
+ * @param onStatus  Optional callback receiving a human-readable status string at each step.
  */
-export async function installUpdate(): Promise<void> {
+export async function installUpdate(onStatus: (status: string) => void = () => {}): Promise<void> {
   if (!isTauri()) {
-    throw new Error("Not running in Tauri environment");
+    throw new Error('Not running in Tauri environment');
   }
 
-  try {
-    const { installUpdate: tauriInstallUpdate } = await import(
-      "@tauri-apps/api/updater"
-    );
-    const { relaunch } = await import("@tauri-apps/api/process");
+  // 1. Stop node
+  onStatus('Stopping nodes...');
+  try { await stopMerod(); } catch { /* not running — ok */ }
+  try { await killAllMerodProcesses(); } catch { /* best-effort */ }
 
-    // Install the update
-    await tauriInstallUpdate();
-
-    // Relaunch the app to apply the update
-    await relaunch();
-  } catch (error) {
-    console.error("Failed to install update:", error);
-    throw error;
+  // 2. Download + replace merod binary
+  onStatus('Downloading merod binary...');
+  const result = await downloadAndReplaceMerod();
+  if (result.replaced) {
+    onStatus(`Verified merod ${result.current_version}`);
   }
+
+  // 3. Install Tauri app update (new shell / frontend bundle)
+  onStatus('Installing app update...');
+  const { installUpdate: tauriInstallUpdate } = await import('@tauri-apps/api/updater');
+  const { relaunch } = await import('@tauri-apps/api/process');
+  await tauriInstallUpdate();
+
+  // 4. Relaunch — app closes and reopens with the new binary
+  onStatus('Restarting...');
+  await relaunch();
 }
 
-/**
- * Get the current app version
- */
 export async function getCurrentVersion(): Promise<string> {
   if (!isTauri()) {
-    return "0.0.0-dev";
+    return '0.0.0-dev';
   }
-
   try {
-    const { getVersion } = await import("@tauri-apps/api/app");
+    const { getVersion } = await import('@tauri-apps/api/app');
     return await getVersion();
   } catch (error) {
-    console.error("Failed to get app version:", error);
-    return "unknown";
+    console.error('Failed to get app version:', error);
+    return 'unknown';
   }
 }

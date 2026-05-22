@@ -5,7 +5,6 @@ import {
   getCurrentVersion,
   type UpdateInfo,
 } from "../utils/updater";
-import { stopMerod, killAllMerodProcesses } from "../utils/merod";
 import "./UpdateNotification.css";
 
 interface UpdateNotificationProps {
@@ -55,24 +54,9 @@ export default function UpdateNotification({
   const handleInstall = async () => {
     setInstalling(true);
     setError(null);
-
     try {
-      // Stop the embedded node before updating so the new binary can replace it cleanly
-      setInstallStatus("Stopping nodes...");
-      try {
-        await stopMerod();
-      } catch {
-        // node may not be running — ok
-      }
-      try {
-        await killAllMerodProcesses();
-      } catch {
-        // best-effort
-      }
-
-      setInstallStatus("Installing update, app will restart...");
-      await installUpdate();
-      // relaunch() is called inside installUpdate — app closes and reopens here
+      await installUpdate((status) => setInstallStatus(status));
+      // relaunch() is called inside installUpdate — app closes here
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to install update");
       setInstalling(false);

@@ -11,6 +11,12 @@ use thiserror::Error;
 static HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 static SSE_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 
+/// Version of the merod binary this build expects, embedded at compile time from merod-config.json.
+const MEROD_CONFIG_VERSION: &str = match option_env!("MEROD_CONFIG_VERSION") {
+    Some(v) => v,
+    None => "unknown",
+};
+
 fn http_client() -> &'static reqwest::Client {
     HTTP_CLIENT.get_or_init(|| {
         reqwest::Client::builder()
@@ -1820,6 +1826,256 @@ async fn detect_running_merod_nodes() -> Result<Vec<serde_json::Value>, TauriErr
     }
 }
 
+// ── Merod binary self-update helpers ─────────────────────────────────────────
+
+/// Returns the Rust target triple for the running platform, used to pick the
+/// right GitHub release asset.
+pub(crate) fn merod_target_triple() -> &'static str {
+    if cfg!(target_os = "macos") && cfg!(target_arch = "aarch64") {
+        "aarch64-apple-darwin"
+    } else if cfg!(target_os = "macos") && cfg!(target_arch = "x86_64") {
+        "x86_64-apple-darwin"
+    } else if cfg!(target_os = "linux") && cfg!(target_arch = "x86_64") {
+        "x86_64-unknown-linux-gnu"
+    } else if cfg!(target_os = "linux") && cfg!(target_arch = "aarch64") {
+        "aarch64-unknown-linux-gnu"
+    } else if cfg!(target_os = "windows") && cfg!(target_arch = "x86_64") {
+        "x86_64-pc-windows-msvc"
+    } else {
+        "unknown"
+    }
+}
+
+/// Scores a GitHub release asset name for the given target triple.
+/// Lower score = better match. Returns `None` if the asset is not for this platform.
+pub(crate) fn score_merod_asset(name: &str, target_triple: &str) -> Option<u32> {
+    let lower = name.to_lowercase();
+    if !lower.starts_with("merod") {
+        return None;
+    }
+    if !lower.contains(&target_triple.to_lowercase()) {
+        return None;
+    }
+    let ext_score = if lower.ends_with(".tar.gz") || lower.ends_with(".tgz") {
+        0u32
+    } else if lower.ends_with(".zip") {
+        1
+    } else if lower.ends_with(".exe") {
+        2
+    } else {
+        3
+    };
+    Some(ext_score)
+}
+
+/// Recursively finds a `merod` / `merod.exe` binary inside a directory tree.
+fn find_merod_binary_in_dir(dir: &std::path::Path) -> Option<std::path::PathBuf> {
+    let entries = std::fs::read_dir(dir).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = path.file_name()?.to_string_lossy().to_lowercase();
+        if path.is_dir() {
+            if let Some(found) = find_merod_binary_in_dir(&path) {
+                return Some(found);
+            }
+        } else if name == "merod" || name == "merod.exe" {
+            return Some(path);
+        }
+    }
+    None
+}
+
+/// Runs `<binary> --version` and returns the trimmed stdout, or `None` on failure.
+async fn get_merod_version_at(path: &std::path::Path) -> Option<String> {
+    let output = Command::new(path).arg("--version").output().await.ok()?;
+    let raw = String::from_utf8_lossy(if output.stdout.is_empty() { &output.stderr } else { &output.stdout })
+        .trim()
+        .to_string();
+    if raw.is_empty() { None } else { Some(raw) }
+}
+
+/// Extracts the merod binary from an archive (`.tar.gz` / `.zip`) into `temp_dir`.
+/// Returns the path to the extracted binary.
+async fn extract_merod_binary(
+    archive_path: &std::path::Path,
+    asset_name: &str,
+    temp_dir: &std::path::Path,
+) -> Result<std::path::PathBuf, TauriError> {
+    let lower = asset_name.to_lowercase();
+    let extract_dir = temp_dir.join("extracted");
+    tokio::fs::create_dir_all(&extract_dir).await
+        .map_err(|e| TauriError::new(TauriErrorCode::DirectoryError, format!("create extract dir: {}", e)))?;
+
+    if lower.ends_with(".tar.gz") || lower.ends_with(".tgz") {
+        let status = Command::new("tar")
+            .args(["-xzf", &archive_path.to_string_lossy(), "-C", &extract_dir.to_string_lossy()])
+            .status().await
+            .map_err(|e| TauriError::new(TauriErrorCode::InternalError, format!("tar failed: {}", e)))?;
+        if !status.success() {
+            return Err(TauriError::new(TauriErrorCode::InternalError, "tar extraction failed".to_string()));
+        }
+    } else if lower.ends_with(".zip") {
+        #[cfg(windows)]
+        {
+            let cmd = format!(
+                "Expand-Archive -Path '{}' -DestinationPath '{}' -Force",
+                archive_path.display(), extract_dir.display()
+            );
+            let status = Command::new("powershell")
+                .args(["-NoProfile", "-Command", &cmd])
+                .status().await
+                .map_err(|e| TauriError::new(TauriErrorCode::InternalError, format!("powershell failed: {}", e)))?;
+            if !status.success() {
+                return Err(TauriError::new(TauriErrorCode::InternalError, "zip extraction failed".to_string()));
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            let status = Command::new("unzip")
+                .args(["-o", &archive_path.to_string_lossy(), "-d", &extract_dir.to_string_lossy()])
+                .status().await
+                .map_err(|e| TauriError::new(TauriErrorCode::InternalError, format!("unzip failed: {}", e)))?;
+            if !status.success() {
+                return Err(TauriError::new(TauriErrorCode::InternalError, "unzip extraction failed".to_string()));
+            }
+        }
+    } else {
+        // Plain binary — just use it directly
+        return Ok(archive_path.to_path_buf());
+    }
+
+    find_merod_binary_in_dir(&extract_dir)
+        .ok_or_else(|| TauriError::new(TauriErrorCode::FileNotFound, "merod binary not found in extracted archive"))
+}
+
+/// Downloads the merod binary matching `MEROD_CONFIG_VERSION` from GitHub,
+/// replaces the bundled binary, and verifies the version.
+///
+/// Returns `{ replaced, expected_version, current_version, message }`.
+/// If the binary is already at the correct version, `replaced` is `false`.
+#[tauri::command]
+async fn download_and_replace_merod(app_handle: tauri::AppHandle) -> Result<serde_json::Value, TauriError> {
+    let expected = MEROD_CONFIG_VERSION;
+    if expected == "unknown" {
+        return Err(TauriError::new(
+            TauriErrorCode::InternalError,
+            "MEROD_CONFIG_VERSION was not embedded at build time — cannot determine target version",
+        ));
+    }
+
+    let binary_path = get_merod_binary_path(&app_handle)
+        .map_err(|e| TauriError::new(TauriErrorCode::FileNotFound, e))?;
+
+    // Fast path: already correct
+    if let Some(current) = get_merod_version_at(&binary_path).await {
+        if current.contains(expected) {
+            return Ok(serde_json::json!({
+                "replaced": false,
+                "expected_version": expected,
+                "current_version": current,
+                "message": "Binary is already at the expected version"
+            }));
+        }
+    }
+
+    // Fetch GitHub release metadata
+    let target = merod_target_triple();
+    let release_url = format!(
+        "https://api.github.com/repos/calimero-network/core/releases/tags/{}",
+        expected
+    );
+    let client = reqwest::Client::new();
+    let release: serde_json::Value = client
+        .get(&release_url)
+        .header("Accept", "application/vnd.github+json")
+        .header("User-Agent", "calimero-desktop")
+        .send().await
+        .map_err(|e| TauriError::new(TauriErrorCode::InternalError, format!("GitHub API: {}", e)))?
+        .json().await
+        .map_err(|e| TauriError::new(TauriErrorCode::InternalError, format!("Parse release JSON: {}", e)))?;
+
+    let assets = release["assets"].as_array()
+        .ok_or_else(|| TauriError::new(TauriErrorCode::InternalError, "No assets in GitHub release"))?;
+
+    let (asset_name, asset_url) = assets.iter()
+        .filter_map(|a| {
+            let name = a["name"].as_str()?;
+            let url  = a["browser_download_url"].as_str()?;
+            let score = score_merod_asset(name, target)?;
+            Some((score, name.to_string(), url.to_string()))
+        })
+        .min_by_key(|(s, _, _)| *s)
+        .map(|(_, n, u)| (n, u))
+        .ok_or_else(|| TauriError::new(
+            TauriErrorCode::InternalError,
+            format!("No merod asset for target '{}' in release '{}'", target, expected),
+        ))?;
+
+    info!("[Updater] Downloading {} for {}", asset_name, target);
+
+    // Download to a temp directory
+    let temp_dir = std::env::temp_dir().join(format!(
+        "merod-update-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+    ));
+    tokio::fs::create_dir_all(&temp_dir).await
+        .map_err(|e| TauriError::new(TauriErrorCode::DirectoryError, format!("create temp dir: {}", e)))?;
+
+    let archive_path = temp_dir.join(&asset_name);
+    let bytes = client
+        .get(&asset_url)
+        .header("User-Agent", "calimero-desktop")
+        .send().await
+        .map_err(|e| TauriError::new(TauriErrorCode::InternalError, format!("download: {}", e)))?
+        .bytes().await
+        .map_err(|e| TauriError::new(TauriErrorCode::InternalError, format!("read download: {}", e)))?;
+    tokio::fs::write(&archive_path, &bytes).await
+        .map_err(|e| TauriError::new(TauriErrorCode::FileReadError, format!("write archive: {}", e)))?;
+
+    // Extract
+    let extracted = extract_merod_binary(&archive_path, &asset_name, &temp_dir).await?;
+
+    // Atomic replace: copy to .tmp, set +x, rename over the old binary
+    let tmp_path = binary_path.with_extension("tmp");
+    tokio::fs::copy(&extracted, &tmp_path).await
+        .map_err(|e| TauriError::new(TauriErrorCode::InternalError, format!("copy new binary: {}", e)))?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&tmp_path, std::fs::Permissions::from_mode(0o755))
+            .map_err(|e| TauriError::new(TauriErrorCode::InternalError, format!("set +x: {}", e)))?;
+    }
+
+    tokio::fs::rename(&tmp_path, &binary_path).await
+        .map_err(|e| TauriError::new(TauriErrorCode::InternalError, format!("replace binary: {}", e)))?;
+
+    // Cleanup
+    let _ = tokio::fs::remove_dir_all(&temp_dir).await;
+
+    // Verify
+    let new_version = get_merod_version_at(&binary_path).await
+        .unwrap_or_else(|| "unknown".to_string());
+
+    if !new_version.contains(expected) {
+        return Err(TauriError::new(
+            TauriErrorCode::InternalError,
+            format!("Version mismatch after replace: expected '{}', binary reports '{}'", expected, new_version),
+        ));
+    }
+
+    info!("[Updater] merod updated to {}", new_version);
+    Ok(serde_json::json!({
+        "replaced": true,
+        "expected_version": expected,
+        "current_version": new_version,
+        "message": format!("merod updated to {}", new_version)
+    }))
+}
+
 /// Return the version string reported by the bundled merod binary (`merod --version`).
 #[tauri::command]
 async fn get_merod_binary_version(app_handle: tauri::AppHandle) -> Result<String, TauriError> {
@@ -2336,6 +2592,7 @@ fn main() {
             detect_running_merod_nodes,
             get_merod_logs,
             get_merod_binary_version,
+            download_and_replace_merod,
             set_tray_icon_connected,
             delete_calimero_data_dir,
             kill_all_merod_processes,
@@ -2356,7 +2613,7 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::validate_allowed_url;
+    use super::{validate_allowed_url, score_merod_asset, merod_target_triple};
 
     #[test]
     fn test_allowed_localhost_urls() {
@@ -2574,5 +2831,45 @@ mod tests {
         assert!(!received.is_empty(), "expected at least one chunk before cancel");
         let body = received.concat();
         assert!(body.contains("data: first"), "unexpected: {body:?}");
+    }
+
+    // ── Merod binary update tests ─────────────────────────────────────────────
+
+    #[test]
+    fn test_score_merod_asset_prefers_tar_gz() {
+        let triple = "aarch64-apple-darwin";
+        let tar = score_merod_asset("merod-aarch64-apple-darwin.tar.gz", triple);
+        let zip = score_merod_asset("merod-aarch64-apple-darwin.zip", triple);
+        assert!(tar.is_some(), "tar.gz should match");
+        assert!(zip.is_some(), "zip should match");
+        assert!(tar.unwrap() < zip.unwrap(), "tar.gz should be preferred over zip");
+    }
+
+    #[test]
+    fn test_score_merod_asset_rejects_wrong_platform() {
+        assert!(score_merod_asset("merod-x86_64-apple-darwin.tar.gz", "aarch64-apple-darwin").is_none());
+        assert!(score_merod_asset("merod-x86_64-unknown-linux-gnu.tar.gz", "aarch64-apple-darwin").is_none());
+    }
+
+    #[test]
+    fn test_score_merod_asset_rejects_non_merod() {
+        assert!(score_merod_asset("meroctl-aarch64-apple-darwin.tar.gz", "aarch64-apple-darwin").is_none());
+        assert!(score_merod_asset("something-else.tar.gz", "x86_64-apple-darwin").is_none());
+    }
+
+    #[test]
+    fn test_score_merod_asset_windows() {
+        let triple = "x86_64-pc-windows-msvc";
+        assert!(score_merod_asset("merod-x86_64-pc-windows-msvc.zip", triple).is_some());
+        assert!(score_merod_asset("merod-x86_64-pc-windows-msvc.exe", triple).is_some());
+        assert!(score_merod_asset("merod-aarch64-apple-darwin.tar.gz", triple).is_none());
+    }
+
+    #[test]
+    fn test_merod_target_triple_is_known() {
+        let triple = merod_target_triple();
+        assert_ne!(triple, "unknown", "target triple should be known on supported platforms");
+        // Must contain OS and arch info
+        assert!(triple.contains('-'), "triple should be dash-separated");
     }
 }

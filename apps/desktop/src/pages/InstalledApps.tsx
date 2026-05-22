@@ -134,10 +134,10 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
     }
   };
 
-  const handleOpenFrontend = async (frontendUrl: string, appName?: string) => {
+  const handleOpenFrontend = async (frontendUrl: string, appName?: string, applicationId?: string) => {
     await openAppFrontend(frontendUrl, appName, (error) => {
       toast.error(`Failed to open frontend: ${error.message}`);
-    });
+    }, applicationId ? { applicationId } : undefined);
   };
 
   const handleRowContextMenu = useCallback((e: React.MouseEvent, app: InstalledApplication) => {
@@ -174,7 +174,7 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
           const frontendUrl = metadata?.links?.frontend;
           const items: { label: string; onClick: () => void; danger?: boolean }[] = [];
           if (frontendUrl) {
-            items.push({ label: 'Open', onClick: () => handleOpenFrontend(frontendUrl, appName) });
+            items.push({ label: 'Open', onClick: () => handleOpenFrontend(frontendUrl, appName, contextMenu.app.id) });
           }
           items.push({ label: 'Uninstall', onClick: () => handleUninstall(contextMenu.app.id, appName), danger: true });
           return (
@@ -311,7 +311,7 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
                     <div className="table-cell-actions">
                       {frontendUrl && (
                         <button
-                          onClick={(e) => { e.stopPropagation(); handleOpenFrontend(frontendUrl, appName); }}
+                          onClick={(e) => { e.stopPropagation(); handleOpenFrontend(frontendUrl, appName, app.id); }}
                           className="btn-open"
                         >
                           Open

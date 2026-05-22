@@ -153,56 +153,6 @@ export async function getFleetMeasurements(
   return res.json();
 }
 
-export interface EnableHaResponse {
-  status: string;
-  context_id: string;
-}
-
-/**
- * Enable HA for a context — requests TEE fleet nodes to join this
- * namespace/group. Requires a paid plan.
- */
-export async function enableHa(
-  idToken: string,
-  contextId: string,
-  groupId?: string,
-): Promise<EnableHaResponse | null> {
-  const res = await cloudFetch(
-    `/api/cloud/me/contexts/${encodeURIComponent(contextId)}/enable-ha`,
-    idToken,
-    {
-      method: 'POST',
-      body: JSON.stringify(groupId ? { group_id: groupId } : {}),
-    },
-  );
-  if (!res.ok) {
-    const error = await res.json().catch(() => null);
-    if (res.status === 402) {
-      throw new Error(error?.detail?.message || 'Plan limit reached — upgrade to enable HA');
-    }
-    throw new Error(error?.detail || 'Failed to enable HA');
-  }
-  return res.json();
-}
-
-/**
- * Disable HA for a context.
- */
-export async function disableHa(
-  idToken: string,
-  contextId: string,
-): Promise<void> {
-  const res = await cloudFetch(
-    `/api/cloud/me/contexts/${encodeURIComponent(contextId)}/disable-ha`,
-    idToken,
-    { method: 'POST' },
-  );
-  if (!res.ok) {
-    const error = await res.json().catch(() => null);
-    throw new Error(error?.detail || 'Failed to disable HA');
-  }
-}
-
 export interface NamespaceHaGroup {
   group_id: string;
   context_id: string;

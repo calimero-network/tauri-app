@@ -1919,15 +1919,12 @@ async fn extract_merod_binary(
     } else if lower.ends_with(".zip") {
         #[cfg(windows)]
         {
-            // Escape single quotes in paths to prevent PowerShell injection
-            let archive_esc = archive_path.display().to_string().replace('\'', "''");
-            let dest_esc = extract_dir.display().to_string().replace('\'', "''");
-            let cmd = format!(
-                "Expand-Archive -Path '{}' -DestinationPath '{}' -Force",
-                archive_esc, dest_esc
-            );
+            // Pass paths via env vars — avoids any string interpolation / injection in the command
             let status = Command::new("powershell")
-                .args(["-NoProfile", "-Command", &cmd])
+                .args(["-NoProfile", "-NonInteractive", "-Command",
+                       "Expand-Archive -LiteralPath $env:MEROD_ARCHIVE -DestinationPath $env:MEROD_DEST -Force"])
+                .env("MEROD_ARCHIVE", archive_path.as_os_str())
+                .env("MEROD_DEST", extract_dir.as_os_str())
                 .status().await
                 .map_err(|e| TauriError::new(TauriErrorCode::InternalError, format!("powershell failed: {}", e)))?;
             if !status.success() {
@@ -1983,12 +1980,20 @@ async fn download_and_replace_merod(app_handle: tauri::AppHandle) -> Result<serd
         ));
     }
 
+    // Validate version string only contains semver-safe chars before using in URL
+    if !expected.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-') {
+        return Err(TauriError::new(TauriErrorCode::InternalError,
+            format!("MEROD_CONFIG_VERSION '{}' contains unexpected characters", expected)));
+    }
+
     let binary_path = get_merod_binary_path(&app_handle)
         .map_err(|e| TauriError::new(TauriErrorCode::FileNotFound, e))?;
 
-    // Fast path: already correct
+    let expected_version_output = format!("merod {}", expected);
+
+    // Fast path: already correct — use same exact match as post-replace verification
     if let Some(current) = get_merod_version_at(&binary_path).await {
-        if current.split_whitespace().any(|p| p == expected) {
+        if current == expected_version_output {
             return Ok(serde_json::json!({
                 "replaced": false,
                 "expected_version": expected,
@@ -2067,6 +2072,13 @@ async fn download_and_replace_merod(app_handle: tauri::AppHandle) -> Result<serd
     ));
     tokio::fs::create_dir_all(&temp_dir).await
         .map_err(|e| TauriError::new(TauriErrorCode::DirectoryError, format!("create temp dir: {}", e)))?;
+    // Restrict temp dir to owner only so other processes can't tamper with the download
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&temp_dir, std::fs::Permissions::from_mode(0o700))
+            .map_err(|e| TauriError::new(TauriErrorCode::DirectoryError, format!("set temp dir permissions: {}", e)))?;
+    }
 
     let archive_path = temp_dir.join(&safe_asset_name);
     // Binary downloads can be tens of MB; use a longer timeout than the shared 30s client.
@@ -2102,7 +2114,7 @@ async fn download_and_replace_merod(app_handle: tauri::AppHandle) -> Result<serd
     }
 
     // Windows does not allow rename over an existing file.
-    // Rename old binary to .bak first so it can be recovered if the final rename fails.
+    // Rename old binary to .bak first; restore it if the final rename fails so the app is never left binaryless.
     #[cfg(windows)]
     {
         let bak_path = binary_path.with_extension("bak");
@@ -2111,13 +2123,16 @@ async fn download_and_replace_merod(app_handle: tauri::AppHandle) -> Result<serd
             tokio::fs::rename(&binary_path, &bak_path).await
                 .map_err(|e| TauriError::new(TauriErrorCode::InternalError, format!("backup old binary (Windows): {}", e)))?;
         }
+        if let Err(e) = tokio::fs::rename(&tmp_path, &binary_path).await {
+            // Restore backup so the app is not left without a binary
+            let _ = tokio::fs::rename(&bak_path, &binary_path).await;
+            return Err(TauriError::new(TauriErrorCode::InternalError, format!("replace binary: {}", e)));
+        }
+        let _ = tokio::fs::remove_file(&bak_path).await;
     }
+    #[cfg(not(windows))]
     tokio::fs::rename(&tmp_path, &binary_path).await
         .map_err(|e| TauriError::new(TauriErrorCode::InternalError, format!("replace binary: {}", e)))?;
-    #[cfg(windows)]
-    {
-        let _ = tokio::fs::remove_file(binary_path.with_extension("bak")).await;
-    }
 
     // Cleanup
     let _ = tokio::fs::remove_dir_all(&temp_dir).await;
@@ -2127,7 +2142,6 @@ async fn download_and_replace_merod(app_handle: tauri::AppHandle) -> Result<serd
         .unwrap_or_else(|| "unknown".to_string());
 
     // Exact match against the full expected output — avoids token-match spoofing
-    let expected_version_output = format!("merod {}", expected);
     if new_version != expected_version_output {
         return Err(TauriError::new(
             TauriErrorCode::InternalError,

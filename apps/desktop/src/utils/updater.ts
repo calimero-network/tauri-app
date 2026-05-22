@@ -78,7 +78,12 @@ export async function installUpdate(onStatus: (status: string) => void = () => {
       console.info('[updater] merod binary already at correct version:', merodResult.current_version);
     }
   } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
+    // Tauri invoke() rejects with a serialized error object {message, code}, not a JS Error instance.
+    const msg = e instanceof Error
+      ? e.message
+      : (e && typeof e === 'object' && typeof (e as any).message === 'string'
+          ? (e as any).message
+          : String(e));
     if (msg.includes('Version mismatch after replace')) {
       throw e;
     }

@@ -109,6 +109,23 @@ describe('installUpdate', () => {
     expect(mockRelaunch).not.toHaveBeenCalled();
   });
 
+  it('throws and does NOT relaunch when Tauri returns a serialized error object with version mismatch', async () => {
+    // Tauri invoke() rejects with a plain object {message, code}, not a JS Error instance
+    mockDownloadAndReplace.mockRejectedValue({
+      message: "Version mismatch after replace: expected '0.10.1-rc.42', binary reports 'merod 0.10.1-rc.41'",
+      code: 'InternalError',
+    });
+    await expect(installUpdate()).rejects.toMatchObject({ message: expect.stringContaining('Version mismatch') });
+    expect(mockTauriInstallUpdate).not.toHaveBeenCalled();
+    expect(mockRelaunch).not.toHaveBeenCalled();
+  });
+
+  it('warns and continues when merod download fails with a non-mismatch Tauri error object', async () => {
+    mockDownloadAndReplace.mockRejectedValue({ message: 'network timeout', code: 'InternalError' });
+    await expect(installUpdate()).resolves.toBeUndefined();
+    expect(mockRelaunch).toHaveBeenCalledOnce();
+  });
+
   it('throws and does NOT relaunch when tauriInstallUpdate fails', async () => {
     mockTauriInstallUpdate.mockRejectedValue(new Error('no update package'));
     await expect(installUpdate()).rejects.toThrow('no update package');

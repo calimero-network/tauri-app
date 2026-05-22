@@ -2007,9 +2007,9 @@ async fn download_and_replace_merod(app_handle: tauri::AppHandle) -> Result<serd
 
     let expected_version_output = format!("merod {}", expected);
 
-    // Fast path: already correct — accept "merod X.Y.Z" even if binary appends extra build metadata
+    // Fast path: already correct
     if let Some(current) = get_merod_version_at(&binary_path).await {
-        if current.starts_with(&expected_version_output) {
+        if current == expected_version_output {
             return Ok(serde_json::json!({
                 "replaced": false,
                 "expected_version": expected,
@@ -2129,39 +2129,42 @@ async fn download_and_replace_merod(app_handle: tauri::AppHandle) -> Result<serd
             .map_err(|e| TauriError::new(TauriErrorCode::InternalError, format!("set +x: {}", e)))?;
     }
 
-    // Rename old binary to .bak first; restore it if the final rename fails so the app is never left binaryless.
+    // Rename old binary to .bak first; restore it on rename failure OR version mismatch.
     // On Windows rename-over-existing is not allowed, so we must .bak first regardless.
-    // On Unix rename is atomic over the destination, but we still keep a .bak so we can roll back
-    // if the post-replace version check fails.
+    // On Unix rename is atomic over the destination, but we still keep a .bak until
+    // version verification succeeds so we can roll back if the new binary is wrong.
+    let bak_path = binary_path.with_extension("bak");
     {
-        let bak_path = binary_path.with_extension("bak");
         let _ = tokio::fs::remove_file(&bak_path).await; // remove stale .bak if present
         if binary_path.exists() {
             tokio::fs::rename(&binary_path, &bak_path).await
                 .map_err(|e| TauriError::new(TauriErrorCode::InternalError, format!("backup old binary: {}", e)))?;
         }
         if let Err(e) = tokio::fs::rename(&tmp_path, &binary_path).await {
-            // Restore backup so the app is not left without a binary
             let _ = tokio::fs::rename(&bak_path, &binary_path).await;
             return Err(TauriError::new(TauriErrorCode::InternalError, format!("replace binary: {}", e)));
         }
-        let _ = tokio::fs::remove_file(&bak_path).await;
+        // .bak intentionally kept until version verification succeeds below
     }
 
-    // Cleanup
+    // Cleanup temp dir (archive and extracted files no longer needed regardless of verification outcome)
     let _ = tokio::fs::remove_dir_all(&temp_dir).await;
 
-    // Verify
+    // Verify — .bak still present so we can restore on mismatch
     let new_version = get_merod_version_at(&binary_path).await
         .unwrap_or_else(|| "unknown".to_string());
 
-    // Accept "merod X.Y.Z" even if binary appends extra build metadata after the version
-    if !new_version.starts_with(&expected_version_output) {
+    if new_version != expected_version_output {
+        // Restore backup so the app is not left with a wrong binary
+        let _ = tokio::fs::rename(&bak_path, &binary_path).await;
         return Err(TauriError::new(
             TauriErrorCode::InternalError,
             format!("Version mismatch after replace: expected '{}', binary reports '{}'", expected_version_output, new_version),
         ));
     }
+
+    // Verification passed — safe to discard backup
+    let _ = tokio::fs::remove_file(&bak_path).await;
 
     info!("[Updater] merod updated to {}", new_version);
     Ok(serde_json::json!({

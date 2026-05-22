@@ -10,6 +10,7 @@ import {
   useCreateNamespace,
   type Namespace,
 } from "@calimero-network/mero-react";
+import type { GroupInfo } from "@calimero-network/mero-js";
 import { useToast } from "../contexts/ToastContext";
 import { ChevronLeft, Users, Box, Layers, Copy, ChevronRight, Shield, Globe, Plus, X, Play, Trash2, UserMinus, Link, ChevronDown, Check, MoreHorizontal, LogIn } from "lucide-react";
 import { apiClient } from "../lib/mero-client";
@@ -19,7 +20,7 @@ import { getSettings } from "../utils/settings";
 import {
   enableHaForNamespace,
   disableHaNamespace,
-  getCloudGroups,
+  getCloudNamespaces,
   CloudSessionExpiredError,
 } from "../utils/cloudApi";
 import { getCloudIdToken } from "../utils/cloudAuth";
@@ -93,6 +94,32 @@ type View =
   | { type: "namespace"; ns: Namespace }
   | { type: "group"; ns: Namespace; groupId: string };
 
+// The merod admin group-info response (core's GroupInfoApiResponseData,
+// crates/server/primitives/src/admin/mod.rs, #[serde(rename_all =
+// "camelCase")]) carries three camelCase fields the bundled mero-js
+// `GroupInfo` type omits / misnames:
+//   • `subgroupVisibility` — the live field for group visibility (the SDK
+//     type declares `defaultVisibility`, a different/legacy name).
+//   • `metadata` — the group's full metadata record (name + opaque data
+//     map); serde omits it when none is set, hence optional.
+//   • `groupStateHash` — governance-convergence hash.
+// The package's `exports` map blocks deep-path module augmentation under
+// bundler resolution, so we extend the SDK type locally instead of casting
+// to `any` — access stays fully typed and mirrors the wire shape. Drop the
+// extra members once the SDK type is corrected upstream.
+interface GroupMetadataRecord {
+  name?: string | null;
+  data: Record<string, string>;
+  updatedAt: number;
+  updatedBy: string;
+}
+
+interface GroupInfoExt extends GroupInfo {
+  subgroupVisibility: string;
+  metadata?: GroupMetadataRecord;
+  groupStateHash?: string;
+}
+
 export default function Namespaces() {
   const toast = useToast();
   const { mero } = useMero();
@@ -104,8 +131,12 @@ export default function Namespaces() {
 
   const { namespaces, loading, error, refetch: refetchNamespaces } = useNamespaces();
   const { groups: nsGroups, loading: nsLoadingGroups, error: nsGroupsError, refetch: refetchNsGroups } = useNamespaceGroups(activeNsId) as any;
-  const { groupInfo, loading: groupInfoLoading } = useGroupInfo(activeGroupId);
-  const { groupInfo: nsRootGroupInfo } = useGroupInfo(activeNsRootId);
+  const { groupInfo: groupInfoRaw, loading: groupInfoLoading } = useGroupInfo(activeGroupId);
+  const { groupInfo: nsRootGroupInfoRaw } = useGroupInfo(activeNsRootId);
+  // See GroupInfoExt: the live merod response carries metadata /
+  // subgroupVisibility, which the bundled SDK type omits.
+  const groupInfo = groupInfoRaw as GroupInfoExt | null;
+  const nsRootGroupInfo = nsRootGroupInfoRaw as GroupInfoExt | null;
   const { members: groupMembers, refetch: refetchGroupMembers } = useGroupMembers(activeGroupId) as any;
   const [nsMembers, setNsMembers] = useState<any[]>([]);
   const [nsMembersLoading, setNsMembersLoading] = useState(false);
@@ -376,14 +407,14 @@ export default function Namespaces() {
     const token = getCloudIdToken();
     if (!token) return;
     let cancelled = false;
-    getCloudGroups(token)
-      .then((groups) => {
+    getCloudNamespaces(token)
+      .then((namespaces) => {
         if (cancelled) return;
         const byNamespace: Record<string, boolean> = {};
-        for (const g of groups) {
-          if (!g.namespace_id) continue;
-          if (g.ha_status === "enabled") byNamespace[g.namespace_id] = true;
-          else if (byNamespace[g.namespace_id] === undefined) byNamespace[g.namespace_id] = false;
+        for (const n of namespaces) {
+          if (!n.namespace_id) continue;
+          if (n.ha_status === "enabled") byNamespace[n.namespace_id] = true;
+          else if (byNamespace[n.namespace_id] === undefined) byNamespace[n.namespace_id] = false;
         }
         setHaEnabled(byNamespace);
       })

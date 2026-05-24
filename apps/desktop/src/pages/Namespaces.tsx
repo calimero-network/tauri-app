@@ -464,11 +464,20 @@ export default function Namespaces() {
   const renderContextItem = (c: any, applicationId: string, _refetch: () => void) => {
     const app = installedApps.find((a) => a.id === applicationId);
     const canLaunch = !!app?.frontendUrl;
+    const hasName = !!c.name;
     return (
       <div key={c.contextId} className="ns-context-item">
         <Box size={14} />
-        <span className="context-name">{c.name || truncateId(c.contextId)}</span>
-        <span className="context-id mono">{truncateId(c.contextId)}</span>
+        <div className="ns-row-info">
+          {hasName ? (
+            <>
+              <span className="ns-row-name">{c.name}</span>
+              <span className="ns-row-id">{truncateId(c.contextId)}</span>
+            </>
+          ) : (
+            <span className="ns-row-name mono">{truncateId(c.contextId)}</span>
+          )}
+        </div>
         <button className="copy-btn" onClick={() => copyToClipboard(c.contextId)} title="Copy ID">
           <Copy size={12} />
         </button>
@@ -742,7 +751,16 @@ export default function Namespaces() {
             <h2>Application</h2>
             <div className="ns-detail-field">
               <span className="field-label">Target Application</span>
-              <span className="field-value mono">{truncateId(ns.targetApplicationId)}</span>
+              <div className="ns-row-info">
+                {appById[ns.targetApplicationId]?.name ? (
+                  <>
+                    <span className="ns-row-name">{appById[ns.targetApplicationId]!.name}</span>
+                    <span className="ns-row-id">{truncateId(ns.targetApplicationId)}</span>
+                  </>
+                ) : (
+                  <span className="ns-row-name mono">{truncateId(ns.targetApplicationId)}</span>
+                )}
+              </div>
               <button className="copy-btn" onClick={() => copyToClipboard(ns.targetApplicationId)} title="Copy">
                 <Copy size={12} />
               </button>
@@ -810,15 +828,20 @@ export default function Namespaces() {
               <div className="ns-member-list">
                 {nsMembers.map((m) => {
                   const isExpanded = expandedMemberId === m.identity;
+                  const hasName = !!m.name;
                   return (
                     <div key={m.identity} className={`ns-member-item ns-member-clickable${isExpanded ? ' ns-member-expanded' : ''}`}>
                       <div className="ns-member-row" onClick={() => setExpandedMemberId(isExpanded ? null : m.identity)}>
                         <div className="member-info">
                           <div className="member-name-row">
-                            <span className="member-name">{m.name || truncateId(m.identity)}</span>
+                            {hasName ? (
+                              <span className="member-name">{m.name}</span>
+                            ) : (
+                              <span className="member-name mono">{truncateId(m.identity)}</span>
+                            )}
                             {myIdentity && m.identity === myIdentity && <span className="ns-me-badge">you</span>}
                           </div>
-                          <span className="member-id mono">{truncateId(m.identity)}</span>
+                          {hasName && <span className="member-id mono">{truncateId(m.identity)}</span>}
                         </div>
                         <span className="member-role" style={{ color: roleColor(m.role) }}>{m.role}</span>
                         <button
@@ -878,23 +901,36 @@ export default function Namespaces() {
               <p className="empty-hint">No groups in this namespace</p>
             ) : (
               <div className="ns-group-list">
-                {nsGroups.map((g: any) => (
-                  <div key={g.groupId} className="ns-group-item">
-                    <Layers size={16} />
-                    <span className="group-name" onClick={() => openGroup(ns, g.groupId)} style={{ flex: 1, cursor: 'pointer' }}>
-                      {(g as any).name || (g as any).metadata?.name || truncateId(g.groupId)}
-                    </span>
-                    <span className="group-id mono">{truncateId(g.groupId)}</span>
-                    <button
-                      className="ns-danger-icon-btn"
-                      title="Delete group"
-                      onClick={(e) => { e.stopPropagation(); setDeleteGroupTarget(g.groupId); }}
-                    >
-                      <Trash2 size={13} />
-                    </button>
-                    <ChevronRight size={14} className="ns-card-chevron" onClick={() => openGroup(ns, g.groupId)} style={{ cursor: 'pointer' }} />
-                  </div>
-                ))}
+                {nsGroups.map((g: any) => {
+                  const gName = (g as any).name || (g as any).metadata?.name;
+                  return (
+                    <div key={g.groupId} className="ns-group-item">
+                      <Layers size={16} />
+                      <div
+                        className="ns-row-info"
+                        onClick={() => openGroup(ns, g.groupId)}
+                        style={{ cursor: 'pointer' }}
+                      >
+                        {gName ? (
+                          <>
+                            <span className="ns-row-name">{gName}</span>
+                            <span className="ns-row-id">{truncateId(g.groupId)}</span>
+                          </>
+                        ) : (
+                          <span className="ns-row-name mono">{truncateId(g.groupId)}</span>
+                        )}
+                      </div>
+                      <button
+                        className="ns-danger-icon-btn"
+                        title="Delete group"
+                        onClick={(e) => { e.stopPropagation(); setDeleteGroupTarget(g.groupId); }}
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                      <ChevronRight size={14} className="ns-card-chevron" onClick={() => openGroup(ns, g.groupId)} style={{ cursor: 'pointer' }} />
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>
@@ -984,15 +1020,21 @@ export default function Namespaces() {
                   <p className="empty-hint">No members</p>
                 ) : (
                   <div className="ns-member-list">
-                    {safeGroupMembers.map((m: any) => (
+                    {safeGroupMembers.map((m: any) => {
+                      const hasName = !!m.name;
+                      return (
                       <div key={m.identity} className="ns-member-item">
                         <div className="ns-member-row">
                           <div className="member-info">
                             <div className="member-name-row">
-                              <span className="member-name">{m.name || truncateId(m.identity)}</span>
+                              {hasName ? (
+                                <span className="member-name">{m.name}</span>
+                              ) : (
+                                <span className="member-name mono">{truncateId(m.identity)}</span>
+                              )}
                               {myIdentity && m.identity === myIdentity && <span className="ns-me-badge">you</span>}
                             </div>
-                            <span className="member-id mono">{truncateId(m.identity)}</span>
+                            {hasName && <span className="member-id mono">{truncateId(m.identity)}</span>}
                           </div>
                           <span className="member-role" style={{ color: roleColor(m.role) }}>{m.role}</span>
                           <button className="copy-btn" onClick={() => copyToClipboard(m.identity)} title="Copy identity">
@@ -1012,7 +1054,8 @@ export default function Namespaces() {
                           </button>
                         </div>
                       </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>
@@ -1032,23 +1075,36 @@ export default function Namespaces() {
                 <div className="ns-detail-section">
                   <h2><Layers size={16} /> Subgroups ({groupSubgroups.length})</h2>
                   <div className="ns-group-list">
-                    {groupSubgroups.map((g: any) => (
-                      <div key={g.groupId} className="ns-group-item">
-                        <Layers size={16} />
-                        <span className="group-name" onClick={() => openGroup(ns, g.groupId)} style={{ flex: 1, cursor: 'pointer' }}>
-                          {(g as any).name || (g as any).metadata?.name || truncateId(g.groupId)}
-                        </span>
-                        <span className="group-id mono">{truncateId(g.groupId)}</span>
-                        <button
-                          className="ns-danger-icon-btn"
-                          title="Delete subgroup"
-                          onClick={() => setDeleteGroupTarget(g.groupId)}
-                        >
-                          <Trash2 size={13} />
-                        </button>
-                        <ChevronRight size={14} className="ns-card-chevron" onClick={() => openGroup(ns, g.groupId)} style={{ cursor: 'pointer' }} />
-                      </div>
-                    ))}
+                    {groupSubgroups.map((g: any) => {
+                      const gName = (g as any).name || (g as any).metadata?.name;
+                      return (
+                        <div key={g.groupId} className="ns-group-item">
+                          <Layers size={16} />
+                          <div
+                            className="ns-row-info"
+                            onClick={() => openGroup(ns, g.groupId)}
+                            style={{ cursor: 'pointer' }}
+                          >
+                            {gName ? (
+                              <>
+                                <span className="ns-row-name">{gName}</span>
+                                <span className="ns-row-id">{truncateId(g.groupId)}</span>
+                              </>
+                            ) : (
+                              <span className="ns-row-name mono">{truncateId(g.groupId)}</span>
+                            )}
+                          </div>
+                          <button
+                            className="ns-danger-icon-btn"
+                            title="Delete subgroup"
+                            onClick={() => setDeleteGroupTarget(g.groupId)}
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                          <ChevronRight size={14} className="ns-card-chevron" onClick={() => openGroup(ns, g.groupId)} style={{ cursor: 'pointer' }} />
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               )}

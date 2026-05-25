@@ -427,10 +427,10 @@ function App() {
     let cancelled = false;
     const t = setTimeout(async () => {
       try {
-        const pending = await invoke<[string, string] | null>("get_pending_open_app");
+        const pending = await invoke<[string, string, string | null] | null>("get_pending_open_app");
         if (cancelled || !pending) return;
-        const [url, name] = pending;
-        const windowLabel = await openAppFrontend(url, name);
+        const [url, name, appId] = pending;
+        const windowLabel = await openAppFrontend(url, name, undefined, appId ? { applicationId: appId } : undefined);
         if (windowLabel) {
           await invoke("focus_window", { windowLabel });
         }

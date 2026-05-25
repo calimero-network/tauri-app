@@ -97,17 +97,23 @@ export async function openAppFrontend(
     // (Home, Applications, Namespaces, shortcut) produces the same label
     // for the same app and Tauri can focus the existing window.
     const urlObj = new URL(frontendUrl);
-    const domain = urlObj.hostname.replace(/[^a-zA-Z0-9]/g, '-');
+    const domain = `${urlObj.hostname}${urlObj.port ? `-${urlObj.port}` : ''}`.replace(/[^a-zA-Z0-9]/g, '-');
     const appKey = context?.applicationId
-      ? context.applicationId.slice(0, 16)
+      ? context.applicationId.slice(0, 60)
       : domain;
     const windowLabel = `app-${appKey}`.slice(0, 64);
 
     // If the window is already open, focus it rather than opening a duplicate.
+    // Tauri v1 has no navigate() API, so we focus the existing window as-is;
+    // apps manage token refresh internally via refresh_token.
     const existing = WebviewWindow.getByLabel(windowLabel);
     if (existing) {
-      await existing.setFocus();
-      return windowLabel;
+      try {
+        await existing.setFocus();
+        return windowLabel;
+      } catch {
+        // window was closed between getByLabel and setFocus; fall through to create a new one
+      }
     }
 
     await invoke('create_app_window', {

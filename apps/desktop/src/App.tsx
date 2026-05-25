@@ -392,9 +392,9 @@ function App() {
   }, [checkConnection, toast]);
 
   // Open app frontend in a new window
-  const handleOpenAppFrontend = useCallback(async (frontendUrl: string, appName?: string) => {
+  const handleOpenAppFrontend = useCallback(async (frontendUrl: string, appName?: string, applicationId?: string) => {
     try {
-      await openAppFrontend(frontendUrl, appName);
+      await openAppFrontend(frontendUrl, appName, undefined, applicationId ? { applicationId } : undefined);
     } catch (error) {
       // Fallback to navigating to installed apps page
       setCurrentPage('installed');
@@ -427,10 +427,10 @@ function App() {
     let cancelled = false;
     const t = setTimeout(async () => {
       try {
-        const pending = await invoke<[string, string] | null>("get_pending_open_app");
+        const pending = await invoke<[string, string, string | null] | null>("get_pending_open_app");
         if (cancelled || !pending) return;
-        const [url, name] = pending;
-        const windowLabel = await openAppFrontend(url, name);
+        const [url, name, appId] = pending;
+        const windowLabel = await openAppFrontend(url, name, undefined, appId ? { applicationId: appId } : undefined);
         if (windowLabel) {
           await invoke("focus_window", { windowLabel });
         }
@@ -936,7 +936,7 @@ function App() {
                     type="button"
                     onClick={() => {
                       if (frontendUrl) {
-                        handleOpenAppFrontend(frontendUrl, appName);
+                        handleOpenAppFrontend(frontendUrl, appName, app.id);
                       } else {
                         setCurrentPage('installed');
                       }

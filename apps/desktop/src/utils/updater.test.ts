@@ -19,8 +19,8 @@ const {
   mockKillAll: vi.fn().mockResolvedValue('killed'),
   mockDownloadAndReplace: vi.fn().mockResolvedValue({
     replaced: true,
-    expected_version: '0.10.1-rc.42',
-    current_version: 'merod 0.10.1-rc.42',
+    expected_version: '0.10.1-rc.43',
+    current_version: 'merod 0.10.1-rc.43',
     message: 'merod updated',
   }),
 }));
@@ -53,8 +53,8 @@ beforeEach(() => {
   mockKillAll.mockResolvedValue('killed');
   mockDownloadAndReplace.mockResolvedValue({
     replaced: true,
-    expected_version: '0.10.1-rc.42',
-    current_version: 'merod 0.10.1-rc.42',
+    expected_version: '0.10.1-rc.43',
+    current_version: 'merod 0.10.1-rc.43',
     message: 'merod updated',
   });
 });
@@ -66,7 +66,7 @@ describe('installUpdate', () => {
     mockKillAll.mockImplementation(async () => { callOrder.push('killAll'); });
     mockDownloadAndReplace.mockImplementation(async () => {
       callOrder.push('downloadAndReplace');
-      return { replaced: true, expected_version: '0.10.1-rc.42', current_version: 'merod 0.10.1-rc.42', message: '' };
+      return { replaced: true, expected_version: '0.10.1-rc.43', current_version: 'merod 0.10.1-rc.43', message: '' };
     });
     mockTauriInstallUpdate.mockImplementation(async () => { callOrder.push('tauriInstallUpdate'); });
     mockRelaunch.mockImplementation(async () => { callOrder.push('relaunch'); });
@@ -102,7 +102,7 @@ describe('installUpdate', () => {
 
   it('throws and does NOT relaunch when merod download fails (version mismatch)', async () => {
     mockDownloadAndReplace.mockRejectedValue(
-      new Error("Version mismatch after replace: expected '0.10.1-rc.42', binary reports 'merod 0.10.1-rc.41'"),
+      new Error("Version mismatch after replace: expected '0.10.1-rc.43', binary reports 'merod 0.10.1-rc.42'"),
     );
     await expect(installUpdate()).rejects.toThrow('Version mismatch');
     expect(mockTauriInstallUpdate).not.toHaveBeenCalled();
@@ -112,7 +112,7 @@ describe('installUpdate', () => {
   it('throws and does NOT relaunch when Tauri returns a serialized error object with version mismatch', async () => {
     // Tauri invoke() rejects with a plain object {message, code}, not a JS Error instance
     mockDownloadAndReplace.mockRejectedValue({
-      message: "Version mismatch after replace: expected '0.10.1-rc.42', binary reports 'merod 0.10.1-rc.41'",
+      message: "Version mismatch after replace: expected '0.10.1-rc.43', binary reports 'merod 0.10.1-rc.42'",
       code: 'InternalError',
     });
     await expect(installUpdate()).rejects.toMatchObject({ message: expect.stringContaining('Version mismatch') });
@@ -141,8 +141,8 @@ describe('installUpdate', () => {
   it('still relaunches when binary was already at the correct version (replaced=false)', async () => {
     mockDownloadAndReplace.mockResolvedValue({
       replaced: false,
-      expected_version: '0.10.1-rc.42',
-      current_version: 'merod 0.10.1-rc.42',
+      expected_version: '0.10.1-rc.43',
+      current_version: 'merod 0.10.1-rc.43',
       message: 'Binary is already at the expected version',
     });
     const statuses: string[] = [];

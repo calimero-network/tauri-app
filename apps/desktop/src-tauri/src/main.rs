@@ -135,11 +135,12 @@ struct HttpResponse {
     body: String,
 }
 
-/// Parses --open-app-url and --open-app-name from CLI args (used when launched from a desktop shortcut).
-fn parse_open_app_args() -> Option<(String, String)> {
+/// Parses --open-app-url, --open-app-name, --open-app-id from CLI args (used when launched from a desktop shortcut).
+fn parse_open_app_args() -> Option<(String, String, Option<String>)> {
     let args: Vec<String> = std::env::args().collect();
     let mut url = None;
     let mut name = None;
+    let mut app_id = None;
     let mut i = 0;
     while i < args.len() {
         if args[i] == "--open-app-url" && i + 1 < args.len() {
@@ -152,9 +153,18 @@ fn parse_open_app_args() -> Option<(String, String)> {
             i += 2;
             continue;
         }
+        if args[i] == "--open-app-id" && i + 1 < args.len() {
+            let id = args[i + 1].clone();
+            // Validate before use: non-empty, ≤128 chars, alphanumeric + hyphen only.
+            if !id.is_empty() && id.len() <= 128 && id.chars().all(|c| c.is_alphanumeric() || c == '-') {
+                app_id = Some(id);
+            }
+            i += 2;
+            continue;
+        }
         i += 1;
     }
-    url.map(|u| (u, name.unwrap_or_else(|| "Application".to_string())))
+    url.map(|u| (u, name.unwrap_or_else(|| "Application".to_string()), app_id))
 }
 
 /// Check CLI args for a calimero:// deep link URL (passed by OS when app is launched via URL scheme).
@@ -168,7 +178,7 @@ fn parse_deep_link_arg() -> Option<String> {
 }
 
 /// State for app to open when launched from a desktop shortcut (read by frontend on load).
-pub struct PendingOpenApp(pub std::sync::Mutex<Option<(String, String)>>);
+pub struct PendingOpenApp(pub std::sync::Mutex<Option<(String, String, Option<String>)>>);
 
 /// State for pending Calimero Cloud auth callback (set by deep link handler, read by frontend).
 pub struct PendingCloudAuth(pub std::sync::Mutex<Option<String>>);
@@ -555,7 +565,7 @@ fn cancel_sse_stream(stream_id: String, cancel_registry: tauri::State<'_, SseCan
 }
 
 #[tauri::command]
-fn get_pending_open_app(state: tauri::State<'_, PendingOpenApp>) -> Option<(String, String)> {
+fn get_pending_open_app(state: tauri::State<'_, PendingOpenApp>) -> Option<(String, String, Option<String>)> {
     state.0.lock().ok().and_then(|g| g.clone())
 }
 
@@ -600,6 +610,7 @@ fn create_desktop_shortcut(
     app_handle: tauri::AppHandle,
     app_name: String,
     frontend_url: String,
+    app_id: Option<String>,
 ) -> Result<String, TauriError> {
     let exe = std::env::current_exe()
         .map_err(|e| TauriError::with_details(TauriErrorCode::ShortcutCreationFailed, "Could not get executable path", e.to_string()))?;
@@ -621,7 +632,8 @@ fn create_desktop_shortcut(
         let lnk_path = desktop.join(format!("{}.lnk", shortcut_name));
         let url_esc = frontend_url.replace('"', "\\\"");
         let name_esc = app_name.replace('"', "\\\"");
-        let args = format!("--open-app-url \"{}\" --open-app-name \"{}\"", url_esc, name_esc);
+        let id_arg = app_id.as_deref().map(|id| format!(" --open-app-id \"{}\"", id.replace('"', "\\\""))).unwrap_or_default();
+        let args = format!("--open-app-url \"{}\" --open-app-name \"{}\"{}",  url_esc, name_esc, id_arg);
         let ps = format!(
             "$WshShell = New-Object -ComObject WScript.Shell; $s = $WshShell.CreateShortcut('{}'); $s.TargetPath = '{}'; $s.Arguments = '{}'; $s.Save()",
             lnk_path.display(),
@@ -651,11 +663,13 @@ fn create_desktop_shortcut(
         let macos_dir = app_path.join("Contents/MacOS");
         std::fs::create_dir_all(&macos_dir).map_err(|e| TauriError::with_details(TauriErrorCode::DirectoryError, "Failed to create .app bundle", e.to_string()))?;
         let launcher_path = macos_dir.join(shortcut_name);
+        let id_arg = app_id.as_deref().map(|id| format!(" --open-app-id \"{}\"", id.replace('\\', "\\\\").replace('"', "\\\""))).unwrap_or_default();
         let script = format!(
-            "#!/bin/bash\nexec \"{}\" --open-app-url \"{}\" --open-app-name \"{}\"\n",
+            "#!/bin/bash\nexec \"{}\" --open-app-url \"{}\" --open-app-name \"{}\"{}\n",
             exe_esc,
             frontend_url.replace('\\', "\\\\").replace('"', "\\\""),
-            app_name.replace('\\', "\\\\").replace('"', "\\\"")
+            app_name.replace('\\', "\\\\").replace('"', "\\\""),
+            id_arg
         );
         std::fs::write(&launcher_path, script).map_err(|e| TauriError::with_details(TauriErrorCode::FileWriteError, "Failed to write launcher script", e.to_string()))?;
         #[cfg(unix)]
@@ -699,16 +713,18 @@ fn create_desktop_shortcut(
         let exe_esc = exe_str.replace('\\', "\\\\").replace('"', "\\\"");
         let url_esc = frontend_url.replace('\\', "\\\\").replace('"', "\\\"");
         let name_esc = app_name.replace('\\', "\\\\").replace('"', "\\\"");
+        let id_arg = app_id.as_deref().map(|id| format!(" --open-app-id \"{}\"", id.replace('\\', "\\\\").replace('"', "\\\""))).unwrap_or_default();
         let content = format!(
             "[Desktop Entry]\n\
              Type=Application\n\
              Name={}\n\
-             Exec=\"{}\" --open-app-url \"{}\" --open-app-name \"{}\"\n\
+             Exec=\"{}\" --open-app-url \"{}\" --open-app-name \"{}\"{}\n\
              Terminal=false\n",
             name_esc,
             exe_esc,
             url_esc,
-            name_esc
+            name_esc,
+            id_arg
         );
         std::fs::write(&path, content).map_err(|e| TauriError::with_details(TauriErrorCode::FileWriteError, "Failed to write shortcut file", e.to_string()))?;
         #[cfg(unix)]

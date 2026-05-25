@@ -104,12 +104,20 @@ export async function openAppFrontend(
       : domain;
     const windowLabel = `app-${appKey}`.slice(0, 64);
 
-    // If the window is already open, focus it rather than opening a duplicate.
-    // Tauri v1 has no navigate() API, so we focus the existing window as-is;
-    // apps manage token refresh internally via refresh_token.
+    // If the window is already open, focus it and push fresh tokens via event.
+    // Tauri v1 has no navigate() API; we emit 'calimero:auth-refresh' so apps
+    // can update their auth state without a full reload.
     const existing = WebviewWindow.getByLabel(windowLabel);
     if (existing) {
       try {
+        if (accessToken && refreshToken) {
+          await existing.emit('calimero:auth-refresh', {
+            access_token: accessToken,
+            refresh_token: refreshToken,
+            expires_at: getTokenExpiresAt() ?? Date.now() + 3600_000,
+            node_url: nodeUrl,
+          });
+        }
         await existing.setFocus();
         return windowLabel;
       } catch (e) {

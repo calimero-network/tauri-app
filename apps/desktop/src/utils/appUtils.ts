@@ -67,6 +67,9 @@ export interface OpenAppFrontendContext {
   executorPublicKey?: string;
 }
 
+// Guards against two concurrent openAppFrontend calls racing to create the same window.
+const pendingWindowCreations = new Set<string>();
+
 export async function openAppFrontend(
   frontendUrl: string,
   appName?: string,
@@ -97,28 +100,23 @@ export async function openAppFrontend(
     // (Home, Applications, Namespaces, shortcut) produces the same label
     // for the same app and Tauri can focus the existing window.
     const urlObj = new URL(frontendUrl);
-    const domain = `${urlObj.hostname}${urlObj.port ? `-${urlObj.port}` : ''}`.replace(/[^a-zA-Z0-9]/g, '-');
-    // Sanitize to Tauri's allowed label chars [a-zA-Z0-9-/_:] on both paths.
+    const domain = `${urlObj.hostname}${urlObj.port ? `-${urlObj.port}` : ''}`.replace(/[^a-zA-Z0-9\-/_:]/g, '-');
+    // Preserve all Tauri-valid chars [a-zA-Z0-9-/_:]; strip everything else.
     const appKey = context?.applicationId
-      ? context.applicationId.replace(/[^a-zA-Z0-9]/g, '-').slice(0, 60)
+      ? context.applicationId.replace(/[^a-zA-Z0-9\-/_:]/g, '-').slice(0, 60)
       : domain;
     const windowLabel = `app-${appKey}`.slice(0, 64);
 
-    // If the window is already open, focus it and push fresh tokens via event.
-    // Tauri v1 has no navigate() API; we emit 'calimero:auth-refresh' so apps
-    // can update their auth state without a full reload.
+    // If the window is already open, focus it and signal a token refresh.
+    // setFocus first: if it throws (window closed), we skip the emit entirely
+    // so no credentials reach a window that may have navigated to a different origin.
     const existing = WebviewWindow.getByLabel(windowLabel);
     if (existing) {
       try {
-        if (accessToken && refreshToken) {
-          await existing.emit('calimero:auth-refresh', {
-            access_token: accessToken,
-            refresh_token: refreshToken,
-            expires_at: getTokenExpiresAt() ?? Date.now() + 3600_000,
-            node_url: nodeUrl,
-          });
-        }
         await existing.setFocus();
+        // Signal apps to re-read their auth state. No token payload here to avoid
+        // sending credentials to a window whose current origin we cannot verify.
+        await existing.emit('calimero:auth-refresh', null).catch(() => {});
         return windowLabel;
       } catch (e) {
         // window was closed between getByLabel and setFocus; fall through to create a new one
@@ -126,13 +124,23 @@ export async function openAppFrontend(
       }
     }
 
-    await invoke('create_app_window', {
-      windowLabel,
-      url: urlToOpen,
-      title: appName || 'Application',
-      openDevtools: false,
-      nodeUrl: settings.nodeUrl,
-    });
+    // Guard concurrent calls: if another in-flight invocation is already creating
+    // this window, return early — Tauri rejects duplicate labels.
+    if (pendingWindowCreations.has(windowLabel)) {
+      return windowLabel;
+    }
+    pendingWindowCreations.add(windowLabel);
+    try {
+      await invoke('create_app_window', {
+        windowLabel,
+        url: urlToOpen,
+        title: appName || 'Application',
+        openDevtools: false,
+        nodeUrl: settings.nodeUrl,
+      });
+    } finally {
+      pendingWindowCreations.delete(windowLabel);
+    }
 
     return windowLabel;
   } catch (error) {

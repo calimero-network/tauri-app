@@ -98,8 +98,9 @@ export async function openAppFrontend(
     // for the same app and Tauri can focus the existing window.
     const urlObj = new URL(frontendUrl);
     const domain = `${urlObj.hostname}${urlObj.port ? `-${urlObj.port}` : ''}`.replace(/[^a-zA-Z0-9]/g, '-');
+    // Sanitize to Tauri's allowed label chars [a-zA-Z0-9-/_:] on both paths.
     const appKey = context?.applicationId
-      ? context.applicationId.slice(0, 60)
+      ? context.applicationId.replace(/[^a-zA-Z0-9]/g, '-').slice(0, 60)
       : domain;
     const windowLabel = `app-${appKey}`.slice(0, 64);
 
@@ -111,8 +112,9 @@ export async function openAppFrontend(
       try {
         await existing.setFocus();
         return windowLabel;
-      } catch {
+      } catch (e) {
         // window was closed between getByLabel and setFocus; fall through to create a new one
+        console.warn('setFocus failed, opening new window:', e);
       }
     }
 

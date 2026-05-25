@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/tauri";
+import { WebviewWindow } from "@tauri-apps/api/window";
 import { getSettings } from "./settings";
 import { getAccessToken, getRefreshToken, getTokenExpiresAt } from "../lib/token-storage";
 
@@ -92,10 +93,23 @@ export async function openAppFrontend(
 
     const urlToOpen = `${frontendUrl}#${hashParams.toString()}`;
 
-    // Generate unique window label based on domain + timestamp to avoid conflicts
+    // Stable window label: same app+context always gets the same label so
+    // Tauri can find and focus the existing window instead of opening a new one.
     const urlObj = new URL(frontendUrl);
-    const domain = urlObj.hostname.replace(/\./g, '-');
-    const windowLabel = `app-${domain}-${Date.now()}`;
+    const domain = urlObj.hostname.replace(/[^a-zA-Z0-9]/g, '-');
+    const contextSuffix = context?.contextId
+      ? `-${context.contextId.slice(0, 12)}`
+      : context?.applicationId
+        ? `-${context.applicationId.slice(0, 12)}`
+        : '';
+    const windowLabel = `app-${domain}${contextSuffix}`.slice(0, 64);
+
+    // If the window is already open, focus it rather than opening a duplicate.
+    const existing = WebviewWindow.getByLabel(windowLabel);
+    if (existing) {
+      await existing.setFocus();
+      return windowLabel;
+    }
 
     await invoke('create_app_window', {
       windowLabel,

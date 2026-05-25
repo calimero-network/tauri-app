@@ -392,9 +392,9 @@ function App() {
   }, [checkConnection, toast]);
 
   // Open app frontend in a new window
-  const handleOpenAppFrontend = useCallback(async (frontendUrl: string, appName?: string) => {
+  const handleOpenAppFrontend = useCallback(async (frontendUrl: string, appName?: string, applicationId?: string) => {
     try {
-      await openAppFrontend(frontendUrl, appName);
+      await openAppFrontend(frontendUrl, appName, undefined, applicationId ? { applicationId } : undefined);
     } catch (error) {
       // Fallback to navigating to installed apps page
       setCurrentPage('installed');
@@ -936,7 +936,7 @@ function App() {
                     type="button"
                     onClick={() => {
                       if (frontendUrl) {
-                        handleOpenAppFrontend(frontendUrl, appName);
+                        handleOpenAppFrontend(frontendUrl, appName, app.id);
                       } else {
                         setCurrentPage('installed');
                       }

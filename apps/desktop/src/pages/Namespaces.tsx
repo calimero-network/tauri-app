@@ -11,10 +11,10 @@ import {
   type Namespace,
 } from "@calimero-network/mero-react";
 import { useToast } from "../contexts/ToastContext";
-import { ChevronLeft, Users, Box, Layers, Copy, ChevronRight, Shield, Globe, Plus, X, Play, Trash2, UserMinus, Link, ChevronDown, Check, MoreHorizontal, LogIn } from "lucide-react";
+import { ChevronLeft, Users, Box, Layers, Copy, ChevronRight, Shield, Globe, Plus, X, Trash2, UserMinus, Link, ChevronDown, Check, MoreHorizontal, LogIn } from "lucide-react";
 import { apiClient } from "../lib/mero-client";
-import { saveContextKey, getContextKey } from "../utils/contextKeys";
-import { decodeMetadata, openAppFrontend } from "../utils/appUtils";
+import { saveContextKey } from "../utils/contextKeys";
+import { decodeMetadata } from "../utils/appUtils";
 import { getSettings } from "../utils/settings";
 import {
   enableHaForNamespace,
@@ -253,20 +253,6 @@ export default function Namespaces() {
     }
   };
 
-  const handleLaunchContext = async (contextId: string, applicationId: string) => {
-    const app = installedApps.find((a) => a.id === applicationId);
-    if (!app?.frontendUrl) { toast.error("This application has no frontend URL"); return; }
-    // Warm up the token — if it's expired the node will return 401+token_expired,
-    // mero-js refreshes and writes fresh tokens back to localStorage before we read them.
-    try { await apiClient.node.listApplications(); } catch {}
-    const key = getContextKey(contextId);
-    await openAppFrontend(app.frontendUrl, app.name, undefined, {
-      applicationId,
-      contextId,
-      executorPublicKey: key?.publicKey,
-    });
-  };
-
   const handleDeleteNamespace = async (ns: Namespace) => {
     if (!mero) return;
     setActionLoading(true);
@@ -461,9 +447,7 @@ export default function Namespaces() {
   };
 
   // ── Context row helper ──
-  const renderContextItem = (c: any, applicationId: string, _refetch: () => void) => {
-    const app = installedApps.find((a) => a.id === applicationId);
-    const canLaunch = !!app?.frontendUrl;
+  const renderContextItem = (c: any, _applicationId: string, _refetch: () => void) => {
     const hasName = !!c.name;
     return (
       <div key={c.contextId} className="ns-context-item">
@@ -481,15 +465,6 @@ export default function Namespaces() {
         <button className="copy-btn" onClick={() => copyToClipboard(c.contextId)} title="Copy ID">
           <Copy size={12} />
         </button>
-        {canLaunch && (
-          <button
-            className="ns-launch-btn"
-            onClick={() => handleLaunchContext(c.contextId, applicationId)}
-            title={`Launch ${app?.name ?? "app"} with this context`}
-          >
-            <Play size={12} /> Launch
-          </button>
-        )}
       </div>
     );
   };

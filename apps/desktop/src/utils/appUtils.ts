@@ -93,16 +93,15 @@ export async function openAppFrontend(
 
     const urlToOpen = `${frontendUrl}#${hashParams.toString()}`;
 
-    // Stable window label: same app+context always gets the same label so
-    // Tauri can find and focus the existing window instead of opening a new one.
+    // Stable window label keyed by applicationId so every call site
+    // (Home, Applications, Namespaces, shortcut) produces the same label
+    // for the same app and Tauri can focus the existing window.
     const urlObj = new URL(frontendUrl);
     const domain = urlObj.hostname.replace(/[^a-zA-Z0-9]/g, '-');
-    const contextSuffix = context?.contextId
-      ? `-${context.contextId.slice(0, 12)}`
-      : context?.applicationId
-        ? `-${context.applicationId.slice(0, 12)}`
-        : '';
-    const windowLabel = `app-${domain}${contextSuffix}`.slice(0, 64);
+    const appKey = context?.applicationId
+      ? context.applicationId.slice(0, 16)
+      : domain;
+    const windowLabel = `app-${appKey}`.slice(0, 64);
 
     // If the window is already open, focus it rather than opening a duplicate.
     const existing = WebviewWindow.getByLabel(windowLabel);

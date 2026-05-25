@@ -154,7 +154,11 @@ fn parse_open_app_args() -> Option<(String, String, Option<String>)> {
             continue;
         }
         if args[i] == "--open-app-id" && i + 1 < args.len() {
-            app_id = Some(args[i + 1].clone());
+            let id = args[i + 1].clone();
+            // Validate before use: non-empty, ≤128 chars, alphanumeric + hyphen only.
+            if !id.is_empty() && id.len() <= 128 && id.chars().all(|c| c.is_alphanumeric() || c == '-') {
+                app_id = Some(id);
+            }
             i += 2;
             continue;
         }

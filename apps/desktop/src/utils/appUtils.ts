@@ -100,10 +100,12 @@ export async function openAppFrontend(
     // (Home, Applications, Namespaces, shortcut) produces the same label
     // for the same app and Tauri can focus the existing window.
     const urlObj = new URL(frontendUrl);
-    const domain = `${urlObj.hostname}${urlObj.port ? `-${urlObj.port}` : ''}`.replace(/[^a-zA-Z0-9\-/_:]/g, '-');
-    // Preserve all Tauri-valid chars [a-zA-Z0-9-/_:]; strip everything else.
+    const domain = `${urlObj.hostname}${urlObj.port ? `-${urlObj.port}` : ''}`.replace(/[^a-zA-Z0-9-]/g, '-');
+    // Restrict to [a-zA-Z0-9-] to prevent label crafting via slash/colon/underscore.
+    // Calimero applicationIds are base58-encoded 32-byte keys (~43 chars), so the
+    // slice(0, 60) limit is never hit in practice and no truncation collisions occur.
     const appKey = context?.applicationId
-      ? context.applicationId.replace(/[^a-zA-Z0-9\-/_:]/g, '-').slice(0, 60)
+      ? context.applicationId.replace(/[^a-zA-Z0-9-]/g, '-').slice(0, 60)
       : domain;
     const windowLabel = `app-${appKey}`.slice(0, 64);
 

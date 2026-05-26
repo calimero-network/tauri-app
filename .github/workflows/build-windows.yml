@@ -24,10 +24,6 @@ on:
       artifact-name:
         description: "Name of the uploaded artifact"
         value: ${{ jobs.build.outputs.artifact-name }}
-  pull_request:
-    branches:
-      - master
-      - main
 
 env:
   CARGO_TERM_COLOR: always

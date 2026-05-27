@@ -1,5 +1,5 @@
 import { useState, useMemo, useRef, useEffect } from "react";
-import { Search, Copy, RefreshCw, X } from "lucide-react";
+import { Search, Copy, Check, RefreshCw, X } from "lucide-react";
 import Convert from "ansi-to-html";
 import { useTheme } from "../contexts/ThemeContext";
 import "./LogsViewer.css";
@@ -24,6 +24,7 @@ export function LogsViewer({
   const [caseSensitive, setCaseSensitive] = useState(false);
   const [levelFilter, setLevelFilter] = useState<string>("");
   const [autoScroll, setAutoScroll] = useState(true);
+  const [copied, setCopied] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const levels = [
@@ -70,6 +71,8 @@ export function LogsViewer({
 
   const handleCopy = () => {
     navigator.clipboard.writeText(filteredLines.join("\n"));
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   };
 
   useEffect(() => {
@@ -95,11 +98,11 @@ export function LogsViewer({
             </button>
             <button
               onClick={handleCopy}
-              className="logs-viewer-btn"
+              className={`logs-viewer-btn${copied ? " logs-viewer-btn--copied" : ""}`}
               title="Copy to clipboard"
             >
-              <Copy size={14} />
-              Copy
+              {copied ? <Check size={14} /> : <Copy size={14} />}
+              {copied ? "Copied!" : "Copy"}
             </button>
             <button
               onClick={onClose}

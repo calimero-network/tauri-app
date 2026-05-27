@@ -70,6 +70,11 @@
   cursor: not-allowed;
 }
 
+.logs-viewer-btn--copied {
+  color: var(--color-success, #22c55e);
+  border-color: var(--color-success, #22c55e);
+}
+
 .logs-viewer-close {
   padding: 6px 10px;
 }

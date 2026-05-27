@@ -1,5 +1,5 @@
 import { useState, useMemo, useRef, useEffect } from "react";
-import { Search, Copy, RefreshCw, X } from "lucide-react";
+import { Search, Copy, Check, RefreshCw, X } from "lucide-react";
 import Convert from "ansi-to-html";
 import { useTheme } from "../contexts/ThemeContext";
 import "./LogsViewer.css";
@@ -24,7 +24,9 @@ export function LogsViewer({
   const [caseSensitive, setCaseSensitive] = useState(false);
   const [levelFilter, setLevelFilter] = useState<string>("");
   const [autoScroll, setAutoScroll] = useState(true);
+  const [copied, setCopied] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const levels = [
     { id: "", label: "All" },
@@ -68,9 +70,22 @@ export function LogsViewer({
     return text ? convert.toHtml(text) : "";
   }, [filteredLines, convert]);
 
-  const handleCopy = () => {
-    navigator.clipboard.writeText(filteredLines.join("\n"));
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(filteredLines.join("\n"));
+      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+      setCopied(true);
+      copyTimeoutRef.current = setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // clipboard write failed — don't show feedback
+    }
   };
+
+  useEffect(() => {
+    return () => {
+      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     if (autoScroll && scrollRef.current) {
@@ -95,11 +110,11 @@ export function LogsViewer({
             </button>
             <button
               onClick={handleCopy}
-              className="logs-viewer-btn"
+              className={`logs-viewer-btn${copied ? " logs-viewer-btn--copied" : ""}`}
               title="Copy to clipboard"
             >
-              <Copy size={14} />
-              Copy
+              {copied ? <Check size={14} /> : <Copy size={14} />}
+              {copied ? "Copied!" : "Copy"}
             </button>
             <button
               onClick={onClose}

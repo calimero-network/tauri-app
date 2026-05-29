@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { checkOnboardingState, getOnboardingMessage, type OnboardingState } from "../utils/onboarding";
 import { apiClient } from "../lib/mero-client";
 import { LoginView } from "../components/LoginView";
-import { initMerodNode, startMerod, listMerodNodes, detectRunningMerodNodes, waitForNodeHealthy, stopMerod, killAllMerodProcesses } from "../utils/merod";
+import { initMerodNode, startMerod, listMerodNodes, detectRunningMerodNodes, waitForNodeHealthy, stopMerod, killAllMerodProcesses, deleteCalimeroDataDir } from "../utils/merod";
 import { invoke } from "@tauri-apps/api/tauri";
 import { saveSettings, getSettings, clearAllAppData } from "../utils/settings";
 import { saveOnboardingProgress, loadOnboardingProgress } from "../utils/onboardingProgress";
@@ -467,13 +467,22 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
     setCurrentStep('node-setup');
   };
 
-  // Hard reset: kill all merod processes, wipe all storage, reload from scratch
+  // Hard reset: kill all merod processes, delete data dir, wipe all storage, reload
   const handleNukeAll = async () => {
     setNuking(true);
     setShowFloatingMenu(false);
+    // 1. Graceful stop then force-kill
     try { await stopMerod(); } catch { /* not tracked — ok */ }
     try { await killAllMerodProcesses(); } catch { /* best-effort */ }
+    // 2. Wait for OS to release file handles
     await new Promise((r) => setTimeout(r, 800));
+    // 3. Delete the data directory (settings path + default ~/.calimero)
+    const settingsDataDir = getSettings().embeddedNodeDataDir || '~/.calimero';
+    const dirsToDelete = [...new Set([settingsDataDir, '~/.calimero'])];
+    for (const dir of dirsToDelete) {
+      try { await deleteCalimeroDataDir(dir); } catch { /* dir may not exist */ }
+    }
+    // 4. Wipe all client-side state
     clearAllAppData();
     sessionStorage.clear();
     window.location.reload();

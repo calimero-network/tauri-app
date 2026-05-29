@@ -4,7 +4,7 @@ import { apiClient } from "../lib/mero-client";
 import { LoginView } from "../components/LoginView";
 import { initMerodNode, startMerod, listMerodNodes, detectRunningMerodNodes, waitForNodeHealthy } from "../utils/merod";
 import { invoke } from "@tauri-apps/api/tauri";
-import { saveSettings, getSettings } from "../utils/settings";
+import { saveSettings, getSettings, clearAllAppData } from "../utils/settings";
 import { saveOnboardingProgress, loadOnboardingProgress } from "../utils/onboardingProgress";
 import { startCloudLogin } from "../utils/cloudAuth";
 import { isCloudEnabled } from "../utils/featureFlags";
@@ -484,6 +484,30 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
     const settings = getSettings();
     // Only show error if we have a properly configured node (not default localhost)
     if (settings.nodeUrl && settings.nodeUrl !== 'http://localhost:2528' && settings.nodeUrl !== 'http://localhost:8080') {
+      const handleBackToNodeSetup = () => {
+        // Clear the saved nodeUrl so the error condition no longer triggers,
+        // then go back to node-setup so the user can reconfigure.
+        saveSettings({
+          ...getSettings(),
+          nodeUrl: 'http://localhost:2528',
+          useEmbeddedNode: undefined,
+          embeddedNodeName: undefined,
+          embeddedNodePort: undefined,
+          embeddedNodeDataDir: undefined,
+        });
+        setState(null);
+        setNodeCreated(false);
+        setNodeStarted(false);
+        setNodeSetupMode('choose');
+        hasAttemptedAutoContinue.current = false;
+        setCurrentStep('node-setup');
+      };
+
+      const handleResetAll = () => {
+        clearAllAppData();
+        window.location.reload();
+      };
+
       // Progress indicator component
       const ProgressIndicator = () => (
         <div className="onboarding-progress">
@@ -525,11 +549,18 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
                 </ol>
               </div>
             <div className="onboarding-actions">
+              <button onClick={handleBackToNodeSetup} className="button button-secondary">
+                <ArrowLeft size={16} style={{ marginRight: '4px', verticalAlign: 'middle' }} />
+                Back to Node Setup
+              </button>
               {onSettings && (
                   <button onClick={onSettings} className="button button-primary">
                     Open Settings
                 </button>
               )}
+              <button onClick={handleResetAll} className="button button-danger">
+                Reset &amp; Start Over
+              </button>
             </div>
           </div>
         </div>
@@ -988,6 +1019,13 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
         <div className="onboarding-page" data-testid="onboarding-page">
         <ProgressIndicator />
           <div ref={stepContainerRef} className="onboarding-step-container onboarding-step-login">
+            <button
+              onClick={() => setCurrentStep(STEP_AFTER_NODE_SETUP)}
+              className="step-back-button"
+              aria-label="Go back"
+            >
+              <ArrowLeft size={18} />
+            </button>
             <div className="step-content" style={{ justifyContent: 'center' }}>
               <h1 className="step-title">Set Up Authentication</h1>
               <p className="step-description">
@@ -1030,6 +1068,13 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
       <div className="onboarding-page" data-testid="onboarding-page">
         <ProgressIndicator />
         <div ref={stepContainerRef} className="onboarding-step-container">
+          <button
+            onClick={() => setCurrentStep('login')}
+            className="step-back-button"
+            aria-label="Go back"
+          >
+            <ArrowLeft size={18} />
+          </button>
           <div className="step-content">
             <h1 className="step-title">Install Your First App</h1>
             <p className="step-description">

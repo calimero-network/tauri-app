@@ -1428,6 +1428,14 @@
   display: none;
 }
 
+.onboarding-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: center;
+  margin-top: 20px;
+}
+
 .loading-spinner {
   text-align: center;
   padding: 60px 20px;

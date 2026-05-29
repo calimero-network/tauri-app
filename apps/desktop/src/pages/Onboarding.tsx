@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { checkOnboardingState, getOnboardingMessage, type OnboardingState } from "../utils/onboarding";
 import { apiClient } from "../lib/mero-client";
 import { LoginView } from "../components/LoginView";
-import { initMerodNode, startMerod, listMerodNodes, detectRunningMerodNodes, waitForNodeHealthy } from "../utils/merod";
+import { initMerodNode, startMerod, listMerodNodes, detectRunningMerodNodes, waitForNodeHealthy, stopMerod, killAllMerodProcesses } from "../utils/merod";
 import { invoke } from "@tauri-apps/api/tauri";
 import { saveSettings, getSettings, clearAllAppData } from "../utils/settings";
 import { saveOnboardingProgress, loadOnboardingProgress } from "../utils/onboardingProgress";
@@ -503,7 +503,10 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
         setCurrentStep('node-setup');
       };
 
-      const handleResetAll = () => {
+      const handleResetAll = async () => {
+        try { await stopMerod(); } catch { /* not tracked — ok */ }
+        try { await killAllMerodProcesses(); } catch { /* best-effort */ }
+        await new Promise((r) => setTimeout(r, 500));
         clearAllAppData();
         window.location.reload();
       };

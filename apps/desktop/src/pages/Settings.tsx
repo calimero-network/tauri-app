@@ -319,8 +319,15 @@ export default function Settings({ onBack }: SettingsProps) {
                           try {
                             await stopMerod();
                           } catch {
-                            // Node may not be running
+                            // not running — ok
                           }
+                          try {
+                            await killAllMerodProcesses();
+                          } catch {
+                            // best-effort
+                          }
+                          // Brief settle so OS releases file handles before reload
+                          await new Promise((r) => setTimeout(r, 500));
                           clearAllAppData();
                           window.location.reload();
                         }}

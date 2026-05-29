@@ -16,7 +16,6 @@ vi.mock('./settings', () => ({
 
 import {
   requestOwnershipProof,
-  claimContexts,
   enableHaForNamespace,
   getCloudNamespaces,
   CLOUD_BASE_URL,
@@ -131,57 +130,6 @@ describe('requestOwnershipProof', () => {
   });
 });
 
-describe('claimContexts', () => {
-  let restore: () => void;
-  afterEach(() => restore?.());
-
-  it('POSTs the snake_case wire payload to the cloud and returns claimed[]', async () => {
-    const { calls, restore: r } = installFetch(() =>
-      jsonResponse({ claimed: ['ctx-1'] }),
-    );
-    restore = r;
-    const sessionJwt = makeJwt({ iss: 'mdma' });
-    const claimed = await claimContexts(sessionJwt, [
-      {
-        context_id: 'ctx-1',
-        ownership_proof: {
-          signer_public_key: 'pk',
-          signed_payload: 'sp',
-          signature: 'sig',
-        },
-      },
-    ]);
-    expect(claimed).toEqual(['ctx-1']);
-    expect(calls[0].url).toBe(`${CLOUD_BASE_URL}/api/cloud/me/contexts/claim`);
-    const body = JSON.parse(String(calls[0].init?.body));
-    expect(body).toEqual({
-      claims: [
-        {
-          context_id: 'ctx-1',
-          ownership_proof: {
-            signer_public_key: 'pk',
-            signed_payload: 'sp',
-            signature: 'sig',
-          },
-        },
-      ],
-    });
-  });
-
-  it('surfaces the detail string on 403', async () => {
-    const { restore: r } = installFetch(() =>
-      jsonResponse(
-        { detail: 'Ownership proof failed: signer not registered' },
-        403,
-      ),
-    );
-    restore = r;
-    await expect(
-      claimContexts(makeJwt({ iss: 'mdma' }), []),
-    ).rejects.toThrow(/Ownership proof failed: signer not registered/);
-  });
-});
-
 describe('getCloudNamespaces', () => {
   let restore: () => void;
   afterEach(() => restore?.());
@@ -220,7 +168,7 @@ describe('getCloudNamespaces', () => {
   });
 });
 
-describe('enableHaForNamespace (Phase 4 — HA decoupled from /contexts/claim)', () => {
+describe('enableHaForNamespace', () => {
   let restore: () => void;
   beforeEach(() => {
     // Deterministic but *distinct per call* — a counter advances each
@@ -306,7 +254,7 @@ describe('enableHaForNamespace (Phase 4 — HA decoupled from /contexts/claim)',
     ).rejects.toThrow(/Unexpected response from local node members endpoint/);
   });
 
-  it('real-context path: members → measurements → tee-policy → enable, NO proof, NO /contexts/claim', async () => {
+  it('real-context path: members → measurements → tee-policy → enable, NO per-context proof', async () => {
     const calls: string[] = [];
     const { restore: r } = installFetch((url, init) => {
       calls.push(`${init?.method ?? 'GET'} ${url}`);
@@ -348,9 +296,8 @@ describe('enableHaForNamespace (Phase 4 — HA decoupled from /contexts/claim)',
     );
     expect(res.status).toBe('enabling');
 
-    // Phase 4 decouple: HA enable performs NO context-claim preflight.
+    // HA-enable does not invoke the per-context ownership-proof shim.
     expect(calls.some((c) => c.includes('/issue-ownership-proof'))).toBe(false);
-    expect(calls.some((c) => c.includes('/contexts/claim'))).toBe(false);
 
     // Order: members (UX fail-fast) → measurements → tee-policy → enable.
     const ordered = (substr: string) =>
@@ -368,7 +315,7 @@ describe('enableHaForNamespace (Phase 4 — HA decoupled from /contexts/claim)',
     expect(enableCall).toBeDefined();
   });
 
-  it('no-context path ([] groups): members → measurements → tee-policy → ONE namespace proof → enable, NO /contexts/claim', async () => {
+  it('no-context path ([] groups): members → measurements → tee-policy → ONE namespace proof → enable', async () => {
     const calls: string[] = [];
     let enableBody: any;
     const { restore: r } = installFetch((url, init) => {
@@ -416,9 +363,6 @@ describe('enableHaForNamespace (Phase 4 — HA decoupled from /contexts/claim)',
       [], // zero-context namespace
     );
     expect(res.status).toBe('enabling');
-
-    // No /contexts/claim on the no-context path either.
-    expect(calls.some((c) => c.includes('/contexts/claim'))).toBe(false);
 
     // Exactly one namespace-scoped ownership proof, after tee-policy.
     const nsProofCalls = calls.filter((c) =>
@@ -524,47 +468,6 @@ describe('enableHaForNamespace (Phase 4 — HA decoupled from /contexts/claim)',
       ),
     ).rejects.toThrow(/Cloud session has expired/);
     expect(calls).toHaveLength(0); // failed fast, no merod/cloud round-trips
-  });
-
-  it('does not call /contexts/claim even when real contexts are supplied', async () => {
-    const seen: string[] = [];
-    const { restore: r } = installFetch((url, init) => {
-      seen.push(url);
-      return route(url, init, {
-        '/admin-api/groups/ns-root/members': () =>
-          jsonResponse({
-            members: [{ identity: 'me', role: 'Admin' }],
-            selfIdentity: 'me',
-          }),
-        '/api/cloud/fleet/measurements': () =>
-          jsonResponse({
-            release_tag: 'v1',
-            allowed_mrtd: ['mrtd-1'],
-            allowed_rtmr0: [],
-            allowed_rtmr1: [],
-            allowed_rtmr2: [],
-            allowed_rtmr3: [],
-          }),
-        '/admin-api/groups/ns-root/settings/tee-admission-policy': () =>
-          new Response('{}', { status: 200 }),
-        '/api/cloud/me/namespaces/ns-root/enable-ha': () =>
-          jsonResponse({ status: 'enabling', namespace_id: 'ns-root', groups: [] }),
-      });
-    });
-    restore = r;
-    await enableHaForNamespace(
-      makeJwt({ iss: 'mdma', email: 'u@e' }),
-      'http://node',
-      'ns-root',
-      [
-        { group_id: 'ns-root', context_id: 'ctx-1' },
-        { group_id: 'sub-1', context_id: 'ctx-2' },
-      ],
-    );
-    // The decouple invariant: no /contexts/claim and no per-context
-    // /issue-ownership-proof anywhere in the HA-enable flow.
-    expect(seen.some((u) => u.includes('/contexts/claim'))).toBe(false);
-    expect(seen.some((u) => u.includes('/issue-ownership-proof'))).toBe(false);
   });
 
   it('throws the descriptive error (not a raw SyntaxError) on a non-JSON members body', async () => {

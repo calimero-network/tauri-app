@@ -11,7 +11,7 @@ import { isCloudEnabled } from "../utils/featureFlags";
 import { fetchAppsFromAllRegistries, fetchAppManifest, recordDownload, type AppSummary } from "../utils/registry";
 import { useToast } from "../contexts/ToastContext";
 import { useTheme } from "../contexts/ThemeContext";
-import { ArrowLeft, ArrowRight, Check, Package, Download, CheckCircle2, ChevronDown, ChevronUp, AlertTriangle } from "lucide-react";
+import { ArrowLeft, ArrowRight, Check, Package, Download, CheckCircle2, ChevronDown, ChevronUp, AlertTriangle, Settings, RefreshCw } from "lucide-react";
 import calimeroLogo from "../assets/calimero-logo.svg";
 import bs58 from "bs58";
 import "./Onboarding.css";
@@ -100,6 +100,8 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
   const [nodeSetupMode, setNodeSetupMode] = useState<'choose' | 'use-existing' | 'create-new'>(() => loadOnboardingProgress()?.nodeSetupMode ?? 'choose');
   const stepContainerRef = useRef<HTMLDivElement>(null);
   const hasAttemptedAutoContinue = useRef(false);
+  const [showFloatingMenu, setShowFloatingMenu] = useState(false);
+  const [nuking, setNuking] = useState(false);
 
   useEffect(() => {
     async function loadState() {
@@ -457,6 +459,66 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
     }
   };
 
+  // Reset node state and go back to node-setup (used by cloud-connect and login back buttons)
+  const goBackToNodeSetup = () => {
+    setNodeCreated(false);
+    setNodeStarted(false);
+    setCreatingNode(false);
+    setCurrentStep('node-setup');
+  };
+
+  // Hard reset: kill all merod processes, wipe all storage, reload from scratch
+  const handleNukeAll = async () => {
+    setNuking(true);
+    setShowFloatingMenu(false);
+    try { await stopMerod(); } catch { /* not tracked — ok */ }
+    try { await killAllMerodProcesses(); } catch { /* best-effort */ }
+    await new Promise((r) => setTimeout(r, 800));
+    clearAllAppData();
+    sessionStorage.clear();
+    window.location.reload();
+  };
+
+  const FloatingMenu = () => (
+    <>
+      {showFloatingMenu && (
+        <div
+          className="onboarding-floating-overlay"
+          onClick={() => setShowFloatingMenu(false)}
+        />
+      )}
+      <div className="onboarding-floating-actions">
+        {showFloatingMenu && (
+          <div className="onboarding-floating-menu">
+            <button
+              className="floating-menu-item"
+              onClick={() => { setShowFloatingMenu(false); window.location.reload(); }}
+            >
+              <RefreshCw size={14} />
+              Reload page
+            </button>
+            <div className="floating-menu-divider" />
+            <button
+              className="floating-menu-item floating-menu-item-danger"
+              disabled={nuking}
+              onClick={handleNukeAll}
+            >
+              {nuking ? 'Stopping & resetting...' : '⚠ Reset everything'}
+            </button>
+          </div>
+        )}
+        <button
+          className="onboarding-cog-btn"
+          onClick={() => setShowFloatingMenu(v => !v)}
+          title="Options"
+          aria-label="Options"
+        >
+          <Settings size={18} />
+        </button>
+      </div>
+    </>
+  );
+
   // Get current step index for progress
   const currentStepIndex = ONBOARDING_STEPS.indexOf(currentStep);
   const progress = ((currentStepIndex + 1) / ONBOARDING_STEPS.length) * 100;
@@ -465,6 +527,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
   if (loading && !['welcome', 'what-is', 'node-setup'].includes(currentStep)) {
     return (
       <div className="onboarding-page" data-testid="onboarding-page">
+        <FloatingMenu />
         <div className="onboarding-content">
           <div className="loading-spinner">
             <div className="spinner"></div>
@@ -503,14 +566,6 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
         setCurrentStep('node-setup');
       };
 
-      const handleResetAll = async () => {
-        try { await stopMerod(); } catch { /* not tracked — ok */ }
-        try { await killAllMerodProcesses(); } catch { /* best-effort */ }
-        await new Promise((r) => setTimeout(r, 500));
-        clearAllAppData();
-        window.location.reload();
-      };
-
       // Progress indicator component
       const ProgressIndicator = () => (
         <div className="onboarding-progress">
@@ -533,6 +588,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
     return (
       <div className="onboarding-page" data-testid="onboarding-page">
           <ProgressIndicator />
+          <FloatingMenu />
         <div className="onboarding-content">
           <div className="onboarding-card error">
               <AlertTriangle className="onboarding-icon" size={48} />
@@ -561,8 +617,8 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
                     Open Settings
                 </button>
               )}
-              <button onClick={handleResetAll} className="button button-danger">
-                Reset &amp; Start Over
+              <button onClick={handleNukeAll} disabled={nuking} className="button button-danger">
+                {nuking ? 'Stopping & resetting...' : 'Reset & Start Over'}
               </button>
             </div>
           </div>
@@ -601,6 +657,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
     return (
       <div className="onboarding-page" data-testid="onboarding-page">
         <ProgressIndicator />
+        <FloatingMenu />
         <div ref={stepContainerRef} className="onboarding-step-container">
           <div className="step-content">
             <div className="step-logo-wrapper">
@@ -631,6 +688,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
     return (
       <div className="onboarding-page" data-testid="onboarding-page">
         <ProgressIndicator />
+        <FloatingMenu />
         <div ref={stepContainerRef} className="onboarding-step-container">
           <button 
             onClick={() => setCurrentStep('welcome')} 
@@ -690,6 +748,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
     return (
       <div className="onboarding-page" data-testid="onboarding-page">
         <ProgressIndicator />
+        <FloatingMenu />
         <div ref={stepContainerRef} className="onboarding-step-container">
           <button 
             onClick={() => {
@@ -936,6 +995,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
     return (
       <div className="onboarding-page" data-testid="onboarding-page">
         <ProgressIndicator />
+        <FloatingMenu />
         <div ref={stepContainerRef} className="onboarding-step-container">
           <div className="step-content">
             <h1 className="step-title">Connect to Calimero Cloud</h1>
@@ -989,7 +1049,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
             <div className="step-actions" style={{ marginTop: '24px' }}>
               <button
                 className="button button-secondary"
-                onClick={() => setCurrentStep('node-setup')}
+                onClick={goBackToNodeSetup}
               >
                 <ArrowLeft size={16} style={{ marginRight: '4px', verticalAlign: 'middle' }} />
                 Back
@@ -1021,9 +1081,19 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
       return (
         <div className="onboarding-page" data-testid="onboarding-page">
         <ProgressIndicator />
+        <FloatingMenu />
           <div ref={stepContainerRef} className="onboarding-step-container onboarding-step-login">
             <button
-              onClick={() => setCurrentStep(STEP_AFTER_NODE_SETUP)}
+              onClick={() => {
+                if (STEP_AFTER_NODE_SETUP === 'node-setup') {
+                  goBackToNodeSetup();
+                } else {
+                  setNodeCreated(false);
+                  setNodeStarted(false);
+                  setCreatingNode(false);
+                  setCurrentStep(STEP_AFTER_NODE_SETUP);
+                }
+              }}
               className="step-back-button"
               aria-label="Go back"
             >
@@ -1070,6 +1140,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
     return (
       <div className="onboarding-page" data-testid="onboarding-page">
         <ProgressIndicator />
+        <FloatingMenu />
         <div ref={stepContainerRef} className="onboarding-step-container">
           <button
             onClick={() => setCurrentStep('login')}

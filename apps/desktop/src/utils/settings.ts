@@ -1,3 +1,5 @@
+import { clearAllTokens } from '../lib/token-storage';
+
 export interface AppSettings {
   nodeUrl: string;
   authUrl?: string; // Optional, defaults to nodeUrl if not set
@@ -126,8 +128,12 @@ export function clearSettings(): void {
 const THEME_KEY = 'calimero-desktop-theme';
 
 /**
- * Clear all app data (settings + theme + onboarding progress + cache). Use with stopMerod() for full reset.
- * Caller should reload the app after this.
+ * Clear all app data (settings + theme + onboarding progress + cache + session tokens).
+ * Use with stopMerod() for full reset. Caller should reload the app after this.
+ *
+ * Note: localStorage is partitioned per web origin, so this only clears the silo of the
+ * origin it runs in. Loaded app UIs served from other origins (each node URL is a distinct
+ * origin) keep their own tokens — wiping those requires clearing WebsiteData on disk.
  */
 export function clearAllAppData(): void {
   localStorage.removeItem(SETTINGS_KEY);
@@ -135,6 +141,11 @@ export function clearAllAppData(): void {
   localStorage.removeItem('calimero-onboarding-progress');
   localStorage.removeItem('calimero-autostart-default-applied');
   localStorage.removeItem('calimero-marketplace-cache');
+  localStorage.removeItem('calimero-error-log');
+  // Session tokens were left behind on reset, so a "reset" still resumed the old
+  // authenticated session against the node. Clear them too.
+  localStorage.removeItem('calimero-auth-tokens');
+  clearAllTokens();
 }
 
 

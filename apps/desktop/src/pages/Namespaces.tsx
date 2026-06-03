@@ -61,6 +61,24 @@ function parseApiError(e: any): string {
 
 const DEFAULT_NAMESPACE_CAPABILITIES = 1 | 2 | 8;
 
+/**
+ * Extract the `members` array from a merod `/admin-api/groups/{ns}/members`
+ * response. Mero-js's admin response shape varies across versions —
+ * direct `members` array on some routes, wrapped `data.members` on
+ * others — so both sites that consume this endpoint (the list-members
+ * useEffect and the post-disable eviction helper) hit the dual-path
+ * lookup. Centralised here so a future shape change is one edit.
+ *
+ * Returns `null` (not `[]`) when the response shape is unrecognised,
+ * so callers can distinguish "no members" from "couldn't tell" and
+ * fail closed where appropriate. tauri-app#107 v4 review.
+ */
+function extractMembersFromResponse(json: unknown): unknown[] | null {
+  const raw = (json as { members?: unknown; data?: { members?: unknown } })?.members
+    ?? (json as { data?: { members?: unknown } })?.data?.members;
+  return Array.isArray(raw) ? raw : null;
+}
+
 interface InstalledApp {
   id: string;
   name: string;
@@ -125,8 +143,7 @@ export default function Namespaces() {
     })
       .then((r) => { if (!r.ok) throw new Error(`${r.status}`); return r.json(); })
       .then((json) => {
-        const members = json?.members ?? json?.data?.members ?? [];
-        setNsMembers(Array.isArray(members) ? members : []);
+        setNsMembers(extractMembersFromResponse(json) ?? []);
       })
       .catch((e) => { if (e?.name !== 'AbortError') setNsMembers([]); })
       .finally(() => setNsMembersLoading(false));
@@ -323,6 +340,116 @@ export default function Namespaces() {
     }
   };
 
+  /**
+   * Evict every `ReadOnlyTee` member from the owner's local merod state for
+   * the given namespace. Called after a successful cloud `disable-ha` so the
+   * owner publishes `MemberRemoved` over gossip (which fires the existing
+   * key-rotation pipeline, granting forward secrecy on new namespace writes
+   * by excluding the evicted peer from the wrapped new key) and the fleet
+   * node's merod receives the eviction event.
+   *
+   * Auth: uses the **local node access token** (`getAccessToken()`), NOT
+   * the cloud session token. The admin API at `${settings.nodeUrl}/admin-api`
+   * lives on the user's own merod process and authenticates against its
+   * own token. v1 of this helper threaded the cloud token here by mistake
+   * (mirroring the wrong useEffect; the canonical list-members useEffect
+   * uses `getAccessToken()`). Caught in tauri-app#107 review.
+   *
+   * Best-effort: failures fall into two distinct buckets that the caller
+   * differentiates in the toast — `listFailed` (couldn't enumerate TEE
+   * members at all) vs `failed` (a specific remove call errored). Auto-
+   * retry is NOT available: by the time this runs, `haEnabled` has
+   * already flipped to false, so the disable branch can't be re-clicked.
+   * The user has to re-enable HA and disable again, or restart the
+   * desktop, to retry. The toast says so honestly.
+   *
+   * The list-members fetch has a 5s `AbortSignal.timeout` so a hung
+   * merod doesn't block the disable flow indefinitely.
+   *
+   * See: tauri-app#106, core ADR 0002, core PR #2653.
+   */
+  const evictTeeMembersAfterDisable = async (
+    nsId: string,
+  ): Promise<{ evicted: number; failed: number; listFailed: boolean }> => {
+    // Fail closed on every pre-flight that means "we couldn't check what
+    // was local" (mero client not ready, nodeUrl unconfigured, no node
+    // token). The toast then honestly says cleanup is pending instead
+    // of claiming success. tauri-app#107 v3 review (cursor + meroreviewer).
+    if (!mero) return { evicted: 0, failed: 0, listFailed: true };
+    const settings = getSettings();
+    if (!settings.nodeUrl) return { evicted: 0, failed: 0, listFailed: true };
+    const nodeToken = getAccessToken();
+    if (!nodeToken) return { evicted: 0, failed: 0, listFailed: true };
+
+    let teeMembers: { identity: string }[];
+    try {
+      const resp = await fetch(
+        `${settings.nodeUrl}/admin-api/groups/${encodeURIComponent(nsId)}/members`,
+        {
+          headers: { Authorization: `Bearer ${nodeToken}` },
+          signal: AbortSignal.timeout(5000),
+        },
+      );
+      if (!resp.ok) {
+        console.warn(
+          `evictTeeMembersAfterDisable: list-members http=${resp.status} for ns=${nsId} — cleanup pending`,
+        );
+        return { evicted: 0, failed: 0, listFailed: true };
+      }
+      const json = await resp.json();
+      // Fail closed on bad shape: missing or non-array `members` means
+      // we can't tell what role each entry has, so we cannot safely
+      // report "no TEE peers present" — we don't know. Treat as
+      // `listFailed`. The dual-path response normalisation lives in
+      // `extractMembersFromResponse` (top of file). tauri-app#107 v3
+      // review (cursor "Bad members body skips eviction") + v4 DRY.
+      const raw = extractMembersFromResponse(json);
+      if (raw === null) {
+        console.warn(
+          `evictTeeMembersAfterDisable: list-members body had no array \`members\` field for ns=${nsId} — cleanup pending`,
+        );
+        return { evicted: 0, failed: 0, listFailed: true };
+      }
+      teeMembers = raw
+        .filter(
+          (m: unknown): m is { identity: string; role: string } =>
+            typeof (m as { identity?: unknown })?.identity === 'string'
+            && (m as { role?: unknown })?.role === 'ReadOnlyTee',
+        )
+        .map((m) => ({ identity: m.identity }));
+    } catch (e) {
+      // Don't log the raw error object — it may contain headers/URL with
+      // the bearer token. Log a redacted summary instead.
+      console.warn(
+        `evictTeeMembersAfterDisable: list-members fetch threw for ns=${nsId} (${(e as Error)?.name ?? 'unknown'})`,
+      );
+      return { evicted: 0, failed: 0, listFailed: true };
+    }
+
+    if (teeMembers.length === 0) {
+      return { evicted: 0, failed: 0, listFailed: false };
+    }
+
+    let evicted = 0;
+    let failed = 0;
+    for (const m of teeMembers) {
+      try {
+        await mero.admin.removeGroupMembers(nsId, { members: [m.identity] });
+        evicted += 1;
+      } catch (e) {
+        // Truncate the identity (cryptographic public-key string) in the
+        // log: enough prefix to correlate with admin tooling, not enough
+        // to be a tracking primitive on its own. tauri-app#107 v3 review.
+        const idShort = `${m.identity.slice(0, 8)}…`;
+        console.warn(
+          `evictTeeMembersAfterDisable: remove failed for ns=${nsId} identity=${idShort} (${(e as Error)?.name ?? 'unknown'})`,
+        );
+        failed += 1;
+      }
+    }
+    return { evicted, failed, listFailed: false };
+  };
+
   const handleJoinNamespace = async (invitationText: string) => {
     if (!mero) return;
     setActionLoading(true);
@@ -395,7 +522,51 @@ export default function Namespaces() {
       if (isEnabled) {
         await disableHaNamespace(token, nsId);
         setHaEnabled((prev) => ({ ...prev, [nsId]: false }));
-        toast.success('HA disabled — TEE nodes will stop replicating');
+        // Cloud-side disable is done; now evict any admitted TEE members
+        // from this owner's local merod. Without this, `MemberRemoved` is
+        // never published, no key rotation fires, and the fleet node
+        // remains a `ReadOnlyTee` member of our local group state
+        // indefinitely (see tauri-app#106 + core ADR 0002).
+        const evictResult = await evictTeeMembersAfterDisable(nsId);
+        // Refresh the Members list if any remove call ran (success OR
+        // failure). On `failed > 0` the store state could still have
+        // changed in mero before the failure, and refetching reflects
+        // truth. On pure `listFailed` we have no removals to mirror, so
+        // skip the refresh. Mirrors the `handleRemoveMember` pattern.
+        // tauri-app#107 v3 review (cursor) + v5 review (defensive
+        // `failed > 0` arm per meroreviewer).
+        if (evictResult.evicted > 0 || evictResult.failed > 0) {
+          setNsMembersVersion((v) => v + 1);
+          refetchGroupMembers?.();
+        }
+        // Toast tiers — honest about what happened and what the user can do:
+        //   * everything succeeded → standard success
+        //   * list-members fetch failed → cloud is disabled but we don't
+        //     know what's local; user must re-enable + disable or restart
+        //     to retry (no auto-retry exists because haEnabled is already
+        //     false, so the disable branch is no longer reachable from
+        //     this UI control — tauri-app#107 review)
+        //   * partial per-member failure → same retry caveat applies
+        //   * zero TEE members found locally → nothing to evict (fleet
+        //     never admitted before disable, or gossip hadn't propagated)
+        if (evictResult.listFailed) {
+          toast.success(
+            'HA disabled cloud-side. Local membership cleanup failed — ' +
+              're-enable then disable HA, or restart the desktop, to retry.',
+          );
+        } else if (evictResult.failed > 0) {
+          toast.success(
+            `HA disabled — ${evictResult.evicted} TEE member(s) evicted, ` +
+              `${evictResult.failed} cleanup failed. Re-enable then disable HA to retry.`,
+          );
+        } else if (evictResult.evicted > 0) {
+          toast.success(
+            `HA disabled — ${evictResult.evicted} TEE member(s) evicted; ` +
+              'forward secrecy applied via key rotation',
+          );
+        } else {
+          toast.success('HA disabled — TEE nodes will stop replicating');
+        }
       } else {
         const rootCtxs = await mero.admin
           .listGroupContexts(nsId)

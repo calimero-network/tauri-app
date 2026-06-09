@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
 import { getSettings } from "../utils/settings";
-import { fetchAppsFromAllRegistries, recordDownload, type AppSummary } from "../utils/registry";
+import { fetchAppsFromAllRegistries, fetchAppVersions, recordDownload, type AppSummary, type VersionInfo } from "../utils/registry";
 import { apiClient } from "../lib/mero-client";
 import { decodeMetadata } from "../utils/appUtils";
 import {
@@ -38,6 +38,10 @@ export default function Marketplace({ clientReady = true }: MarketplaceProps) {
   // Track whether a background refresh is in progress (no skeleton shown)
   const [refreshing, setRefreshing] = useState(false);
   const [selectedApp, setSelectedApp] = useState<MarketplaceApp | null>(null);
+  // Version picker for the detail modal: the versions the registry offers for
+  // the open app, and which one Install will fetch (defaults to latest).
+  const [availableVersions, setAvailableVersions] = useState<VersionInfo[]>([]);
+  const [selectedVersion, setSelectedVersion] = useState<string>("");
   const mountedRef = useRef(true);
 
   // Cleanup on unmount
@@ -52,6 +56,22 @@ export default function Marketplace({ clientReady = true }: MarketplaceProps) {
       loadInstalledApps();
     }
   }, [clientReady]);
+
+  // Load the open app's published versions for the picker; default the
+  // selection to its latest. Cleared when the modal closes.
+  useEffect(() => {
+    if (!selectedApp) {
+      setAvailableVersions([]);
+      setSelectedVersion("");
+      return;
+    }
+    setSelectedVersion(selectedApp.latest_version);
+    let cancelled = false;
+    fetchAppVersions(selectedApp.registry, selectedApp.id)
+      .then((vs) => { if (!cancelled) setAvailableVersions(vs); })
+      .catch(() => { if (!cancelled) setAvailableVersions([]); });
+    return () => { cancelled = true; };
+  }, [selectedApp]);
 
   // -----------------------------------------------------------------------
   // Helper: build MarketplaceApp[] from raw registry results + installed set
@@ -272,12 +292,13 @@ export default function Marketplace({ clientReady = true }: MarketplaceProps) {
     return sorted;
   }, [apps, filterInstalled, searchQuery]);
 
-  const handleInstall = async (app: MarketplaceApp) => {
+  const handleInstall = async (app: MarketplaceApp, version: string = app.latest_version) => {
     setInstallingAppId(app.id);
     try {
-      // Fetch the manifest to get the WASM artifact URL
+      // Fetch the manifest to get the WASM artifact URL. `version` defaults to
+      // the latest, but the detail modal lets the user pick an older one.
       const { fetchAppManifest } = await import("../utils/registry");
-      const manifest = await fetchAppManifest(app.registry, app.id, app.latest_version);
+      const manifest = await fetchAppManifest(app.registry, app.id, version);
       
       
       // Handle both v1 format (artifact) and v2 format (artifacts array)
@@ -345,7 +366,7 @@ export default function Marketplace({ clientReady = true }: MarketplaceProps) {
       const metadata = {
         name: app.name,
         description: manifest.metadata?.description || "",
-        version: app.latest_version,
+        version,
         developer: app.developer_pubkey,
         minRuntimeVersion: manifest.minRuntimeVersion,
       };
@@ -385,7 +406,7 @@ export default function Marketplace({ clientReady = true }: MarketplaceProps) {
       toast.success(`${app.alias || app.name} installed successfully!`);
 
       // Record download with registry (fire-and-forget)
-      recordDownload(app.registry, app.id, app.latest_version);
+      recordDownload(app.registry, app.id, version);
 
       // Update just the changed card — no full reload, no flicker.
       // loadInstalledApps updates installedAppIds, which the sync useEffect
@@ -645,6 +666,26 @@ export default function Marketplace({ clientReady = true }: MarketplaceProps) {
                 <span className="modal-meta-value">{(selectedApp.downloads ?? 0).toLocaleString()}</span>
               </div>
               <div className="modal-meta-row">
+                <span className="modal-meta-label">Version</span>
+                {availableVersions.length > 1 ? (
+                  <select
+                    className="modal-version-select"
+                    value={selectedVersion}
+                    onChange={(e) => setSelectedVersion(e.target.value)}
+                    disabled={installingAppId === selectedApp.id || selectedApp.installed}
+                    data-testid="version-picker"
+                  >
+                    {availableVersions.map((v) => (
+                      <option key={v.semver} value={v.semver}>
+                        {v.semver === selectedApp.latest_version ? `${v.semver} (latest)` : v.semver}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <span className="modal-meta-value">v{selectedVersion || selectedApp.latest_version}</span>
+                )}
+              </div>
+              <div className="modal-meta-row">
                 <span className="modal-meta-label">Registry</span>
                 <button
                   className="modal-meta-link"
@@ -666,7 +707,7 @@ export default function Marketplace({ clientReady = true }: MarketplaceProps) {
                 </button>
               ) : (
                 <button
-                  onClick={() => handleInstall(selectedApp)}
+                  onClick={() => handleInstall(selectedApp, selectedVersion || selectedApp.latest_version)}
                   className="button button-primary"
                   disabled={installingAppId === selectedApp.id}
                 >

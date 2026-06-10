@@ -145,16 +145,25 @@ export async function fetchAppVersions(
     const bundles = await response.json();
     const bundlesArray = Array.isArray(bundles) ? bundles : [];
 
-    // Transform V2 bundles to VersionInfo format
-    return bundlesArray.map((bundle: any) => {
-      // Get artifact URL (convention: /artifacts/:package/:version/:package-:version.mpk)
-      const artifactUrl = `/artifacts/${bundle.package}/${bundle.appVersion}/${bundle.package}-${bundle.appVersion}.mpk`;
-      return {
-        semver: bundle.appVersion,
-        cid: artifactUrl,
+    // Deduplicate by semver (registry may return one entry per platform/arch),
+    // then sort descending so latest appears first.
+    const seen = new Set<string>();
+    return bundlesArray
+      .map((bundle: any) => ({
+        semver: bundle.appVersion as string,
+        cid: `/artifacts/${bundle.package}/${bundle.appVersion}/${bundle.package}-${bundle.appVersion}.mpk`,
         yanked: false,
-      };
-    });
+      }))
+      .filter((v) => !seen.has(v.semver) && seen.add(v.semver))
+      .sort((a, b) => {
+        const pa = a.semver.replace(/^v/, '').split('.').map(Number);
+        const pb = b.semver.replace(/^v/, '').split('.').map(Number);
+        for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+          const diff = (pb[i] ?? 0) - (pa[i] ?? 0);
+          if (diff !== 0) return diff;
+        }
+        return 0;
+      });
   } catch (error) {
     console.error(`Failed to fetch app versions from registry ${registryUrl}:`, error);
     throw error;

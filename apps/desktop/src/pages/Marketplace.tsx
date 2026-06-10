@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
 import { getSettings } from "../utils/settings";
-import { fetchAppsFromAllRegistries, fetchAppVersions, recordDownload, type AppSummary, type VersionInfo } from "../utils/registry";
+import { fetchAppsFromAllRegistries, fetchAppVersions, fetchAppManifest, recordDownload, type AppSummary, type VersionInfo } from "../utils/registry";
 import { apiClient } from "../lib/mero-client";
 import { decodeMetadata } from "../utils/appUtils";
 import {
@@ -59,6 +59,8 @@ export default function Marketplace({ clientReady = true }: MarketplaceProps) {
 
   // Load the open app's published versions for the picker; default the
   // selection to its latest. Cleared when the modal closes.
+  // Depends on selectedApp?.id (not the full object) so patching installed:true
+  // after an install doesn't re-run this and reset the user's version pick.
   useEffect(() => {
     if (!selectedApp) {
       setAvailableVersions([]);
@@ -69,9 +71,14 @@ export default function Marketplace({ clientReady = true }: MarketplaceProps) {
     let cancelled = false;
     fetchAppVersions(selectedApp.registry, selectedApp.id)
       .then((vs) => { if (!cancelled) setAvailableVersions(vs); })
-      .catch(() => { if (!cancelled) setAvailableVersions([]); });
+      .catch(() => {
+        if (!cancelled) {
+          setAvailableVersions([]);
+          toast.error("Failed to load version list");
+        }
+      });
     return () => { cancelled = true; };
-  }, [selectedApp]);
+  }, [selectedApp?.id]);
 
   // -----------------------------------------------------------------------
   // Helper: build MarketplaceApp[] from raw registry results + installed set
@@ -293,14 +300,14 @@ export default function Marketplace({ clientReady = true }: MarketplaceProps) {
   }, [apps, filterInstalled, searchQuery]);
 
   const handleInstall = async (app: MarketplaceApp, version: string = app.latest_version) => {
+    if (!/^[\w.+-]+$/.test(version)) {
+      toast.error("Invalid version string");
+      return;
+    }
     setInstallingAppId(app.id);
     try {
-      // Fetch the manifest to get the WASM artifact URL. `version` defaults to
-      // the latest, but the detail modal lets the user pick an older one.
-      const { fetchAppManifest } = await import("../utils/registry");
       const manifest = await fetchAppManifest(app.registry, app.id, version);
-      
-      
+
       // Handle both v1 format (artifact) and v2 format (artifacts array)
       let wasmUrl: string;
       let wasmHashHex: string | null = null;
@@ -682,7 +689,7 @@ export default function Marketplace({ clientReady = true }: MarketplaceProps) {
                     ))}
                   </select>
                 ) : (
-                  <span className="modal-meta-value">v{selectedVersion || selectedApp.latest_version}</span>
+                  <span className="modal-meta-value">{selectedVersion || selectedApp.latest_version}</span>
                 )}
               </div>
               <div className="modal-meta-row">
@@ -707,7 +714,7 @@ export default function Marketplace({ clientReady = true }: MarketplaceProps) {
                 </button>
               ) : (
                 <button
-                  onClick={() => handleInstall(selectedApp, selectedVersion || selectedApp.latest_version)}
+                  onClick={() => handleInstall(selectedApp, selectedVersion)}
                   className="button button-primary"
                   disabled={installingAppId === selectedApp.id}
                 >

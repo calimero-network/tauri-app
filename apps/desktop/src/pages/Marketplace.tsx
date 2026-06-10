@@ -42,6 +42,7 @@ export default function Marketplace({ clientReady = true }: MarketplaceProps) {
   // the open app, and which one Install will fetch (defaults to latest).
   const [availableVersions, setAvailableVersions] = useState<VersionInfo[]>([]);
   const [selectedVersion, setSelectedVersion] = useState<string>("");
+  const [versionsLoading, setVersionsLoading] = useState(false);
   const mountedRef = useRef(true);
 
   // Cleanup on unmount
@@ -67,16 +68,19 @@ export default function Marketplace({ clientReady = true }: MarketplaceProps) {
     if (!selectedApp) {
       setAvailableVersions([]);
       setSelectedVersion("");
+      setVersionsLoading(false);
       return;
     }
     setAvailableVersions([]);
     setSelectedVersion(selectedApp.latest_version);
+    setVersionsLoading(true);
     let cancelled = false;
     fetchAppVersions(selectedApp.registry, selectedApp.id)
-      .then((vs) => { if (!cancelled) setAvailableVersions(vs); })
+      .then((vs) => { if (!cancelled) { setAvailableVersions(vs); setVersionsLoading(false); } })
       .catch(() => {
         if (!cancelled) {
           setAvailableVersions([]);
+          setVersionsLoading(false);
           toast.error("Failed to load version list");
         }
       });
@@ -677,7 +681,11 @@ export default function Marketplace({ clientReady = true }: MarketplaceProps) {
               </div>
               <div className="modal-meta-row">
                 <span className="modal-meta-label">Version</span>
-                {availableVersions.length > 1 ? (
+                {versionsLoading ? (
+                  <span className="modal-meta-value modal-versions-loading">
+                    <RefreshCw size={12} className="spinning" /> Loading…
+                  </span>
+                ) : availableVersions.length > 0 ? (
                   <select
                     className="modal-version-select"
                     value={selectedVersion}

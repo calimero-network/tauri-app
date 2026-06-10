@@ -735,10 +735,12 @@ export default function Marketplace({ clientReady = true }: MarketplaceProps) {
                 <button
                   onClick={() => handleInstall(selectedApp, selectedVersion || selectedApp.latest_version)}
                   className="button button-primary"
-                  disabled={installingAppId === selectedApp.id}
+                  disabled={installingAppId === selectedApp.id || versionsLoading}
                 >
                   {installingAppId === selectedApp.id ? (
                     <><RefreshCw size={16} className="spinning" /> Installing...</>
+                  ) : versionsLoading ? (
+                    <><RefreshCw size={16} className="spinning" /> Loading versions...</>
                   ) : (
                     <><span className="install-icon-wrap"><Download size={16} /></span>Install</>
                   )}

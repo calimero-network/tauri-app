@@ -147,15 +147,15 @@ export async function fetchAppVersions(
     const bundlesArray = Array.isArray(bundles) ? bundles : [];
 
     // Deduplicate by semver (registry may return one entry per platform/arch),
-    // then sort descending so latest appears first.
+    // filter yanked versions (unsupported by the developer), then sort descending.
     const seen = new Set<string>();
     return bundlesArray
       .map((bundle: any) => ({
         semver: bundle.appVersion as string,
         cid: `/artifacts/${bundle.package}/${bundle.appVersion}/${bundle.package}-${bundle.appVersion}.mpk`,
-        yanked: false,
+        yanked: bundle.yanked === true,
       }))
-      .filter((v) => !seen.has(v.semver) && seen.add(v.semver))
+      .filter((v) => !v.yanked && !seen.has(v.semver) && seen.add(v.semver))
       .sort((a, b) => {
         const pa = a.semver.replace(/^v/, '').split('.').map(Number);
         const pb = b.semver.replace(/^v/, '').split('.').map(Number);

@@ -126,6 +126,7 @@ export async function fetchAppVersions(
   registryUrl: string,
   appId: string
 ): Promise<VersionInfo[]> {
+  if (!/^[\w.@/-]+$/.test(appId)) throw new Error(`Invalid appId: ${appId}`);
   try {
     // Use V2 Bundle API - get all published versions for this package
     const url = new URL('/api/v2/bundles', registryUrl);
@@ -150,6 +151,7 @@ export async function fetchAppVersions(
     // filter yanked versions (unsupported by the developer), then sort descending.
     const seen = new Set<string>();
     return bundlesArray
+      .filter((bundle: any) => /^[\w.+-]+$/.test(bundle.appVersion))
       .map((bundle: any) => ({
         semver: bundle.appVersion as string,
         cid: `/artifacts/${bundle.package}/${bundle.appVersion}/${bundle.package}-${bundle.appVersion}.mpk`,

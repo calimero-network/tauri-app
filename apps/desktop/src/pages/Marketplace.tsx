@@ -76,7 +76,15 @@ export default function Marketplace({ clientReady = true }: MarketplaceProps) {
     setVersionsLoading(true);
     let cancelled = false;
     fetchAppVersions(selectedApp.registry, selectedApp.id)
-      .then((vs) => { if (!cancelled) { setAvailableVersions(vs); setVersionsLoading(false); } })
+      .then((vs) => {
+        if (!cancelled) {
+          setAvailableVersions(vs);
+          // Use the newest non-yanked version from the registry (may differ from
+          // the listing row's latest_version if that version is yanked).
+          setSelectedVersion(vs[0]?.semver ?? selectedApp.latest_version);
+          setVersionsLoading(false);
+        }
+      })
       .catch(() => {
         if (!cancelled) {
           setAvailableVersions([]);
@@ -685,7 +693,7 @@ export default function Marketplace({ clientReady = true }: MarketplaceProps) {
                   <span className="modal-meta-value modal-versions-loading">
                     <RefreshCw size={12} className="spinning" /> Loading…
                   </span>
-                ) : availableVersions.length > 0 ? (
+                ) : availableVersions.length > 1 ? (
                   <select
                     className="modal-version-select"
                     value={selectedVersion}
@@ -695,7 +703,7 @@ export default function Marketplace({ clientReady = true }: MarketplaceProps) {
                   >
                     {availableVersions.map((v) => (
                       <option key={v.semver} value={v.semver}>
-                        {v.semver === selectedApp.latest_version ? `${v.semver} (latest)` : v.semver}
+                        {v.semver === availableVersions[0]?.semver ? `${v.semver} (latest)` : v.semver}
                       </option>
                     ))}
                   </select>
@@ -725,7 +733,7 @@ export default function Marketplace({ clientReady = true }: MarketplaceProps) {
                 </button>
               ) : (
                 <button
-                  onClick={() => handleInstall(selectedApp, selectedVersion)}
+                  onClick={() => handleInstall(selectedApp, selectedVersion || selectedApp.latest_version)}
                   className="button button-primary"
                   disabled={installingAppId === selectedApp.id}
                 >

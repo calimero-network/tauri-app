@@ -93,7 +93,8 @@ export default function Marketplace({ clientReady = true }: MarketplaceProps) {
         }
       });
     return () => { cancelled = true; };
-  }, [selectedApp?.id, selectedApp?.registry]);
+    // toast.error is a stable useCallback ref; the whole `toast` object is not.
+  }, [selectedApp?.id, selectedApp?.registry, toast.error]);
 
   // -----------------------------------------------------------------------
   // Helper: build MarketplaceApp[] from raw registry results + installed set

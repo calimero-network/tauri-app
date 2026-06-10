@@ -118,9 +118,10 @@ export async function fetchAppsFromRegistry(
   }
 }
 
-// Package ids may be scoped (@org/name); both fetch helpers use this so the
-// version list and the manifest fetch agree on what's valid.
-const APP_ID_RE = /^[\w.@/-]+$/;
+// Package ids may be scoped (@org/name) but nothing more — this mirrors the
+// registry's own validation and blocks stray slashes / path-traversal. Both
+// fetch helpers use it so the version list and manifest fetch agree.
+const APP_ID_RE = /^(?:@[\w.-]+\/)?[\w.+-]+$/;
 const VERSION_RE = /^[\w.+-]+$/;
 
 /**

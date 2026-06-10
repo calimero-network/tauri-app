@@ -129,7 +129,7 @@ export async function fetchAppVersions(
   try {
     // Use V2 Bundle API - get all bundles for this package
     const url = new URL('/api/v2/bundles', registryUrl);
-    url.searchParams.set('package', appId);
+    url.searchParams.set('package', appId); // query param — encodeURIComponent handled by URLSearchParams
 
     const response = await fetch(url.toString(), {
       method: 'GET',
@@ -179,9 +179,11 @@ export async function fetchAppManifest(
   appId: string,
   version: string
 ): Promise<AppManifest> {
+  if (!/^[\w.+-]+$/.test(appId)) throw new Error(`Invalid appId: ${appId}`);
+  if (!/^[\w.+-]+$/.test(version)) throw new Error(`Invalid version: ${version}`);
   try {
-    // Use V2 Bundle API
-    const url = new URL(`/api/v2/bundles/${appId}/${version}`, registryUrl);
+    // Use V2 Bundle API — encodeURIComponent guards against path traversal in segments
+    const url = new URL(`/api/v2/bundles/${encodeURIComponent(appId)}/${encodeURIComponent(version)}`, registryUrl);
     
     const response = await fetch(url.toString(), {
       method: 'GET',

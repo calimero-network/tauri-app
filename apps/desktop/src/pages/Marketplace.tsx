@@ -59,14 +59,17 @@ export default function Marketplace({ clientReady = true }: MarketplaceProps) {
 
   // Load the open app's published versions for the picker; default the
   // selection to its latest. Cleared when the modal closes.
-  // Depends on selectedApp?.id (not the full object) so patching installed:true
+  // Depends on id+registry (not the full object) so patching installed:true
   // after an install doesn't re-run this and reset the user's version pick.
+  // Registry is included so the same package id from a different registry
+  // gets a fresh version list.
   useEffect(() => {
     if (!selectedApp) {
       setAvailableVersions([]);
       setSelectedVersion("");
       return;
     }
+    setAvailableVersions([]);
     setSelectedVersion(selectedApp.latest_version);
     let cancelled = false;
     fetchAppVersions(selectedApp.registry, selectedApp.id)
@@ -78,7 +81,7 @@ export default function Marketplace({ clientReady = true }: MarketplaceProps) {
         }
       });
     return () => { cancelled = true; };
-  }, [selectedApp?.id]);
+  }, [selectedApp?.id, selectedApp?.registry]);
 
   // -----------------------------------------------------------------------
   // Helper: build MarketplaceApp[] from raw registry results + installed set

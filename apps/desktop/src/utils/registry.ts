@@ -127,9 +127,10 @@ export async function fetchAppVersions(
   appId: string
 ): Promise<VersionInfo[]> {
   try {
-    // Use V2 Bundle API - get all bundles for this package
+    // Use V2 Bundle API - get all published versions for this package
     const url = new URL('/api/v2/bundles', registryUrl);
-    url.searchParams.set('package', appId); // query param — encodeURIComponent handled by URLSearchParams
+    url.searchParams.set('package', appId); // encodeURIComponent handled by URLSearchParams
+    url.searchParams.set('all_versions', 'true');
 
     const response = await fetch(url.toString(), {
       method: 'GET',

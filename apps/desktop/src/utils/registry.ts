@@ -118,6 +118,59 @@ export async function fetchAppsFromRegistry(
   }
 }
 
+// Package ids may be scoped (@org/name) but nothing more — this mirrors the
+// registry's own validation and blocks stray slashes / path-traversal. Both
+// fetch helpers use it so the version list and manifest fetch agree.
+const APP_ID_RE = /^(?:@[\w.-]+\/)?[\w.+-]+$/;
+const VERSION_RE = /^[\w.+-]+$/;
+
+/**
+ * Compare two semver strings for a descending sort. Handles MAJOR.MINOR.PATCH
+ * plus pre-release identifiers (1.0.0-alpha sorts below 1.0.0). Build metadata
+ * (after '+') is ignored, per the semver spec.
+ */
+function compareSemverDesc(a: string, b: string): number {
+  const parse = (v: string) => {
+    const withoutBuild = v.replace(/^v/, '').split('+')[0];
+    const dash = withoutBuild.indexOf('-');
+    const core = dash === -1 ? withoutBuild : withoutBuild.slice(0, dash);
+    const pre = dash === -1 ? '' : withoutBuild.slice(dash + 1);
+    return { core: core.split('.').map(Number), pre };
+  };
+  const pa = parse(a);
+  const pb = parse(b);
+  for (let i = 0; i < Math.max(pa.core.length, pb.core.length); i++) {
+    const diff = (pb.core[i] ?? 0) - (pa.core[i] ?? 0);
+    if (diff !== 0) return diff;
+  }
+  // Equal core: a release WITHOUT a pre-release outranks one WITH it.
+  if (pa.pre === '' && pb.pre !== '') return -1;
+  if (pa.pre !== '' && pb.pre === '') return 1;
+  if (pa.pre === pb.pre) return 0;
+  const ia = pa.pre.split('.');
+  const ib = pb.pre.split('.');
+  for (let i = 0; i < Math.max(ia.length, ib.length); i++) {
+    const xa = ia[i];
+    const xb = ib[i];
+    if (xa === undefined) return 1; // shorter pre-release has lower precedence
+    if (xb === undefined) return -1;
+    const na = Number(xa);
+    const nb = Number(xb);
+    const aNum = !Number.isNaN(na);
+    const bNum = !Number.isNaN(nb);
+    if (aNum && bNum) {
+      if (na !== nb) return nb - na;
+    } else if (aNum !== bNum) {
+      // numeric identifiers have lower precedence than alphanumeric ones
+      return aNum ? 1 : -1;
+    } else {
+      const cmp = xb.localeCompare(xa);
+      if (cmp !== 0) return cmp;
+    }
+  }
+  return 0;
+}
+
 /**
  * Fetch all versions of an application from a registry
  * Uses V2 Bundle API
@@ -126,10 +179,12 @@ export async function fetchAppVersions(
   registryUrl: string,
   appId: string
 ): Promise<VersionInfo[]> {
+  if (!APP_ID_RE.test(appId)) throw new Error(`Invalid appId: ${appId}`);
   try {
-    // Use V2 Bundle API - get all bundles for this package
+    // Use V2 Bundle API - get all published versions for this package
     const url = new URL('/api/v2/bundles', registryUrl);
-    url.searchParams.set('package', appId);
+    url.searchParams.set('package', appId); // encodeURIComponent handled by URLSearchParams
+    url.searchParams.set('all_versions', 'true');
 
     const response = await fetch(url.toString(), {
       method: 'GET',
@@ -145,16 +200,23 @@ export async function fetchAppVersions(
     const bundles = await response.json();
     const bundlesArray = Array.isArray(bundles) ? bundles : [];
 
-    // Transform V2 bundles to VersionInfo format
-    return bundlesArray.map((bundle: any) => {
-      // Get artifact URL (convention: /artifacts/:package/:version/:package-:version.mpk)
-      const artifactUrl = `/artifacts/${bundle.package}/${bundle.appVersion}/${bundle.package}-${bundle.appVersion}.mpk`;
-      return {
-        semver: bundle.appVersion,
-        cid: artifactUrl,
+    // Drop yanked/invalid entries and deduplicate by semver (the registry may
+    // return one entry per platform/arch), then sort newest-first.
+    const seen = new Set<string>();
+    const versions: VersionInfo[] = [];
+    for (const bundle of bundlesArray as any[]) {
+      const semver = bundle.appVersion as string;
+      if (!VERSION_RE.test(semver)) continue;
+      if (bundle.yanked === true) continue;
+      if (seen.has(semver)) continue;
+      seen.add(semver);
+      versions.push({
+        semver,
+        cid: `/artifacts/${bundle.package}/${semver}/${bundle.package}-${semver}.mpk`,
         yanked: false,
-      };
-    });
+      });
+    }
+    return versions.sort((a, b) => compareSemverDesc(a.semver, b.semver));
   } catch (error) {
     console.error(`Failed to fetch app versions from registry ${registryUrl}:`, error);
     throw error;
@@ -170,9 +232,11 @@ export async function fetchAppManifest(
   appId: string,
   version: string
 ): Promise<AppManifest> {
+  if (!APP_ID_RE.test(appId)) throw new Error(`Invalid appId: ${appId}`);
+  if (!VERSION_RE.test(version)) throw new Error(`Invalid version: ${version}`);
   try {
-    // Use V2 Bundle API
-    const url = new URL(`/api/v2/bundles/${appId}/${version}`, registryUrl);
+    // Use V2 Bundle API — encodeURIComponent guards against path traversal in segments
+    const url = new URL(`/api/v2/bundles/${encodeURIComponent(appId)}/${encodeURIComponent(version)}`, registryUrl);
     
     const response = await fetch(url.toString(), {
       method: 'GET',

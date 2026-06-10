@@ -608,7 +608,7 @@ export default function Marketplace({ clientReady = true }: MarketplaceProps) {
                       </button>
                     ) : (
                       <button
-                        onClick={() => handleInstall(app)}
+                        onClick={() => setSelectedApp(app)}
                         className="button button-primary"
                         disabled={installingAppId === app.id}
                       >

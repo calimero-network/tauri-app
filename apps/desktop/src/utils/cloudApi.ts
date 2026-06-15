@@ -281,28 +281,25 @@ export async function setTeeAdmissionPolicy(
   }
 }
 
-// ── Cloud claim (silent context registration) ──
+// ── Ownership proofs (namespace HA gate) ──
 
 /**
- * An ownership proof issued by the local merod for a single context.
- * The triplet is opaque to the desktop — it round-trips through the
- * cloud's claim endpoint, which forwards it to a verifier that checks
- * the signature against the registered group signing key.
+ * An ownership proof issued by the local merod, scoped either to a
+ * single context (PROOF_AUDIENCE_CLAIM_CONTEXT) or to a namespace root
+ * (PROOF_AUDIENCE_ENABLE_HA_NAMESPACE). The triplet is opaque to the
+ * desktop — it round-trips through a cloud endpoint, which forwards it
+ * to a verifier that checks the signature against the registered group
+ * signing key.
  *
- * Field names are snake_case because this object is embedded into the
- * cloud /api/cloud/me/contexts/claim request body. Merod's admin API
- * returns the same triplet in camelCase (see requestOwnershipProof
+ * Field names are snake_case because this object is embedded into a
+ * cloud request body. Merod's admin API returns the same triplet in
+ * camelCase (see requestOwnershipProof / requestNamespaceOwnershipProof
  * below) and we re-key on the way out.
  */
 export interface OwnershipProof {
   signer_public_key: string;
   signed_payload: string;
   signature: string;
-}
-
-export interface ClaimedContext {
-  context_id: string;
-  ownership_proof: OwnershipProof;
 }
 
 interface IssueOwnershipProofResponseData {
@@ -566,46 +563,13 @@ export async function requestNamespaceOwnershipProof(
 }
 
 /**
- * Submit a batch of ownership proofs to the cloud so the contexts get
- * recorded against the caller's MDMA user. Single batched call instead
- * of one POST per context — the cloud verifier is the bottleneck and
- * each proof is independent.
+ * Enable HA end-to-end for a namespace. The cloud only knows namespaces;
+ * the desktop does not register/claim individual contexts.
  *
- * 403 responses include `{detail: "Ownership proof failed: <reason>"}`;
- * surface the detail string verbatim so the failure reason (signer
- * mismatch, expired nonce, ...) reaches the operator.
- */
-export async function claimContexts(
-  idToken: string,
-  claims: ClaimedContext[],
-): Promise<string[]> {
-  const res = await cloudFetch('/api/cloud/me/contexts/claim', idToken, {
-    method: 'POST',
-    body: JSON.stringify({ claims }),
-  });
-  if (!res.ok) {
-    const error = await res.json().catch(() => null);
-    throw new Error(error?.detail || 'Failed to claim contexts with cloud');
-  }
-  // Tolerate a 2xx with an empty/non-JSON body (e.g. 204): fall back to
-  // {} so the caller's claim-coverage check reports a meaningful
-  // "did not register" error instead of a raw JSON SyntaxError.
-  const body = (await res.json().catch(() => ({}))) as { claimed?: string[] };
-  return Array.isArray(body?.claimed) ? body.claimed : [];
-}
-
-/**
- * Enable HA end-to-end for a namespace (Phase 4 — HA authz decoupled
- * from context registration):
  * 1. Pre-flight: verify the caller is the namespace-root Admin. This is
  *    a UX fail-fast only — the authoritative gate is server-side (the
- *    namespace ownership proof on the no-context path; a UserContext the
- *    caller already claimed on the real-context path). HA enable no
- *    longer silently claims contexts as a precondition: there is NO
- *    `/contexts/claim` round-trip on either path. `/contexts/claim`
- *    remains a separate, explicit context-registration concern (see
- *    `claimContexts` / `requestOwnershipProof`) that callers invoke on
- *    their own; it is not a hidden dependency of enabling HA.
+ *    namespace ownership proof on the no-context path; a UserNamespace
+ *    row on the real-context path).
  * 2. Fetch fleet measurements from cloud once (trusted MRTD values).
  * 3. Set the TEE admission policy on the *namespace root only*. Subgroup
  *    policies are ignored by core (namespace-scoped since rc.29 /
@@ -614,8 +578,8 @@ export async function claimContexts(
  *    admission check.
  * 4. Register the namespace with cloud:
  *    • Real-context path: `groups` carries representative
- *      {group_id, context_id} entries; the cloud authorises each context
- *      against a UserContext the caller already claimed out-of-band.
+ *      {group_id, context_id} entries; the cloud authorises off the
+ *      caller's namespace ownership in the UserNamespace ledger.
  *    • No-context path: `groups` is `[]` plus a single namespace-scoped
  *      ownership proof — the authoritative server-verified namespace gate.
  */
@@ -628,11 +592,9 @@ export async function enableHaForNamespace(
   // A context-less namespace is a first-class HA target. When no group
   // has a real context the cloud authorises off ONE namespace-scoped
   // ownership proof + an empty group list (the authoritative
-  // server-verified gate — no UserContext row exists to authorise
-  // against). When real contexts are supplied the cloud authorises each
-  // against a UserContext the caller already registered out-of-band via
-  // the separate /contexts/claim flow. Neither path claims contexts as a
-  // side effect of enabling HA (Phase 4 decouple).
+  // server-verified gate). When real contexts are supplied the cloud
+  // authorises off the caller's namespace ownership in the UserNamespace
+  // ledger — there is no separate per-context registration step.
   const hasRealContext = groups.some((g) => !!g.context_id);
 
   // ── Step 1: token-shape fail-fast + Admin pre-flight ──
@@ -692,14 +654,10 @@ export async function enableHaForNamespace(
     throw new Error('Only the namespace admin can enable HA for this namespace.');
   }
 
-  // NOTE (Phase 4 decouple): there is intentionally no per-context
-  // ownership-proof + /contexts/claim batch here anymore. Enabling HA no
-  // longer silently registers contexts as a precondition. The
-  // real-context path now sends `groups` straight to enableHaNamespace —
-  // the cloud authorises each context against a UserContext the caller
-  // already registered via the separate, explicit /contexts/claim flow
-  // (requestOwnershipProof + claimContexts remain available for that, but
-  // are not invoked from this HA path). The no-context path supplies a
+  // The cloud surface is namespace-only: there is no per-context
+  // registration step the desktop calls. The real-context path sends
+  // `groups` straight to enableHaNamespace and the cloud authorises off
+  // the caller's namespace ownership; the no-context path supplies a
   // single namespace-scoped ownership proof below.
 
   // ── Step 2–4: measurements → tee-policy → register ──
@@ -713,16 +671,15 @@ export async function enableHaForNamespace(
   await setTeeAdmissionPolicy(nodeUrl, namespaceId, measurements.allowed_mrtd);
 
   if (hasRealContext) {
-    // Real-context path: the cloud authorises each context against a
-    // UserContext the caller registered out-of-band via /contexts/claim.
-    // No proof here, and HA no longer claims on the caller's behalf.
+    // Real-context path: the cloud authorises off the caller's namespace
+    // ownership in the UserNamespace ledger. No per-call proof needed.
     return enableHaNamespace(idToken, namespaceId, groups);
   }
 
-  // Context-less path: no contexts to bill/claim, so send an empty group
-  // list plus exactly ONE namespace-scoped ownership proof. merod gates
-  // proof issuance on direct admin of the namespace root and signs with
-  // the root signing key; the cloud re-verifies the proof (signature,
+  // Context-less path: no contexts to bill, so send an empty group list
+  // plus exactly ONE namespace-scoped ownership proof. merod gates proof
+  // issuance on direct admin of the namespace root and signs with the
+  // root signing key; the cloud re-verifies the proof (signature,
   // subject == authenticated email, audience, group_id == path namespace)
   // before any write — this server-side check is the authoritative
   // namespace-ownership gate. Core admits a ReadOnlyTee fleet member at

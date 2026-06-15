@@ -26,7 +26,7 @@ import {
 import { getCloudIdToken } from "../utils/cloudAuth";
 import { getAccessToken } from "../lib/token-storage";
 import { parseJwtPayload } from "../utils/jwt";
-import { isCloudEnabled } from "../utils/featureFlags";
+import { useCloudEnabled } from "../hooks/useCloudEnabled";
 import "./Namespaces.css";
 
 function parseApiError(e: any): string {
@@ -132,6 +132,7 @@ type GroupInfoExt = Omit<GroupInfo, "metadata"> & {
 export default function Namespaces() {
   const toast = useToast();
   const { mero } = useMero();
+  const cloudEnabled = useCloudEnabled();
   const [view, setView] = useState<View>({ type: "list" });
 
   const activeNsId = view.type === "namespace" || view.type === "group" ? view.ns.namespaceId : null;
@@ -948,7 +949,7 @@ export default function Namespaces() {
             )}
           </div>
 
-          {isCloudEnabled() && (() => {
+          {cloudEnabled && (() => {
             const cloudConnected = !!getCloudIdToken();
             const nsHaEnabled = !!haEnabled[ns.namespaceId];
             const nsHaEnabling = !!haEnabling[ns.namespaceId];

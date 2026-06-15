@@ -5,7 +5,7 @@ import { invoke } from "@tauri-apps/api/tauri";
 import { killAllMerodProcesses, deleteCalimeroDataDir, stopMerod, getMerodStatus } from "../utils/merod";
 import { startCloudLogin, disconnectCloud } from "../utils/cloudAuth";
 import { getCloudSubscription, CloudSessionExpiredError } from "../utils/cloudApi";
-import { isCloudEnabled } from "../utils/featureFlags";
+import { isCloudEnabled, notifyCloudEnabledChanged } from "../utils/featureFlags";
 import { useTheme } from "../contexts/ThemeContext";
 import { useToast } from "../contexts/ToastContext";
 import { ArrowLeft, RotateCcw, Trash2, Cloud } from "lucide-react";
@@ -25,6 +25,7 @@ export default function Settings({ onBack }: SettingsProps) {
   const [activeTab, setActiveTab] = useState<'general' | 'registries' | 'cloud'>('general');
   const [developerMode, setDeveloperMode] = useState(false);
   const [debugLogs, setDebugLogs] = useState(false);
+  const [cloudEnabled, setCloudEnabled] = useState(false);
   const [cloudConnected, setCloudConnected] = useState(false);
   const [cloudEmail, setCloudEmail] = useState<string | undefined>();
   const [cloudName, setCloudName] = useState<string | undefined>();
@@ -47,6 +48,8 @@ export default function Settings({ onBack }: SettingsProps) {
     setRegistries(settings.registries || []);
     setDeveloperMode(settings.developerMode ?? false);
     setDebugLogs(settings.debugLogs ?? false);
+    // Effective cloud flag: explicit runtime override if set, else the build-time default.
+    setCloudEnabled(typeof settings.cloudEnabled === 'boolean' ? settings.cloudEnabled : isCloudEnabled());
     setCloudConnected(settings.cloudConnected ?? false);
     setCloudEmail(settings.cloudUserEmail);
     setCloudName(settings.cloudUserName);
@@ -119,6 +122,18 @@ export default function Settings({ onBack }: SettingsProps) {
       debugLogs: newValue,
     });
     toast.success(`Debug logs ${newValue ? 'enabled' : 'disabled'}. Restart the node for changes to take effect.`);
+  };
+
+  const handleCloudEnabledToggle = () => {
+    const newValue = !cloudEnabled;
+    setCloudEnabled(newValue);
+    const settings = getSettings();
+    saveSettings({
+      ...settings,
+      cloudEnabled: newValue,
+    });
+    notifyCloudEnabledChanged();
+    toast.success(`Calimero Cloud ${newValue ? 'enabled' : 'disabled'}`);
   };
 
   const handleAddRegistry = () => {
@@ -271,6 +286,26 @@ export default function Settings({ onBack }: SettingsProps) {
             <p className="field-hint">
                   Enable debug-level logging for the merod node. Produces more verbose logs useful for troubleshooting.
                   Restart the node for changes to take effect.
+            </p>
+          </div>
+          <div className="settings-field">
+                <span className="settings-field-label">Enable Cloud</span>
+                <div className="toggle-switch">
+            <input
+                    id="cloud-enabled"
+                    type="checkbox"
+                    checked={cloudEnabled}
+                    onChange={handleCloudEnabledToggle}
+                  />
+                  <label htmlFor="cloud-enabled" className="toggle-label">
+                    <span className="toggle-slider"></span>
+                    <span className="toggle-text">
+                      {cloudEnabled ? 'Enabled' : 'Disabled'}
+                    </span>
+                  </label>
+                </div>
+            <p className="field-hint">
+                  Show Calimero Cloud sign-in and High Availability features. Takes effect immediately.
             </p>
           </div>
               <div className="settings-field" style={{ marginTop: '16px', paddingTop: '16px', borderTop: '1px solid var(--border-color, #333)' }}>

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { checkOnboardingState, getOnboardingMessage, type OnboardingState } from "../utils/onboarding";
 import { apiClient } from "../lib/mero-client";
 import { LoginView } from "../components/LoginView";
@@ -23,21 +23,35 @@ interface OnboardingProps {
 
 type OnboardingStep = 'welcome' | 'what-is' | 'node-setup' | 'cloud-connect' | 'login' | 'install-app';
 
-const ONBOARDING_STEPS: OnboardingStep[] = isCloudEnabled()
-  ? ['welcome', 'what-is', 'node-setup', 'cloud-connect', 'login', 'install-app']
-  : ['welcome', 'what-is', 'node-setup', 'login', 'install-app'];
-
-const STEP_AFTER_NODE_SETUP: OnboardingStep = isCloudEnabled() ? 'cloud-connect' : 'login';
-
-
 export default function Onboarding({ onComplete, onSettings }: OnboardingProps) {
   const toast = useToast();
   const { setTheme } = useTheme();
+
+  // Evaluated at runtime so the cloud feature flag (which is now a runtime toggle)
+  // takes effect without a rebuild. Step ordering is preserved exactly per enabled/disabled case.
+  const ONBOARDING_STEPS = useMemo<OnboardingStep[]>(
+    () =>
+      isCloudEnabled()
+        ? ['welcome', 'what-is', 'node-setup', 'cloud-connect', 'login', 'install-app']
+        : ['welcome', 'what-is', 'node-setup', 'login', 'install-app'],
+    [],
+  );
+
+  const STEP_AFTER_NODE_SETUP = useMemo<OnboardingStep>(
+    () => (isCloudEnabled() ? 'cloud-connect' : 'login'),
+    [],
+  );
   const [state, setState] = useState<OnboardingState | null>(null);
   const [loading, setLoading] = useState(true);
   const [currentStep, setCurrentStep] = useState<OnboardingStep>(() => {
     const saved = loadOnboardingProgress();
-    return saved?.currentStep ?? 'welcome';
+    const savedStep = saved?.currentStep ?? 'welcome';
+    // Cloud was disabled at runtime after progress was saved on the cloud step;
+    // that step is no longer in the list, so skip it.
+    if (savedStep === 'cloud-connect' && !isCloudEnabled()) {
+      return 'login';
+    }
+    return savedStep;
   });
 
   // Force dark mode during onboarding - override any theme changes

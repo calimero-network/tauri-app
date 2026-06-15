@@ -10,6 +10,7 @@ export interface AppSettings {
   embeddedNodeName?: string; // Node name for embedded node
   developerMode?: boolean; // Developer mode - shows advanced features like multiple nodes and contexts
   debugLogs?: boolean; // Enable debug-level logging for the merod node
+  cloudEnabled?: boolean; // Runtime override for the cloud feature flag. undefined = use build-time default (VITE_ENABLE_CLOUD / DEV)
   onboardingCompleted?: boolean; // True once user has completed first-time setup - never show onboarding again
   cloudConnected?: boolean; // Whether user is connected to Calimero Cloud
   cloudIdToken?: string; // MDMA session token for Cloud API auth (7d TTL, rolling refresh). During the migration window may hold a Google ID token until exchange lands.
@@ -86,6 +87,8 @@ export function getSettings(): AppSettings {
         embeddedNodeName: rawSettings.embeddedNodeName,
         developerMode: rawSettings.developerMode ?? false, // Default to false
         debugLogs: rawSettings.debugLogs ?? false,
+        cloudEnabled: rawSettings.cloudEnabled, // Passthrough: keep undefined when unset so featureFlags can fall back to build-time default
+
         onboardingCompleted: rawSettings.onboardingCompleted ?? false,
         cloudConnected: rawSettings.cloudConnected ?? false,
         cloudIdToken: rawSettings.cloudIdToken,

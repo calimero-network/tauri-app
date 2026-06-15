@@ -113,17 +113,23 @@ export async function getCloudSubscription(
   return res.json();
 }
 
-export interface CloudGroup {
-  group_id: string;
-  namespace_id: string | null;
+// Shape of `GET /api/cloud/me/namespaces` (the namespace-native read model,
+// live since Phase 2). One row per namespace the caller owns. This is the
+// successor to the deprecated `/api/cloud/me/groups` alias, whose rows
+// carried an extra `group_id` (== `namespace_id`) that no longer exists
+// here — `namespace_id` is the sole identity key and is always present.
+export interface CloudNamespace {
+  namespace_id: string;
   contexts: string[];
   ha_status: string;
   ha_enabled_at: string | null;
   fleet_replicas: { active: number; assigned: number; limit: number };
 }
 
-export async function getCloudGroups(idToken: string): Promise<CloudGroup[]> {
-  const res = await cloudFetch('/api/cloud/me/groups', idToken);
+export async function getCloudNamespaces(
+  idToken: string,
+): Promise<CloudNamespace[]> {
+  const res = await cloudFetch('/api/cloud/me/namespaces', idToken);
   if (!res.ok) return [];
   return res.json();
 }

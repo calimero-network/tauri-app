@@ -10,6 +10,7 @@ import {
   useCreateNamespace,
   type Namespace,
 } from "@calimero-network/mero-react";
+import type { GroupInfo, MetadataRecord } from "@calimero-network/mero-js";
 import { useToast } from "../contexts/ToastContext";
 import { ChevronLeft, Users, Box, Layers, Copy, ChevronRight, Shield, Globe, Plus, X, Trash2, UserMinus, Link, ChevronDown, Check, MoreHorizontal, LogIn } from "lucide-react";
 import { apiClient } from "../lib/mero-client";
@@ -19,7 +20,7 @@ import { getSettings } from "../utils/settings";
 import {
   enableHaForNamespace,
   disableHaNamespace,
-  getCloudGroups,
+  getCloudNamespaces,
   CloudSessionExpiredError,
 } from "../utils/cloudApi";
 import { getCloudIdToken } from "../utils/cloudAuth";
@@ -93,6 +94,23 @@ type View =
   | { type: "namespace"; ns: Namespace }
   | { type: "group"; ns: Namespace; groupId: string };
 
+// The merod admin group-info response (core's GroupInfoApiResponseData,
+// crates/server/primitives/src/admin/mod.rs, #[serde(rename_all =
+// "camelCase")]) carries `groupStateHash` — a governance-convergence hash —
+// that the bundled mero-js `GroupInfo` type still omits. `subgroupVisibility`
+// and `metadata` are already present on the SDK type (and we keep the SDK's
+// `MetadataRecord` shape verbatim via Omit, so the cast at the use sites is a
+// sound widening of the stale SDK type rather than a redeclaration).
+//
+// We re-add `metadata` through Omit (instead of `extends`) because declaring
+// it again on a subtype clashes with the SDK's `metadata?: MetadataRecord |
+// null` (TS2430) — Omit-then-restore keeps the field wire-accurate without the
+// conflict. Drop the whole alias once mero-js exposes `groupStateHash`.
+type GroupInfoExt = Omit<GroupInfo, "metadata"> & {
+  metadata?: MetadataRecord | null;
+  groupStateHash?: string;
+};
+
 export default function Namespaces() {
   const toast = useToast();
   const { mero } = useMero();
@@ -104,8 +122,14 @@ export default function Namespaces() {
 
   const { namespaces, loading, error, refetch: refetchNamespaces } = useNamespaces();
   const { groups: nsGroups, loading: nsLoadingGroups, error: nsGroupsError, refetch: refetchNsGroups } = useNamespaceGroups(activeNsId) as any;
-  const { groupInfo, loading: groupInfoLoading } = useGroupInfo(activeGroupId);
-  const { groupInfo: nsRootGroupInfo } = useGroupInfo(activeNsRootId);
+  const { groupInfo: groupInfoRaw, loading: groupInfoLoading } = useGroupInfo(activeGroupId);
+  const { groupInfo: nsRootGroupInfoRaw } = useGroupInfo(activeNsRootId);
+  // The SDK's `GroupInfo` is stale vs core's API (skew): it lacks
+  // `groupStateHash` that the live merod response carries. We narrow to the
+  // wire-accurate `GroupInfoExt` (a sound widening — see its definition).
+  // Remove this cast once mero-js is bumped to expose the field.
+  const groupInfo = groupInfoRaw as GroupInfoExt | null;
+  const nsRootGroupInfo = nsRootGroupInfoRaw as GroupInfoExt | null;
   const { members: groupMembers, refetch: refetchGroupMembers } = useGroupMembers(activeGroupId) as any;
   const [nsMembers, setNsMembers] = useState<any[]>([]);
   const [nsMembersLoading, setNsMembersLoading] = useState(false);
@@ -365,14 +389,14 @@ export default function Namespaces() {
     const token = getCloudIdToken();
     if (!token) return;
     let cancelled = false;
-    getCloudGroups(token)
-      .then((groups) => {
+    getCloudNamespaces(token)
+      .then((namespaces) => {
         if (cancelled) return;
         const byNamespace: Record<string, boolean> = {};
-        for (const g of groups) {
-          if (!g.namespace_id) continue;
-          if (g.ha_status === "enabled") byNamespace[g.namespace_id] = true;
-          else if (byNamespace[g.namespace_id] === undefined) byNamespace[g.namespace_id] = false;
+        for (const n of namespaces) {
+          if (!n.namespace_id) continue;
+          if (n.ha_status === "enabled") byNamespace[n.namespace_id] = true;
+          else if (byNamespace[n.namespace_id] === undefined) byNamespace[n.namespace_id] = false;
         }
         setHaEnabled(byNamespace);
       })

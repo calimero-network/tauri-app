@@ -18,6 +18,7 @@ import {
   requestOwnershipProof,
   claimContexts,
   enableHaForNamespace,
+  getCloudNamespaces,
   CLOUD_BASE_URL,
 } from './cloudApi';
 
@@ -178,6 +179,44 @@ describe('claimContexts', () => {
     await expect(
       claimContexts(makeJwt({ iss: 'mdma' }), []),
     ).rejects.toThrow(/Ownership proof failed: signer not registered/);
+  });
+});
+
+describe('getCloudNamespaces', () => {
+  let restore: () => void;
+  afterEach(() => restore?.());
+
+  it('GETs the namespace-native read model with a bearer token', async () => {
+    const rows = [
+      {
+        namespace_id: 'ns-1',
+        contexts: ['ctx-1'],
+        ha_status: 'enabled',
+        ha_enabled_at: '2026-01-01T00:00:00Z',
+        fleet_replicas: { active: 1, assigned: 1, limit: 3 },
+      },
+    ];
+    const { calls, restore: r } = installFetch(() => jsonResponse(rows));
+    restore = r;
+
+    const out = await getCloudNamespaces(makeJwt({ iss: 'mdma' }));
+
+    expect(calls).toHaveLength(1);
+    // Migrated off the deprecated /api/cloud/me/groups alias.
+    expect(calls[0].url).toBe(`${CLOUD_BASE_URL}/api/cloud/me/namespaces`);
+    expect(calls[0].init?.method ?? 'GET').toBe('GET');
+    expect(
+      (calls[0].init?.headers as Record<string, string>).Authorization,
+    ).toMatch(/^Bearer /);
+    expect(out).toEqual(rows);
+  });
+
+  it('returns [] on a non-ok response instead of throwing', async () => {
+    const { restore: r } = installFetch(() => jsonResponse({}, 500));
+    restore = r;
+    await expect(getCloudNamespaces(makeJwt({ iss: 'mdma' }))).resolves.toEqual(
+      [],
+    );
   });
 });
 

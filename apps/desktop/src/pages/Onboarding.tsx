@@ -45,7 +45,13 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
   const [loading, setLoading] = useState(true);
   const [currentStep, setCurrentStep] = useState<OnboardingStep>(() => {
     const saved = loadOnboardingProgress();
-    return saved?.currentStep ?? 'welcome';
+    const savedStep = saved?.currentStep ?? 'welcome';
+    // Cloud was disabled at runtime after progress was saved on the cloud step;
+    // that step is no longer in the list, so skip it.
+    if (savedStep === 'cloud-connect' && !isCloudEnabled()) {
+      return 'login';
+    }
+    return savedStep;
   });
 
   // Force dark mode during onboarding - override any theme changes

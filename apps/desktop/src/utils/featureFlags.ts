@@ -21,6 +21,12 @@ function buildTimeDefault(): boolean {
  * boolean; otherwise we fall back to the build-time default. Callable on each render —
  * the result is intentionally not cached at module load so the Settings toggle takes
  * effect immediately without a rebuild.
+ *
+ * NOTE: This flag is a UI-only convenience, NOT a security boundary. It is read from
+ * localStorage (user-writable via settings) and only gates whether cloud UI surfaces
+ * are shown. Every actual cloud operation independently enforces auth by validating the
+ * MDMA session token (isMdmaSessionToken / isTokenExpired) regardless of this flag, so
+ * flipping it cannot grant or bypass access to cloud functionality.
  */
 export function isCloudEnabled(): boolean {
   const { cloudEnabled } = getSettings();

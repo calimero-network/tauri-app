@@ -19,7 +19,9 @@ export function useCloudEnabled(): boolean {
   const [enabled, setEnabled] = useState<boolean>(isCloudEnabled);
 
   useEffect(() => {
-    // Recompute on mount to catch any change between initial state and subscription.
+    // The useState initializer runs during render, but the listener below only
+    // registers after commit. Re-read here so a flag change dispatched in that gap
+    // is not missed. No-op when unchanged (React bails via Object.is).
     setEnabled(isCloudEnabled());
 
     const handler = () => setEnabled(isCloudEnabled());

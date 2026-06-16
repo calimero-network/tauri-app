@@ -566,22 +566,25 @@ export async function requestNamespaceOwnershipProof(
  * Enable HA end-to-end for a namespace. The cloud only knows namespaces;
  * the desktop does not register/claim individual contexts.
  *
- * 1. Pre-flight: verify the caller is the namespace-root Admin. This is
+ * Only the namespace path is supported: an empty group list plus a single
+ * namespace-scoped ownership proof. Passing a non-empty `context_id` is
+ * rejected up front — it would route to the cloud's enable-ha real-context
+ * branch, which authorises against the never-populated `UserContext` ledger
+ * and 404s (namespace-native pivot fallout; calimero-network/mdma#162).
+ *
+ * 1. Reject any per-context request (fail fast, no network).
+ * 2. Pre-flight: verify the caller is the namespace-root Admin. This is
  *    a UX fail-fast only — the authoritative gate is server-side (the
- *    namespace ownership proof on the no-context path; a UserNamespace
- *    row on the real-context path).
- * 2. Fetch fleet measurements from cloud once (trusted MRTD values).
- * 3. Set the TEE admission policy on the *namespace root only*. Subgroup
+ *    namespace ownership proof).
+ * 3. Fetch fleet measurements from cloud once (trusted MRTD values).
+ * 4. Set the TEE admission policy on the *namespace root only*. Subgroup
  *    policies are ignored by core (namespace-scoped since rc.29 /
  *    calimero-network/core#2188) — applying them would error. Auto-follow
  *    propagates fleet-node membership into subgroups without a second
  *    admission check.
- * 4. Register the namespace with cloud:
- *    • Real-context path: `groups` carries representative
- *      {group_id, context_id} entries; the cloud authorises off the
- *      caller's namespace ownership in the UserNamespace ledger.
- *    • No-context path: `groups` is `[]` plus a single namespace-scoped
- *      ownership proof — the authoritative server-verified namespace gate.
+ * 5. Register the namespace with cloud: `groups` is `[]` plus a single
+ *    namespace-scoped ownership proof — the authoritative server-verified
+ *    namespace gate.
  */
 export async function enableHaForNamespace(
   idToken: string,
@@ -589,13 +592,23 @@ export async function enableHaForNamespace(
   namespaceId: string,
   groups: NamespaceHaGroup[],
 ): Promise<EnableHaNamespaceResponse> {
-  // A context-less namespace is a first-class HA target. When no group
-  // has a real context the cloud authorises off ONE namespace-scoped
+  // HA is namespace-scoped: the only supported path is the namespace
   // ownership proof + an empty group list (the authoritative
-  // server-verified gate). When real contexts are supplied the cloud
-  // authorises off the caller's namespace ownership in the UserNamespace
-  // ledger — there is no separate per-context registration step.
-  const hasRealContext = groups.some((g) => !!g.context_id);
+  // server-verified gate). The "real-context" path — passing a non-empty
+  // `context_id` — is intentionally rejected here, before any network
+  // round-trip. It routes to the cloud's enable-ha real-context branch,
+  // which authorises against the `UserContext` ledger; the cloud's
+  // namespace-native pivot stopped populating that table, so any context
+  // sent there 404s with "Contexts not found or not owned by user".
+  // Failing loud now avoids silently dispatching to that broken server
+  // path. Re-enable per-context support only once the server gate
+  // authorises off `UserNamespace` — calimero-network/mdma#162.
+  if (groups.some((g) => !!g.context_id)) {
+    throw new Error(
+      'Per-context HA registration is disabled pending a server-side fix ' +
+        '(calimero-network/mdma#162). Enable HA at the namespace level instead.',
+    );
+  }
 
   // ── Step 1: token-shape fail-fast + Admin pre-flight ──
   // The cloud verifier is the authoritative trust boundary: it re-checks
@@ -655,10 +668,7 @@ export async function enableHaForNamespace(
   }
 
   // The cloud surface is namespace-only: there is no per-context
-  // registration step the desktop calls. The real-context path sends
-  // `groups` straight to enableHaNamespace and the cloud authorises off
-  // the caller's namespace ownership; the no-context path supplies a
-  // single namespace-scoped ownership proof below.
+  // registration step the desktop calls.
 
   // ── Step 2–4: measurements → tee-policy → register ──
   const measurements = await getFleetMeasurements(idToken);
@@ -670,22 +680,8 @@ export async function enableHaForNamespace(
   // there and only there — subgroups inherit it via resolve-to-root.
   await setTeeAdmissionPolicy(nodeUrl, namespaceId, measurements.allowed_mrtd);
 
-  if (hasRealContext) {
-    // Real-context path. NOTE: currently unreachable from the desktop UI —
-    // Namespaces.tsx always passes an empty `groups`, so this branch never
-    // runs in production (it is still exercised by cloudApi.test.ts and
-    // retained for other/future callers). It is kept because the server's
-    // real-context branch is itself broken: it authorises against the
-    // `UserContext` ledger, which the cloud's namespace-native pivot stopped
-    // populating, so any context sent here 404s ("Contexts not found or not
-    // owned by user"). Re-enable this path only once that server gate is
-    // fixed to authorise off `UserNamespace` — tracked in
-    // calimero-network/mdma#162.
-    return enableHaNamespace(idToken, namespaceId, groups);
-  }
-
-  // Context-less path: no contexts to bill, so send an empty group list
-  // plus exactly ONE namespace-scoped ownership proof. merod gates proof
+  // Namespace path: send an empty group list plus exactly ONE
+  // namespace-scoped ownership proof. merod gates proof
   // issuance on direct admin of the namespace root and signs with the
   // root signing key; the cloud re-verifies the proof (signature,
   // subject == authenticated email, audience, group_id == path namespace)

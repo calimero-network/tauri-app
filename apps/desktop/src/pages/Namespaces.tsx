@@ -593,16 +593,17 @@ export default function Namespaces() {
           toast.success('HA disabled — TEE nodes will stop replicating');
         }
       } else {
-        const rootCtxs = await mero.admin
-          .listGroupContexts(nsId)
-          .catch((err: unknown) => {
-            console.warn('listGroupContexts probe failed; falling through to namespace-ownership-proof path:', err);
-            return [] as { contextId: string }[];
-          });
-        const groups = rootCtxs.length
-          ? [{ group_id: nsId, context_id: rootCtxs[0].contextId }]
-          : [];
-        await enableHaForNamespace(token, settings.nodeUrl, nsId, groups);
+        // HA is namespace-scoped: always authorise via the namespace
+        // ownership-proof path, whether or not the namespace already has
+        // contexts. Attaching a real context_id here routes the request
+        // onto the cloud's legacy "real-context" branch, which gates on
+        // the `UserContext` ledger — a table the namespace-native pivot
+        // stopped populating, so it 404s ("Contexts not found or not
+        // owned by user") for any context that actually exists. An empty
+        // group list keeps the request on the server-verified
+        // namespace-ownership gate (UserNamespace); core admits the
+        // ReadOnlyTee fleet member at the root and auto-follows contexts.
+        await enableHaForNamespace(token, settings.nodeUrl, nsId, []);
         setHaEnabled((prev) => ({ ...prev, [nsId]: true }));
         toast.success('HA enabled — TEE fleet nodes will join');
       }

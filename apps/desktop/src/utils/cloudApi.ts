@@ -671,8 +671,16 @@ export async function enableHaForNamespace(
   await setTeeAdmissionPolicy(nodeUrl, namespaceId, measurements.allowed_mrtd);
 
   if (hasRealContext) {
-    // Real-context path: the cloud authorises off the caller's namespace
-    // ownership in the UserNamespace ledger. No per-call proof needed.
+    // Real-context path. NOTE: currently unreachable from the desktop UI —
+    // Namespaces.tsx always passes an empty `groups`, so this branch never
+    // runs in production (it is still exercised by cloudApi.test.ts and
+    // retained for other/future callers). It is kept because the server's
+    // real-context branch is itself broken: it authorises against the
+    // `UserContext` ledger, which the cloud's namespace-native pivot stopped
+    // populating, so any context sent here 404s ("Contexts not found or not
+    // owned by user"). Re-enable this path only once that server gate is
+    // fixed to authorise off `UserNamespace` — tracked in
+    // calimero-network/mdma#162.
     return enableHaNamespace(idToken, namespaceId, groups);
   }
 

@@ -211,9 +211,7 @@ describe('enableHaForNamespace', () => {
     );
     restore = r;
     await expect(
-      enableHaForNamespace(makeJwt({ iss: 'mdma', email: 'u@e' }), 'http://node', 'ns-root', [
-        { group_id: 'g1', context_id: 'ctx-1' },
-      ]),
+      enableHaForNamespace(makeJwt({ iss: 'mdma', email: 'u@e' }), 'http://node', 'ns-root', []),
     ).rejects.toThrow(/Only the namespace admin can enable HA/);
   });
 
@@ -229,9 +227,7 @@ describe('enableHaForNamespace', () => {
     );
     restore = r;
     await expect(
-      enableHaForNamespace(makeJwt({ iss: 'mdma', email: 'u@e' }), 'http://node', 'ns-root', [
-        { group_id: 'g1', context_id: 'ctx-1' },
-      ]),
+      enableHaForNamespace(makeJwt({ iss: 'mdma', email: 'u@e' }), 'http://node', 'ns-root', []),
     ).rejects.toThrow(/Could not determine your role in this namespace/);
   });
 
@@ -248,71 +244,37 @@ describe('enableHaForNamespace', () => {
     );
     restore = r;
     await expect(
-      enableHaForNamespace(makeJwt({ iss: 'mdma', email: 'u@e' }), 'http://node', 'ns-root', [
-        { group_id: 'g1', context_id: 'ctx-1' },
-      ]),
+      enableHaForNamespace(makeJwt({ iss: 'mdma', email: 'u@e' }), 'http://node', 'ns-root', []),
     ).rejects.toThrow(/Unexpected response from local node members endpoint/);
   });
 
-  it('real-context path: members → measurements → tee-policy → enable, NO per-context proof', async () => {
+  it('real-context path is rejected fail-fast with no network calls (mdma#162)', async () => {
+    // Passing a non-empty context_id would route to the cloud's enable-ha
+    // real-context branch, which authorises against the never-populated
+    // `UserContext` ledger and 404s. The client rejects it up front —
+    // before any merod/cloud round-trip — rather than dispatching to the
+    // broken server path.
     const calls: string[] = [];
     const { restore: r } = installFetch((url, init) => {
       calls.push(`${init?.method ?? 'GET'} ${url}`);
-      return route(url, init, {
-        '/admin-api/groups/ns-root/members': () =>
-          jsonResponse({
-            members: [{ identity: 'me', role: 'Admin' }],
-            selfIdentity: 'me',
-          }),
-        '/api/cloud/fleet/measurements': () =>
-          jsonResponse({
-            release_tag: 'v1',
-            allowed_mrtd: ['mrtd-1'],
-            allowed_rtmr0: [],
-            allowed_rtmr1: [],
-            allowed_rtmr2: [],
-            allowed_rtmr3: [],
-          }),
-        '/admin-api/groups/ns-root/settings/tee-admission-policy': () =>
-          new Response('{}', { status: 200 }),
-        '/api/cloud/me/namespaces/ns-root/enable-ha': () =>
-          jsonResponse({
-            status: 'enabling',
-            namespace_id: 'ns-root',
-            groups: [],
-          }),
-      });
+      return jsonResponse({});
     });
     restore = r;
 
-    const res = await enableHaForNamespace(
-      makeJwt({ iss: 'mdma', email: 'u@e' }),
-      'http://node',
-      'ns-root',
-      [
-        { group_id: 'ns-root', context_id: 'ctx-1' },
-        { group_id: 'sub-1', context_id: 'ctx-2' },
-      ],
-    );
-    expect(res.status).toBe('enabling');
+    await expect(
+      enableHaForNamespace(
+        makeJwt({ iss: 'mdma', email: 'u@e' }),
+        'http://node',
+        'ns-root',
+        [
+          { group_id: 'ns-root', context_id: 'ctx-1' },
+          { group_id: 'sub-1', context_id: 'ctx-2' },
+        ],
+      ),
+    ).rejects.toThrow(/Per-context HA registration is disabled.*mdma#162/);
 
-    // HA-enable does not invoke the per-context ownership-proof shim.
-    expect(calls.some((c) => c.includes('/issue-ownership-proof'))).toBe(false);
-
-    // Order: members (UX fail-fast) → measurements → tee-policy → enable.
-    const ordered = (substr: string) =>
-      calls.findIndex((c) => c.includes(substr));
-    expect(ordered('/members')).toBeLessThan(ordered('/fleet/measurements'));
-    expect(ordered('/fleet/measurements')).toBeLessThan(
-      ordered('/tee-admission-policy'),
-    );
-    expect(ordered('/tee-admission-policy')).toBeLessThan(
-      ordered('/enable-ha'),
-    );
-
-    // Real-context path sends the groups straight through, no proof key.
-    const enableCall = calls.find((c) => c.includes('/enable-ha'));
-    expect(enableCall).toBeDefined();
+    // Fail-fast: nothing was dispatched to merod or the cloud.
+    expect(calls).toHaveLength(0);
   });
 
   it('no-context path ([] groups): members → measurements → tee-policy → ONE namespace proof → enable', async () => {
@@ -396,7 +358,7 @@ describe('enableHaForNamespace', () => {
         makeJwt({ iss: 'mdma' }), // no email, no sub
         'http://node',
         'ns-root',
-        [{ group_id: 'g', context_id: 'c' }],
+        [],
       ),
     ).rejects.toThrow(/missing the user identifier/);
   });
@@ -454,9 +416,7 @@ describe('enableHaForNamespace', () => {
     restore = r;
     // iss != "mdma"
     await expect(
-      enableHaForNamespace(makeJwt({ iss: 'google', email: 'u@e' }), 'http://node', 'ns', [
-        { group_id: 'g', context_id: 'c' },
-      ]),
+      enableHaForNamespace(makeJwt({ iss: 'google', email: 'u@e' }), 'http://node', 'ns', []),
     ).rejects.toThrow(/Not signed in to Calimero Cloud/);
     // mdma but expired
     await expect(
@@ -464,7 +424,7 @@ describe('enableHaForNamespace', () => {
         makeJwt({ iss: 'mdma', email: 'u@e', exp: Math.floor(Date.now() / 1000) - 10 }),
         'http://node',
         'ns',
-        [{ group_id: 'g', context_id: 'c' }],
+        [],
       ),
     ).rejects.toThrow(/Cloud session has expired/);
     expect(calls).toHaveLength(0); // failed fast, no merod/cloud round-trips
@@ -479,9 +439,7 @@ describe('enableHaForNamespace', () => {
     );
     restore = r;
     await expect(
-      enableHaForNamespace(makeJwt({ iss: 'mdma', email: 'u@e' }), 'http://node', 'ns-root', [
-        { group_id: 'g1', context_id: 'ctx-1' },
-      ]),
+      enableHaForNamespace(makeJwt({ iss: 'mdma', email: 'u@e' }), 'http://node', 'ns-root', []),
     ).rejects.toThrow(/Unexpected response from local node members endpoint/);
   });
 
@@ -494,9 +452,7 @@ describe('enableHaForNamespace', () => {
     );
     restore = r;
     await expect(
-      enableHaForNamespace(makeJwt({ iss: 'mdma', email: 'u@e' }), 'http://node', 'ns-root', [
-        { group_id: 'g1', context_id: 'ctx-1' },
-      ]),
+      enableHaForNamespace(makeJwt({ iss: 'mdma', email: 'u@e' }), 'http://node', 'ns-root', []),
     ).rejects.toThrow(/Unexpected response from local node members endpoint/);
   });
 });

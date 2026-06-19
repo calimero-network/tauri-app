@@ -579,6 +579,9 @@ export default function Namespaces() {
           reconcileExhaustedRef.current = false;
           clearReconcileRetryTimer();
         } else if (reconcileRetryTimer.current === null) {
+          // A timer already pending from a previous pass is left to fire on
+          // its original schedule rather than resetting the interval — the
+          // retry still happens, just not re-deferred by a later pass.
           if (reconcileRetryCount.current < RECONCILE_MAX_RETRIES) {
             reconcileRetryCount.current += 1;
             reconcileRetryTimer.current = setTimeout(() => {

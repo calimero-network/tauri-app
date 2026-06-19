@@ -415,6 +415,12 @@ export function buildEvictionDeps(args: {
       return extractMembersFromResponse(json);
     },
     listSubgroups: async (groupId) => {
+      // Mirror the fetch-side abort check: stop enumerating the tree via the
+      // mero admin client once the caller is superseded. Throwing makes
+      // `enumerateGroupTree` mark the walk incomplete and stop descending,
+      // so a cancelled pass doesn't keep issuing admin calls down a deep
+      // tree (meroreviewer).
+      if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
       const entries = await mero.admin.listSubgroups(groupId);
       return (entries ?? [])
         .map((e) => e?.groupId)

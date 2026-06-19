@@ -478,6 +478,23 @@ export default function Namespaces() {
   // and skips namespaces with no local TEE members, so the steady state is
   // a cheap no-op.
   const reconcileRunningRef = useRef(false);
+  // A trigger arriving while a pass is in flight must NOT be dropped: the
+  // in-flight pass may be working off now-stale `haEnabled`, and if this is
+  // the last trigger the namespace would be stranded forever. Record it and
+  // re-run once the current pass settles (cursor + meroreviewer).
+  const reconcilePendingRef = useRef(false);
+  // Bounded self-heal for the `listFailed` case (transient node token /
+  // hung merod / gossip lag): when a completed pass couldn't fully
+  // enumerate local state and no other trigger is coming, retry on a timer
+  // up to a cap so the "retries automatically" promise actually holds —
+  // without polling forever (meroreviewer). Reset once a pass fully
+  // enumerates every disabled namespace.
+  const reconcileRetryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reconcileRetryCount = useRef(0);
+  const RECONCILE_MAX_RETRIES = 5;
+  const RECONCILE_RETRY_MS = 30_000;
+  const [reconcileTick, setReconcileTick] = useState(0);
+  const triggerReconcile = useCallback(() => setReconcileTick((t) => t + 1), []);
   useEffect(() => {
     if (!mero) return;
     const settings = getSettings();
@@ -488,10 +505,15 @@ export default function Namespaces() {
     // HA state we haven't confirmed is off.
     const hasDisabled = Object.values(haEnabled).some((v) => v === false);
     if (!hasDisabled) return;
-    if (reconcileRunningRef.current) return;
+    if (reconcileRunningRef.current) {
+      // Defer instead of dropping — re-run after the in-flight pass settles.
+      reconcilePendingRef.current = true;
+      return;
+    }
 
     let cancelled = false;
     reconcileRunningRef.current = true;
+    reconcilePendingRef.current = false;
     const deps = buildEvictionDeps({
       mero,
       nodeUrl: settings.nodeUrl,
@@ -510,17 +532,49 @@ export default function Namespaces() {
             `Cleaned up ${evicted} stranded TEE member(s) from HA-disabled namespace(s)`,
           );
         }
+        // Fully enumerated → clear the retry budget. Otherwise schedule a
+        // bounded retry so a transient failure self-heals even when
+        // `haEnabled` never changes again (no cloud-status polling exists).
+        if (touched.some((r) => r.listFailed)) {
+          if (
+            reconcileRetryTimer.current === null &&
+            reconcileRetryCount.current < RECONCILE_MAX_RETRIES
+          ) {
+            reconcileRetryCount.current += 1;
+            reconcileRetryTimer.current = setTimeout(() => {
+              reconcileRetryTimer.current = null;
+              triggerReconcile();
+            }, RECONCILE_RETRY_MS);
+          }
+        } else {
+          reconcileRetryCount.current = 0;
+        }
       })
       .catch(() => {
         // Best-effort; never surface a reconcile failure as an error toast.
-        // The next `haEnabled` change retries.
       })
       .finally(() => {
         reconcileRunningRef.current = false;
+        // A trigger arrived mid-pass — re-run against the latest state.
+        if (reconcilePendingRef.current) {
+          reconcilePendingRef.current = false;
+          triggerReconcile();
+        }
       });
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [haEnabled, mero]);
+  }, [haEnabled, mero, reconcileTick]);
+
+  // Clear any pending reconcile retry timer on unmount.
+  useEffect(
+    () => () => {
+      if (reconcileRetryTimer.current !== null) {
+        clearTimeout(reconcileRetryTimer.current);
+        reconcileRetryTimer.current = null;
+      }
+    },
+    [],
+  );
 
   const toggleHa = useCallback(async (ns: Namespace) => {
     const token = getCloudIdToken();
@@ -536,52 +590,69 @@ export default function Namespaces() {
     try {
       if (isEnabled) {
         await disableHaNamespace(token, nsId);
+        // Claim the reconcile mutex BEFORE flipping `haEnabled` to false.
+        // That state change triggers the reconcile effect; without the
+        // claim it would walk the same namespace tree concurrently with
+        // our own eviction below, double-issuing removes and duplicating
+        // the success toast (cursor). With the claim, the effect defers
+        // (pending-rerun); the inner `finally` releases it and triggers a
+        // single reconcile pass to mop up any leftovers / retry a
+        // listFailed.
+        reconcileRunningRef.current = true;
         setHaEnabled((prev) => ({ ...prev, [nsId]: false }));
-        // Cloud-side disable is done; now evict any admitted TEE members
-        // from this owner's local merod. Without this, `MemberRemoved` is
-        // never published, no key rotation fires, and the fleet node
-        // remains a `ReadOnlyTee` member of our local group state
-        // indefinitely (see tauri-app#106 + core ADR 0002).
-        const evictResult = await evictTeeMembersAfterDisable(nsId);
-        // Refresh the Members list if any remove call ran (success OR
-        // failure). On `failed > 0` the store state could still have
-        // changed in mero before the failure, and refetching reflects
-        // truth. On pure `listFailed` we have no removals to mirror, so
-        // skip the refresh. Mirrors the `handleRemoveMember` pattern.
-        // tauri-app#107 v3 review (cursor) + v5 review (defensive
-        // `failed > 0` arm per meroreviewer).
-        if (evictResult.evicted > 0 || evictResult.failed > 0) {
-          setNsMembersVersion((v) => v + 1);
-          refetchGroupMembers?.();
-        }
-        // Toast tiers — honest about what happened. Unlike v1, a transient
-        // failure here is NOT a dead end: the reconcile (which runs on
-        // namespace/HA-status load) retries automatically, so the copy now
-        // says "will retry" rather than "restart to retry" (tauri-app#106).
-        //   * everything succeeded → standard success
-        //   * list-members fetch / subgroup walk failed → cloud is
-        //     disabled but we couldn't fully enumerate what's local; the
-        //     reconcile retries on next load
-        //   * partial per-member failure → reconcile retries the leftovers
-        //   * zero TEE members found locally → nothing to evict (fleet
-        //     never admitted before disable, or gossip hadn't propagated)
-        if (evictResult.listFailed) {
-          toast.success(
-            'HA disabled cloud-side. Local membership cleanup is incomplete — ' +
-              'it will retry automatically on the next refresh.',
-          );
-        } else if (evictResult.failed > 0) {
-          toast.success(
-            `HA disabled — ${evictResult.evicted} TEE member(s) evicted, ` +
-              `${evictResult.failed} cleanup failed; will retry automatically.`,
-          );
-        } else if (evictResult.evicted > 0) {
-          toast.success(
-            `HA disabled — ${evictResult.evicted} TEE member(s) evicted; ` +
-              'forward secrecy applied via key rotation',
-          );
-        } else {
-          toast.success('HA disabled — TEE nodes will stop replicating');
+        try {
+          // Cloud-side disable is done; now evict any admitted TEE members
+          // from this owner's local merod. Without this, `MemberRemoved` is
+          // never published, no key rotation fires, and the fleet node
+          // remains a `ReadOnlyTee` member of our local group state
+          // indefinitely (see tauri-app#106 + core ADR 0002).
+          const evictResult = await evictTeeMembersAfterDisable(nsId);
+          // Refresh the Members list if any remove call ran (success OR
+          // failure). On `failed > 0` the store state could still have
+          // changed in mero before the failure, and refetching reflects
+          // truth. On pure `listFailed` we have no removals to mirror, so
+          // skip the refresh. Mirrors the `handleRemoveMember` pattern.
+          // tauri-app#107 v3 review (cursor) + v5 review (defensive
+          // `failed > 0` arm per meroreviewer).
+          if (evictResult.evicted > 0 || evictResult.failed > 0) {
+            setNsMembersVersion((v) => v + 1);
+            refetchGroupMembers?.();
+          }
+          // Toast tiers — honest about what happened. Unlike v1, a transient
+          // failure here is NOT a dead end: the reconcile (which runs on
+          // namespace/HA-status load) retries automatically, so the copy now
+          // says "will retry" rather than "restart to retry" (tauri-app#106).
+          //   * everything succeeded → standard success
+          //   * list-members fetch / subgroup walk failed → cloud is
+          //     disabled but we couldn't fully enumerate what's local; the
+          //     reconcile retries on next load
+          //   * partial per-member failure → reconcile retries the leftovers
+          //   * zero TEE members found locally → nothing to evict (fleet
+          //     never admitted before disable, or gossip hadn't propagated)
+          if (evictResult.listFailed) {
+            toast.success(
+              'HA disabled cloud-side. Local membership cleanup is incomplete — ' +
+                'it will retry automatically on the next refresh.',
+            );
+          } else if (evictResult.failed > 0) {
+            toast.success(
+              `HA disabled — ${evictResult.evicted} TEE member(s) evicted, ` +
+                `${evictResult.failed} cleanup failed; will retry automatically.`,
+            );
+          } else if (evictResult.evicted > 0) {
+            toast.success(
+              `HA disabled — ${evictResult.evicted} TEE member(s) evicted; ` +
+                'forward secrecy applied via key rotation',
+            );
+          } else {
+            toast.success('HA disabled — TEE nodes will stop replicating');
+          }
+        } finally {
+          // Release the mutex and let the reconcile run once against the
+          // latest state (idempotent no-op if we already cleaned up; a
+          // genuine retry if our fast-path eviction hit listFailed).
+          reconcileRunningRef.current = false;
+          triggerReconcile();
         }
       } else {
         // HA is namespace-scoped: always authorise via the namespace
@@ -607,7 +678,7 @@ export default function Namespaces() {
     } finally {
       setHaEnabling((prev) => { const next = { ...prev }; delete next[nsId]; return next; });
     }
-  }, [haEnabled, mero, toast]);
+  }, [haEnabled, mero, toast, triggerReconcile]);
 
   // ── Nav ──
   const openNamespace = (ns: Namespace) => { setActionsMenuOpen(false); setView({ type: "namespace", ns }); };

@@ -267,6 +267,21 @@ describe('buildEvictionDeps', () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
+  it('fails closed without touching the network when nodeUrl is not http(s)', async () => {
+    const fetchImpl = vi.fn();
+    for (const nodeUrl of ['javascript:alert(1)', 'data:text/html,x', 'not a url', '']) {
+      const deps = buildEvictionDeps({
+        mero: { admin: { listSubgroups: async () => [], removeGroupMembers: async () => {} } },
+        nodeUrl,
+        getNodeToken: () => 'node-tok',
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+      });
+      expect(await deps.listGroupMembers('ns')).toBeNull();
+    }
+    // An invalid base URL must never reach a token-bearing fetch.
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it('lists members with a Bearer node token and normalises the body', async () => {
     const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
       expect((init?.headers as Record<string, string>).Authorization).toBe(

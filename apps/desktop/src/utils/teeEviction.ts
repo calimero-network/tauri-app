@@ -238,13 +238,22 @@ export async function reconcileDisabledNamespaces(
 ): Promise<Record<string, EvictionResult>> {
   const results: Record<string, EvictionResult> = {};
   const disabled = Object.keys(haEnabled).filter((nsId) => haEnabled[nsId] === false);
-  for (const nsId of disabled) {
-    // Cheap pre-check on the root only: if the root listing shows no TEE
-    // member AND has no subgroups with TEE members, the full walk would
-    // be a no-op. But a subgroup can hold a stranded TEE even when the
-    // root is clean (Bug 2), so we can't short-circuit on the root alone.
-    // Run the full walk; it skips groups with no TEE members anyway.
-    const result = await evictTeeMembersFromTree(deps, nsId);
+  // Each namespace is an independent tree, so evict them concurrently —
+  // for a user with many HA-disabled namespaces this avoids serialising the
+  // walks. `evictTeeMembersFromTree` is best-effort and never throws, but we
+  // still use `allSettled` so one namespace's failure can never abort the
+  // others. (No root short-circuit: a subgroup can hold a stranded TEE even
+  // when the root is clean — Bug 2 — and the walk already skips groups with
+  // no TEE members.)
+  const settled = await Promise.allSettled(
+    disabled.map(async (nsId): Promise<[string, EvictionResult]> => [
+      nsId,
+      await evictTeeMembersFromTree(deps, nsId),
+    ]),
+  );
+  for (const outcome of settled) {
+    if (outcome.status !== 'fulfilled') continue;
+    const [nsId, result] = outcome.value;
     if (result.evicted > 0 || result.failed > 0 || result.listFailed) {
       results[nsId] = result;
     }
@@ -299,8 +308,32 @@ export function buildEvictionDeps(args: {
 }): EvictionDeps {
   const { mero, nodeUrl, getNodeToken } = args;
   const doFetch = args.fetchImpl ?? fetch;
+  // Validate the node URL once up front: it is interpolated into the
+  // members fetch URL right next to the local node bearer token, so a
+  // malformed / non-http(s) value (e.g. a `javascript:` or `data:` scheme
+  // from a tampered settings store) must never reach `fetch`. We accept any
+  // http/https origin and deliberately do NOT pin loopback — merod can be
+  // configured on a remote/LAN host (the rest of the app interpolates the
+  // same `settings.nodeUrl` without a loopback constraint), so pinning it
+  // would break valid remote-node setups. An invalid URL fails closed
+  // (listGroupMembers → null → listFailed) and the reconcile surfaces it as
+  // "cleanup pending". (meroreviewer review.)
+  let nodeUrlOk = false;
+  try {
+    const proto = new URL(nodeUrl).protocol;
+    nodeUrlOk = proto === 'http:' || proto === 'https:';
+  } catch {
+    nodeUrlOk = false;
+  }
   return {
     listGroupMembers: async (groupId) => {
+      if (!nodeUrlOk) {
+        // Never interpolate an unvalidated URL into a token-bearing fetch.
+        console.warn(
+          'buildEvictionDeps: nodeUrl is not a valid http(s) URL — cleanup pending',
+        );
+        return null;
+      }
       const token = getNodeToken();
       if (!token) {
         // No node token → fail-closed. Reconcile retries once a token

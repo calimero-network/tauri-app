@@ -176,7 +176,7 @@ export async function evictTeeMembersFromTree(
   let failed = 0;
   let anyListFailed = incomplete;
 
-  for (const groupId of groupIds) {
+  walk: for (const groupId of groupIds) {
     // Bail out of the (mutating) walk if the caller has been superseded —
     // e.g. the namespace's HA state changed (re-enabled) while we were
     // mid-walk. Without this, an in-flight reconcile would keep issuing
@@ -217,8 +217,9 @@ export async function evictTeeMembersFromTree(
 
     for (const identity of teeIds) {
       if (shouldAbort?.()) {
+        // Abort the whole walk, not just this group's remaining identities.
         anyListFailed = true;
-        break;
+        break walk;
       }
       try {
         await deps.removeGroupMembers(groupId, [identity]);
@@ -322,9 +323,11 @@ export interface MeroAdminLike {
  * the reconcile retries — it no longer silently strands the TEE.
  *
  * The members fetch carries a 5s `AbortSignal.timeout` so a hung merod
- * doesn't wedge the disable / reconcile flow. Removal + subgroup
- * enumeration go through the mero admin client (which manages its own
- * auth/headers).
+ * doesn't wedge the disable / reconcile flow. An optional caller `signal`
+ * (the reconcile pass's AbortController) is merged in, so a superseded
+ * pass cancels its in-flight fetch immediately rather than waiting out the
+ * 5s timeout (meroreviewer). Removal + subgroup enumeration go through the
+ * mero admin client (which manages its own auth/headers).
  *
  * `nodeToken` is read lazily via the supplied getter on every listing so
  * a token that rotates between reconcile passes is picked up fresh.
@@ -334,8 +337,9 @@ export function buildEvictionDeps(args: {
   nodeUrl: string;
   getNodeToken: () => string | null;
   fetchImpl?: typeof fetch;
+  signal?: AbortSignal;
 }): EvictionDeps {
-  const { mero, nodeUrl, getNodeToken } = args;
+  const { mero, nodeUrl, getNodeToken, signal } = args;
   const doFetch = args.fetchImpl ?? fetch;
   // Validate the node URL once up front: it is interpolated into the
   // members fetch URL right next to the local node bearer token, so a
@@ -363,19 +367,33 @@ export function buildEvictionDeps(args: {
         );
         return null;
       }
+      if (signal?.aborted) {
+        // Caller already superseded (e.g. HA re-enabled) — don't start a
+        // token-bearing fetch we'd only discard.
+        return null;
+      }
       const token = getNodeToken();
       if (!token) {
         // No node token → fail-closed. Reconcile retries once a token
         // is available. Never log the (absent) token.
         return null;
       }
+      // Merge the caller's abort signal with the per-request 5s timeout so
+      // the fetch is cancelled the moment either fires. `AbortSignal.any`
+      // is used when available; otherwise we fall back to the timeout
+      // (caller abort is still honoured at the walk's `shouldAbort` checks).
+      const timeout = AbortSignal.timeout(5000);
+      const fetchSignal =
+        signal && typeof AbortSignal.any === 'function'
+          ? AbortSignal.any([signal, timeout])
+          : timeout;
       let resp: Response;
       try {
         resp = await doFetch(
           `${nodeUrl}/admin-api/groups/${encodeURIComponent(groupId)}/members`,
           {
             headers: { Authorization: `Bearer ${token}` },
-            signal: AbortSignal.timeout(5000),
+            signal: fetchSignal,
           },
         );
       } catch (e) {

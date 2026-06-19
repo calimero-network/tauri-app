@@ -551,6 +551,7 @@ export default function Namespaces() {
       mero,
       nodeUrl: settings.nodeUrl,
       getNodeToken: getAccessToken,
+      signal: controller.signal,
     });
     reconcileDisabledNamespaces(deps, haEnabled, {
       shouldAbort: () => controller.signal.aborted,

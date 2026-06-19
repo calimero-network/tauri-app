@@ -306,6 +306,47 @@ function short(id: string): string {
 }
 
 /**
+ * Race a promise against a deadline (and an optional abort signal). Used to
+ * bound the `mero.admin.listSubgroups` admin call, which — unlike the members
+ * fetch — carries no timeout of its own, so a hung merod could otherwise wedge
+ * the whole eviction walk and leave the HA toggle stuck (cursor). Racing the
+ * signal in as well means an abort mid-call is honoured immediately rather
+ * than only at the next `shouldAbort` poll (meroreviewer). On timeout/abort it
+ * rejects; `enumerateGroupTree` treats either as "couldn't enumerate this
+ * branch" (incomplete → the reconcile retries).
+ */
+function withDeadline<T>(p: Promise<T>, ms: number, signal?: AbortSignal): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const onAbort = () => settle(() => reject(new DOMException('Aborted', 'AbortError')));
+    const cleanup = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+    };
+    const settle = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      fn();
+    };
+    if (signal?.aborted) {
+      reject(new DOMException('Aborted', 'AbortError'));
+      return;
+    }
+    timer = setTimeout(
+      () => settle(() => reject(new DOMException('Timed out', 'TimeoutError'))),
+      ms,
+    );
+    signal?.addEventListener('abort', onAbort, { once: true });
+    p.then(
+      (v) => settle(() => resolve(v)),
+      (e) => settle(() => reject(e)),
+    );
+  });
+}
+
+/**
  * Minimal shape of the live `mero` admin client this module depends on.
  * Declared locally (rather than importing the SDK type) so the eviction
  * module stays free of the heavyweight mero-js type graph and its unit
@@ -434,7 +475,14 @@ export function buildEvictionDeps(args: {
       // so a cancelled pass doesn't keep issuing admin calls down a deep
       // tree (meroreviewer).
       if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
-      const entries = await mero.admin.listSubgroups(groupId);
+      // Bound the admin call: it carries no timeout of its own, so a hung
+      // merod must not wedge the walk (cursor). The signal is raced in too,
+      // so an abort mid-call is honoured immediately (meroreviewer).
+      const entries = await withDeadline(
+        mero.admin.listSubgroups(groupId),
+        5000,
+        signal,
+      );
       return (entries ?? [])
         .map((e) => e?.groupId)
         .filter((g): g is string => typeof g === 'string' && !!g);

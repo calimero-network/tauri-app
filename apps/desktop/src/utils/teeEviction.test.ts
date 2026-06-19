@@ -356,6 +356,28 @@ describe('buildEvictionDeps', () => {
     expect(await deps.listGroupMembers('ns')).toBeNull();
   });
 
+  it('rejects listSubgroups when the admin call hangs (deadline)', async () => {
+    vi.useFakeTimers();
+    try {
+      const deps = buildEvictionDeps({
+        mero: {
+          admin: {
+            listSubgroups: () => new Promise<{ groupId: string }[]>(() => {}), // never resolves
+            removeGroupMembers: async () => {},
+          },
+        },
+        nodeUrl: 'http://node',
+        getNodeToken: () => 'node-tok',
+      });
+      const pending = deps.listSubgroups('ns');
+      const assertion = expect(pending).rejects.toThrow();
+      await vi.advanceTimersByTimeAsync(5000);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('maps SubgroupEntry[] to a string[] of group ids', async () => {
     const deps = buildEvictionDeps({
       mero: {

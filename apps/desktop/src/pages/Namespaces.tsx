@@ -586,7 +586,8 @@ export default function Namespaces() {
             reconcileRetryCount.current += 1;
             reconcileRetryTimer.current = setTimeout(() => {
               reconcileRetryTimer.current = null;
-              triggerReconcile();
+              // Mirror the `.finally` guard: don't re-trigger after unmount.
+              if (reconcileMountedRef.current) triggerReconcile();
             }, RECONCILE_RETRY_MS);
           } else if (!reconcileExhaustedRef.current) {
             // Out of automatic retries — surface it once so the user isn't

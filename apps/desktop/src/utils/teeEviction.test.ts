@@ -189,6 +189,22 @@ describe('evictTeeMembersFromTree', () => {
     warn.mockRestore();
   });
 
+  it('does no enumeration or removes when shouldAbort is already true at entry', async () => {
+    const { deps, removed } = makeModel({
+      tree: { ns: ['sub'], sub: [] },
+      members: { ns: [{ identity: 'fleet', role: 'ReadOnlyTee' }] },
+    });
+    const listSubgroups = vi.fn(deps.listSubgroups);
+    const result = await evictTeeMembersFromTree(
+      { ...deps, listSubgroups: listSubgroups as typeof deps.listSubgroups },
+      'ns',
+      { shouldAbort: () => true },
+    );
+    expect(result).toEqual({ evicted: 0, failed: 0, listFailed: true, groupsVisited: 0 });
+    expect(listSubgroups).not.toHaveBeenCalled();
+    expect(removed).toHaveLength(0);
+  });
+
   it('stops issuing removes once shouldAbort flips true (e.g. HA re-enabled)', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const { deps, removed } = makeModel({

@@ -134,10 +134,14 @@ export async function enumerateGroupTree(
     let children: string[];
     try {
       children = await deps.listSubgroups(gid);
-    } catch {
-      // Can't see this group's children — record incompleteness, keep
-      // walking the rest of the queue (other branches may still resolve).
+    } catch (e) {
+      // Can't see this group's children — record incompleteness.
       incomplete = true;
+      // An abort means the whole pass is superseded; stop draining the
+      // queue (every remaining `listSubgroups` would just throw too)
+      // rather than spinning through the rest of the BFS (meroreviewer).
+      if ((e as Error)?.name === 'AbortError') break;
+      // Otherwise keep walking — other branches may still resolve.
       continue;
     }
     for (const c of children) {
@@ -170,6 +174,11 @@ export async function evictTeeMembersFromTree(
   opts?: EvictionOpts,
 ): Promise<EvictionResult> {
   const shouldAbort = opts?.shouldAbort;
+  // Bail before any enumeration if the caller is already superseded, so a
+  // pass that lost its race never even walks the tree (meroreviewer).
+  if (shouldAbort?.()) {
+    return { evicted: 0, failed: 0, listFailed: true, groupsVisited: 0 };
+  }
   const { groupIds, incomplete } = await enumerateGroupTree(deps, nsId);
 
   let evicted = 0;
@@ -387,15 +396,19 @@ export function buildEvictionDeps(args: {
         signal && typeof AbortSignal.any === 'function'
           ? AbortSignal.any([signal, timeout])
           : timeout;
+      // Build via `new URL` rather than string interpolation so a nodeUrl
+      // with a trailing slash (or base path) doesn't produce a double-slash
+      // / double-path URL (meroreviewer).
+      const membersUrl = new URL(
+        `/admin-api/groups/${encodeURIComponent(groupId)}/members`,
+        nodeUrl,
+      ).toString();
       let resp: Response;
       try {
-        resp = await doFetch(
-          `${nodeUrl}/admin-api/groups/${encodeURIComponent(groupId)}/members`,
-          {
-            headers: { Authorization: `Bearer ${token}` },
-            signal: fetchSignal,
-          },
-        );
+        resp = await doFetch(membersUrl, {
+          headers: { Authorization: `Bearer ${token}` },
+          signal: fetchSignal,
+        });
       } catch (e) {
         // Don't log the raw error — it can carry headers/URL with the
         // bearer token. Redacted summary only.

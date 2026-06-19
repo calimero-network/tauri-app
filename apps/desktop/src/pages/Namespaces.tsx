@@ -69,6 +69,12 @@ function parseApiError(e: any): string {
 
 const DEFAULT_NAMESPACE_CAPABILITIES = 1 | 2 | 8;
 
+// Bounded self-heal for the reconcile (see the reconcile effect): retry a
+// namespace whose cleanup left work undone up to this many times, spaced by
+// this interval, before surfacing the "couldn't finish" toast.
+const RECONCILE_MAX_RETRIES = 5;
+const RECONCILE_RETRY_MS = 30_000;
+
 interface InstalledApp {
   id: string;
   name: string;
@@ -507,8 +513,11 @@ export default function Namespaces() {
   // inside the effect — instead of a separate `[haEnabled]` effect — keeps
   // the reset from racing the in-flight pass's retry bookkeeping (mero).
   const reconcileBudgetKeyRef = useRef(haEnabled);
-  const RECONCILE_MAX_RETRIES = 5;
-  const RECONCILE_RETRY_MS = 30_000;
+  // Stays true for the component's lifetime; flipped false only on unmount,
+  // so the reconcile `.finally` can skip a post-unmount `triggerReconcile`
+  // (setState) without breaking the in-flight pending-rerun handoff — which
+  // runs while `cancelled` is true and so can't be guarded by `cancelled`.
+  const reconcileMountedRef = useRef(true);
   const [reconcileTick, setReconcileTick] = useState(0);
   const triggerReconcile = useCallback(() => setReconcileTick((t) => t + 1), []);
   const clearReconcileRetryTimer = useCallback(() => {
@@ -607,8 +616,14 @@ export default function Namespaces() {
       .finally(() => {
         reconcileBusyRef.current = Math.max(0, reconcileBusyRef.current - 1);
         // All owners released and a trigger arrived mid-pass — re-run
-        // against the latest state.
-        if (reconcileBusyRef.current === 0 && reconcilePendingRef.current) {
+        // against the latest state. Skip after unmount (no live component to
+        // re-render); `cancelled` can't gate this because the pending-rerun
+        // handoff legitimately fires while `cancelled` is true.
+        if (
+          reconcileMountedRef.current &&
+          reconcileBusyRef.current === 0 &&
+          reconcilePendingRef.current
+        ) {
           reconcilePendingRef.current = false;
           triggerReconcile();
         }
@@ -624,8 +639,14 @@ export default function Namespaces() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [haEnabled, mero, reconcileTick]);
 
-  // Clear any pending reconcile retry timer on unmount.
-  useEffect(() => clearReconcileRetryTimer, [clearReconcileRetryTimer]);
+  // On unmount: mark unmounted and clear any pending reconcile retry timer.
+  useEffect(
+    () => () => {
+      reconcileMountedRef.current = false;
+      clearReconcileRetryTimer();
+    },
+    [clearReconcileRetryTimer],
+  );
 
   const toggleHa = useCallback(async (ns: Namespace) => {
     const token = getCloudIdToken();

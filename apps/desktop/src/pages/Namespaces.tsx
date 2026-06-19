@@ -495,30 +495,42 @@ export default function Namespaces() {
   // kept failing → `failed > 0`) and no other trigger is coming, retry on a
   // timer up to a cap so the "retries automatically" promise actually holds
   // — without polling forever (cursor + meroreviewer). The budget resets on
-  // every genuine `haEnabled` change (see the reset effect below), so each
-  // new disable round gets a fresh set of retries and a persistently-failing
-  // namespace can't starve a newly-disabled one.
+  // every genuine `haEnabled` change, so each new disable round gets a fresh
+  // set of retries and a persistently-failing namespace can't starve a
+  // newly-disabled one.
   const reconcileRetryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reconcileRetryCount = useRef(0);
   const reconcileExhaustedRef = useRef(false);
+  // The `haEnabled` reference the retry budget was last reset for. Reset on a
+  // genuine reference change (new disable / cloud refresh) but NOT on retry-
+  // driven re-runs (same reference, only `reconcileTick` bumps). Doing this
+  // inside the effect — instead of a separate `[haEnabled]` effect — keeps
+  // the reset from racing the in-flight pass's retry bookkeeping (mero).
+  const reconcileBudgetKeyRef = useRef(haEnabled);
   const RECONCILE_MAX_RETRIES = 5;
   const RECONCILE_RETRY_MS = 30_000;
   const [reconcileTick, setReconcileTick] = useState(0);
   const triggerReconcile = useCallback(() => setReconcileTick((t) => t + 1), []);
-
-  // Reset the retry budget whenever the cloud-derived `haEnabled` map
-  // changes — a genuine state change (new disable / cloud refresh) warrants
-  // a fresh set of automatic retries (meroreviewer). Retry-driven re-runs go
-  // through `reconcileTick`, not `haEnabled`, so they don't reset the budget.
-  useEffect(() => {
-    reconcileRetryCount.current = 0;
-    reconcileExhaustedRef.current = false;
-  }, [haEnabled]);
+  const clearReconcileRetryTimer = useCallback(() => {
+    if (reconcileRetryTimer.current !== null) {
+      clearTimeout(reconcileRetryTimer.current);
+      reconcileRetryTimer.current = null;
+    }
+  }, []);
 
   useEffect(() => {
     if (!mero) return;
     const settings = getSettings();
     if (!settings.nodeUrl) return;
+    // Fresh retry budget on a genuine `haEnabled` change; retry-driven
+    // re-runs (same reference, new tick) keep the current budget. The prior
+    // pass is already `cancelled` by the time we get here, so this can't
+    // race its bookkeeping (mero).
+    if (reconcileBudgetKeyRef.current !== haEnabled) {
+      reconcileBudgetKeyRef.current = haEnabled;
+      reconcileRetryCount.current = 0;
+      reconcileExhaustedRef.current = false;
+    }
     // Only act when the cloud has actually told us at least one namespace
     // is disabled. `=== false` (not `undefined`) gates this — `undefined`
     // means "unknown / not in cloud", and we must not evict a TEE whose
@@ -532,6 +544,7 @@ export default function Namespaces() {
     }
 
     let cancelled = false;
+    const controller = new AbortController();
     reconcileBusyRef.current += 1;
     reconcilePendingRef.current = false;
     const deps = buildEvictionDeps({
@@ -539,28 +552,22 @@ export default function Namespaces() {
       nodeUrl: settings.nodeUrl,
       getNodeToken: getAccessToken,
     });
-    reconcileDisabledNamespaces(deps, haEnabled)
+    reconcileDisabledNamespaces(deps, haEnabled, {
+      shouldAbort: () => controller.signal.aborted,
+    })
       .then((results) => {
         if (cancelled) return;
         const touched = Object.values(results);
-        const evicted = touched.reduce((n, r) => n + r.evicted, 0);
-        if (evicted > 0) {
-          // We changed local membership — mirror it into the UI.
-          setNsMembersVersion((v) => v + 1);
-          refetchGroupMembers?.();
-          toast.success(
-            `Cleaned up ${evicted} stranded TEE member(s) from HA-disabled namespace(s)`,
-          );
-        }
-        // "Done" means every disabled namespace was fully enumerated AND had
-        // no failed removes. Anything short of that (listFailed OR a leftover
-        // remove failure) schedules a bounded retry, so the self-heal also
-        // covers the case where enumeration succeeds but removal keeps
-        // failing (cursor). On success, clear the budget.
+        // Schedule the retry / clear the budget BEFORE the UI mirroring
+        // below, so a throw from a `toast`/refetch call can never drop a
+        // needed retry (mero). "Done" = every disabled namespace fully
+        // enumerated with no failed removes; anything short of that
+        // (listFailed OR `failed > 0`) schedules a bounded retry (cursor).
         const needsRetry = touched.some((r) => r.listFailed || r.failed > 0);
         if (!needsRetry) {
           reconcileRetryCount.current = 0;
           reconcileExhaustedRef.current = false;
+          clearReconcileRetryTimer();
         } else if (reconcileRetryTimer.current === null) {
           if (reconcileRetryCount.current < RECONCILE_MAX_RETRIES) {
             reconcileRetryCount.current += 1;
@@ -578,9 +585,23 @@ export default function Namespaces() {
             );
           }
         }
+        const evicted = touched.reduce((n, r) => n + r.evicted, 0);
+        if (evicted > 0) {
+          // We changed local membership — mirror it into the UI.
+          setNsMembersVersion((v) => v + 1);
+          refetchGroupMembers?.();
+          toast.success(
+            `Cleaned up ${evicted} stranded TEE member(s) from HA-disabled namespace(s)`,
+          );
+        }
       })
-      .catch(() => {
-        // Best-effort; never surface a reconcile failure as an error toast.
+      .catch((e) => {
+        // `reconcileDisabledNamespaces` is best-effort and should not
+        // reject; a rejection here signals a programming error, so log it
+        // (no user-facing toast) rather than swallowing it silently (mero).
+        console.warn(
+          `reconcile: unexpected rejection (${(e as Error)?.name ?? 'unknown'})`,
+        );
       })
       .finally(() => {
         reconcileBusyRef.current = Math.max(0, reconcileBusyRef.current - 1);
@@ -591,20 +612,19 @@ export default function Namespaces() {
           triggerReconcile();
         }
       });
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      // Stop the in-flight mutating walk for this now-superseded snapshot
+      // (e.g. HA was re-enabled mid-walk) and drop any pending retry timer;
+      // the re-run reschedules a retry if one is still needed (cursor + mero).
+      controller.abort();
+      clearReconcileRetryTimer();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [haEnabled, mero, reconcileTick]);
 
   // Clear any pending reconcile retry timer on unmount.
-  useEffect(
-    () => () => {
-      if (reconcileRetryTimer.current !== null) {
-        clearTimeout(reconcileRetryTimer.current);
-        reconcileRetryTimer.current = null;
-      }
-    },
-    [],
-  );
+  useEffect(() => clearReconcileRetryTimer, [clearReconcileRetryTimer]);
 
   const toggleHa = useCallback(async (ns: Namespace) => {
     const token = getCloudIdToken();

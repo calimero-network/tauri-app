@@ -80,6 +80,16 @@ export interface EvictionDeps {
   removeGroupMembers: (groupId: string, identities: string[]) => Promise<void>;
 }
 
+/**
+ * Cross-cutting options for an eviction run. `shouldAbort` is polled
+ * before each group and before each individual remove so a superseded
+ * caller (e.g. the namespace was re-enabled mid-walk) can stop issuing
+ * further `MemberRemoved` ops without leaving a half-mutated tree.
+ */
+export interface EvictionOpts {
+  shouldAbort?: () => boolean;
+}
+
 export interface EvictionResult {
   /** Number of (group, identity) removals that succeeded. */
   evicted: number;
@@ -157,7 +167,9 @@ export async function enumerateGroupTree(
 export async function evictTeeMembersFromTree(
   deps: EvictionDeps,
   nsId: string,
+  opts?: EvictionOpts,
 ): Promise<EvictionResult> {
+  const shouldAbort = opts?.shouldAbort;
   const { groupIds, incomplete } = await enumerateGroupTree(deps, nsId);
 
   let evicted = 0;
@@ -165,6 +177,17 @@ export async function evictTeeMembersFromTree(
   let anyListFailed = incomplete;
 
   for (const groupId of groupIds) {
+    // Bail out of the (mutating) walk if the caller has been superseded —
+    // e.g. the namespace's HA state changed (re-enabled) while we were
+    // mid-walk. Without this, an in-flight reconcile would keep issuing
+    // `MemberRemoved` for a namespace that is no longer HA-disabled,
+    // evicting a TEE that was just re-admitted (cursor). `listFailed`
+    // marks the partial result incomplete; the caller discards it anyway
+    // once superseded.
+    if (shouldAbort?.()) {
+      anyListFailed = true;
+      break;
+    }
     let raw: unknown[] | null;
     try {
       raw = await deps.listGroupMembers(groupId);
@@ -193,6 +216,10 @@ export async function evictTeeMembersFromTree(
     if (teeIds.length === 0) continue;
 
     for (const identity of teeIds) {
+      if (shouldAbort?.()) {
+        anyListFailed = true;
+        break;
+      }
       try {
         await deps.removeGroupMembers(groupId, [identity]);
         evicted += 1;
@@ -235,9 +262,11 @@ export async function evictTeeMembersFromTree(
 export async function reconcileDisabledNamespaces(
   deps: EvictionDeps,
   haEnabled: Record<string, boolean>,
+  opts?: EvictionOpts,
 ): Promise<Record<string, EvictionResult>> {
   const results: Record<string, EvictionResult> = {};
   const disabled = Object.keys(haEnabled).filter((nsId) => haEnabled[nsId] === false);
+  if (opts?.shouldAbort?.()) return results;
   // Each namespace is an independent tree, so evict them concurrently —
   // for a user with many HA-disabled namespaces this avoids serialising the
   // walks. `evictTeeMembersFromTree` is best-effort and never throws, but we
@@ -248,7 +277,7 @@ export async function reconcileDisabledNamespaces(
   const settled = await Promise.allSettled(
     disabled.map(async (nsId): Promise<[string, EvictionResult]> => [
       nsId,
-      await evictTeeMembersFromTree(deps, nsId),
+      await evictTeeMembersFromTree(deps, nsId, opts),
     ]),
   );
   for (const outcome of settled) {

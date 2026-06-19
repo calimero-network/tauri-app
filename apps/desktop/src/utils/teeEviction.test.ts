@@ -189,6 +189,32 @@ describe('evictTeeMembersFromTree', () => {
     warn.mockRestore();
   });
 
+  it('stops issuing removes once shouldAbort flips true (e.g. HA re-enabled)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { deps, removed } = makeModel({
+      tree: { ns: ['sub'], sub: [] },
+      members: {
+        ns: [{ identity: 'fleet', role: 'ReadOnlyTee' }],
+        sub: [{ identity: 'fleet', role: 'ReadOnlyTee' }],
+      },
+    });
+    let aborted = false;
+    const origRemove = deps.removeGroupMembers;
+    deps.removeGroupMembers = async (g, ids) => {
+      await origRemove(g, ids);
+      aborted = true; // abort right after the first (root) remove
+    };
+    const result = await evictTeeMembersFromTree(deps, 'ns', {
+      shouldAbort: () => aborted,
+    });
+    // Root was evicted, but the subgroup walk stopped — never touched `sub`.
+    expect(result.evicted).toBe(1);
+    expect(removed).toEqual([{ groupId: 'ns', identities: ['fleet'] }]);
+    // Aborting leaves the tree partially walked → reported incomplete.
+    expect(result.listFailed).toBe(true);
+    warn.mockRestore();
+  });
+
   it('propagates incomplete enumeration as listFailed', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const deps: EvictionDeps = {

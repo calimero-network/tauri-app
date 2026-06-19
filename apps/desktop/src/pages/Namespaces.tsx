@@ -477,24 +477,44 @@ export default function Namespaces() {
   // mops up subgroup rows the root-only v1 left behind (Bug 2). Idempotent
   // and skips namespaces with no local TEE members, so the steady state is
   // a cheap no-op.
-  const reconcileRunningRef = useRef(false);
-  // A trigger arriving while a pass is in flight must NOT be dropped: the
-  // in-flight pass may be working off now-stale `haEnabled`, and if this is
-  // the last trigger the namespace would be stranded forever. Record it and
-  // re-run once the current pass settles (cursor + meroreviewer).
+  // Eviction concurrency guard. This is a *counting* semaphore, NOT a
+  // boolean: both the reconcile effect and the `toggleHa` disable fast-path
+  // are eviction "owners", and a boolean let an in-flight reconcile's
+  // `finally` clear a flag that `toggleHa` had set — re-opening the gate
+  // mid-disable and allowing a concurrent tree walk (cursor). A counter
+  // only re-opens once every owner has released. A new reconcile pass
+  // starts only when the count is 0.
+  const reconcileBusyRef = useRef(0);
+  // A trigger arriving while an eviction is in flight must NOT be dropped:
+  // the in-flight pass may be working off now-stale `haEnabled`, and if this
+  // is the last trigger the namespace would be stranded forever. Record it
+  // and re-run once the count drains to 0 (cursor + meroreviewer).
   const reconcilePendingRef = useRef(false);
-  // Bounded self-heal for the `listFailed` case (transient node token /
-  // hung merod / gossip lag): when a completed pass couldn't fully
-  // enumerate local state and no other trigger is coming, retry on a timer
-  // up to a cap so the "retries automatically" promise actually holds —
-  // without polling forever (meroreviewer). Reset once a pass fully
-  // enumerates every disabled namespace.
+  // Bounded self-heal: when a completed pass left work undone (couldn't
+  // enumerate local state → `listFailed`, OR a `removeGroupMembers` call
+  // kept failing → `failed > 0`) and no other trigger is coming, retry on a
+  // timer up to a cap so the "retries automatically" promise actually holds
+  // — without polling forever (cursor + meroreviewer). The budget resets on
+  // every genuine `haEnabled` change (see the reset effect below), so each
+  // new disable round gets a fresh set of retries and a persistently-failing
+  // namespace can't starve a newly-disabled one.
   const reconcileRetryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reconcileRetryCount = useRef(0);
+  const reconcileExhaustedRef = useRef(false);
   const RECONCILE_MAX_RETRIES = 5;
   const RECONCILE_RETRY_MS = 30_000;
   const [reconcileTick, setReconcileTick] = useState(0);
   const triggerReconcile = useCallback(() => setReconcileTick((t) => t + 1), []);
+
+  // Reset the retry budget whenever the cloud-derived `haEnabled` map
+  // changes — a genuine state change (new disable / cloud refresh) warrants
+  // a fresh set of automatic retries (meroreviewer). Retry-driven re-runs go
+  // through `reconcileTick`, not `haEnabled`, so they don't reset the budget.
+  useEffect(() => {
+    reconcileRetryCount.current = 0;
+    reconcileExhaustedRef.current = false;
+  }, [haEnabled]);
+
   useEffect(() => {
     if (!mero) return;
     const settings = getSettings();
@@ -505,14 +525,14 @@ export default function Namespaces() {
     // HA state we haven't confirmed is off.
     const hasDisabled = Object.values(haEnabled).some((v) => v === false);
     if (!hasDisabled) return;
-    if (reconcileRunningRef.current) {
-      // Defer instead of dropping — re-run after the in-flight pass settles.
+    if (reconcileBusyRef.current > 0) {
+      // Defer instead of dropping — re-run after the count drains to 0.
       reconcilePendingRef.current = true;
       return;
     }
 
     let cancelled = false;
-    reconcileRunningRef.current = true;
+    reconcileBusyRef.current += 1;
     reconcilePendingRef.current = false;
     const deps = buildEvictionDeps({
       mero,
@@ -532,31 +552,41 @@ export default function Namespaces() {
             `Cleaned up ${evicted} stranded TEE member(s) from HA-disabled namespace(s)`,
           );
         }
-        // Fully enumerated → clear the retry budget. Otherwise schedule a
-        // bounded retry so a transient failure self-heals even when
-        // `haEnabled` never changes again (no cloud-status polling exists).
-        if (touched.some((r) => r.listFailed)) {
-          if (
-            reconcileRetryTimer.current === null &&
-            reconcileRetryCount.current < RECONCILE_MAX_RETRIES
-          ) {
+        // "Done" means every disabled namespace was fully enumerated AND had
+        // no failed removes. Anything short of that (listFailed OR a leftover
+        // remove failure) schedules a bounded retry, so the self-heal also
+        // covers the case where enumeration succeeds but removal keeps
+        // failing (cursor). On success, clear the budget.
+        const needsRetry = touched.some((r) => r.listFailed || r.failed > 0);
+        if (!needsRetry) {
+          reconcileRetryCount.current = 0;
+          reconcileExhaustedRef.current = false;
+        } else if (reconcileRetryTimer.current === null) {
+          if (reconcileRetryCount.current < RECONCILE_MAX_RETRIES) {
             reconcileRetryCount.current += 1;
             reconcileRetryTimer.current = setTimeout(() => {
               reconcileRetryTimer.current = null;
               triggerReconcile();
             }, RECONCILE_RETRY_MS);
+          } else if (!reconcileExhaustedRef.current) {
+            // Out of automatic retries — surface it once so the user isn't
+            // left believing cleanup is still in progress (meroreviewer).
+            reconcileExhaustedRef.current = true;
+            toast.error(
+              'Automatic TEE cleanup did not finish after several retries. ' +
+                'Toggle HA off again, or restart the app, to retry.',
+            );
           }
-        } else {
-          reconcileRetryCount.current = 0;
         }
       })
       .catch(() => {
         // Best-effort; never surface a reconcile failure as an error toast.
       })
       .finally(() => {
-        reconcileRunningRef.current = false;
-        // A trigger arrived mid-pass — re-run against the latest state.
-        if (reconcilePendingRef.current) {
+        reconcileBusyRef.current = Math.max(0, reconcileBusyRef.current - 1);
+        // All owners released and a trigger arrived mid-pass — re-run
+        // against the latest state.
+        if (reconcileBusyRef.current === 0 && reconcilePendingRef.current) {
           reconcilePendingRef.current = false;
           triggerReconcile();
         }
@@ -590,15 +620,16 @@ export default function Namespaces() {
     try {
       if (isEnabled) {
         await disableHaNamespace(token, nsId);
-        // Claim the reconcile mutex BEFORE flipping `haEnabled` to false.
-        // That state change triggers the reconcile effect; without the
-        // claim it would walk the same namespace tree concurrently with
-        // our own eviction below, double-issuing removes and duplicating
-        // the success toast (cursor). With the claim, the effect defers
-        // (pending-rerun); the inner `finally` releases it and triggers a
-        // single reconcile pass to mop up any leftovers / retry a
-        // listFailed.
-        reconcileRunningRef.current = true;
+        // Acquire the eviction semaphore BEFORE flipping `haEnabled` to
+        // false. That state change triggers the reconcile effect; without
+        // the claim it would walk the same namespace tree concurrently with
+        // our own eviction below, double-issuing removes and duplicating the
+        // success toast (cursor). Because it's a counter (not a boolean), an
+        // unrelated in-flight reconcile releasing its own hold can't re-open
+        // the gate while we still hold it. The effect defers (pending-rerun)
+        // until the count drains; the inner `finally` releases our hold and
+        // triggers a single reconcile pass to mop up leftovers / retry.
+        reconcileBusyRef.current += 1;
         setHaEnabled((prev) => ({ ...prev, [nsId]: false }));
         try {
           // Cloud-side disable is done; now evict any admitted TEE members
@@ -648,11 +679,19 @@ export default function Namespaces() {
             toast.success('HA disabled — TEE nodes will stop replicating');
           }
         } finally {
-          // Release the mutex and let the reconcile run once against the
+          // Release our hold and let the reconcile run once against the
           // latest state (idempotent no-op if we already cleaned up; a
-          // genuine retry if our fast-path eviction hit listFailed).
-          reconcileRunningRef.current = false;
-          triggerReconcile();
+          // genuine retry if our fast-path eviction left work undone). If
+          // another eviction is still in flight, the count stays > 0 and the
+          // pending-rerun mechanism re-triggers once it drains.
+          reconcileBusyRef.current = Math.max(0, reconcileBusyRef.current - 1);
+          if (reconcileBusyRef.current === 0) {
+            triggerReconcile();
+          } else {
+            // Another eviction is still in flight — let it re-trigger once
+            // the count drains, rather than racing a pass against it now.
+            reconcilePendingRef.current = true;
+          }
         }
       } else {
         // HA is namespace-scoped: always authorise via the namespace

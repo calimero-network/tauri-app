@@ -1,4 +1,10 @@
-name: Build Linux
+name: Build Chromebook
+
+# Chromebooks run Linux apps via the Crostini (Debian) container. Intel/AMD
+# Chromebooks are already covered by the x86_64 Linux build; this workflow
+# produces the ARM64 (aarch64) artifacts that ARM Chromebooks need. The primary
+# deliverable is the .deb (double-click install in the ChromeOS Files app); the
+# AppImage feeds the Tauri updater (linux-aarch64).
 
 on:
   workflow_call:
@@ -29,10 +35,12 @@ env:
 
 jobs:
   build:
-    name: Build Linux x64
-    runs-on: ubuntu-22.04
+    name: Build Chromebook (Linux ARM64)
+    # Native ARM64 GitHub-hosted runner. Matches the x86_64 build's ubuntu-22.04
+    # so the webkit2gtk 0.18.2 wry patch below applies identically.
+    runs-on: ubuntu-22.04-arm
     outputs:
-      artifact-name: linux-build
+      artifact-name: chromebook-build
 
     steps:
       - name: Checkout code
@@ -100,9 +108,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ steps.get-pnpm-store.outputs.path }}
-          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
+          key: ${{ runner.os }}-arm64-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
           restore-keys: |
-            ${{ runner.os }}-pnpm-store-
+            ${{ runner.os }}-arm64-pnpm-store-
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -111,6 +119,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: apps/desktop/src-tauri
+          key: arm64
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -193,32 +202,32 @@ jobs:
             exit 1
           fi
 
-      - name: Build Tauri app for Linux
+      - name: Build Tauri app for Chromebook (Linux ARM64)
         working-directory: apps/desktop
         env:
           # beforeBuildCommand runs merod:prepare again; reuse binary from "Prepare merod binary" (no GITHUB_TOKEN here).
           MEROD_SKIP_IF_EXISTS: "1"
           TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
           TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
-        run: pnpm exec tauri build --bundles appimage,deb,rpm
+        # .deb is the Crostini install path on ChromeOS; AppImage feeds the updater.
+        run: pnpm exec tauri build --bundles appimage,deb
 
       - name: Verify build outputs
         if: steps.build-mode.outputs.mode == 'validation'
         run: |
           echo "Checking for expected build outputs..."
 
-          APPIMAGE_FILE=$(find apps/desktop/src-tauri/target/release/bundle -name "*.AppImage" 2>/dev/null | head -1)
           DEB_FILE=$(find apps/desktop/src-tauri/target/release/bundle -name "*.deb" 2>/dev/null | head -1)
-          RPM_FILE=$(find apps/desktop/src-tauri/target/release/bundle -name "*.rpm" 2>/dev/null | head -1)
+          APPIMAGE_FILE=$(find apps/desktop/src-tauri/target/release/bundle -name "*.AppImage" 2>/dev/null | head -1)
 
-          if [ -z "$APPIMAGE_FILE" ]; then
-            echo "Error: AppImage not found"
+          # The .deb is the required Chromebook deliverable.
+          if [ -z "$DEB_FILE" ]; then
+            echo "Error: deb not found"
             exit 1
           fi
-          echo "AppImage: $APPIMAGE_FILE ($(du -sh "$APPIMAGE_FILE" | cut -f1))"
+          echo "DEB: $DEB_FILE ($(du -sh "$DEB_FILE" | cut -f1))"
 
-          [ -n "$DEB_FILE" ] && echo "DEB: $DEB_FILE ($(du -sh "$DEB_FILE" | cut -f1))"
-          [ -n "$RPM_FILE" ] && echo "RPM: $RPM_FILE ($(du -sh "$RPM_FILE" | cut -f1))"
+          [ -n "$APPIMAGE_FILE" ] && echo "AppImage: $APPIMAGE_FILE ($(du -sh "$APPIMAGE_FILE" | cut -f1))"
 
           echo "Build validation passed"
 
@@ -227,13 +236,13 @@ jobs:
         run: |
           node scripts/release/collect-assets.cjs \
             --version "${{ steps.build-mode.outputs.version }}" \
-            --platform linux \
+            --platform chromebook \
             --output release-assets/
 
       - name: Upload artifacts
         if: steps.build-mode.outputs.mode == 'release'
         uses: actions/upload-artifact@v4
         with:
-          name: linux-build
+          name: chromebook-build
           path: release-assets/
           retention-days: 7

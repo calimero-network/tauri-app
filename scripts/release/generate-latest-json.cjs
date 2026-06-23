@@ -17,6 +17,7 @@ const TAURI_PLATFORMS = {
   macos: ["darwin-universal", "darwin-x86_64", "darwin-aarch64"],
   windows: ["windows-x86_64"],
   linux: ["linux-x86_64"],
+  chromebook: ["linux-aarch64"],
 };
 
 // Map our artifact types to Tauri updater expectations
@@ -24,6 +25,7 @@ const UPDATER_ASSET_SUFFIX = {
   macos: "_macos_universal.app.tar.gz",
   windows: "_windows_x64.nsis.zip",
   linux: "_linux_x64.AppImage.tar.gz",
+  chromebook: "_linux_arm64.AppImage.tar.gz",
 };
 
 function parseArgs() {
@@ -52,7 +54,7 @@ function parseArgs() {
 
 function loadPlatformManifests(assetsDir) {
   const manifests = {};
-  const platforms = ["macos", "windows", "linux"];
+  const platforms = ["macos", "windows", "linux", "chromebook"];
 
   for (const platform of platforms) {
     const manifestPath = path.join(assetsDir, `manifest-${platform}.json`);

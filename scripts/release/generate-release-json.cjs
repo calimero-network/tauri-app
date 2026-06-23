@@ -20,6 +20,9 @@ const DOWNLOAD_META = {
   "_linux_x64.AppImage": { os: "linux", arch: "x64", format: "appimage", label: "Linux (AppImage)" },
   "_linux_x64.deb": { os: "linux", arch: "x64", format: "deb", label: "Linux (Debian/Ubuntu)" },
   "_linux_x64.rpm": { os: "linux", arch: "x64", format: "rpm", label: "Linux (Fedora/RHEL)" },
+  // Chromebook (ARM64 Linux / Crostini). .deb is the canonical install path.
+  "_linux_arm64.deb": { os: "chromebook", arch: "arm64", format: "deb", label: "Chromebook (Debian/ARM64)" },
+  "_linux_arm64.AppImage": { os: "chromebook", arch: "arm64", format: "appimage", label: "Chromebook (AppImage/ARM64)" },
 };
 
 // Primary download format per OS
@@ -27,6 +30,7 @@ const PRIMARY_FORMAT = {
   macos: "dmg",
   windows: "exe",
   linux: "appimage",
+  chromebook: "deb",
 };
 
 function parseArgs() {
@@ -55,7 +59,7 @@ function parseArgs() {
 
 function loadPlatformManifests(assetsDir) {
   const manifests = {};
-  const platforms = ["macos", "windows", "linux"];
+  const platforms = ["macos", "windows", "linux", "chromebook"];
 
   for (const platform of platforms) {
     const manifestPath = path.join(assetsDir, `manifest-${platform}.json`);

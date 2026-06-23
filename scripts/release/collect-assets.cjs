@@ -76,6 +76,29 @@ const PLATFORM_CONFIG = {
       { pattern: /\.rpm$/, suffix: "_linux_x64.rpm", type: "installer" },
     ],
   },
+  // Chromebook = ARM64 Linux (Crostini). Built on a native aarch64 runner, so
+  // the bundle output lives in the same release/bundle path as x86_64 Linux.
+  chromebook: {
+    searchPaths: ["apps/desktop/src-tauri/target/release/bundle"],
+    artifacts: [
+      { pattern: /\.deb$/, suffix: "_linux_arm64.deb", type: "installer" },
+      {
+        pattern: /\.AppImage$/,
+        suffix: "_linux_arm64.AppImage",
+        type: "installer",
+      },
+      {
+        pattern: /\.AppImage\.tar\.gz$/,
+        suffix: "_linux_arm64.AppImage.tar.gz",
+        type: "updater",
+      },
+      {
+        pattern: /\.AppImage\.tar\.gz\.sig$/,
+        suffix: "_linux_arm64.AppImage.tar.gz.sig",
+        type: "signature",
+      },
+    ],
+  },
 };
 
 function findFiles(dir, pattern) {

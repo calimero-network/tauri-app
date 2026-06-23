@@ -63,12 +63,23 @@ jobs:
       TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
       TAURI_PUBLIC_KEY: ${{ secrets.TAURI_PUBLIC_KEY }}
 
+  build-chromebook:
+    name: Build Chromebook
+    needs: prepare
+    uses: ./.github/workflows/build-chromebook.yml
+    with:
+      version: ${{ needs.prepare.outputs.version }}
+    secrets:
+      TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+      TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+      TAURI_PUBLIC_KEY: ${{ secrets.TAURI_PUBLIC_KEY }}
+
   # Publish release with all platform artifacts
   publish:
     name: Publish Release
-    needs: [prepare, build-macos, build-linux]
+    needs: [prepare, build-macos, build-linux, build-chromebook]
     # Continue even if some platforms fail (partial release)
-    if: always() && needs.prepare.result == 'success' && (needs.build-macos.result == 'success' || needs.build-linux.result == 'success')
+    if: always() && needs.prepare.result == 'success' && (needs.build-macos.result == 'success' || needs.build-linux.result == 'success' || needs.build-chromebook.result == 'success')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -89,6 +100,13 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: linux-build
+          path: release-assets/
+
+      - name: Download Chromebook artifacts
+        if: needs.build-chromebook.result == 'success'
+        uses: actions/download-artifact@v4
+        with:
+          name: chromebook-build
           path: release-assets/
 
       - name: List collected assets
@@ -136,6 +154,9 @@ jobs:
           fi
           if [ "${{ needs.build-linux.result }}" = "success" ]; then
             PLATFORMS="${PLATFORMS}"$'\n'"- **Linux** (64-bit): Download AppImage, deb, or rpm"
+          fi
+          if [ "${{ needs.build-chromebook.result }}" = "success" ]; then
+            PLATFORMS="${PLATFORMS}"$'\n'"- **Chromebook** (ARM64): Download the deb (install via the Files app) or AppImage"
           fi
 
           cat > release-notes.md << EOF

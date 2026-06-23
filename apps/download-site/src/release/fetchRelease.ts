@@ -44,6 +44,8 @@ function inferAssetMetadata(
   filename: string
 ): { os: OS; format: string } | null {
   const lower = filename.toLowerCase();
+  // ARM64 Linux artifacts are Chromebook (Crostini) builds.
+  const isArm64 = lower.includes("arm64") || lower.includes("aarch64");
 
   if (lower.endsWith(".dmg")) {
     return { os: "macos", format: "dmg" };
@@ -55,10 +57,10 @@ function inferAssetMetadata(
     return { os: "windows", format: "msi" };
   }
   if (lower.endsWith(".appimage")) {
-    return { os: "linux", format: "appimage" };
+    return { os: isArm64 ? "chromebook" : "linux", format: "appimage" };
   }
   if (lower.endsWith(".deb")) {
-    return { os: "linux", format: "deb" };
+    return { os: isArm64 ? "chromebook" : "linux", format: "deb" };
   }
   if (lower.endsWith(".rpm")) {
     return { os: "linux", format: "rpm" };
@@ -115,7 +117,12 @@ async function fetchFromGitHubApi(): Promise<ReleaseManifest | null> {
 
       downloads.push({
         os: meta.os,
-        arch: meta.os === "macos" ? "universal" : "x64",
+        arch:
+          meta.os === "macos"
+            ? "universal"
+            : meta.os === "chromebook"
+              ? "arm64"
+              : "x64",
         format: meta.format as DownloadAsset["format"],
         label: getFormatLabel(meta.os, meta.format),
         url: asset.browser_download_url,
@@ -146,6 +153,9 @@ function getFormatLabel(os: OS, format: string): string {
   if (os === "linux" && format === "appimage") return "Linux (AppImage)";
   if (os === "linux" && format === "deb") return "Linux (Debian/Ubuntu)";
   if (os === "linux" && format === "rpm") return "Linux (Fedora/RHEL)";
+  if (os === "chromebook" && format === "deb") return "Chromebook (Debian/ARM64)";
+  if (os === "chromebook" && format === "appimage")
+    return "Chromebook (AppImage/ARM64)";
   return format.toUpperCase();
 }
 
@@ -153,6 +163,7 @@ function isPrimaryFormat(os: OS, format: string): boolean {
   if (os === "macos" && format === "dmg") return true;
   if (os === "windows" && format === "exe") return true;
   if (os === "linux" && format === "appimage") return true;
+  if (os === "chromebook" && format === "deb") return true;
   return false;
 }
 

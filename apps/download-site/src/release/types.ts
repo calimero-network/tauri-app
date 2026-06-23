@@ -2,7 +2,7 @@
  * Types for release.json manifest consumed by the download site.
  */
 
-export type OS = "macos" | "windows" | "linux";
+export type OS = "macos" | "windows" | "linux" | "chromebook";
 export type Arch = "x64" | "arm64" | "universal";
 export type Format = "dmg" | "exe" | "msi" | "appimage" | "deb" | "rpm";
 

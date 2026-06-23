@@ -176,14 +176,17 @@ jobs:
           # wry 0.24.11 uses `use webkit2gtk::{traits::*, ...}` but on Linux with webkit2gtk 0.18.2
           # the trait methods from SettingsExt are not resolved through the glob. Adding the
           # explicit import is the fix the Rust compiler itself suggests.
+          # wry 0.24.12+ already imports SettingsExt explicitly, so the guard below must skip
+          # patching to avoid a duplicate import (E0252). Matching the bare `SettingsExt` token
+          # is correct for both: 0.24.11 never mentions it (glob), 0.24.12 lists it by name.
           cargo fetch --manifest-path apps/desktop/src-tauri/Cargo.toml
           WRY_MOD=$(find ~/.cargo/registry/src -name "mod.rs" -path "*/wry-0.24.*/src/webview/webkitgtk/*" 2>/dev/null | head -1)
           if [ -n "$WRY_MOD" ]; then
-            if ! grep -q "use webkit2gtk::SettingsExt" "$WRY_MOD"; then
+            if ! grep -q "SettingsExt" "$WRY_MOD"; then
               sed -i 's/^use webkit2gtk::{/use webkit2gtk::SettingsExt;\nuse webkit2gtk::{/' "$WRY_MOD"
               echo "Patched: $WRY_MOD"
             else
-              echo "Already patched, skipping."
+              echo "SettingsExt already imported (wry >= 0.24.12 or already patched); skipping."
             fi
           else
             echo "wry webkitgtk mod.rs not found in cargo cache"

@@ -34,7 +34,7 @@ import {
 import "./App.css";
 
 // Platform tab configuration
-const PLATFORM_ORDER: OS[] = ["macos", "windows", "linux"];
+const PLATFORM_ORDER: OS[] = ["macos", "windows", "linux", "chromebook"];
 
 interface PlatformTabProps {
   platform: OS;
@@ -588,6 +588,30 @@ function App() {
                         { id: 2, content: "x64 processor" },
                         { id: 3, content: "100 MB available disk space" },
                         { id: 4, content: "WebKit2GTK 4.0" },
+                      ]}
+                      variant="ghost"
+                      divider={true}
+                    />
+                  </Stack>
+
+                  <Stack spacing="lg">
+                    <Heading level={4} size="lg" weight="semibold">
+                      Chromebook
+                    </Heading>
+                    <List
+                      items={[
+                        {
+                          id: 1,
+                          content:
+                            "ChromeOS with the Linux (Crostini) environment enabled",
+                        },
+                        { id: 2, content: "ARM64 (aarch64) processor" },
+                        { id: 3, content: "100 MB available disk space" },
+                        {
+                          id: 4,
+                          content:
+                            "Install the .deb via the Files app, then launch from the launcher",
+                        },
                       ]}
                       variant="ghost"
                       divider={true}

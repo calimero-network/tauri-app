@@ -32,6 +32,12 @@ export function detectPlatform(): Platform {
     return "unknown";
   }
 
+  // Check for ChromeOS (Chromebook) before Linux — CrOS user agents report
+  // "X11; CrOS <arch>" and must not be mistaken for desktop Linux.
+  if (userAgent.includes("cros")) {
+    return "chromebook";
+  }
+
   // Check for macOS - Macintosh in user agent and no touch capability
   if (userAgent.includes("macintosh") && navigator.maxTouchPoints <= 1) {
     return "macos";
@@ -61,6 +67,8 @@ export function getPlatformLabel(platform: Platform): string {
       return "Windows";
     case "linux":
       return "Linux";
+    case "chromebook":
+      return "Chromebook";
     default:
       return "Unknown";
   }
@@ -70,5 +78,10 @@ export function getPlatformLabel(platform: Platform): string {
  * Check if a platform has available downloads.
  */
 export function isPlatformSupported(platform: Platform): boolean {
-  return platform === "macos" || platform === "windows" || platform === "linux";
+  return (
+    platform === "macos" ||
+    platform === "windows" ||
+    platform === "linux" ||
+    platform === "chromebook"
+  );
 }

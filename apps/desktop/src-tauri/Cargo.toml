@@ -28,6 +28,13 @@ thiserror = "1.0"
 keyring = "2"
 tauri-plugin-deep-link = "0.1"
 
+# macOS: raw Objective-C interop to install a WKWebView media-capture delegate
+# so WebRTC apps (Mero Meet) can use the camera/mic. Matches the objc/block
+# versions wry already pulls in on this platform.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc = "0.2"
+block = "0.1"
+
 [profile.release]
 strip = "symbols"
 lto = true

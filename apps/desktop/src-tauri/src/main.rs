@@ -8,6 +8,10 @@ use log::{debug, info, warn};
 use std::sync::OnceLock;
 use thiserror::Error;
 
+// Enables camera/microphone for WebRTC video calls (e.g. Mero Meet) in app
+// WebviewWindows. See the module for the macOS WKWebView delegate details.
+mod webrtc_media;
+
 static HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 static SSE_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 
@@ -796,6 +800,10 @@ async fn create_app_window(
     app_handle.ipc_scope().configure_remote_access(remote_access);
 
     info!("[Tauri] Configured IPC scope for domain: {} on window: {}", domain, window_label);
+
+    // Allow the app's webview to use camera/microphone for WebRTC video calls
+    // (e.g. Mero Meet). No-op on platforms where the webview already permits it.
+    webrtc_media::grant_media_permissions(&window);
 
     // Show the window AFTER IPC scope is configured
     window.show().map_err(|e| TauriError::with_details(TauriErrorCode::WindowOperationFailed, format!("Failed to display window '{}'", title), e.to_string()))?;
@@ -2380,6 +2388,43 @@ async fn open_url_in_browser(url: String, app_handle: tauri::AppHandle) -> Resul
         .map_err(|e| TauriError::new(TauriErrorCode::InternalError, e.to_string()))
 }
 
+/// One WebRTC ICE server entry, serialized exactly as the browser's
+/// `RTCIceServer` expects (so the frontend can feed it straight into
+/// `new RTCPeerConnection({ iceServers })`).
+#[derive(Serialize)]
+struct IceServer {
+    urls: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    username: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "credential")]
+    credential: Option<String>,
+}
+
+/// ICE servers for WebRTC apps (Mero Meet). Always returns a public STUN
+/// server; if a self-hosted/bundled TURN relay is configured via the
+/// `CALIMERO_TURN_URL` (+ optional `CALIMERO_TURN_USER` / `CALIMERO_TURN_CRED`)
+/// env vars, it is appended. This is the seam for shipping a TURN relay with
+/// the desktop app: point these at it and group/NAT-restricted calls keep
+/// working without the frontend needing to know the details.
+#[tauri::command]
+fn get_ice_servers() -> Vec<IceServer> {
+    let mut servers = vec![IceServer {
+        urls: "stun:stun.l.google.com:19302".to_string(),
+        username: None,
+        credential: None,
+    }];
+    if let Ok(turn_url) = std::env::var("CALIMERO_TURN_URL") {
+        if !turn_url.trim().is_empty() {
+            servers.push(IceServer {
+                urls: turn_url,
+                username: std::env::var("CALIMERO_TURN_USER").ok().filter(|s| !s.is_empty()),
+                credential: std::env::var("CALIMERO_TURN_CRED").ok().filter(|s| !s.is_empty()),
+            });
+        }
+    }
+    servers
+}
+
 #[tauri::command]
 async fn delete_calimero_data_dir(data_dir: String) -> Result<String, TauriError> {
     let expanded = if data_dir.starts_with("~") {
@@ -2716,6 +2761,7 @@ fn main() {
             autostart_is_enabled,
             close_current_window,
             open_url_in_browser,
+            get_ice_servers,
             secure_store_token,
             secure_get_token,
             secure_delete_token,

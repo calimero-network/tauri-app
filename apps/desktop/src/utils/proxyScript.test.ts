@@ -153,7 +153,7 @@ describe("proxy_script SSE routing", () => {
       .catch(() => {}); // may throw; we only care about which command was called
 
     const sseCalls = tauriInvoke.mock.calls.filter(
-      ([cmd]: [string]) => cmd === "proxy_sse_stream"
+      (call) => call[0] === "proxy_sse_stream"
     );
     expect(sseCalls.length).toBe(0);
   });

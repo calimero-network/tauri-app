@@ -93,6 +93,10 @@ export async function openAppFrontend(
     if (context?.applicationId) hashParams.set('app-id', context.applicationId);
     if (context?.contextId) hashParams.set('context_id', context.contextId);
     if (context?.executorPublicKey) hashParams.set('executor_public_key', context.executorPublicKey);
+    // Propagate the desktop's developer-mode setting so apps can surface
+    // advanced diagnostics (e.g. Mero Meet's WebRTC panel). App windows are a
+    // separate origin and can't read the desktop's settings localStorage.
+    hashParams.set('dev_mode', settings.developerMode ? '1' : '0');
 
     const urlToOpen = `${frontendUrl}#${hashParams.toString()}`;
 

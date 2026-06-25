@@ -61,8 +61,8 @@ importers:
         specifier: ^0.34.5
         version: 0.34.5
       tar:
-        specifier: ^7.5.13
-        version: 7.5.13
+        specifier: ^7.5.16
+        version: 7.5.16
       typescript:
         specifier: ^5.8.3
         version: 5.9.3
@@ -1486,8 +1486,8 @@ packages:
   strip-literal@3.1.0:
     resolution: {integrity: sha512-8r3mkIM/2+PpjHoOtiAW8Rg3jJLHaV7xPwG+YRGrv6FP0wwk/toTpATxWYOW0BKdWwl82VT2tFYi5DlROa0Mxg==}
 
-  tar@7.5.13:
-    resolution: {integrity: sha512-tOG/7GyXpFevhXVh8jOPJrmtRpOTsYqUIkVdVooZYJS/z8WhfQUX8RJILmeuJNinGAMSu1veBr4asSHFt5/hng==}
+  tar@7.5.16:
+    resolution: {integrity: sha512-56adEpPMouktRlBLXiaYFFzZ/3+JXa8P9n7WbR+ibIjtviN55mEaOkiysCnPnWm+7kkui1Dn8J9l+g6zV8731w==}
     engines: {node: '>=18'}
 
   tinybench@2.9.0:
@@ -2912,7 +2912,7 @@ snapshots:
     dependencies:
       js-tokens: 9.0.1
 
-  tar@7.5.13:
+  tar@7.5.16:
     dependencies:
       '@isaacs/fs-minipass': 4.0.1
       chownr: 3.0.0

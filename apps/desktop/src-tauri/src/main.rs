@@ -8,10 +8,6 @@ use log::{debug, info, warn};
 use std::sync::OnceLock;
 use thiserror::Error;
 
-// Enables camera/microphone for WebRTC video calls (e.g. Mero Meet) in app
-// WebviewWindows. See the module for the macOS WKWebView delegate details.
-mod webrtc_media;
-
 static HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 static SSE_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 
@@ -801,9 +797,13 @@ async fn create_app_window(
 
     info!("[Tauri] Configured IPC scope for domain: {} on window: {}", domain, window_label);
 
-    // Allow the app's webview to use camera/microphone for WebRTC video calls
-    // (e.g. Mero Meet). No-op on platforms where the webview already permits it.
-    webrtc_media::grant_media_permissions(&window);
+    // Camera/microphone for WebRTC video calls (e.g. Mero Meet) needs no extra
+    // work here: wry's own WKUIDelegate already grants
+    // `requestMediaCapturePermissionForOrigin` on macOS, and WebView2 / WebKitGTK
+    // grant it on Windows/Linux. The OS-level permission prompt (gated by the
+    // Info.plist usage strings + entitlements) still applies on first use.
+    // Installing a custom delegate here would replace wry's, breaking its
+    // `<input type=file>` open-panel handler.
 
     // Show the window AFTER IPC scope is configured
     window.show().map_err(|e| TauriError::with_details(TauriErrorCode::WindowOperationFailed, format!("Failed to display window '{}'", title), e.to_string()))?;
@@ -2414,12 +2414,25 @@ fn get_ice_servers() -> Vec<IceServer> {
         credential: None,
     }];
     if let Ok(turn_url) = std::env::var("CALIMERO_TURN_URL") {
-        if !turn_url.trim().is_empty() {
+        let turn_url = turn_url.trim();
+        // Only accept a real TURN URI; an unset/garbled env value must not be
+        // forwarded to RTCPeerConnection (it would invalidate the whole entry).
+        if turn_url.starts_with("turn:") || turn_url.starts_with("turns:") {
             servers.push(IceServer {
-                urls: turn_url,
-                username: std::env::var("CALIMERO_TURN_USER").ok().filter(|s| !s.is_empty()),
-                credential: std::env::var("CALIMERO_TURN_CRED").ok().filter(|s| !s.is_empty()),
+                urls: turn_url.to_string(),
+                username: std::env::var("CALIMERO_TURN_USER")
+                    .ok()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty()),
+                credential: std::env::var("CALIMERO_TURN_CRED")
+                    .ok()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty()),
             });
+        } else if !turn_url.is_empty() {
+            log::warn!(
+                "[webrtc] ignoring CALIMERO_TURN_URL: must start with 'turn:' or 'turns:'"
+            );
         }
     }
     servers

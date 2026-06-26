@@ -486,13 +486,11 @@ dependencies = [
 name = "calimero-tauri-app"
 version = "0.1.0"
 dependencies = [
- "block",
  "dirs 5.0.1",
  "env_logger",
  "futures-util",
  "keyring",
  "log",
- "objc",
  "regex",
  "reqwest",
  "serde",

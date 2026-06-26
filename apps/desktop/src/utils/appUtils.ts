@@ -122,7 +122,12 @@ export async function openAppFrontend(
         await existing.setFocus();
         // Signal apps to re-read their auth state. No token payload here to avoid
         // sending credentials to a window whose current origin we cannot verify.
-        await existing.emit('calimero:auth-refresh', null).catch(() => {});
+        // dev_mode is not a credential, so we forward the current value: an
+        // already-open app would otherwise keep the stale dev_mode from when its
+        // window was first created until it is recreated.
+        await existing
+          .emit('calimero:auth-refresh', { dev_mode: settings.developerMode ? '1' : '0' })
+          .catch(() => {});
         return windowLabel;
       } catch (e) {
         // window was closed between getByLabel and setFocus; fall through to create a new one

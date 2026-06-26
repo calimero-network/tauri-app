@@ -272,6 +272,9 @@ export default function Namespaces() {
     ): Promise<TreeSubgroup> => {
       // Stop descending as soon as this run is superseded — avoids issuing a
       // burst of now-pointless requests for a tree that won't be committed.
+      // Note: requests already dispatched can't be aborted (the mero-js admin
+      // methods take no AbortSignal); their results are simply discarded by the
+      // `cancelled` guard in `.then`.
       if (cancelled) return { groupId, name, contexts: [], subgroups: [] };
       const [contexts, subs] = await Promise.all([
         admin.listGroupContexts(groupId).catch(onFetchErr("listGroupContexts", groupId)),

@@ -1327,3 +1327,136 @@
   background: rgba(239, 68, 68, 0.08) !important;
   color: var(--error, #ef4444);
 }
+
+/* ─── Structure tree ─── */
+.ns-tree-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 12px 0;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.ns-tree-header h2 {
+  border-bottom: none;
+  margin: 0;
+  padding: 0;
+}
+
+.ns-tree-legend {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+
+.ns-tree {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--surface-glass-soft);
+}
+
+.ns-tree-branch {
+  display: flex;
+  flex-direction: column;
+}
+
+.ns-tree-children {
+  display: flex;
+  flex-direction: column;
+}
+
+.ns-tree-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 8px;
+  padding-bottom: 8px;
+  padding-right: 12px;
+  border-top: 1px solid var(--border-color);
+  min-height: 24px;
+}
+
+/* No divider above the very first row in the tree. */
+.ns-tree > .ns-tree-branch:first-child > .ns-tree-row {
+  border-top: none;
+}
+
+.ns-tree-row:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.ns-tree-namespace {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.ns-tree-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  color: var(--text-tertiary);
+}
+
+.ns-tree-toggle:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+.ns-tree-toggle-empty {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+}
+
+.ns-tree-chevron {
+  transition: transform 0.18s;
+}
+
+.ns-tree-chevron-open {
+  transform: rotate(90deg);
+}
+
+.ns-tree-icon {
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.ns-tree-icon-root {
+  color: var(--accent-primary, #a5ff11);
+}
+
+/* Aligns context leaves under the subgroup's name (no chevron of their own). */
+.ns-tree-spacer {
+  display: inline-block;
+  width: 18px;
+  flex-shrink: 0;
+}
+
+.ns-tree-count {
+  flex: 0 0 auto;
+  font-size: 10px;
+  color: var(--text-tertiary);
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 999px;
+  padding: 1px 8px;
+  line-height: 1.6;
+}
+
+.ns-tree-empty {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  font-style: italic;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border-color);
+}

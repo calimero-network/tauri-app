@@ -124,6 +124,54 @@ type GroupInfoExt = Omit<GroupInfo, "metadata"> & {
   groupStateHash?: string;
 };
 
+// ─── Namespace structure tree ───
+// A namespace owns root-level contexts and subgroups; each subgroup owns its
+// own contexts and (recursively) nested subgroups. We fetch this whole shape
+// imperatively (the mero-react hooks only resolve one level at a time) so the
+// page can render a collapsible folder tree and count contexts across the
+// entire tree — not just the root.
+interface TreeContext {
+  contextId: string;
+  name?: string;
+}
+interface TreeSubgroup {
+  groupId: string;
+  name?: string;
+  contexts: TreeContext[];
+  subgroups: TreeSubgroup[];
+}
+interface NamespaceTree {
+  rootContexts: TreeContext[];
+  subgroups: TreeSubgroup[];
+}
+
+// Guard against a pathological/cyclic group graph blowing the stack.
+const MAX_TREE_DEPTH = 12;
+
+// Total contexts in the whole tree: root contexts + every subgroup's contexts,
+// recursively. This is what the "Contexts" stat should reflect (the old count
+// only saw root contexts).
+function countTreeContexts(tree: NamespaceTree): number {
+  let n = tree.rootContexts.length;
+  const walk = (sg: TreeSubgroup) => {
+    n += sg.contexts.length;
+    sg.subgroups.forEach(walk);
+  };
+  tree.subgroups.forEach(walk);
+  return n;
+}
+
+// Total subgroups in the whole tree (direct + nested).
+function countTreeSubgroups(tree: NamespaceTree): number {
+  let n = 0;
+  const walk = (sg: TreeSubgroup) => {
+    n += 1;
+    sg.subgroups.forEach(walk);
+  };
+  tree.subgroups.forEach(walk);
+  return n;
+}
+
 export default function Namespaces() {
   const toast = useToast();
   const { mero } = useMero();
@@ -135,7 +183,7 @@ export default function Namespaces() {
   const activeNsRootId = (view.type === "namespace" || view.type === "group") ? view.ns.namespaceId : null;
 
   const { namespaces, loading, error, refetch: refetchNamespaces } = useNamespaces();
-  const { groups: nsGroups, loading: nsLoadingGroups, error: nsGroupsError, refetch: refetchNsGroups } = useNamespaceGroups(activeNsId) as any;
+  const { groups: nsGroups, loading: nsLoadingGroups, refetch: refetchNsGroups } = useNamespaceGroups(activeNsId) as any;
   const { groupInfo: groupInfoRaw, loading: groupInfoLoading } = useGroupInfo(activeGroupId);
   const { groupInfo: nsRootGroupInfoRaw } = useGroupInfo(activeNsRootId);
   // The SDK's `GroupInfo` is stale vs core's API (skew): it lacks
@@ -175,6 +223,78 @@ export default function Namespaces() {
     view.type === "namespace" ? view.ns.namespaceId : null,
   );
   const { subgroups: groupSubgroups = [], refetch: refetchSubgroups } = useSubgroups(activeGroupId) as any;
+
+  // Full structure tree for the namespace detail view (root contexts +
+  // subgroups recursively), fetched imperatively. `treeVersion` is bumped by
+  // create/delete handlers so the tree (and its counts) stay fresh.
+  const [tree, setTree] = useState<NamespaceTree | null>(null);
+  const [treeLoading, setTreeLoading] = useState(false);
+  const [treeVersion, setTreeVersion] = useState(0);
+  const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
+  const refetchTree = useCallback(() => setTreeVersion((v) => v + 1), []);
+
+  useEffect(() => {
+    if (view.type !== "namespace" || !mero || !activeNsId) {
+      setTree(null);
+      return;
+    }
+    let cancelled = false;
+    const admin: any = mero.admin;
+
+    const buildSubgroup = async (
+      groupId: string,
+      name: string | undefined,
+      depth: number,
+    ): Promise<TreeSubgroup> => {
+      const [contexts, subs] = await Promise.all([
+        admin.listGroupContexts(groupId).catch(() => []),
+        depth < MAX_TREE_DEPTH
+          ? admin.listSubgroups(groupId).catch(() => [])
+          : Promise.resolve([]),
+      ]);
+      const subgroups = await Promise.all(
+        (subs as any[]).map((s) => buildSubgroup(s.groupId, s.name, depth + 1)),
+      );
+      return { groupId, name, contexts: (contexts as TreeContext[]) ?? [], subgroups };
+    };
+
+    setTreeLoading(true);
+    (async () => {
+      const [rootContexts, nsSubs] = await Promise.all([
+        admin.listGroupContexts(activeNsId).catch(() => []),
+        admin.listNamespaceGroups(activeNsId).catch(() => []),
+      ]);
+      const subgroups = await Promise.all(
+        (nsSubs as any[]).map((s) => buildSubgroup(s.groupId, s.name, 1)),
+      );
+      return { rootContexts: (rootContexts as TreeContext[]) ?? [], subgroups };
+    })()
+      .then((t) => {
+        if (cancelled) return;
+        setTree(t);
+        // Default: namespace root expanded, subgroups collapsed.
+        setExpandedNodes(new Set([`ns:${activeNsId}`]));
+      })
+      .catch(() => {
+        if (!cancelled) setTree(null);
+      })
+      .finally(() => {
+        if (!cancelled) setTreeLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [view.type, activeNsId, mero, treeVersion]);
+
+  const toggleNode = useCallback((id: string) => {
+    setExpandedNodes((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
 
   const { createNamespace, loading: creatingNamespace } = useCreateNamespace();
   const [creatingContext, setCreatingContext] = useState(false);
@@ -282,6 +402,7 @@ export default function Namespaces() {
       saveContextKey(result.contextId, result.memberPublicKey, applicationId);
       toast.success(`Context created: ${truncateId(result.contextId)}`);
       setCtxModalOpen(null);
+      refetchTree();
       await Promise.all([refetchGroupContexts?.(), refetchNsRootContexts?.()]);
     } catch (e: any) {
       toast.error(`Failed to create context: ${parseApiError(e)}`);
@@ -314,6 +435,7 @@ export default function Namespaces() {
       toast.success('Group deleted');
       setDeleteGroupTarget(null);
       if (view.type === 'group') setView({ type: 'namespace', ns: view.ns });
+      refetchTree();
       await Promise.all([
         refetchNsGroups?.(),
         refetchSubgroups?.(),
@@ -332,6 +454,7 @@ export default function Namespaces() {
       await mero.admin.deleteContext(contextId);
       toast.success('Context deleted');
       setDeleteContextTarget(null);
+      refetchTree();
       await Promise.all([
         refetch(),
         refetchNsRootContexts?.(),
@@ -813,6 +936,105 @@ export default function Namespaces() {
     );
   };
 
+  // ── Tree (folder structure) helpers ──
+  // A context leaf in the tree: copy + delete. `indent` is the nesting depth
+  // (0 = directly under the namespace root).
+  const renderTreeContext = (c: TreeContext, indent: number) => {
+    const hasName = !!c.name;
+    return (
+      <div
+        key={`ctx-${c.contextId}`}
+        className="ns-tree-row ns-tree-context"
+        style={{ paddingLeft: `${0.6 + indent * 1.25}rem` }}
+      >
+        <span className="ns-tree-spacer" />
+        <Box size={14} className="ns-tree-icon" />
+        <div className="ns-row-info">
+          {hasName ? (
+            <>
+              <span className="ns-row-name">{c.name}</span>
+              <span className="ns-row-id">{truncateId(c.contextId)}</span>
+            </>
+          ) : (
+            <span className="ns-row-name mono">{truncateId(c.contextId)}</span>
+          )}
+        </div>
+        <button className="copy-btn" onClick={() => copyToClipboard(c.contextId)} title="Copy ID">
+          <Copy size={12} />
+        </button>
+        <button
+          className="ns-danger-icon-btn"
+          title="Delete context"
+          onClick={() => setDeleteContextTarget({ contextId: c.contextId, name: c.name || truncateId(c.contextId), refetch: refetchTree })}
+        >
+          <Trash2 size={13} />
+        </button>
+      </div>
+    );
+  };
+
+  // A subgroup node: collapsible header (chevron toggles its children) whose
+  // name opens the group detail view; recurses into nested subgroups.
+  const renderTreeSubgroup = (sg: TreeSubgroup, ns: Namespace, indent: number) => {
+    const isOpen = expandedNodes.has(sg.groupId);
+    const childCount = sg.contexts.length + sg.subgroups.length;
+    const gName = sg.name;
+    return (
+      <div key={`sg-${sg.groupId}`} className="ns-tree-branch">
+        <div
+          className="ns-tree-row ns-tree-subgroup"
+          style={{ paddingLeft: `${0.6 + indent * 1.25}rem` }}
+        >
+          <button
+            className="ns-tree-toggle"
+            onClick={() => toggleNode(sg.groupId)}
+            title={isOpen ? "Collapse" : "Expand"}
+            disabled={childCount === 0}
+          >
+            {childCount === 0 ? (
+              <span className="ns-tree-toggle-empty" />
+            ) : (
+              <ChevronRight size={14} className={`ns-tree-chevron${isOpen ? " ns-tree-chevron-open" : ""}`} />
+            )}
+          </button>
+          <Layers size={15} className="ns-tree-icon" />
+          <div className="ns-row-info" onClick={() => openGroup(ns, sg.groupId)} style={{ cursor: "pointer" }}>
+            {gName ? (
+              <>
+                <span className="ns-row-name">{gName}</span>
+                <span className="ns-row-id">{truncateId(sg.groupId)}</span>
+              </>
+            ) : (
+              <span className="ns-row-name mono">{truncateId(sg.groupId)}</span>
+            )}
+          </div>
+          <span className="ns-tree-count">{childCount}</span>
+          <button
+            className="ns-danger-icon-btn"
+            title="Delete group"
+            onClick={(e) => { e.stopPropagation(); setDeleteGroupTarget(sg.groupId); }}
+          >
+            <Trash2 size={13} />
+          </button>
+        </div>
+        {isOpen && (
+          <div className="ns-tree-children">
+            {childCount === 0 ? (
+              <div className="ns-tree-empty" style={{ paddingLeft: `${0.6 + (indent + 1) * 1.25}rem` }}>
+                Empty subgroup
+              </div>
+            ) : (
+              <>
+                {sg.contexts.map((c) => renderTreeContext(c, indent + 1))}
+                {sg.subgroups.map((child) => renderTreeSubgroup(child, ns, indent + 1))}
+              </>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   // ── Modals ──
   const modalOverlay = (
     <>
@@ -974,7 +1196,7 @@ export default function Namespaces() {
                     </button>
                   </div>
                   <div className="ns-card-stats">
-                    <span title="Groups"><Layers size={14} /> {(ns as any).subgroupCount ?? 0}</span>
+                    <span title="Subgroups"><Layers size={14} /> {(ns as any).subgroupCount ?? 0}</span>
                     <span title="Members"><Users size={14} /> {(ns as any).memberCount ?? 0}</span>
                     <span title="Contexts"><Box size={14} /> {(ns as any).contextCount ?? 0}</span>
                   </div>
@@ -997,6 +1219,11 @@ export default function Namespaces() {
   // ─── Namespace Detail View ───
   if (view.type === "namespace") {
     const { ns } = view;
+    // Counts span the whole tree (root + nested subgroups). Fall back to the
+    // single-level hook data while the tree is still loading.
+    const nsContextCount = tree ? countTreeContexts(tree) : nsRootContexts.length;
+    const nsSubgroupCount = tree ? countTreeSubgroups(tree) : nsGroups.length;
+    const countsLoading = treeLoading && !tree;
     return (
       <>
       <div className="ns-page">
@@ -1030,7 +1257,7 @@ export default function Namespaces() {
                   <button className="ns-actions-menu-item" onClick={() => { setActionsMenuOpen(false); setCtxModalOpen({ namespaceId: ns.namespaceId, applicationId: ns.targetApplicationId }); }}>
                     <Plus size={13} /> Create Context
                   </button>
-                  <button className="ns-actions-menu-item" onClick={() => { setActionsMenuOpen(false); setJoinCtxModal({ groupId: ns.namespaceId, refetch: () => refetchNsRootContexts?.() }); }}>
+                  <button className="ns-actions-menu-item" onClick={() => { setActionsMenuOpen(false); setJoinCtxModal({ groupId: ns.namespaceId, refetch: () => { refetchTree(); refetchNsRootContexts?.(); } }); }}>
                     <LogIn size={13} /> Join Context
                   </button>
                   <button className="ns-actions-menu-item" onClick={() => { setActionsMenuOpen(false); setInviteModal({ groupId: ns.namespaceId, isNamespace: true }); }}>
@@ -1053,12 +1280,12 @@ export default function Namespaces() {
               <div className="stat-label">Members ↓</div>
             </button>
             <div className="stat-card">
-              <div className="stat-value">{nsRootContexts.length}</div>
+              <div className="stat-value">{countsLoading ? '…' : nsContextCount}</div>
               <div className="stat-label">Contexts</div>
             </div>
             <div className="stat-card">
-              <div className="stat-value">{nsLoadingGroups ? '…' : nsGroups.length}</div>
-              <div className="stat-label">Groups</div>
+              <div className="stat-value">{countsLoading || nsLoadingGroups ? '…' : nsSubgroupCount}</div>
+              <div className="stat-label">Subgroups</div>
             </div>
             <div className="stat-card">
               <div className="stat-value" style={{ fontSize: "0.85rem" }}>{ns.upgradePolicy || "—"}</div>
@@ -1087,12 +1314,38 @@ export default function Namespaces() {
           </div>
 
           <div className="ns-detail-section">
-            <h2><Box size={16} /> Contexts ({nsRootContexts.length})</h2>
-            {nsRootContexts.length === 0 ? (
-              <p className="empty-hint">No contexts yet. Click "Create Context" to add one.</p>
+            <div className="ns-tree-header">
+              <h2><Layers size={16} /> Structure</h2>
+              <span className="ns-tree-legend">{nsContextCount} contexts · {nsSubgroupCount} subgroups</span>
+            </div>
+            {treeLoading && !tree ? (
+              <div className="loading">Loading structure…</div>
+            ) : !tree || (tree.rootContexts.length === 0 && tree.subgroups.length === 0) ? (
+              <p className="empty-hint">Empty namespace. Create a context or subgroup to get started.</p>
             ) : (
-              <div className="ns-context-list">
-                {nsRootContexts.map((c: any) => renderContextItem(c, ns.targetApplicationId, () => refetchNsRootContexts?.()))}
+              <div className="ns-tree">
+                <div className="ns-tree-branch">
+                  <div className="ns-tree-row ns-tree-namespace" style={{ paddingLeft: "0.6rem" }}>
+                    <button
+                      className="ns-tree-toggle"
+                      onClick={() => toggleNode(`ns:${ns.namespaceId}`)}
+                      title={expandedNodes.has(`ns:${ns.namespaceId}`) ? "Collapse" : "Expand"}
+                    >
+                      <ChevronRight size={14} className={`ns-tree-chevron${expandedNodes.has(`ns:${ns.namespaceId}`) ? " ns-tree-chevron-open" : ""}`} />
+                    </button>
+                    <Box size={15} className="ns-tree-icon ns-tree-icon-root" />
+                    <div className="ns-row-info">
+                      <span className="ns-row-name">{nsDisplayName(ns)}</span>
+                    </div>
+                    <span className="ns-tree-count">{tree.rootContexts.length + tree.subgroups.length}</span>
+                  </div>
+                  {expandedNodes.has(`ns:${ns.namespaceId}`) && (
+                    <div className="ns-tree-children">
+                      {tree.rootContexts.map((c) => renderTreeContext(c, 1))}
+                      {tree.subgroups.map((sg) => renderTreeSubgroup(sg, ns, 1))}
+                    </div>
+                  )}
+                </div>
               </div>
             )}
           </div>
@@ -1210,49 +1463,6 @@ export default function Namespaces() {
             )}
           </div>
 
-          <div className="ns-detail-section">
-            <h2>Groups</h2>
-            {nsLoadingGroups ? (
-              <div className="loading">Loading groups...</div>
-            ) : nsGroupsError ? (
-              <div className="error-message">{nsGroupsError.message}</div>
-            ) : nsGroups.length === 0 ? (
-              <p className="empty-hint">No groups in this namespace</p>
-            ) : (
-              <div className="ns-group-list">
-                {nsGroups.map((g: any) => {
-                  const gName = (g as any).name || (g as any).metadata?.name;
-                  return (
-                    <div key={g.groupId} className="ns-group-item">
-                      <Layers size={16} />
-                      <div
-                        className="ns-row-info"
-                        onClick={() => openGroup(ns, g.groupId)}
-                        style={{ cursor: 'pointer' }}
-                      >
-                        {gName ? (
-                          <>
-                            <span className="ns-row-name">{gName}</span>
-                            <span className="ns-row-id">{truncateId(g.groupId)}</span>
-                          </>
-                        ) : (
-                          <span className="ns-row-name mono">{truncateId(g.groupId)}</span>
-                        )}
-                      </div>
-                      <button
-                        className="ns-danger-icon-btn"
-                        title="Delete group"
-                        onClick={(e) => { e.stopPropagation(); setDeleteGroupTarget(g.groupId); }}
-                      >
-                        <Trash2 size={13} />
-                      </button>
-                      <ChevronRight size={14} className="ns-card-chevron" onClick={() => openGroup(ns, g.groupId)} style={{ cursor: 'pointer' }} />
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
         </main>
       </div>
       {modalOverlay}

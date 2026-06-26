@@ -252,6 +252,9 @@ export default function Namespaces() {
     // keeps the current tree on screen (no flicker, no collapse).
     const namespaceChanged = expandedInitRef.current !== activeNsId;
     if (namespaceChanged) setTree(null);
+    // Start each run with a clean error state so a stale banner from a prior
+    // failed fetch doesn't linger over a fresh (re)load.
+    setTreeError(false);
 
     // Any sub-fetch failure flips this so the UI can warn that counts/branches
     // may be incomplete instead of silently rendering an empty subtree.
@@ -292,15 +295,20 @@ export default function Namespaces() {
       const subgroups = await Promise.all(
         (nsSubs as any[]).map((s) => buildSubgroup(s.groupId, s.name, 1)),
       );
-      return { rootContexts: (rootContexts as TreeContext[]) ?? [], subgroups };
+      // `fetchFailed` is final here — the IIFE has awaited the entire tree —
+      // but we carry it in the resolved value so `.then` reads a snapshot
+      // rather than a closure variable.
+      return { rootContexts: (rootContexts as TreeContext[]) ?? [], subgroups, fetchFailed };
     })()
-      .then((t) => {
+      .then(({ fetchFailed: failed, ...treeData }) => {
         if (cancelled) return;
-        setTree(t);
-        setTreeError(fetchFailed);
+        setTree(treeData);
+        setTreeError(failed);
         // Initialise expansion only on the first load of this namespace;
-        // refreshes preserve whatever the user has expanded.
-        if (namespaceChanged) {
+        // refreshes preserve whatever the user has expanded. Re-check against
+        // the ref (not the start-of-run boolean) so a late-resolving fetch
+        // can't reset a namespace the user has since switched to.
+        if (expandedInitRef.current !== activeNsId) {
           expandedInitRef.current = activeNsId;
           setExpandedNodes(new Set([`ns:${activeNsId}`]));
         }
@@ -996,10 +1004,13 @@ export default function Namespaces() {
         <button className="copy-btn" onClick={() => copyToClipboard(c.contextId)} title="Copy ID">
           <Copy size={12} />
         </button>
+        {/* No-op refetch: handleDeleteContext already refreshes the tree
+            (refetchTree) plus the namespace/group context hooks, so a
+            per-target refetch would just bump treeVersion a second time. */}
         <button
           className="ns-danger-icon-btn"
           title="Delete context"
-          onClick={() => setDeleteContextTarget({ contextId: c.contextId, name: c.name || truncateId(c.contextId), refetch: refetchTree })}
+          onClick={() => setDeleteContextTarget({ contextId: c.contextId, name: c.name || truncateId(c.contextId), refetch: () => {} })}
         >
           <Trash2 size={13} />
         </button>
@@ -1356,10 +1367,12 @@ export default function Namespaces() {
               <h2><Layers size={16} /> Structure</h2>
               <span className="ns-tree-legend">{nsContextCount} contexts · {nsSubgroupCount} subgroups</span>
             </div>
-            <p className="ns-tree-help">
-              <Box size={12} /> <strong>Context</strong> = a running app instance (e.g. a chat channel).
-              <Layers size={12} /> <strong>Subgroup</strong> = a nested group holding its own contexts. Click a subgroup to expand it.
-            </p>
+            {tree && (
+              <p className="ns-tree-help">
+                <Box size={12} /> <strong>Context</strong> = a running app instance (e.g. a chat channel).
+                <Layers size={12} /> <strong>Subgroup</strong> = a nested group holding its own contexts. Click a subgroup to expand it.
+              </p>
+            )}
             {treeError && tree && (
               <p className="ns-tree-error">Some groups couldn't be loaded — the structure and counts may be incomplete.</p>
             )}

@@ -229,29 +229,54 @@ export default function Namespaces() {
   // create/delete handlers so the tree (and its counts) stay fresh.
   const [tree, setTree] = useState<NamespaceTree | null>(null);
   const [treeLoading, setTreeLoading] = useState(false);
+  const [treeError, setTreeError] = useState(false);
   const [treeVersion, setTreeVersion] = useState(0);
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
+  // Tracks the namespace whose expansion state has been initialised, so that
+  // post-mutation refreshes (refetchTree) preserve the user's expanded
+  // subgroups and only the first load of a *new* namespace resets them.
+  const expandedInitRef = useRef<string | null>(null);
   const refetchTree = useCallback(() => setTreeVersion((v) => v + 1), []);
 
   useEffect(() => {
     if (view.type !== "namespace" || !mero || !activeNsId) {
       setTree(null);
+      setTreeError(false);
+      expandedInitRef.current = null;
       return;
     }
     let cancelled = false;
     const admin: any = mero.admin;
+    // When the namespace itself changes, drop the previous tree so we don't
+    // briefly show the wrong namespace's structure; a same-namespace refresh
+    // keeps the current tree on screen (no flicker, no collapse).
+    const namespaceChanged = expandedInitRef.current !== activeNsId;
+    if (namespaceChanged) setTree(null);
+
+    // Any sub-fetch failure flips this so the UI can warn that counts/branches
+    // may be incomplete instead of silently rendering an empty subtree.
+    let fetchFailed = false;
+    const onFetchErr = (label: string, id: string) => (e: unknown) => {
+      fetchFailed = true;
+      console.warn(`[ns-tree] ${label} failed for ${id}`, e);
+      return [] as any[];
+    };
 
     const buildSubgroup = async (
       groupId: string,
       name: string | undefined,
       depth: number,
     ): Promise<TreeSubgroup> => {
+      // Stop descending as soon as this run is superseded — avoids issuing a
+      // burst of now-pointless requests for a tree that won't be committed.
+      if (cancelled) return { groupId, name, contexts: [], subgroups: [] };
       const [contexts, subs] = await Promise.all([
-        admin.listGroupContexts(groupId).catch(() => []),
+        admin.listGroupContexts(groupId).catch(onFetchErr("listGroupContexts", groupId)),
         depth < MAX_TREE_DEPTH
-          ? admin.listSubgroups(groupId).catch(() => [])
+          ? admin.listSubgroups(groupId).catch(onFetchErr("listSubgroups", groupId))
           : Promise.resolve([]),
       ]);
+      if (cancelled) return { groupId, name, contexts: [], subgroups: [] };
       const subgroups = await Promise.all(
         (subs as any[]).map((s) => buildSubgroup(s.groupId, s.name, depth + 1)),
       );
@@ -261,8 +286,8 @@ export default function Namespaces() {
     setTreeLoading(true);
     (async () => {
       const [rootContexts, nsSubs] = await Promise.all([
-        admin.listGroupContexts(activeNsId).catch(() => []),
-        admin.listNamespaceGroups(activeNsId).catch(() => []),
+        admin.listGroupContexts(activeNsId).catch(onFetchErr("listGroupContexts", activeNsId)),
+        admin.listNamespaceGroups(activeNsId).catch(onFetchErr("listNamespaceGroups", activeNsId)),
       ]);
       const subgroups = await Promise.all(
         (nsSubs as any[]).map((s) => buildSubgroup(s.groupId, s.name, 1)),
@@ -272,11 +297,20 @@ export default function Namespaces() {
       .then((t) => {
         if (cancelled) return;
         setTree(t);
-        // Default: namespace root expanded, subgroups collapsed.
-        setExpandedNodes(new Set([`ns:${activeNsId}`]));
+        setTreeError(fetchFailed);
+        // Initialise expansion only on the first load of this namespace;
+        // refreshes preserve whatever the user has expanded.
+        if (namespaceChanged) {
+          expandedInitRef.current = activeNsId;
+          setExpandedNodes(new Set([`ns:${activeNsId}`]));
+        }
       })
-      .catch(() => {
-        if (!cancelled) setTree(null);
+      .catch((e) => {
+        if (cancelled) return;
+        // Total failure: keep any tree already on screen rather than blanking
+        // it to a misleading "Empty namespace"; just flag the error.
+        console.warn("[ns-tree] structure fetch failed", e);
+        setTreeError(true);
       })
       .finally(() => {
         if (!cancelled) setTreeLoading(false);
@@ -1326,8 +1360,13 @@ export default function Namespaces() {
               <Box size={12} /> <strong>Context</strong> = a running app instance (e.g. a chat channel).
               <Layers size={12} /> <strong>Subgroup</strong> = a nested group holding its own contexts. Click a subgroup to expand it.
             </p>
+            {treeError && tree && (
+              <p className="ns-tree-error">Some groups couldn't be loaded — the structure and counts may be incomplete.</p>
+            )}
             {treeLoading && !tree ? (
               <div className="loading">Loading structure…</div>
+            ) : treeError && !tree ? (
+              <p className="empty-hint">Couldn't load the namespace structure. Refresh to try again.</p>
             ) : !tree || (tree.rootContexts.length === 0 && tree.subgroups.length === 0) ? (
               <p className="empty-hint">Empty namespace. Create a context or subgroup to get started.</p>
             ) : (

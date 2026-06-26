@@ -1460,3 +1460,31 @@
   padding: 8px 12px;
   border-top: 1px solid var(--border-color);
 }
+
+.ns-page-subtitle {
+  margin: 4px 0 0;
+  max-width: 640px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-tertiary);
+}
+
+.ns-tree-help {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-tertiary);
+}
+
+.ns-tree-help svg {
+  vertical-align: -2px;
+}
+
+.ns-tree-help strong {
+  color: var(--text-secondary);
+  font-weight: 600;
+}

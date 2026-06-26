@@ -1132,6 +1132,9 @@ export default function Namespaces() {
           <div className="ns-page-top">
             <div className="ns-page-top-left">
               <h1>Namespaces</h1>
+              <p className="ns-page-subtitle">
+                A namespace is an app-bound workspace. It holds contexts (running app instances, e.g. a chat channel) and subgroups (nested groups that hold their own contexts).
+              </p>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <button
@@ -1196,9 +1199,9 @@ export default function Namespaces() {
                     </button>
                   </div>
                   <div className="ns-card-stats">
-                    <span title="Subgroups"><Layers size={14} /> {(ns as any).subgroupCount ?? 0}</span>
-                    <span title="Members"><Users size={14} /> {(ns as any).memberCount ?? 0}</span>
-                    <span title="Contexts"><Box size={14} /> {(ns as any).contextCount ?? 0}</span>
+                    <span title="Subgroups — nested groups inside this namespace, each holding its own contexts"><Layers size={14} /> {(ns as any).subgroupCount ?? 0}</span>
+                    <span title="Members — identities with access to this namespace"><Users size={14} /> {(ns as any).memberCount ?? 0}</span>
+                    <span title="Contexts — running app instances (e.g. a chat channel) directly under the namespace"><Box size={14} /> {(ns as any).contextCount ?? 0}</span>
                   </div>
                   {ns.upgradePolicy && (
                     <div className="ns-card-policy">
@@ -1274,20 +1277,21 @@ export default function Namespaces() {
           <div className="ns-detail-stats">
             <button
               className="stat-card stat-card-clickable"
+              title="Members — identities with access to this namespace"
               onClick={() => document.getElementById('ns-members-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
             >
               <div className="stat-value">{nsMembersLoading ? '…' : nsMembers.length}</div>
               <div className="stat-label">Members ↓</div>
             </button>
-            <div className="stat-card">
+            <div className="stat-card" title="Contexts — running app instances (e.g. a chat channel), counted across the namespace and all its subgroups">
               <div className="stat-value">{countsLoading ? '…' : nsContextCount}</div>
               <div className="stat-label">Contexts</div>
             </div>
-            <div className="stat-card">
+            <div className="stat-card" title="Subgroups — nested groups inside this namespace, each holding its own contexts (counted recursively)">
               <div className="stat-value">{countsLoading || nsLoadingGroups ? '…' : nsSubgroupCount}</div>
               <div className="stat-label">Subgroups</div>
             </div>
-            <div className="stat-card">
+            <div className="stat-card" title="Upgrade Policy — how this namespace adopts new application versions">
               <div className="stat-value" style={{ fontSize: "0.85rem" }}>{ns.upgradePolicy || "—"}</div>
               <div className="stat-label">Upgrade Policy</div>
             </div>
@@ -1318,6 +1322,10 @@ export default function Namespaces() {
               <h2><Layers size={16} /> Structure</h2>
               <span className="ns-tree-legend">{nsContextCount} contexts · {nsSubgroupCount} subgroups</span>
             </div>
+            <p className="ns-tree-help">
+              <Box size={12} /> <strong>Context</strong> = a running app instance (e.g. a chat channel).
+              <Layers size={12} /> <strong>Subgroup</strong> = a nested group holding its own contexts. Click a subgroup to expand it.
+            </p>
             {treeLoading && !tree ? (
               <div className="loading">Loading structure…</div>
             ) : !tree || (tree.rootContexts.length === 0 && tree.subgroups.length === 0) ? (

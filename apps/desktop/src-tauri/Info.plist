@@ -13,5 +13,12 @@
 			</array>
 		</dict>
 	</array>
+	<!-- Required so the embedded WKWebView may access camera/microphone for
+	     WebRTC video calls (Mero Meet). Without these usage strings macOS
+	     terminates the app on the first getUserMedia() call. -->
+	<key>NSCameraUsageDescription</key>
+	<string>Calimero needs camera access for video calls in apps like Mero Meet.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Calimero needs microphone access for audio in calls in apps like Mero Meet.</string>
 </dict>
 </plist>

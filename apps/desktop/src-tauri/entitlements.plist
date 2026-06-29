@@ -12,5 +12,12 @@
     <true/>
     <key>com.apple.security.network.client</key>
     <true/>
+    <!-- WebRTC video calls (Mero Meet): allow the hardened-runtime app to use
+         the camera and microphone. Paired with the NSCamera/NSMicrophone usage
+         strings in Info.plist and the WKWebView media-permission handler. -->
+    <key>com.apple.security.device.camera</key>
+    <true/>
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
 </dict>
 </plist>

@@ -797,6 +797,14 @@ async fn create_app_window(
 
     info!("[Tauri] Configured IPC scope for domain: {} on window: {}", domain, window_label);
 
+    // Camera/microphone for WebRTC video calls (e.g. Mero Meet) needs no extra
+    // work here: wry's own WKUIDelegate already grants
+    // `requestMediaCapturePermissionForOrigin` on macOS, and WebView2 / WebKitGTK
+    // grant it on Windows/Linux. The OS-level permission prompt (gated by the
+    // Info.plist usage strings + entitlements) still applies on first use.
+    // Installing a custom delegate here would replace wry's, breaking its
+    // `<input type=file>` open-panel handler.
+
     // Show the window AFTER IPC scope is configured
     window.show().map_err(|e| TauriError::with_details(TauriErrorCode::WindowOperationFailed, format!("Failed to display window '{}'", title), e.to_string()))?;
     // Bring app window to front so user sees it instead of the main dashboard
@@ -2380,6 +2388,61 @@ async fn open_url_in_browser(url: String, app_handle: tauri::AppHandle) -> Resul
         .map_err(|e| TauriError::new(TauriErrorCode::InternalError, e.to_string()))
 }
 
+/// One WebRTC ICE server entry, serialized exactly as the browser's
+/// `RTCIceServer` expects (so the frontend can feed it straight into
+/// `new RTCPeerConnection({ iceServers })`).
+#[derive(Serialize)]
+struct IceServer {
+    urls: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    username: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "credential")]
+    credential: Option<String>,
+}
+
+/// Read and sanitize an optional TURN credential env var: trims whitespace and
+/// rejects empty, over-long (>256 chars), or control-character-bearing values so
+/// a malformed or hostile env value can't be forwarded verbatim into the
+/// frontend's `RTCPeerConnection` config.
+fn sanitized_turn_secret(var: &str) -> Option<String> {
+    std::env::var(var)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty() && s.len() <= 256 && !s.chars().any(char::is_control))
+}
+
+/// ICE servers for WebRTC apps (Mero Meet). Always returns a public STUN
+/// server; if a self-hosted/bundled TURN relay is configured via the
+/// `CALIMERO_TURN_URL` (+ optional `CALIMERO_TURN_USER` / `CALIMERO_TURN_CRED`)
+/// env vars, it is appended. This is the seam for shipping a TURN relay with
+/// the desktop app: point these at it and group/NAT-restricted calls keep
+/// working without the frontend needing to know the details.
+#[tauri::command]
+fn get_ice_servers() -> Vec<IceServer> {
+    let mut servers = vec![IceServer {
+        urls: "stun:stun.l.google.com:19302".to_string(),
+        username: None,
+        credential: None,
+    }];
+    if let Ok(turn_url) = std::env::var("CALIMERO_TURN_URL") {
+        let turn_url = turn_url.trim();
+        // Only accept a real TURN URI; an unset/garbled env value must not be
+        // forwarded to RTCPeerConnection (it would invalidate the whole entry).
+        if turn_url.starts_with("turn:") || turn_url.starts_with("turns:") {
+            servers.push(IceServer {
+                urls: turn_url.to_string(),
+                username: sanitized_turn_secret("CALIMERO_TURN_USER"),
+                credential: sanitized_turn_secret("CALIMERO_TURN_CRED"),
+            });
+        } else if !turn_url.is_empty() {
+            log::warn!(
+                "[webrtc] ignoring CALIMERO_TURN_URL: must start with 'turn:' or 'turns:'"
+            );
+        }
+    }
+    servers
+}
+
 #[tauri::command]
 async fn delete_calimero_data_dir(data_dir: String) -> Result<String, TauriError> {
     let expanded = if data_dir.starts_with("~") {
@@ -2716,6 +2779,7 @@ fn main() {
             autostart_is_enabled,
             close_current_window,
             open_url_in_browser,
+            get_ice_servers,
             secure_store_token,
             secure_get_token,
             secure_delete_token,

@@ -93,6 +93,12 @@ export async function openAppFrontend(
     if (context?.applicationId) hashParams.set('app-id', context.applicationId);
     if (context?.contextId) hashParams.set('context_id', context.contextId);
     if (context?.executorPublicKey) hashParams.set('executor_public_key', context.executorPublicKey);
+    // Propagate the desktop's developer-mode setting so apps can surface
+    // advanced diagnostics (e.g. Mero Meet's WebRTC panel). App windows are a
+    // separate origin and can't read the desktop's settings localStorage.
+    // Only set the flag when enabled: apps treat its absence as "off", so we
+    // avoid leaking the user's dev-mode preference to every app frontend.
+    if (settings.developerMode) hashParams.set('dev_mode', '1');
 
     const urlToOpen = `${frontendUrl}#${hashParams.toString()}`;
 
@@ -118,7 +124,12 @@ export async function openAppFrontend(
         await existing.setFocus();
         // Signal apps to re-read their auth state. No token payload here to avoid
         // sending credentials to a window whose current origin we cannot verify.
-        await existing.emit('calimero:auth-refresh', null).catch(() => {});
+        // dev_mode is not a credential, so we forward the current value: an
+        // already-open app would otherwise keep the stale dev_mode from when its
+        // window was first created until it is recreated.
+        await existing
+          .emit('calimero:auth-refresh', { dev_mode: settings.developerMode ? '1' : '0' })
+          .catch(() => {});
         return windowLabel;
       } catch (e) {
         // window was closed between getByLabel and setFocus; fall through to create a new one

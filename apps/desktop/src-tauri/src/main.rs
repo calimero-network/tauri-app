@@ -2400,6 +2400,17 @@ struct IceServer {
     credential: Option<String>,
 }
 
+/// Read and sanitize an optional TURN credential env var: trims whitespace and
+/// rejects empty, over-long (>256 chars), or control-character-bearing values so
+/// a malformed or hostile env value can't be forwarded verbatim into the
+/// frontend's `RTCPeerConnection` config.
+fn sanitized_turn_secret(var: &str) -> Option<String> {
+    std::env::var(var)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty() && s.len() <= 256 && !s.chars().any(char::is_control))
+}
+
 /// ICE servers for WebRTC apps (Mero Meet). Always returns a public STUN
 /// server; if a self-hosted/bundled TURN relay is configured via the
 /// `CALIMERO_TURN_URL` (+ optional `CALIMERO_TURN_USER` / `CALIMERO_TURN_CRED`)
@@ -2420,14 +2431,8 @@ fn get_ice_servers() -> Vec<IceServer> {
         if turn_url.starts_with("turn:") || turn_url.starts_with("turns:") {
             servers.push(IceServer {
                 urls: turn_url.to_string(),
-                username: std::env::var("CALIMERO_TURN_USER")
-                    .ok()
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty()),
-                credential: std::env::var("CALIMERO_TURN_CRED")
-                    .ok()
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty()),
+                username: sanitized_turn_secret("CALIMERO_TURN_USER"),
+                credential: sanitized_turn_secret("CALIMERO_TURN_CRED"),
             });
         } else if !turn_url.is_empty() {
             log::warn!(

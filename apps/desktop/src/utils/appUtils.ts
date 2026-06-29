@@ -96,7 +96,9 @@ export async function openAppFrontend(
     // Propagate the desktop's developer-mode setting so apps can surface
     // advanced diagnostics (e.g. Mero Meet's WebRTC panel). App windows are a
     // separate origin and can't read the desktop's settings localStorage.
-    hashParams.set('dev_mode', settings.developerMode ? '1' : '0');
+    // Only set the flag when enabled: apps treat its absence as "off", so we
+    // avoid leaking the user's dev-mode preference to every app frontend.
+    if (settings.developerMode) hashParams.set('dev_mode', '1');
 
     const urlToOpen = `${frontendUrl}#${hashParams.toString()}`;
 

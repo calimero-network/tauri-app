@@ -2411,14 +2411,101 @@ fn sanitized_turn_secret(var: &str) -> Option<String> {
         .filter(|s| !s.is_empty() && s.len() <= 256 && !s.chars().any(char::is_control))
 }
 
-/// ICE servers for WebRTC apps (Mero Meet). Always returns a public STUN
-/// server; if a self-hosted/bundled TURN relay is configured via the
-/// `CALIMERO_TURN_URL` (+ optional `CALIMERO_TURN_USER` / `CALIMERO_TURN_CRED`)
-/// env vars, it is appended. This is the seam for shipping a TURN relay with
-/// the desktop app: point these at it and group/NAT-restricted calls keep
-/// working without the frontend needing to know the details.
+/// JSON returned by a self-hosted ICE credential endpoint (`CALIMERO_ICE_ENDPOINT`).
+/// Matches the conventional `{ "iceServers": [...] }` shape so a coturn + minting
+/// service (or any compatible TURN-as-a-service endpoint) can be swapped without a
+/// code change. Each entry carries one `urls` string (the minting service emits one
+/// url per entry).
+#[derive(Deserialize)]
+struct IceEndpointResponse {
+    #[serde(rename = "iceServers")]
+    ice_servers: Vec<IceServerWire>,
+}
+
+#[derive(Deserialize)]
+struct IceServerWire {
+    urls: String,
+    #[serde(default)]
+    username: Option<String>,
+    #[serde(default)]
+    credential: Option<String>,
+}
+
+/// Fetch ICE servers (with freshly-minted, short-lived TURN credentials) from a
+/// self-hosted endpoint. Sends `CALIMERO_ICE_ENDPOINT_KEY` as a bearer token when
+/// set so the minting service can authenticate the desktop app. Returns `None` on
+/// any failure (unreachable, non-2xx, malformed, no usable entries) so the caller
+/// falls back to the static path — a momentarily-down endpoint must never block a
+/// user from joining a call. Bounded by a short timeout for the same reason.
+async fn fetch_ice_servers_from_endpoint(endpoint: &str) -> Option<Vec<IceServer>> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(4))
+        .build()
+        .ok()?;
+    let mut req = client.get(endpoint);
+    if let Some(key) = sanitized_turn_secret("CALIMERO_ICE_ENDPOINT_KEY") {
+        req = req.bearer_auth(key);
+    }
+    let resp = req.send().await.ok()?;
+    if !resp.status().is_success() {
+        log::warn!("[webrtc] ICE endpoint returned status {}", resp.status());
+        return None;
+    }
+    let parsed: IceEndpointResponse = resp.json().await.ok()?;
+    let servers: Vec<IceServer> = parsed
+        .ice_servers
+        .into_iter()
+        .filter_map(|s| {
+            let urls = s.urls.trim().to_string();
+            let is_ice = urls.starts_with("stun:")
+                || urls.starts_with("stuns:")
+                || urls.starts_with("turn:")
+                || urls.starts_with("turns:");
+            is_ice.then(|| IceServer {
+                urls,
+                username: s.username,
+                credential: s.credential,
+            })
+        })
+        .collect();
+    if servers.is_empty() {
+        None
+    } else {
+        Some(servers)
+    }
+}
+
+/// ICE servers for WebRTC apps (Mero Meet). Resolution order:
+///
+/// 1. `CALIMERO_ICE_ENDPOINT` — a self-hosted endpoint that mints short-lived
+///    TURN credentials (authenticated with `CALIMERO_ICE_ENDPOINT_KEY` if set).
+///    This is the preferred production path: no long-lived TURN secret ships in
+///    the app binary, and the endpoint owns the full STUN+TURN list. If it's
+///    configured and reachable, its response is authoritative.
+/// 2. Static `CALIMERO_TURN_URL` (+ optional `CALIMERO_TURN_USER` /
+///    `CALIMERO_TURN_CRED`) — appended to a default STUN server. Simple to set
+///    up, but the credentials live in the environment/binary.
+/// 3. Public STUN only — last resort so an un-provisioned build still gets basic
+///    NAT discovery. Configuring (1) or (2) is required for calls between peers
+///    behind symmetric NAT/CGNAT, where a relay is mandatory.
 #[tauri::command]
-fn get_ice_servers() -> Vec<IceServer> {
+async fn get_ice_servers() -> Vec<IceServer> {
+    // (1) Preferred: self-hosted ephemeral-credential endpoint.
+    if let Ok(endpoint) = std::env::var("CALIMERO_ICE_ENDPOINT") {
+        let endpoint = endpoint.trim();
+        if endpoint.starts_with("http://") || endpoint.starts_with("https://") {
+            if let Some(servers) = fetch_ice_servers_from_endpoint(endpoint).await {
+                return servers;
+            }
+            log::warn!(
+                "[webrtc] CALIMERO_ICE_ENDPOINT unreachable/invalid; falling back to static config"
+            );
+        } else if !endpoint.is_empty() {
+            log::warn!("[webrtc] ignoring CALIMERO_ICE_ENDPOINT: must be an http(s) URL");
+        }
+    }
+
+    // (2)/(3) Static STUN (+ optional static TURN from env).
     let mut servers = vec![IceServer {
         urls: "stun:stun.l.google.com:19302".to_string(),
         username: None,

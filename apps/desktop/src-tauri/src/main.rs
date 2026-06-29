@@ -2400,15 +2400,37 @@ struct IceServer {
     credential: Option<String>,
 }
 
-/// Read and sanitize an optional TURN credential env var: trims whitespace and
-/// rejects empty, over-long (>256 chars), or control-character-bearing values so
-/// a malformed or hostile env value can't be forwarded verbatim into the
-/// frontend's `RTCPeerConnection` config.
+/// Validate a credential/secret value: trims whitespace and rejects empty,
+/// over-long (>256 chars), or control-character-bearing values so a malformed or
+/// hostile value can't be forwarded verbatim into the frontend's
+/// `RTCPeerConnection` config.
+fn sanitize_secret(value: &str) -> Option<String> {
+    let v = value.trim();
+    (!v.is_empty() && v.len() <= 256 && !v.chars().any(char::is_control)).then(|| v.to_string())
+}
+
+/// Read and sanitize an optional TURN credential env var.
 fn sanitized_turn_secret(var: &str) -> Option<String> {
-    std::env::var(var)
+    std::env::var(var).ok().as_deref().and_then(sanitize_secret)
+}
+
+/// The ICE credential endpoint URL. Runtime `CALIMERO_ICE_ENDPOINT` wins; otherwise
+/// the value baked in at build time via `option_env!` (so release builds ship a
+/// working default the installed app uses with zero user configuration). Returns
+/// `None` unless the resolved value is an http(s) URL.
+fn ice_endpoint() -> Option<String> {
+    let raw = std::env::var("CALIMERO_ICE_ENDPOINT")
         .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty() && s.len() <= 256 && !s.chars().any(char::is_control))
+        .or_else(|| option_env!("CALIMERO_ICE_ENDPOINT").map(str::to_string))?;
+    let raw = raw.trim();
+    (raw.starts_with("http://") || raw.starts_with("https://")).then(|| raw.to_string())
+}
+
+/// The bearer key sent to the ICE endpoint. Runtime env wins; otherwise the
+/// build-time baked value (paired with the baked `ice_endpoint`).
+fn ice_endpoint_key() -> Option<String> {
+    sanitized_turn_secret("CALIMERO_ICE_ENDPOINT_KEY")
+        .or_else(|| option_env!("CALIMERO_ICE_ENDPOINT_KEY").and_then(sanitize_secret))
 }
 
 /// JSON returned by a self-hosted ICE credential endpoint (`CALIMERO_ICE_ENDPOINT`).
@@ -2443,7 +2465,7 @@ async fn fetch_ice_servers_from_endpoint(endpoint: &str) -> Option<Vec<IceServer
         .build()
         .ok()?;
     let mut req = client.get(endpoint);
-    if let Some(key) = sanitized_turn_secret("CALIMERO_ICE_ENDPOINT_KEY") {
+    if let Some(key) = ice_endpoint_key() {
         req = req.bearer_auth(key);
     }
     let resp = req.send().await.ok()?;
@@ -2477,8 +2499,10 @@ async fn fetch_ice_servers_from_endpoint(endpoint: &str) -> Option<Vec<IceServer
 
 /// ICE servers for WebRTC apps (Mero Meet). Resolution order:
 ///
-/// 1. `CALIMERO_ICE_ENDPOINT` — a self-hosted endpoint that mints short-lived
-///    TURN credentials (authenticated with `CALIMERO_ICE_ENDPOINT_KEY` if set).
+/// 1. `CALIMERO_ICE_ENDPOINT` — an endpoint that mints short-lived TURN
+///    credentials (authenticated with `CALIMERO_ICE_ENDPOINT_KEY` if set).
+///    Resolved from the runtime env var, or from a value baked in at build time
+///    (`option_env!`) so release builds use it with zero user configuration.
 ///    This is the preferred production path: no long-lived TURN secret ships in
 ///    the app binary, and the endpoint owns the full STUN+TURN list. If it's
 ///    configured and reachable, its response is authoritative.
@@ -2490,19 +2514,14 @@ async fn fetch_ice_servers_from_endpoint(endpoint: &str) -> Option<Vec<IceServer
 ///    behind symmetric NAT/CGNAT, where a relay is mandatory.
 #[tauri::command]
 async fn get_ice_servers() -> Vec<IceServer> {
-    // (1) Preferred: self-hosted ephemeral-credential endpoint.
-    if let Ok(endpoint) = std::env::var("CALIMERO_ICE_ENDPOINT") {
-        let endpoint = endpoint.trim();
-        if endpoint.starts_with("http://") || endpoint.starts_with("https://") {
-            if let Some(servers) = fetch_ice_servers_from_endpoint(endpoint).await {
-                return servers;
-            }
-            log::warn!(
-                "[webrtc] CALIMERO_ICE_ENDPOINT unreachable/invalid; falling back to static config"
-            );
-        } else if !endpoint.is_empty() {
-            log::warn!("[webrtc] ignoring CALIMERO_ICE_ENDPOINT: must be an http(s) URL");
+    // (1) Preferred: ephemeral-credential endpoint (runtime env, else baked at build).
+    if let Some(endpoint) = ice_endpoint() {
+        if let Some(servers) = fetch_ice_servers_from_endpoint(&endpoint).await {
+            return servers;
         }
+        log::warn!(
+            "[webrtc] CALIMERO_ICE_ENDPOINT unreachable/invalid; falling back to static config"
+        );
     }
 
     // (2)/(3) Static STUN (+ optional static TURN from env).

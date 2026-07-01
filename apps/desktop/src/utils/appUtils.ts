@@ -100,7 +100,17 @@ export async function openAppFrontend(
     // avoid leaking the user's dev-mode preference to every app frontend.
     if (settings.developerMode) hashParams.set('dev_mode', '1');
 
-    const urlToOpen = `${frontendUrl}#${hashParams.toString()}`;
+    // Cache-bust the document URL so the webview loads fresh HTML on open instead
+    // of a stale cached index.html pointing at an old bundle. Query param, not the
+    // SSO hash; auth is per-origin so SSO/localStorage are unaffected.
+    let urlToOpen: string;
+    try {
+      const u = new URL(frontendUrl);
+      u.searchParams.set('_cb', String(Date.now()));
+      urlToOpen = `${u.toString()}#${hashParams.toString()}`;
+    } catch {
+      urlToOpen = `${frontendUrl}#${hashParams.toString()}`;
+    }
 
     // Stable window label keyed by applicationId so every call site
     // (Home, Applications, Namespaces, shortcut) produces the same label

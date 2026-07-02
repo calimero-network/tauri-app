@@ -231,9 +231,16 @@ export default function Namespaces() {
         | undefined)
     : undefined;
   const isNsAdmin = (myNsRole ?? '').toLowerCase() === 'admin';
-  // Only swap Delete → Leave when we POSITIVELY know we're not admin; while
-  // the role is unresolved keep the old Delete (the node still enforces).
-  const showNsLeave = myNsRole !== undefined && !isNsAdmin;
+  // Only swap Delete → Leave when we POSITIVELY know we're not admin: members
+  // finished loading AND our identity resolved AND our role was found. While
+  // either async source is pending the menu keeps the old Delete (the node
+  // still enforces admin-ship, so the worst case is the pre-existing error
+  // toast — never a wrong destructive action).
+  const showNsLeave =
+    !nsMembersLoading &&
+    myNsIdentity?.publicKey !== undefined &&
+    myNsRole !== undefined &&
+    !isNsAdmin;
 
   const { contexts: groupContexts, refetch: refetchGroupContexts } = useGroupContexts(activeGroupId);
   const { contexts: nsRootContexts, refetch: refetchNsRootContexts } = useGroupContexts(

@@ -125,12 +125,17 @@ export async function openAppFrontend(
       : domain;
     const windowLabel = `app-${appKey}`.slice(0, 64);
 
-    // If the window is already open, focus it and signal a token refresh.
-    // setFocus first: if it throws (window closed), we skip the emit entirely
+    // If the window is already open, restore + focus it and signal a token refresh.
+    // A window minimized to the macOS dock does NOT come back on setFocus alone —
+    // it must be unminimized first (and shown, in case it was hidden), otherwise
+    // clicking "Open" on an already-open-but-minimized app appears to do nothing.
+    // These run before the emit: if any throw (window closed), we skip the emit
     // so no credentials reach a window that may have navigated to a different origin.
     const existing = WebviewWindow.getByLabel(windowLabel);
     if (existing) {
       try {
+        if (await existing.isMinimized()) await existing.unminimize();
+        await existing.show();
         await existing.setFocus();
         // Signal apps to re-read their auth state. No token payload here to avoid
         // sending credentials to a window whose current origin we cannot verify.
@@ -142,8 +147,8 @@ export async function openAppFrontend(
           .catch(() => {});
         return windowLabel;
       } catch (e) {
-        // window was closed between getByLabel and setFocus; fall through to create a new one
-        console.warn('setFocus failed, opening new window:', e);
+        // window was closed between getByLabel and restore/focus; fall through to create a new one
+        console.warn('focus existing window failed, opening new one:', e);
       }
     }
 

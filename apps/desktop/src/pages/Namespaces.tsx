@@ -8,11 +8,12 @@ import {
   useGroupContexts,
   useSubgroups,
   useCreateNamespace,
+  useNamespaceIdentity,
   type Namespace,
 } from "@calimero-network/mero-react";
 import type { GroupInfo, MetadataRecord } from "@calimero-network/mero-js";
 import { useToast } from "../contexts/ToastContext";
-import { ChevronLeft, Users, Box, Layers, Copy, ChevronRight, Shield, Globe, Plus, X, Trash2, UserMinus, Link, ChevronDown, Check, MoreHorizontal, LogIn } from "lucide-react";
+import { ChevronLeft, Users, Box, Layers, Copy, ChevronRight, Shield, Globe, Plus, X, Trash2, UserMinus, Link, ChevronDown, Check, MoreHorizontal, LogIn, LogOut } from "lucide-react";
 import { apiClient } from "../lib/mero-client";
 import { saveContextKey } from "../utils/contextKeys";
 import { decodeMetadata } from "../utils/appUtils";
@@ -193,6 +194,9 @@ export default function Namespaces() {
   const groupInfo = groupInfoRaw as GroupInfoExt | null;
   const nsRootGroupInfo = nsRootGroupInfoRaw as GroupInfoExt | null;
   const { members: groupMembers, refetch: refetchGroupMembers } = useGroupMembers(activeGroupId) as any;
+  // My identity on the active namespace — used to find my ROLE in the member
+  // list (admin → may Delete; member → may only Leave) and to self-remove.
+  const { identity: myNsIdentity } = useNamespaceIdentity(activeNsRootId);
   const [nsMembers, setNsMembers] = useState<any[]>([]);
   const [nsMembersLoading, setNsMembersLoading] = useState(false);
   const [nsMembersVersion, setNsMembersVersion] = useState(0);
@@ -217,6 +221,26 @@ export default function Namespaces() {
       .finally(() => setNsMembersLoading(false));
     return () => controller.abort();
   }, [activeNsRootId, nsMembersVersion, view.type]);
+
+  // My role on the active namespace, resolved from the member list. Drives
+  // whether the actions menu offers Delete (admin) or Leave (plain member) —
+  // the node rejects a non-admin delete, so don't offer a dead-end action.
+  const myNsRole: string | undefined = myNsIdentity?.publicKey
+    ? (nsMembers.find((m: any) => m?.identity === myNsIdentity.publicKey)?.role as
+        | string
+        | undefined)
+    : undefined;
+  const isNsAdmin = (myNsRole ?? '').toLowerCase() === 'admin';
+  // Only swap Delete → Leave when we POSITIVELY know we're not admin: members
+  // finished loading AND our identity resolved AND our role was found. While
+  // either async source is pending the menu keeps the old Delete (the node
+  // still enforces admin-ship, so the worst case is the pre-existing error
+  // toast — never a wrong destructive action).
+  const showNsLeave =
+    !nsMembersLoading &&
+    myNsIdentity?.publicKey !== undefined &&
+    myNsRole !== undefined &&
+    !isNsAdmin;
 
   const { contexts: groupContexts, refetch: refetchGroupContexts } = useGroupContexts(activeGroupId);
   const { contexts: nsRootContexts, refetch: refetchNsRootContexts } = useGroupContexts(
@@ -347,6 +371,7 @@ export default function Namespaces() {
   // Action state
   const [actionLoading, setActionLoading] = useState(false);
   const [deleteNsTarget, setDeleteNsTarget] = useState<Namespace | null>(null);
+  const [leaveNsTarget, setLeaveNsTarget] = useState<Namespace | null>(null);
   const [deleteGroupTarget, setDeleteGroupTarget] = useState<string | null>(null);
   const [deleteContextTarget, setDeleteContextTarget] = useState<{ contextId: string; name: string; refetch: () => void } | null>(null);
   const [removeMemberTarget, setRemoveMemberTarget] = useState<{ groupId: string; identity: string; name: string; onSuccess: () => void } | null>(null);
@@ -467,6 +492,31 @@ export default function Namespaces() {
       await refetchNamespaces();
     } catch (e: any) {
       toast.error(`Failed to delete namespace: ${parseApiError(e)}`);
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  // Leave = remove MY OWN identity from the namespace's member set. This is
+  // the cleanup path for non-admins: deleteNamespace is admin-gated on the
+  // node ("identity is not an admin on namespace/group …"), which previously
+  // left members with NO way to get rid of a namespace from their view.
+  const handleLeaveNamespace = async (ns: Namespace) => {
+    if (!mero || !myNsIdentity?.publicKey) {
+      toast.error('Could not resolve your identity on this namespace');
+      return;
+    }
+    setActionLoading(true);
+    try {
+      await mero.admin.removeGroupMembers(ns.namespaceId, {
+        members: [myNsIdentity.publicKey],
+      });
+      toast.success('Left namespace');
+      setLeaveNsTarget(null);
+      setView({ type: 'list' });
+      await refetchNamespaces();
+    } catch (e: any) {
+      toast.error(`Failed to leave namespace: ${parseApiError(e)}`);
     } finally {
       setActionLoading(false);
     }
@@ -1115,6 +1165,17 @@ export default function Namespaces() {
           onConfirm={() => handleDeleteNamespace(deleteNsTarget)}
         />
       )}
+      {leaveNsTarget && (
+        <DeleteConfirmModal
+          title="Leave Namespace"
+          warning="You will lose access to this namespace, its subgroups and contexts. Rejoining requires a new invitation."
+          name={nsDisplayName(leaveNsTarget)}
+          confirmLabel="Leave"
+          loading={actionLoading}
+          onClose={() => setLeaveNsTarget(null)}
+          onConfirm={() => handleLeaveNamespace(leaveNsTarget)}
+        />
+      )}
       {deleteGroupTarget && (
         <DeleteConfirmModal
           title="Delete Group"
@@ -1314,9 +1375,15 @@ export default function Namespaces() {
                   <button className="ns-actions-menu-item" onClick={() => { setActionsMenuOpen(false); setInviteModal({ groupId: ns.namespaceId, isNamespace: true }); }}>
                     <Link size={13} /> Invite
                   </button>
-                  <button className="ns-actions-menu-item ns-actions-menu-item-danger" onClick={() => { setActionsMenuOpen(false); setDeleteNsTarget(ns); }}>
-                    <Trash2 size={13} /> Delete
-                  </button>
+                  {showNsLeave ? (
+                    <button className="ns-actions-menu-item ns-actions-menu-item-danger" onClick={() => { setActionsMenuOpen(false); setLeaveNsTarget(ns); }}>
+                      <LogOut size={13} /> Leave
+                    </button>
+                  ) : (
+                    <button className="ns-actions-menu-item ns-actions-menu-item-danger" onClick={() => { setActionsMenuOpen(false); setDeleteNsTarget(ns); }}>
+                      <Trash2 size={13} /> Delete
+                    </button>
+                  )}
                 </div>
               )}
             </div>

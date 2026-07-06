@@ -18,6 +18,7 @@ import {
   requestOwnershipProof,
   enableHaForNamespace,
   getCloudNamespaces,
+  ensureTeeAdmissionPolicy,
   CLOUD_BASE_URL,
 } from './cloudApi';
 
@@ -454,5 +455,129 @@ describe('enableHaForNamespace', () => {
     await expect(
       enableHaForNamespace(makeJwt({ iss: 'mdma', email: 'u@e' }), 'http://node', 'ns-root', []),
     ).rejects.toThrow(/Unexpected response from local node members endpoint/);
+  });
+});
+
+describe('ensureTeeAdmissionPolicy', () => {
+  let restore: () => void;
+  afterEach(() => restore?.());
+
+  const membersAdmin = () =>
+    jsonResponse({ members: [{ identity: 'me', role: 'Admin' }], selfIdentity: 'me' });
+  const membersMember = () =>
+    jsonResponse({ members: [{ identity: 'me', role: 'Member' }], selfIdentity: 'me' });
+  const measurements = (mrtd: string[]) =>
+    jsonResponse({
+      release_tag: 'v1',
+      allowed_mrtd: mrtd,
+      allowed_rtmr0: [],
+      allowed_rtmr1: [],
+      allowed_rtmr2: [],
+      allowed_rtmr3: [],
+    });
+  const idToken = () => makeJwt({ iss: 'mdma', email: 'u@e' });
+
+  it('skips (no measurements, no PUT) when the node is not the namespace admin', async () => {
+    const calls: string[] = [];
+    const { restore: r } = installFetch((url, init) => {
+      calls.push(`${init?.method ?? 'GET'} ${url}`);
+      if (url.includes('/members')) return membersMember();
+      return jsonResponse({});
+    });
+    restore = r;
+    await expect(
+      ensureTeeAdmissionPolicy('http://node', idToken(), 'ns-root'),
+    ).resolves.toBe('skipped');
+    // A member must never fetch measurements or PUT a policy it cannot sign.
+    expect(calls.some((c) => c.includes('/fleet/measurements'))).toBe(false);
+    expect(calls.some((c) => c.includes('/tee-admission-policy'))).toBe(false);
+  });
+
+  it('skips when the node is not a member of the namespace root (role lookup throws)', async () => {
+    const { restore: r } = installFetch((url) => {
+      if (url.includes('/members')) return new Response('not a member', { status: 404 });
+      return jsonResponse({});
+    });
+    restore = r;
+    await expect(
+      ensureTeeAdmissionPolicy('http://node', idToken(), 'ns-root'),
+    ).resolves.toBe('skipped');
+  });
+
+  it('skips when there are no fleet MRTD measurements', async () => {
+    const { restore: r } = installFetch((url) => {
+      if (url.includes('/members')) return membersAdmin();
+      if (url.includes('/fleet/measurements')) return measurements([]);
+      return jsonResponse({});
+    });
+    restore = r;
+    await expect(
+      ensureTeeAdmissionPolicy('http://node', idToken(), 'ns-root'),
+    ).resolves.toBe('skipped');
+  });
+
+  it("is a no-op ('ok', no PUT) when the on-node policy already covers the desired MRTDs", async () => {
+    const calls: { method: string; url: string }[] = [];
+    const { restore: r } = installFetch((url, init) => {
+      const method = init?.method ?? 'GET';
+      calls.push({ method, url });
+      if (url.includes('/members')) return membersAdmin();
+      if (url.includes('/fleet/measurements')) return measurements(['mrtd-1']);
+      if (url.includes('/tee-admission-policy'))
+        return jsonResponse({ enabled: true, allowedMrtd: ['mrtd-1'] });
+      return jsonResponse({});
+    });
+    restore = r;
+    await expect(
+      ensureTeeAdmissionPolicy('http://node', idToken(), 'ns-root'),
+    ).resolves.toBe('ok');
+    expect(
+      calls.some((c) => c.method === 'PUT' && c.url.includes('/tee-admission-policy')),
+    ).toBe(false);
+  });
+
+  it("re-authors ('reasserted') when no policy is set (enabled:false) — the stuck-node case", async () => {
+    let putBody: { allowedMrtd?: unknown } | undefined;
+    const { restore: r } = installFetch((url, init) => {
+      const method = init?.method ?? 'GET';
+      if (url.includes('/members')) return membersAdmin();
+      if (url.includes('/fleet/measurements')) return measurements(['mrtd-1']);
+      if (url.includes('/tee-admission-policy')) {
+        if (method === 'PUT') {
+          putBody = JSON.parse(String(init?.body));
+          return new Response('{}', { status: 200 });
+        }
+        return jsonResponse({ enabled: false, allowedMrtd: [] });
+      }
+      return jsonResponse({});
+    });
+    restore = r;
+    await expect(
+      ensureTeeAdmissionPolicy('http://node', idToken(), 'ns-root'),
+    ).resolves.toBe('reasserted');
+    // PUT uses the load-bearing camelCase key with the current MRTD set.
+    expect(putBody?.allowedMrtd).toEqual(['mrtd-1']);
+  });
+
+  it('re-authors when the policy is stale (MRTD rotated — different set)', async () => {
+    let putBody: { allowedMrtd?: unknown } | undefined;
+    const { restore: r } = installFetch((url, init) => {
+      const method = init?.method ?? 'GET';
+      if (url.includes('/members')) return membersAdmin();
+      if (url.includes('/fleet/measurements')) return measurements(['mrtd-NEW']);
+      if (url.includes('/tee-admission-policy')) {
+        if (method === 'PUT') {
+          putBody = JSON.parse(String(init?.body));
+          return new Response('{}', { status: 200 });
+        }
+        return jsonResponse({ enabled: true, allowedMrtd: ['mrtd-OLD'] });
+      }
+      return jsonResponse({});
+    });
+    restore = r;
+    await expect(
+      ensureTeeAdmissionPolicy('http://node', idToken(), 'ns-root'),
+    ).resolves.toBe('reasserted');
+    expect(putBody?.allowedMrtd).toEqual(['mrtd-NEW']);
   });
 });

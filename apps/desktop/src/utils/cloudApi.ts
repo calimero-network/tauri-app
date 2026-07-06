@@ -281,6 +281,100 @@ export async function setTeeAdmissionPolicy(
   }
 }
 
+/** The subset of the merod GET tee-admission-policy response we act on. */
+export interface TeeAdmissionPolicyState {
+  enabled: boolean;
+  allowedMrtd: string[];
+}
+
+/**
+ * Read the current TEE admission policy for a group from the local merod.
+ *
+ * merod's GET returns 200 with the `disabled()` shape (`enabled:false`,
+ * empty lists) when no policy is set — NOT a 404 — so an absent policy is
+ * `{ enabled:false, allowedMrtd:[] }`, distinguishable from a set one.
+ * Response keys are camelCase (GetTeeAdmissionPolicyApiResponse has
+ * `#[serde(rename_all="camelCase")]`) and, like the members endpoint, the
+ * payload is returned directly with no `{ data }` envelope.
+ */
+export async function getTeeAdmissionPolicy(
+  nodeUrl: string,
+  groupId: string,
+): Promise<TeeAdmissionPolicyState> {
+  const accessToken = getAccessToken();
+  if (!accessToken) {
+    throw new Error('Not authenticated to local node — sign in first');
+  }
+  const res = await fetch(
+    `${nodeUrl}/admin-api/groups/${encodeURIComponent(groupId)}/settings/tee-admission-policy`,
+    { method: 'GET', headers: { Authorization: `Bearer ${accessToken}` } },
+  );
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`Failed to read TEE admission policy: ${text || res.statusText}`);
+  }
+  const data = (await res.json().catch(() => null)) as {
+    enabled?: unknown;
+    allowedMrtd?: unknown;
+  } | null;
+  return {
+    enabled: data?.enabled === true,
+    allowedMrtd: Array.isArray(data?.allowedMrtd)
+      ? (data!.allowedMrtd as unknown[]).filter((m): m is string => typeof m === 'string')
+      : [],
+  };
+}
+
+/**
+ * Idempotently re-assert a namespace's TEE admission policy on the local
+ * merod so a fleet TEE node can be admitted.
+ *
+ * The enable-HA flow (`enableHaForNamespace`) authors this policy exactly
+ * once, at toggle time. A namespace whose HA was enabled on an OLDER build
+ * (before that PUT existed) has no policy at all — its fleet node loops
+ * forever on merod's `no TeeAdmissionPolicy set for group`. A namespace
+ * whose fleet MRTD later ROTATED has a stale policy. This heals both.
+ *
+ * Owner-gated: only the namespace-root Admin may author the policy, so a
+ * node that merely joined the namespace is a no-op (`'skipped'`).
+ * `getSelfRoleInGroup` throws when this node isn't a member of the root —
+ * that, and any non-Admin role, is a clean skip, not an error.
+ *
+ * Idempotent: re-authors only when the on-node policy is absent/disabled or
+ * its MRTD set differs from the current fleet measurements — a correct
+ * policy is a read-only no-op (`'ok'`). Mirrors enable-HA's exact-set
+ * semantics (re-author to the desired set), so a rotated-out MRTD is
+ * dropped, not merely supplemented.
+ */
+export async function ensureTeeAdmissionPolicy(
+  nodeUrl: string,
+  idToken: string,
+  namespaceId: string,
+): Promise<'ok' | 'reasserted' | 'skipped'> {
+  let role: string | null;
+  try {
+    role = await getSelfRoleInGroup(nodeUrl, namespaceId);
+  } catch {
+    // Not a member of the namespace root (actor bails) — not ours to author.
+    return 'skipped';
+  }
+  if (role !== 'Admin') return 'skipped';
+
+  const desired = (await getFleetMeasurements(idToken)).allowed_mrtd;
+  if (!desired.length) return 'skipped';
+
+  const current = await getTeeAdmissionPolicy(nodeUrl, namespaceId);
+  const currentSet = current.enabled ? new Set(current.allowedMrtd) : null;
+  const matches =
+    currentSet !== null &&
+    currentSet.size === new Set(desired).size &&
+    desired.every((m) => currentSet.has(m));
+  if (matches) return 'ok';
+
+  await setTeeAdmissionPolicy(nodeUrl, namespaceId, desired);
+  return 'reasserted';
+}
+
 // ── Ownership proofs (namespace HA gate) ──
 
 /**

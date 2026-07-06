@@ -21,6 +21,7 @@ import {
   enableHaForNamespace,
   disableHaNamespace,
   getCloudNamespaces,
+  ensureTeeAdmissionPolicy,
   CloudSessionExpiredError,
 } from "../utils/cloudApi";
 import { getCloudIdToken } from "../utils/cloudAuth";
@@ -819,6 +820,62 @@ export default function Namespaces() {
     },
     [clearReconcileRetryTimer],
   );
+
+  // ── Reconcile: ensure the TEE admission policy exists for HA-ENABLED
+  // namespaces we own. `enableHaForNamespace` authors the policy once, at
+  // toggle time — so a namespace enabled on an OLDER build (before that PUT
+  // existed) has NO policy, and its fleet TEE node loops forever on merod's
+  // "no TeeAdmissionPolicy set for group"; a namespace whose fleet MRTD
+  // later rotated has a STALE one. This self-heals both on load: for each
+  // enabled namespace where we are the root Admin, `ensureTeeAdmissionPolicy`
+  // re-asserts the policy from the current fleet measurements. It is
+  // idempotent (a correct policy is a read-only no-op) and owner-gated (a
+  // namespace we merely joined is skipped), so the steady state is cheap and
+  // a member node never tries to author a policy it can't sign. Distinct
+  // from the disable-side eviction reconcile above; deliberately kept
+  // separate from its retry/semaphore machinery.
+  useEffect(() => {
+    const settings = getSettings();
+    if (!settings.nodeUrl) return;
+    const idToken = getCloudIdToken();
+    if (!idToken) return;
+    const enabledIds = Object.entries(haEnabled)
+      .filter(([, v]) => v === true)
+      .map(([id]) => id);
+    if (enabledIds.length === 0) return;
+
+    let cancelled = false;
+    void (async () => {
+      let reasserted = 0;
+      for (const nsId of enabledIds) {
+        if (cancelled) return;
+        try {
+          const outcome = await ensureTeeAdmissionPolicy(
+            settings.nodeUrl,
+            idToken,
+            nsId,
+          );
+          if (outcome === "reasserted") reasserted += 1;
+        } catch (e) {
+          // Best-effort: one namespace failing (transient merod/cloud error)
+          // must not abort the rest. The fleet node keeps retrying admission,
+          // so a missed re-assert self-heals on the next load — log, no toast.
+          console.warn(
+            `ensure-policy: ${nsId} skipped (${(e as Error)?.name ?? "error"})`,
+          );
+        }
+      }
+      if (!cancelled && reasserted > 0) {
+        toast.success(
+          `Re-authored TEE admission policy for ${reasserted} HA namespace(s)`,
+        );
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [haEnabled]);
 
   const toggleHa = useCallback(async (ns: Namespace) => {
     const token = getCloudIdToken();

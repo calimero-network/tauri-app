@@ -183,23 +183,35 @@ jobs:
         run: |
           VERSION="${{ needs.prepare.outputs.version }}"
 
-          echo "Creating release v$VERSION"
+          # Rerun-safe: a partial rerun (e.g. one platform job re-ran after
+          # a flaky bundling failure) re-runs this job too, and the release
+          # already exists from the first attempt — a bare `create` then
+          # 422s (tag_name already exists) BEFORE any assets upload, leaving
+          # the release missing the very platform the rerun fixed. Reuse the
+          # existing release and let `--clobber` refresh the assets instead.
+          if gh release view "v$VERSION" --repo "${{ github.repository }}" > /dev/null 2>&1; then
+            echo "Release v$VERSION already exists — refreshing assets only (rerun)"
+            gh release edit "v$VERSION" \
+              --repo "${{ github.repository }}" \
+              --notes-file release-notes.md
+          else
+            echo "Creating release v$VERSION"
+            gh release create "v$VERSION" \
+              --repo "${{ github.repository }}" \
+              --title "v$VERSION" \
+              --notes-file release-notes.md \
+              --latest
+          fi
 
-          # Create release with notes
-          gh release create "v$VERSION" \
-            --repo "${{ github.repository }}" \
-            --title "v$VERSION" \
-            --notes-file release-notes.md \
-            --latest
-
-          # Upload all assets from release-assets/
+          # Upload all assets from release-assets/ (--clobber so a rerun
+          # replaces first-attempt assets and manifests instead of failing)
           for file in release-assets/*; do
             if [ -f "$file" ]; then
               filename=$(basename "$file")
               # Skip manifest files (internal use)
               if [[ "$filename" != manifest-*.json ]]; then
                 echo "Uploading: $filename"
-                gh release upload "v$VERSION" "$file" --repo "${{ github.repository }}"
+                gh release upload "v$VERSION" "$file" --repo "${{ github.repository }}" --clobber
               fi
             fi
           done

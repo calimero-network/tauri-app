@@ -29,7 +29,13 @@
     // invoking the proxy from a localhost-origin page fails with
     // "Scope not defined for URL". Never proxy from non-HTTPS pages.
     function pageNeedsProxy() {
-        return window.location.protocol === 'https:';
+        try {
+            return window.location.protocol === 'https:';
+        } catch (e) {
+            // No usable location (shouldn't happen in a real webview) —
+            // keep the historical always-proxy behavior.
+            return true;
+        }
     }
 
     // Normalize the first fetch() argument: string | URL | Request → string URL

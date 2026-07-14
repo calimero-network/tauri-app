@@ -47,8 +47,6 @@ export function LoginView({ onSuccess, onError, variant = 'light' }: LoginViewPr
     if (provider.name === 'user_password' || provider.name === 'username_password') {
       setShowProviders(false);
       setShowUsernamePasswordForm(true);
-    } else if (provider.name === 'near_wallet') {
-      setError('NEAR wallet authentication not yet implemented');
     } else {
       setError(`Provider ${provider.name} is not supported`);
     }

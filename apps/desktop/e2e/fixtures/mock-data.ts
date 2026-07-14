@@ -61,6 +61,25 @@ export const MOCK_ACCESS_TOKEN = `${JWT_HEADER}.${JWT_PAYLOAD}.${JWT_SIGNATURE}`
 export const MOCK_REFRESH_TOKEN = `refresh-${JWT_HEADER}.${JWT_PAYLOAD}.${JWT_SIGNATURE}`;
 export const MOCK_TOKEN_EXPIRES_AT = Date.now() + 86400 * 1000;
 
+/**
+ * The token pair the node mints on the Nth rotation of a token family.
+ *
+ * Refresh tokens are single-use (calimero-network/core#3083): each
+ * POST /auth/refresh consumes the presented refresh token and returns a brand
+ * new pair, so no two generations share a token. Access tokens stay JWT-shaped
+ * because mero-js reads `exp` out of the payload to compute `expires_at`.
+ */
+export function rotatedTokenPair(generation: number): {
+  access_token: string;
+  refresh_token: string;
+} {
+  const signature = `${JWT_SIGNATURE}-r${generation}`;
+  return {
+    access_token: `${JWT_HEADER}.${JWT_PAYLOAD}.${signature}`,
+    refresh_token: `refresh-${JWT_HEADER}.${JWT_PAYLOAD}.${signature}`,
+  };
+}
+
 // ─── Auth providers ──────────────────────────────────────────────────────────
 
 export const MOCK_PROVIDERS = [
@@ -263,7 +282,10 @@ export const API_ROUTES = {
   adminHealth: "**/admin-api/health",
   providers: "**/auth/providers",
   requestToken: "**/auth/request-token",
-  refreshToken: "**/auth/refresh-token",
+  // The node's route is `/auth/refresh` (mero-js posts there). This used to read
+  // `**/auth/refresh-token`, which matched nothing — the refresh path was
+  // effectively untested and every refresh request escaped the mock.
+  refreshToken: "**/auth/refresh",
   listApplications: "**/admin-api/applications",
   installApplication: "**/admin-api/install-application",
   uninstallApplication: "**/admin-api/applications/*",

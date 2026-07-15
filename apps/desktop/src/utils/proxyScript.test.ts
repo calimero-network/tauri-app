@@ -30,7 +30,7 @@ function injectProxy(mockWindow: any, nodeUrl = "http://localhost:2428") {
   new Function("window", src)(mockWindow);
 }
 
-function makeMockWindow() {
+function makeMockWindow(pageProtocol = "https:") {
   // Minimal XMLHttpRequest stub. The script wraps open/send/setRequestHeader and
   // dispatches events on the instance, so those must exist for it to wrap them.
   function FakeXHR(this: any) {
@@ -47,6 +47,9 @@ function makeMockWindow() {
   };
   return {
     __TAURI_FETCH_PROXY_INJECTED__: undefined as boolean | undefined,
+    // The proxy only runs on HTTPS-hosted pages (mixed-content bypass);
+    // default the mock to an HTTPS page so proxy-path tests exercise it.
+    location: { protocol: pageProtocol },
     // Stored by the script as `originalFetch` — returned for non-proxied URLs.
     fetch: vi.fn().mockResolvedValue(new Response("original", { status: 200 })),
     XMLHttpRequest: FakeXHR,
@@ -146,6 +149,27 @@ describe("proxy_script SSE routing", () => {
     // External HTTPS URL — must not go through the proxy.
     await mockWindow.fetch("https://api.example.com/data", {});
     expect(mockWindow.__TAURI_INVOKE__).not.toHaveBeenCalled();
+  });
+
+  it("does not invoke Tauri IPC when the page itself is plain HTTP (e.g. the node's auth page)", async () => {
+    // Pages served over http:// (like http://localhost:2528/auth/login after
+    // a logout → browser-style login) have no mixed-content problem, and the
+    // window's IPC scope may not cover their origin — native fetch must be
+    // used instead of the proxy.
+    const mockWindow = makeMockWindow("http:");
+    mockWindow.__TAURI_INVOKE__ = vi.fn();
+    mockWindow.__TAURI__ = {
+      event: { listen: vi.fn(async () => vi.fn()) },
+    };
+
+    injectProxy(mockWindow);
+
+    const response = await mockWindow.fetch(
+      "http://localhost:2528/auth/providers",
+      { headers: { Accept: "application/json" } }
+    );
+    expect(mockWindow.__TAURI_INVOKE__).not.toHaveBeenCalled();
+    expect(await response.text()).toBe("original");
   });
 
   it("does not invoke Tauri IPC for non-SSE localhost requests", async () => {

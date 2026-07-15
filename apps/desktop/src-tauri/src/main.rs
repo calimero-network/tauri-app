@@ -899,12 +899,33 @@ async fn create_app_window(
 
     // Configure IPC scope BEFORE showing window
     // This allows windows with unique labels (domain + timestamp) to access Tauri IPC
-    let remote_access = tauri::ipc::RemoteDomainAccessScope::new(domain)
-        .add_window(&window_label)
-        .enable_tauri_api();
-    app_handle.ipc_scope().configure_remote_access(remote_access);
+    //
+    // Tauri v1 matches IPC scopes by EXACT domain (no wildcards), and the
+    // browser-style login flow navigates this same window to the node's auth
+    // page (e.g. http://localhost:2528/auth/login). Without a scope for the
+    // node's host, every IPC call from that page fails with
+    // "Scope not defined for URL". Register the app domain, the node host and
+    // localhost. Note: Url::domain() returns None for IP hosts (127.0.0.1),
+    // so scopes can never match IP-hosted pages — the injected proxy script
+    // falls back to native fetch there (plain-HTTP pages don't need the proxy).
+    let mut scope_domains: Vec<String> = vec![domain.to_string(), "localhost".to_string()];
+    if let Some(node_host) = node_url_to_use
+        .parse::<url::Url>()
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_string))
+    {
+        scope_domains.push(node_host);
+    }
+    scope_domains.sort();
+    scope_domains.dedup();
+    for scope_domain in &scope_domains {
+        let remote_access = tauri::ipc::RemoteDomainAccessScope::new(scope_domain)
+            .add_window(&window_label)
+            .enable_tauri_api();
+        app_handle.ipc_scope().configure_remote_access(remote_access);
+    }
 
-    info!("[Tauri] Configured IPC scope for domain: {} on window: {}", domain, window_label);
+    info!("[Tauri] Configured IPC scope for domains: {:?} on window: {}", scope_domains, window_label);
 
     // Camera/microphone for WebRTC video calls (e.g. Mero Meet) needs no extra
     // work here: wry's own WKUIDelegate already grants

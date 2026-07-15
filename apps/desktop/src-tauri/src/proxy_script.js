@@ -24,6 +24,24 @@
         }
     }
 
+    // The proxy exists solely to bypass mixed-content blocking: HTTPS-hosted
+    // app pages cannot fetch http://localhost directly. When the page itself
+    // is served over plain HTTP (e.g. the node's auth frontend at
+    // http://localhost:2528/auth/login after a logout → browser-style login
+    // navigation), native fetch works fine — and Tauri v1 IPC scopes are
+    // exact-domain matches registered for the app's original domain, so
+    // invoking the proxy from a localhost-origin page fails with
+    // "Scope not defined for URL". Never proxy from non-HTTPS pages.
+    function pageNeedsProxy() {
+        try {
+            return window.location.protocol === 'https:';
+        } catch (e) {
+            // No usable location (shouldn't happen in a real webview) —
+            // keep the historical always-proxy behavior.
+            return true;
+        }
+    }
+
     // Is this the app's `POST /auth/refresh` call?
     //
     // Refresh tokens are single-use (calimero-network/core#3083): whoever calls
@@ -278,9 +296,14 @@
 
         // Proxy any HTTP localhost request (any port) to avoid mixed content blocking.
         // The Rust backend validates the URL before proxying.
-        // /auth/refresh is always routed through here — even for a non-localhost
-        // node — so the brokered sentinel can never reach the network.
-        const shouldProxy = isHttpLocalhost(urlStr) || isAuthRefresh(urlStr, effectiveMethod);
+        // Mixed-content proxying only applies to an HTTPS-hosted page (finding
+        // #145: proxying from a plain-HTTP localhost page fails the Tauri IPC
+        // scope check). But /auth/refresh is ALWAYS routed through here — even
+        // for a non-localhost node — so the brokered sentinel can never reach
+        // the network.
+        const shouldProxy =
+            (pageNeedsProxy() && isHttpLocalhost(urlStr)) ||
+            isAuthRefresh(urlStr, effectiveMethod);
         console.log('[Tauri Proxy] Should proxy?', shouldProxy, 'for URL:', urlStr);
 
         if (shouldProxy) {
@@ -364,13 +387,15 @@
                     headers: new Headers(response.headers)
                 });
             } catch (error) {
-                console.error('[Tauri Proxy] Fetch proxy failed:', error, 'URL:', urlStr);
-                const isTauri = typeof window.__TAURI_INVOKE__ === 'function' ||
-                    (typeof window.__TAURI__ !== 'undefined' && typeof window.__TAURI__.invoke === 'function');
-                if (!isTauri) {
-                    return originalFetch.apply(this, arguments);
+                if (error instanceof DOMException && error.name === 'AbortError') {
+                    throw error;
                 }
-                throw error;
+                // Last resort: try the native fetch. If the proxy failed for an
+                // IPC scope error while the page can reach localhost natively,
+                // this recovers; if mixed content blocks it, it fails the same
+                // way the proxy just did.
+                console.error('[Tauri Proxy] Fetch proxy failed, falling back to native fetch:', error, 'URL:', urlStr);
+                return originalFetch.apply(this, arguments);
             }
         }
 
@@ -402,7 +427,9 @@
         };
 
         xhr.send = function(body) {
-            const shouldProxy = isHttpLocalhost(xhrUrl) || isAuthRefresh(xhrUrl, xhrMethod);
+            const shouldProxy =
+                (pageNeedsProxy() && isHttpLocalhost(xhrUrl)) ||
+                isAuthRefresh(xhrUrl, xhrMethod);
 
             if (shouldProxy) {
                 console.log('[Tauri Proxy] XHR intercepted:', xhrMethod, xhrUrl);
@@ -438,12 +465,20 @@
                         xhr.dispatchEvent(new ProgressEvent('loadend'));
                     })
                     .catch(function(error) {
-                        console.error('[Tauri Proxy] XHR proxy failed:', error, 'URL:', xhrUrl);
-                        if (typeof xhr.onerror === 'function') {
-                            xhr.onerror(new ProgressEvent('error'));
+                        // Same last-resort fallback as fetch: open() already ran
+                        // on the real XHR, so a native send() can still succeed
+                        // (e.g. when only the IPC scope was the problem).
+                        console.error('[Tauri Proxy] XHR proxy failed, falling back to native XHR:', error, 'URL:', xhrUrl);
+                        try {
+                            originalSend(body);
+                        } catch (sendError) {
+                            console.error('[Tauri Proxy] Native XHR fallback failed:', sendError, 'URL:', xhrUrl);
+                            if (typeof xhr.onerror === 'function') {
+                                xhr.onerror(new ProgressEvent('error'));
+                            }
+                            xhr.dispatchEvent(new ProgressEvent('error'));
+                            xhr.dispatchEvent(new ProgressEvent('loadend'));
                         }
-                        xhr.dispatchEvent(new ProgressEvent('error'));
-                        xhr.dispatchEvent(new ProgressEvent('loadend'));
                     });
                 return;
             }

@@ -165,15 +165,6 @@ class AuthApi {
     }
   }
 
-  async getChallenge(): Promise<ApiResponse<{ challenge: string; nonce: string }>> {
-    try {
-      const r = await this.meroJs.auth.getChallenge();
-      return { data: { challenge: r.challenge, nonce: r.expiresAt } };
-    } catch (e) {
-      return { error: { message: e instanceof Error ? e.message : 'Failed to get challenge' } };
-    }
-  }
-
   async generateClientKey(payload: {
     context_id: string;
     context_identity: string;

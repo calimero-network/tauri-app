@@ -20,7 +20,6 @@ export interface ProviderSelectorProps {
 }
 
 const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
-  near_wallet: 'NEAR Wallet',
   user_password: 'Username/Password',
   username_password: 'Username/Password',
 };

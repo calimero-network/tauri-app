@@ -10,6 +10,10 @@
 
     console.log('[Tauri Proxy] Configured node URL for interception:', nodeUrl);
 
+    // Sentinel the desktop puts in the app's refresh-token slot instead of the
+    // real refresh token. MUST match BROKERED_REFRESH_TOKEN in src/lib/token-broker.ts.
+    const BROKERED_REFRESH_TOKEN = 'calimero-desktop-brokered-refresh-token';
+
     // Check if a URL is an HTTP localhost request that needs proxying
     function isHttpLocalhost(urlStr) {
         try {
@@ -35,6 +39,64 @@
             // No usable location (shouldn't happen in a real webview) —
             // keep the historical always-proxy behavior.
             return true;
+        }
+    }
+
+    // Is this the app's `POST /auth/refresh` call?
+    //
+    // Refresh tokens are single-use (calimero-network/core#3083): whoever calls
+    // /auth/refresh consumes the token and gets a new one, and re-presenting a
+    // consumed token revokes the entire family. App windows therefore never hold
+    // the real refresh token — the desktop does, and it is the only rotator. We
+    // intercept this request and let the desktop answer it.
+    //
+    // Matched on the node URL rather than on localhost specifically, so a
+    // remote-node setup is brokered too (and never leaks the sentinel to it).
+    function isAuthRefresh(urlStr, method) {
+        if ((method || 'GET').toUpperCase() !== 'POST') return false;
+        try {
+            return new URL(urlStr).pathname.replace(/\/+$/, '').endsWith('/auth/refresh');
+        } catch (e) {
+            return false;
+        }
+    }
+
+    // Ask the desktop window to rotate its refresh token and hand back a fresh
+    // access token. Returns a proxy-shaped response ({status, body, headers}) so
+    // both the fetch and XHR paths can consume it exactly like a proxied reply.
+    async function brokerTokenRefresh() {
+        const invokeFn = getTauriInvoke();
+        if (!invokeFn) {
+            // No Tauri IPC — we must NOT fall through to the network, because the
+            // app is holding the sentinel, not a real refresh token.
+            console.error('[Tauri Proxy] /auth/refresh needs Tauri IPC to be brokered by the desktop');
+            return {
+                status: 401,
+                body: JSON.stringify({ error: 'Token refresh unavailable: no Tauri IPC' }),
+                headers: { 'content-type': 'application/json' },
+            };
+        }
+
+        try {
+            const accessToken = await invokeFn('broker_token_refresh');
+            console.log('[Tauri Proxy] /auth/refresh brokered by desktop');
+            // Same wire shape the node returns, so unmodified mero-js/mero-react
+            // parse it as an ordinary refresh response. The refresh token stays
+            // the sentinel: the desktop keeps the real one.
+            return {
+                status: 200,
+                body: JSON.stringify({
+                    data: { access_token: accessToken, refresh_token: BROKERED_REFRESH_TOKEN },
+                }),
+                headers: { 'content-type': 'application/json' },
+            };
+        } catch (error) {
+            console.error('[Tauri Proxy] Desktop token broker failed:', error);
+            return {
+                status: 401,
+                body: JSON.stringify({ error: String((error && error.message) || error) }),
+                headers: { 'content-type': 'application/json' },
+            };
         }
     }
 
@@ -186,6 +248,13 @@
 
     // Helper function to proxy regular HTTP requests through Tauri
     async function proxyRequest(url, method, headers, body) {
+        // /auth/refresh is answered by the desktop, never forwarded to the node.
+        // Both the fetch and XHR interceptors funnel through here, so this single
+        // check covers both.
+        if (isAuthRefresh(url, method)) {
+            return brokerTokenRefresh();
+        }
+
         const invokeFn = getTauriInvoke();
         if (!invokeFn) {
             console.error('[Tauri Proxy] Tauri invoke API not available!');
@@ -220,12 +289,21 @@
             || (typeof Request !== 'undefined' && urlArg instanceof Request ? urlArg.headers : null);
         const effectiveSignal = (init && init.signal)
             || (typeof Request !== 'undefined' && urlArg instanceof Request ? urlArg.signal : null);
+        const effectiveMethod = (init && init.method)
+            || (typeof Request !== 'undefined' && urlArg instanceof Request ? urlArg.method : 'GET');
 
         console.log('[Tauri Proxy] Fetch called:', urlStr);
 
         // Proxy any HTTP localhost request (any port) to avoid mixed content blocking.
         // The Rust backend validates the URL before proxying.
-        const shouldProxy = pageNeedsProxy() && isHttpLocalhost(urlStr);
+        // Mixed-content proxying only applies to an HTTPS-hosted page (finding
+        // #145: proxying from a plain-HTTP localhost page fails the Tauri IPC
+        // scope check). But /auth/refresh is ALWAYS routed through here — even
+        // for a non-localhost node — so the brokered sentinel can never reach
+        // the network.
+        const shouldProxy =
+            (pageNeedsProxy() && isHttpLocalhost(urlStr)) ||
+            isAuthRefresh(urlStr, effectiveMethod);
         console.log('[Tauri Proxy] Should proxy?', shouldProxy, 'for URL:', urlStr);
 
         if (shouldProxy) {
@@ -283,7 +361,7 @@
                 console.log('[Tauri Proxy] Headers being sent:', JSON.stringify(headers, null, 2));
                 console.log('[Tauri Proxy] Has Authorization header?', 'Authorization' in headers || 'authorization' in headers);
 
-                const requestPromise = proxyRequest(urlStr, (init && init.method) || 'GET', headers, bodyStr);
+                const requestPromise = proxyRequest(urlStr, effectiveMethod, headers, bodyStr);
 
                 let response;
                 if (effectiveSignal) {
@@ -349,7 +427,9 @@
         };
 
         xhr.send = function(body) {
-            const shouldProxy = pageNeedsProxy() && isHttpLocalhost(xhrUrl);
+            const shouldProxy =
+                (pageNeedsProxy() && isHttpLocalhost(xhrUrl)) ||
+                isAuthRefresh(xhrUrl, xhrMethod);
 
             if (shouldProxy) {
                 console.log('[Tauri Proxy] XHR intercepted:', xhrMethod, xhrUrl);

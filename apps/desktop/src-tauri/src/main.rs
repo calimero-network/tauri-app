@@ -564,6 +564,115 @@ fn cancel_sse_stream(stream_id: String, cancel_registry: tauri::State<'_, SseCan
     }
 }
 
+// ─── Desktop token broker ───────────────────────────────────────────────────
+//
+// Refresh tokens are single-use (calimero-network/core#3083): every
+// POST /auth/refresh consumes the presented token, and re-presenting a consumed
+// one is treated as theft — the node revokes the whole token family and logs
+// out every holder. Each app webview is a separate origin with its own
+// localStorage and its own MeroJs, so they must not share a refresh token: the
+// first to rotate consumes it and the next one trips reuse detection.
+//
+// So app windows never get the real refresh token. The desktop window holds it
+// and is the sole rotator. The proxy script intercepts an app's
+// POST /auth/refresh and calls `broker_token_refresh`, which relays the request
+// to the desktop window and returns the access token it hands back.
+
+/// What the desktop window answers with: a fresh access token, or why not.
+type TokenBrokerReply = Result<String, String>;
+
+/// In-flight broker requests, keyed by request id, awaiting the desktop's reply.
+type TokenBrokerRegistry = std::sync::Arc<
+    std::sync::Mutex<std::collections::HashMap<String, tokio::sync::oneshot::Sender<TokenBrokerReply>>>,
+>;
+
+/// How long the desktop window gets to answer before the app's fetch fails.
+const TOKEN_BROKER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+
+#[derive(Clone, Serialize)]
+struct TokenRequestPayload {
+    #[serde(rename = "requestId")]
+    request_id: String,
+}
+
+/// Broker an app window's `POST /auth/refresh` to the desktop window, which owns
+/// the refresh token. Returns a fresh access token — never a refresh token.
+#[tauri::command]
+async fn broker_token_refresh(
+    app_handle: tauri::AppHandle,
+    registry: tauri::State<'_, TokenBrokerRegistry>,
+) -> Result<String, TauriError> {
+    static NEXT_REQUEST_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let request_id = format!(
+        "tok-{}",
+        NEXT_REQUEST_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    );
+
+    let main_window = app_handle.get_window("main").ok_or_else(|| {
+        TauriError::new(
+            TauriErrorCode::WindowOperationFailed,
+            "Desktop window is unavailable; cannot refresh the access token",
+        )
+    })?;
+
+    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel::<TokenBrokerReply>();
+    registry
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .insert(request_id.clone(), reply_tx);
+
+    if let Err(e) = main_window.emit(
+        "calimero:token-request",
+        TokenRequestPayload { request_id: request_id.clone() },
+    ) {
+        registry.lock().unwrap_or_else(|p| p.into_inner()).remove(&request_id);
+        return Err(TauriError::with_details(
+            TauriErrorCode::WindowOperationFailed,
+            "Failed to reach the desktop window for a token refresh",
+            e.to_string(),
+        ));
+    }
+
+    match tokio::time::timeout(TOKEN_BROKER_TIMEOUT, reply_rx).await {
+        Ok(Ok(Ok(access_token))) => Ok(access_token),
+        Ok(Ok(Err(reason))) => Err(TauriError::new(TauriErrorCode::InternalError, reason)),
+        // Sender dropped without replying (desktop window closed mid-request).
+        Ok(Err(_)) => Err(TauriError::new(
+            TauriErrorCode::InternalError,
+            "Desktop window closed before the token refresh completed",
+        )),
+        Err(_) => {
+            registry.lock().unwrap_or_else(|p| p.into_inner()).remove(&request_id);
+            Err(TauriError::new(
+                TauriErrorCode::Timeout,
+                "Timed out waiting for the desktop to refresh the access token",
+            ))
+        }
+    }
+}
+
+/// Called by the desktop window to answer a `broker_token_refresh` request.
+#[tauri::command]
+fn resolve_token_request(
+    request_id: String,
+    access_token: Option<String>,
+    error: Option<String>,
+    registry: tauri::State<'_, TokenBrokerRegistry>,
+) {
+    if let Some(sender) = registry
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .remove(&request_id)
+    {
+        let reply = match access_token {
+            Some(token) => Ok(token),
+            None => Err(error.unwrap_or_else(|| "Token refresh failed".to_string())),
+        };
+        // Receiver gone means the request already timed out — nothing to do.
+        let _ = sender.send(reply);
+    }
+}
+
 #[tauri::command]
 fn get_pending_open_app(state: tauri::State<'_, PendingOpenApp>) -> Option<(String, String, Option<String>)> {
     state.0.lock().ok().and_then(|g| g.clone())
@@ -2875,6 +2984,7 @@ fn main() {
         })
         .manage(MerodState::default())
         .manage(SseCancelRegistry::new(std::sync::Mutex::new(std::collections::HashMap::new())))
+        .manage(TokenBrokerRegistry::new(std::sync::Mutex::new(std::collections::HashMap::new())))
         .invoke_handler(tauri::generate_handler![
             get_pending_open_app,
             clear_pending_open_app,
@@ -2886,6 +2996,8 @@ fn main() {
             proxy_http_request,
             proxy_sse_stream,
             cancel_sse_stream,
+            broker_token_refresh,
+            resolve_token_request,
             start_merod,
             stop_merod,
             stop_merod_by_pid_command,

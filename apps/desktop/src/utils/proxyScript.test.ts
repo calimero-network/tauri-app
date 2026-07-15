@@ -12,6 +12,13 @@ const RAW_PROXY_SCRIPT = readFileSync(
   "utf-8"
 );
 
+// The script runs in a webview, where ProgressEvent is a browser global. The
+// vitest environment is `node`, which has Event but not ProgressEvent — so the
+// XHR path would ReferenceError here for reasons that never occur in the app.
+if (typeof (globalThis as any).ProgressEvent === "undefined") {
+  (globalThis as any).ProgressEvent = class ProgressEvent extends Event {};
+}
+
 /**
  * Execute the proxy IIFE with a fake `window` object.
  * Using `new Function('window', src)` means all `window.*` accesses inside
@@ -24,10 +31,20 @@ function injectProxy(mockWindow: any, nodeUrl = "http://localhost:2428") {
 }
 
 function makeMockWindow(pageProtocol = "https:") {
-  // Provide a minimal XMLHttpRequest stub so the script's XHR-wrapping code
-  // doesn't throw on init (we don't exercise XHR in these tests).
-  function FakeXHR() {}
-  FakeXHR.prototype = {};
+  // Minimal XMLHttpRequest stub. The script wraps open/send/setRequestHeader and
+  // dispatches events on the instance, so those must exist for it to wrap them.
+  function FakeXHR(this: any) {
+    this.onload = null;
+    this.onerror = null;
+    this.onreadystatechange = null;
+  }
+  FakeXHR.prototype = {
+    open() {},
+    send() {},
+    setRequestHeader() {},
+    dispatchEvent() {},
+    addEventListener() {},
+  };
   return {
     __TAURI_FETCH_PROXY_INJECTED__: undefined as boolean | undefined,
     // The proxy only runs on HTTPS-hosted pages (mixed-content bypass);
@@ -180,5 +197,131 @@ describe("proxy_script SSE routing", () => {
       (call) => call[0] === "proxy_sse_stream"
     );
     expect(sseCalls.length).toBe(0);
+  });
+});
+
+// ─── Brokered /auth/refresh (calimero-network/core#3083) ────────────────────
+//
+// Refresh tokens are single-use: whoever POSTs /auth/refresh consumes the token
+// and gets a new one, and re-presenting a consumed one revokes the entire
+// family. App windows therefore hold a sentinel, not a real refresh token —
+// their /auth/refresh calls must be answered by the desktop, and must never
+// reach the node.
+describe("proxy_script /auth/refresh brokering", () => {
+  const BROKERED_REFRESH_TOKEN = "calimero-desktop-brokered-refresh-token";
+
+  function tauriWindow(invokeImpl: (cmd: string, args: any) => Promise<unknown>) {
+    const mockWindow = makeMockWindow();
+    mockWindow.__TAURI_INVOKE__ = vi.fn(invokeImpl);
+    mockWindow.__TAURI__ = { event: { listen: vi.fn(async () => vi.fn()) } };
+    // `originalFetch` is captured by the script at injection time; hold on to it
+    // so a test can prove the sentinel never went out over the network.
+    mockWindow.__originalFetch = mockWindow.fetch;
+    return mockWindow;
+  }
+
+  it("routes an app's POST /auth/refresh to the desktop instead of the node", async () => {
+    const mockWindow = tauriWindow(async (cmd) =>
+      cmd === "broker_token_refresh" ? "fresh-access-token" : { status: 200, headers: {}, body: "{}" }
+    );
+    injectProxy(mockWindow);
+
+    const response = await mockWindow.fetch("http://localhost:2428/auth/refresh", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ access_token: "stale", refresh_token: BROKERED_REFRESH_TOKEN }),
+    });
+
+    const commands = mockWindow.__TAURI_INVOKE__.mock.calls.map((c: any[]) => c[0]);
+    expect(commands).toContain("broker_token_refresh");
+    // The sentinel must never be forwarded to the node.
+    expect(commands).not.toContain("proxy_http_request");
+
+    // Shaped like a real /auth/refresh reply so unmodified mero-js parses it.
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      data: {
+        access_token: "fresh-access-token",
+        refresh_token: BROKERED_REFRESH_TOKEN,
+      },
+    });
+  });
+
+  it("brokers /auth/refresh even when the node is not on localhost", async () => {
+    const mockWindow = tauriWindow(async () => "fresh-access-token");
+    injectProxy(mockWindow, "https://node.example.com");
+
+    const response = await mockWindow.fetch("https://node.example.com/auth/refresh", {
+      method: "POST",
+      body: "{}",
+    });
+
+    expect(mockWindow.__TAURI_INVOKE__).toHaveBeenCalledWith("broker_token_refresh");
+    expect(response.status).toBe(200);
+    // A remote node is not "localhost", so without the explicit auth-refresh
+    // route this would have gone straight out over the network with the sentinel.
+    expect(mockWindow.__originalFetch).not.toHaveBeenCalled();
+  });
+
+  it("does not broker a GET to /auth/refresh, nor other auth routes", async () => {
+    const mockWindow = tauriWindow(async () => ({ status: 200, headers: {}, body: "{}" }));
+    injectProxy(mockWindow);
+
+    await mockWindow.fetch("http://localhost:2428/auth/refresh", { method: "GET" }).catch(() => {});
+    await mockWindow
+      .fetch("http://localhost:2428/auth/login", { method: "POST", body: "{}" })
+      .catch(() => {});
+
+    const commands = mockWindow.__TAURI_INVOKE__.mock.calls.map((c: any[]) => c[0]);
+    expect(commands).not.toContain("broker_token_refresh");
+  });
+
+  it("fails closed with a 401 rather than leaking the sentinel when IPC is unavailable", async () => {
+    const mockWindow = makeMockWindow(); // no __TAURI_INVOKE__ at all
+    const originalFetch = mockWindow.fetch;
+    injectProxy(mockWindow);
+
+    const response = await mockWindow.fetch("http://localhost:2428/auth/refresh", {
+      method: "POST",
+      body: JSON.stringify({ refresh_token: BROKERED_REFRESH_TOKEN }),
+    });
+
+    expect(response.status).toBe(401);
+    // Must NOT fall back to the network: the app holds the sentinel, not a real
+    // refresh token, so there is nothing useful to send and nothing to leak.
+    expect(originalFetch).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a desktop-side refresh failure as a 401", async () => {
+    const mockWindow = tauriWindow(async (cmd) => {
+      if (cmd === "broker_token_refresh") throw new Error("Desktop is not authenticated");
+      return { status: 200, headers: {}, body: "{}" };
+    });
+    injectProxy(mockWindow);
+
+    const response = await mockWindow.fetch("http://localhost:2428/auth/refresh", {
+      method: "POST",
+      body: "{}",
+    });
+
+    expect(response.status).toBe(401);
+    expect(await response.text()).toContain("Desktop is not authenticated");
+  });
+
+  it("brokers an XHR POST to /auth/refresh too", async () => {
+    const mockWindow = tauriWindow(async () => "fresh-access-token");
+    injectProxy(mockWindow);
+
+    const xhr = new mockWindow.XMLHttpRequest();
+    xhr.open("POST", "http://localhost:2428/auth/refresh");
+    const done = new Promise<void>((resolve) => { xhr.onload = () => resolve(); });
+    xhr.send(JSON.stringify({ refresh_token: BROKERED_REFRESH_TOKEN }));
+    await done;
+
+    const commands = mockWindow.__TAURI_INVOKE__.mock.calls.map((c: any[]) => c[0]);
+    expect(commands).toContain("broker_token_refresh");
+    expect(commands).not.toContain("proxy_http_request");
+    expect(xhr.status).toBe(200);
+    expect(JSON.parse(xhr.responseText).data.access_token).toBe("fresh-access-token");
   });
 });

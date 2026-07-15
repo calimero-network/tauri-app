@@ -4,6 +4,7 @@ import { createClientAsync, apiClient } from "./lib/mero-client";
 import { MeroContext, type MeroContextValue } from "@calimero-network/mero-react";
 import { LoginView } from "./components/LoginView";
 import { getAccessToken, clearAccessToken, clearRefreshToken } from "./lib/token-storage";
+import { startTokenBroker } from "./lib/token-broker";
 import { getSettings, getAuthUrl, saveSettings } from "./utils/settings";
 import { clearOnboardingProgress } from "./utils/onboardingProgress";
 import { startMerod, detectRunningMerodNodes, type RunningMerodNode } from "./utils/merod";
@@ -402,6 +403,15 @@ function App() {
   }, []);
 
 
+
+  // Serve token refreshes for app windows. Refresh tokens are single-use
+  // (calimero-network/core#3083), so the desktop keeps the only copy and is the
+  // only rotator; app windows ask us instead of refreshing themselves. Must run
+  // for the whole app lifetime — an app window can ask at any time.
+  useEffect(() => {
+    const unlisten = startTokenBroker();
+    return () => { unlisten.then((off) => off()).catch(() => {}); };
+  }, []);
 
   // Health-check interval — lightweight, just updates the connected indicator.
   // Skip on login/settings/onboarding screens.

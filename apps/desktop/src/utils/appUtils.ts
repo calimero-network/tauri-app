@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/tauri";
 import { WebviewWindow } from "@tauri-apps/api/window";
 import { getSettings } from "./settings";
 import { getAccessToken, getRefreshToken, getTokenExpiresAt } from "../lib/token-storage";
+import { BROKERED_REFRESH_TOKEN } from "../lib/token-broker";
 
 /**
  * Extract a human-readable message from a Tauri command error.
@@ -80,14 +81,26 @@ export async function openAppFrontend(
     const settings = getSettings();
     const nodeUrl = (settings.nodeUrl ?? '').replace(/\/$/, '');
 
-    // Build URL hash with node_url and tokens so the app can skip the auth flow
+    // Build URL hash with node_url and the access token so the app can skip the
+    // auth flow.
+    //
+    // The REAL refresh token is deliberately not shared. Refresh tokens are
+    // single-use (calimero-network/core#3083): each POST /auth/refresh consumes
+    // the presented token, and re-presenting a consumed one is treated as theft
+    // — the node revokes the whole token family and every holder is logged out.
+    // Each app webview is its own origin with its own localStorage and its own
+    // MeroJs, so handing them all the same refresh token guarantees exactly that
+    // collision. Instead the desktop keeps the refresh token and stays the sole
+    // rotator: apps get BROKERED_REFRESH_TOKEN, and their /auth/refresh calls are
+    // intercepted by the injected proxy script and served by the desktop.
+    // See src/lib/token-broker.ts.
     const hashParams = new URLSearchParams();
     hashParams.set('node_url', nodeUrl);
     const accessToken = getAccessToken();
     const refreshToken = getRefreshToken();
     if (accessToken && refreshToken) {
       hashParams.set('access_token', accessToken);
-      hashParams.set('refresh_token', refreshToken);
+      hashParams.set('refresh_token', BROKERED_REFRESH_TOKEN);
       hashParams.set('expires_at', String(getTokenExpiresAt() ?? Date.now() + 3600_000));
     }
     if (context?.applicationId) hashParams.set('app-id', context.applicationId);

@@ -16,6 +16,7 @@ import {
   MOCK_INSTALLED_APPS,
   MOCK_REGISTRY_V2_BUNDLES,
   API_ROUTES,
+  rotatedTokenPair,
   listApplicationsWireBody,
   listContextsWireBody,
   type AppSettings,
@@ -157,6 +158,110 @@ export async function mockCoreAPIs(
     }
     return route.continue();
   });
+}
+
+// ─── Single-use refresh tokens (calimero-network/core#3083) ──────────────────
+
+/**
+ * The node signals *why* a 401 happened via `x-auth-error`, and clients key off
+ * it: mero-js only auto-refreshes on `token_expired` (web-client.js), and
+ * mero-js#67 treats `token_reuse` / `token_revoked` as terminal.
+ *
+ * The app is a different origin from the node (1420 → 2528), so the browser
+ * hides that header from JS unless the node also sends
+ * `Access-Control-Expose-Headers`. A mock that omits it silently disables every
+ * refresh path — the client can't see the header, so it never refreshes.
+ */
+export const AUTH_ERROR_HEADERS = (reason: string): Record<string, string> => ({
+  "x-auth-error": reason,
+  "access-control-expose-headers": "x-auth-error",
+});
+
+export interface SingleUseRefreshMock {
+  /** How many POST /auth/refresh calls the node received. */
+  callCount(): number;
+  /** True once a consumed refresh token was re-presented → family revoked. */
+  familyRevoked(): boolean;
+  /** The refresh token the node currently accepts. */
+  liveRefreshToken(): string;
+  /** Every refresh token the node has already consumed. */
+  consumedTokens(): readonly string[];
+}
+
+/**
+ * Model the node's single-use refresh-token rotation.
+ *
+ * Each POST /auth/refresh **consumes** the presented refresh token and returns a
+ * brand-new pair. Re-presenting a consumed token is treated as theft: the node
+ * revokes the whole token family and answers 401 `x-auth-error: token_reuse`,
+ * after which nothing in that family works again.
+ *
+ * That is the real server contract, so a client that hangs on to a consumed
+ * refresh token — or that hands the same one to a second holder, which is what
+ * the desktop used to do by putting it in every app window's URL hash — now
+ * fails loudly here instead of passing against a permissive mock.
+ */
+export async function mockSingleUseRefresh(
+  page: Page,
+): Promise<SingleUseRefreshMock> {
+  let generation = 0;
+  let live = MOCK_REFRESH_TOKEN;
+  let revoked = false;
+  let calls = 0;
+  const consumed = new Set<string>();
+
+  await page.route(API_ROUTES.refreshToken, async (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    calls += 1;
+
+    let presented = "";
+    try {
+      const body = route.request().postDataJSON() as
+        | { refresh_token?: string }
+        | null;
+      presented = body?.refresh_token ?? "";
+    } catch {
+      presented = "";
+    }
+
+    // Replay of a consumed token → theft. Revoke the family for good.
+    if (consumed.has(presented)) {
+      revoked = true;
+      return route.fulfill({
+        status: 401,
+        contentType: "application/json",
+        headers: AUTH_ERROR_HEADERS("token_reuse"),
+        body: JSON.stringify({ error: "refresh token reuse detected" }),
+      });
+    }
+
+    if (revoked || presented !== live) {
+      return route.fulfill({
+        status: 401,
+        contentType: "application/json",
+        headers: AUTH_ERROR_HEADERS("token_revoked"),
+        body: JSON.stringify({ error: "invalid refresh token" }),
+      });
+    }
+
+    consumed.add(presented);
+    generation += 1;
+    const next = rotatedTokenPair(generation);
+    live = next.refresh_token;
+
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ data: next }),
+    });
+  });
+
+  return {
+    callCount: () => calls,
+    familyRevoked: () => revoked,
+    liveRefreshToken: () => live,
+    consumedTokens: () => [...consumed],
+  };
 }
 
 /**

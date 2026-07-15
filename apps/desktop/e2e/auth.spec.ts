@@ -1,12 +1,19 @@
 import { test, expect } from "@playwright/test";
 import {
+  AUTH_ERROR_HEADERS,
   mockCoreAPIs,
+  mockSingleUseRefresh,
   setupAuthenticatedPage,
+  seedAuthenticatedState,
   seedSettings,
+  stubTauriIPC,
+  waitForAppShellReady,
 } from "./fixtures/helpers";
 import {
   AUTHENTICATED_SETTINGS,
+  MOCK_ACCESS_TOKEN,
   MOCK_PROVIDERS_RESPONSE,
+  MOCK_REFRESH_TOKEN,
   API_ROUTES,
   STORAGE_KEYS,
   listApplicationsWireBody,
@@ -43,6 +50,107 @@ test.describe("Authenticated user bypass", () => {
   test("skips login and shows main app", async ({ page }) => {
     await expect(page.getByTestId("login-screen")).not.toBeVisible();
     await expect(page.locator("aside.sidebar")).toBeVisible();
+  });
+});
+
+// ─── Single-use refresh tokens (calimero-network/core#3083) ─────────────────
+//
+// The node consumes the presented refresh token on every POST /auth/refresh and
+// mints a new one; re-presenting a consumed token is treated as theft and the
+// whole family is revoked. `mockSingleUseRefresh` enforces exactly that, so a
+// client that keeps a consumed token — or that shares one with a second holder,
+// which is what the desktop used to do by putting it in every app window's URL
+// hash — fails here instead of passing against a permissive mock.
+
+test.describe("single-use refresh token rotation", () => {
+  test("desktop keeps the rotated refresh token and never replays a consumed one", async ({
+    page,
+  }) => {
+    await stubTauriIPC(page);
+    await mockCoreAPIs(page);
+    const refresh = await mockSingleUseRefresh(page);
+
+    // Reject the seeded access token as expired, and accept anything else — i.e.
+    // behave like a node whose access token has aged out, until the client
+    // rotates. Keyed on the presented bearer rather than a call count because
+    // unauthenticated probes (onboarding, node detection) also hit this route.
+    //
+    // The `x-auth-error: token_expired` header is load-bearing: mero-js only
+    // auto-refreshes on that exact reason (web-client.js), and only when the
+    // node exposes the header cross-origin. Registered after mockCoreAPIs so
+    // this handler wins.
+    await page.route(API_ROUTES.adminHealth, (route) => {
+      const auth = route.request().headers()["authorization"] ?? "";
+      const presented = auth.replace(/^Bearer\s+/i, "");
+      if (presented === MOCK_ACCESS_TOKEN) {
+        return route.fulfill({
+          status: 401,
+          contentType: "application/json",
+          headers: AUTH_ERROR_HEADERS("token_expired"),
+          body: JSON.stringify({ error: "Unauthorized" }),
+        });
+      }
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ data: { status: "ok" } }),
+      });
+    });
+
+    await page.goto("/");
+    await seedAuthenticatedState(page);
+    await page.reload();
+    await waitForAppShellReady(page);
+
+    // A rotation happened, and the replay path was never taken.
+    expect(refresh.callCount()).toBeGreaterThan(0);
+    expect(refresh.familyRevoked()).toBe(false);
+
+    // The consumed token must be gone from storage — keeping it is precisely
+    // what trips token_reuse on the next refresh.
+    const stored = await page.evaluate(
+      (key) => localStorage.getItem(key),
+      STORAGE_KEYS.refreshToken,
+    );
+    expect(refresh.consumedTokens()).toContain(MOCK_REFRESH_TOKEN);
+    expect(stored).not.toBe(MOCK_REFRESH_TOKEN);
+    expect(stored).toBe(refresh.liveRefreshToken());
+  });
+
+  test("node rejects a replayed refresh token with token_reuse and revokes the family", async ({
+    page,
+  }) => {
+    await stubTauriIPC(page);
+    await mockCoreAPIs(page);
+    const refresh = await mockSingleUseRefresh(page);
+    await page.goto("/");
+
+    // Two holders of the same refresh token, exactly as the old URL-hash handoff
+    // produced: the second one to refresh presents an already-consumed token.
+    const replay = await page.evaluate(async (token) => {
+      const post = async (refresh_token: string) => {
+        const res = await fetch("http://localhost:2528/auth/refresh", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ access_token: "stale", refresh_token }),
+        });
+        return {
+          status: res.status,
+          authError: res.headers.get("x-auth-error"),
+          body: await res.json().catch(() => null),
+        };
+      };
+      return { first: await post(token), second: await post(token) };
+    }, MOCK_REFRESH_TOKEN);
+
+    // First holder rotates fine and gets a brand-new pair.
+    expect(replay.first.status).toBe(200);
+    expect(replay.first.body.data.refresh_token).not.toBe(MOCK_REFRESH_TOKEN);
+
+    // Second holder replays the consumed token → theft → family revoked.
+    expect(replay.second.status).toBe(401);
+    expect(replay.second.authError).toBe("token_reuse");
+    expect(refresh.familyRevoked()).toBe(true);
   });
 });
 

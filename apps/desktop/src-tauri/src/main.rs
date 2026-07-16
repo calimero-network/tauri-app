@@ -1294,12 +1294,20 @@ async fn start_merod(
                 }
             }
             
+            // Backfill the first-login setup code (core#3221) for nodes whose
+            // merod predates auto-generation (core#3270), so the first login
+            // on a fresh node can create the admin account instead of dying
+            // on an opaque 401.
+            if ensure_bootstrap_secret(&mut config) {
+                info!("[Merod] Generated a first-login setup code into config.toml");
+            }
+
             // Write updated config back
             let updated_config = toml::to_string_pretty(&config)
                 .map_err(|e| TauriError::with_details(TauriErrorCode::ConfigWriteError, "Failed to serialize config.toml", e.to_string()))?;
             std::fs::write(&config_path, updated_config)
                 .map_err(|e| TauriError::with_details(TauriErrorCode::ConfigWriteError, "Failed to write config.toml", e.to_string()))?;
-            
+
             info!("[Merod] Updated config.toml with server_port={} and swarm_port={}", server_port, swarm_port);
         }
     }
@@ -2349,6 +2357,101 @@ async fn get_merod_binary_version(app_handle: tauri::AppHandle) -> Result<String
     Ok(get_merod_version_at(&merod_binary).await.unwrap_or_else(|| "unknown".to_string()))
 }
 
+/// Ensure the node's first-login setup code (embedded-auth bootstrap secret,
+/// core#3221) exists in its parsed config.toml. Since core rc.14 a fresh node
+/// refuses to mint its first root key unless the login presents this secret;
+/// newer merod generates one at init (core#3270), but the rc.14 binary this
+/// app bundles does not — so the app backfills it before starting the node.
+/// A configured non-empty secret is left untouched; configs without an
+/// embedded_auth section (proxy-mode nodes) are skipped. Returns true when a
+/// secret was inserted.
+fn ensure_bootstrap_secret(config: &mut toml::Value) -> bool {
+    let Some(embedded_auth) = config
+        .get_mut("server")
+        .and_then(|s| s.get_mut("embedded_auth"))
+        .and_then(|a| a.as_table_mut())
+    else {
+        return false;
+    };
+
+    let user_password = embedded_auth
+        .entry("user_password")
+        .or_insert_with(|| toml::Value::Table(toml::map::Map::new()));
+    let Some(user_password) = user_password.as_table_mut() else {
+        return false;
+    };
+
+    let missing = user_password
+        .get("bootstrap_secret")
+        .and_then(|v| v.as_str())
+        .map_or(true, str::is_empty);
+    if !missing {
+        return false;
+    }
+
+    let secret: String = {
+        use rand::Rng;
+        let bytes: [u8; 16] = rand::thread_rng().gen();
+        bytes.iter().map(|b| format!("{b:02x}")).collect()
+    };
+    let _ = user_password.insert(
+        "bootstrap_secret".to_string(),
+        toml::Value::String(secret),
+    );
+    true
+}
+
+/// Read the node's first-login setup code (embedded-auth bootstrap secret)
+/// from its config.toml, so the login flow can transparently present it when
+/// creating the first account on a fresh node (core#3221). Returns None when
+/// the node has no embedded-auth config or no secret; the caller then simply
+/// logs in without one, same as before rc.14.
+#[tauri::command]
+async fn get_bootstrap_secret(
+    node_name: String,
+    home_dir: Option<String>,
+) -> Result<Option<String>, TauriError> {
+    validate_node_name(&node_name).map_err(|e| TauriError::new(TauriErrorCode::InvalidInput, e))?;
+
+    let home_dir_path = if let Some(dir) = home_dir {
+        let expanded = if dir.starts_with("~") {
+            if let Some(home) = dirs::home_dir() {
+                dir.replacen("~", &home.to_string_lossy(), 1)
+            } else {
+                dir
+            }
+        } else {
+            dir
+        };
+        std::path::PathBuf::from(expanded)
+    } else {
+        dirs::home_dir()
+            .ok_or_else(|| TauriError::new(TauriErrorCode::HomeDirNotFound, "Failed to get home directory"))?
+            .join(".calimero")
+    };
+
+    let config_path = home_dir_path.join(&node_name).join("config.toml");
+    if !config_path.exists() {
+        return Ok(None);
+    }
+
+    let config_content = tokio::fs::read_to_string(&config_path)
+        .await
+        .map_err(|e| TauriError::with_details(TauriErrorCode::FileReadError, "Failed to read config.toml", e.to_string()))?;
+    let config: toml::Value = config_content
+        .parse::<toml::Value>()
+        .map_err(|e| TauriError::with_details(TauriErrorCode::ConfigParseError, "Failed to parse config.toml", e.to_string()))?;
+
+    Ok(config
+        .get("server")
+        .and_then(|s| s.get("embedded_auth"))
+        .and_then(|a| a.get("user_password"))
+        .and_then(|u| u.get("bootstrap_secret"))
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string))
+}
+
 /// Read merod logs for a node. Logs are only available for nodes started by the app.
 #[tauri::command]
 async fn get_merod_logs(
@@ -3008,6 +3111,7 @@ fn main() {
             init_merod_node,
             detect_running_merod_nodes,
             get_merod_logs,
+            get_bootstrap_secret,
             get_merod_binary_version,
             download_and_replace_merod,
             set_tray_icon_connected,
@@ -3031,7 +3135,80 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{validate_allowed_url, score_merod_asset, merod_target_triple};
+    use super::{
+        ensure_bootstrap_secret, merod_target_triple, score_merod_asset, validate_allowed_url,
+    };
+
+    #[test]
+    fn bootstrap_secret_backfilled_when_missing() {
+        let mut config: toml::Value = r#"
+[server.embedded_auth.user_password]
+min_password_length = 8
+"#
+        .parse()
+        .unwrap();
+        assert!(ensure_bootstrap_secret(&mut config));
+        let secret = config["server"]["embedded_auth"]["user_password"]["bootstrap_secret"]
+            .as_str()
+            .unwrap();
+        assert_eq!(secret.len(), 32);
+        assert!(secret.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn bootstrap_secret_backfilled_when_user_password_table_absent() {
+        let mut config: toml::Value = r#"
+[server.embedded_auth.jwt]
+issuer = "calimero-auth"
+"#
+        .parse()
+        .unwrap();
+        assert!(ensure_bootstrap_secret(&mut config));
+        assert!(config["server"]["embedded_auth"]["user_password"]["bootstrap_secret"]
+            .as_str()
+            .is_some());
+    }
+
+    #[test]
+    fn bootstrap_secret_kept_when_already_configured() {
+        let mut config: toml::Value = r#"
+[server.embedded_auth.user_password]
+bootstrap_secret = "operator-provisioned"
+"#
+        .parse()
+        .unwrap();
+        assert!(!ensure_bootstrap_secret(&mut config));
+        assert_eq!(
+            config["server"]["embedded_auth"]["user_password"]["bootstrap_secret"]
+                .as_str()
+                .unwrap(),
+            "operator-provisioned"
+        );
+    }
+
+    #[test]
+    fn bootstrap_secret_regenerated_when_blank() {
+        // An empty string disables the bootstrap gate server-side, so treat it
+        // as missing rather than leaving first login permanently broken.
+        let mut config: toml::Value = r#"
+[server.embedded_auth.user_password]
+bootstrap_secret = ""
+"#
+        .parse()
+        .unwrap();
+        assert!(ensure_bootstrap_secret(&mut config));
+    }
+
+    #[test]
+    fn bootstrap_secret_skipped_without_embedded_auth() {
+        let mut config: toml::Value = r#"
+[server]
+auth_mode = "proxy"
+"#
+        .parse()
+        .unwrap();
+        assert!(!ensure_bootstrap_secret(&mut config));
+    }
 
     #[test]
     fn test_allowed_localhost_urls() {

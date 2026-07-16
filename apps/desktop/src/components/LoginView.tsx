@@ -4,6 +4,8 @@ import { setAccessToken, setRefreshToken, setTokenExpiresAt } from '../lib/token
 import type { Provider } from '../lib/mero-client';
 import { ProviderSelector } from './ProviderSelector';
 import { UsernamePasswordForm } from './UsernamePasswordForm';
+import { getBootstrapSecret } from '../utils/merod';
+import { getSettings } from '../utils/settings';
 
 export interface LoginViewProps {
   onSuccess?: () => void;
@@ -57,13 +59,37 @@ export function LoginView({ onSuccess, onError, variant = 'light' }: LoginViewPr
       setUsernamePasswordLoading(true);
       setError(null);
 
+      // Since core rc.14 (core#3221) a fresh node only creates its first
+      // account when the login presents the node's bootstrap secret ("setup
+      // code"), which lives in the config.toml this app manages. Read it
+      // transparently so first-run stays a plain username/password login.
+      // Once an account exists the node ignores the value, and for remote
+      // or pre-rc.14 nodes it resolves to null and is simply omitted —
+      // matching the pre-rc.14 request shape exactly.
+      let bootstrapSecret: string | null = null;
+      const settings = getSettings();
+      if (settings.useEmbeddedNode && settings.embeddedNodeName) {
+        try {
+          bootstrapSecret = await getBootstrapSecret(
+            settings.embeddedNodeName,
+            settings.embeddedNodeDataDir,
+          );
+        } catch (err) {
+          console.warn('Could not read first-login setup code:', err);
+        }
+      }
+
       const tokenResponse = await apiClient.auth.requestToken({
         auth_method: 'user_password',
         public_key: username,
         client_name: 'calimero-desktop',
         timestamp: Date.now(),
         permissions: [],
-        provider_data: { username, password },
+        provider_data: {
+          username,
+          password,
+          ...(bootstrapSecret ? { bootstrap_secret: bootstrapSecret } : {}),
+        },
       });
 
       if (tokenResponse.error) {

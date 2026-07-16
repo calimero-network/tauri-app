@@ -111,6 +111,20 @@ export async function getMerodLogs(
 }
 
 /**
+ * Read the node's first-login setup code (embedded-auth bootstrap secret,
+ * core#3221) from its config.toml. Fresh rc.14+ nodes only mint their first
+ * account when the login presents this code; the app reads it transparently
+ * so first-run stays a plain username/password login. Returns null when the
+ * node has no secret configured (pre-rc.14 nodes, proxy-mode nodes).
+ */
+export async function getBootstrapSecret(
+  nodeName: string,
+  homeDir?: string
+): Promise<string | null> {
+  return await invoke('get_bootstrap_secret', { nodeName, homeDir });
+}
+
+/**
  * Kill all merod processes on the system. Call before total nuke.
  */
 export async function killAllMerodProcesses(): Promise<string> {

@@ -98,7 +98,7 @@ describeAfter35("Nodes – create node form", () => {
     await expect(nameInput).toHaveValue("my-test-node");
   });
 
-  test("Create button is disabled when node name is empty", async ({
+  test("Create button is disabled until name and admin credentials are filled", async ({
     page,
   }) => {
     const createBtn = page
@@ -106,7 +106,14 @@ describeAfter35("Nodes – create node form", () => {
       .getByRole("button", { name: "Create" });
     await expect(createBtn).toBeDisabled();
 
+    // rc.17: creating a node provisions the admin account at init, so a name
+    // alone is no longer enough — admin username + an 8-char password are also
+    // required before Create enables.
     await page.locator("#new-node-name").fill("node1");
+    await expect(createBtn).toBeDisabled();
+
+    await page.locator("#new-admin-user").fill("admin");
+    await page.locator("#new-admin-password").fill("dev-password");
     await expect(createBtn).not.toBeDisabled();
   });
 });

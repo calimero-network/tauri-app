@@ -97,6 +97,8 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
   // Node setup state - restore from saved progress if available
   const [dataDir, setDataDir] = useState(() => loadOnboardingProgress()?.dataDir ?? "~/.calimero");
   const [nodeName, setNodeName] = useState(() => loadOnboardingProgress()?.nodeName ?? "default");
+  const [adminUser, setAdminUser] = useState("");
+  const [adminPassword, setAdminPassword] = useState("");
   const [serverPort, setServerPort] = useState(() => loadOnboardingProgress()?.serverPort ?? 2528);
   const [swarmPort, setSwarmPort] = useState(() => loadOnboardingProgress()?.swarmPort ?? 2428);
       const [creatingNode, setCreatingNode] = useState(false);
@@ -242,6 +244,19 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
       setNodeError(useExistingNode ? "Please select a node" : "Please enter a node name");
       return;
     }
+    // Since core rc.17 the admin account is minted at init — a new node
+    // created without credentials cannot be logged into. Existing nodes
+    // already have (or manage) their own account.
+    if (!useExistingNode) {
+      if (!adminUser.trim() || !adminPassword) {
+        setNodeError("Please choose the admin username and password you will log in with");
+        return;
+      }
+      if (adminPassword.length < 8) {
+        setNodeError("The admin password must be at least 8 characters");
+        return;
+      }
+    }
 
     setCreatingNode(true);
     setNodeError(null);
@@ -302,7 +317,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
       } else {
         // Create new node
         try {
-          await initMerodNode(targetNodeName, dataDir);
+          await initMerodNode(targetNodeName, dataDir, adminUser.trim(), adminPassword);
         } catch (initError: any) {
           const msg = initError?.message || initError?.toString() || "";
           if (msg.toLowerCase().includes("exist") || msg.toLowerCase().includes("already")) {
@@ -932,6 +947,33 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
                 </div>
               </div>
 
+              <div className="form-group">
+                <label htmlFor="admin-user">Admin Username</label>
+                <input
+                  id="admin-user"
+                  type="text"
+                  value={adminUser}
+                  onChange={(e) => setAdminUser(e.target.value)}
+                  placeholder="Username you will log in with"
+                  autoComplete="username"
+                  disabled={creatingNode || nodeCreated}
+                />
+                <p className="field-hint">The node's admin account is created now — you will sign in with these credentials</p>
+              </div>
+
+              <div className="form-group">
+                <label htmlFor="admin-password">Admin Password</label>
+                <input
+                  id="admin-password"
+                  type="password"
+                  value={adminPassword}
+                  onChange={(e) => setAdminPassword(e.target.value)}
+                  placeholder="At least 8 characters"
+                  autoComplete="new-password"
+                  disabled={creatingNode || nodeCreated}
+                />
+              </div>
+
               <div className="advanced-options-section">
                 <button
                   type="button"
@@ -999,7 +1041,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
                 <button
                   onClick={handleCreateNode}
                   className="step-button step-button-primary"
-                  disabled={creatingNode || nodeCreated || !nodeName.trim()}
+                  disabled={creatingNode || nodeCreated || !nodeName.trim() || !adminUser.trim() || !adminPassword}
                 >
                   {creatingNode ? 'Creating Node...' : nodeCreated && nodeStarted ? 'Setting Up...' : 'Create Node & Continue'}
                   {!creatingNode && !nodeCreated && <ArrowRight size={18} />}

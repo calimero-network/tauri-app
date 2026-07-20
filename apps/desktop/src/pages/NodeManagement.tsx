@@ -28,6 +28,8 @@ export default function NodeManagement() {
   const [homeDir, setHomeDir] = useState("~/.calimero");
   const [selectedNode, setSelectedNode] = useState<string>("");
   const [newNodeName, setNewNodeName] = useState("");
+  const [newAdminUser, setNewAdminUser] = useState("");
+  const [newAdminPassword, setNewAdminPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [serverPort, setServerPort] = useState<number>(2528);
   const [swarmPort, setSwarmPort] = useState<number>(2428);
@@ -148,13 +150,25 @@ export default function NodeManagement() {
       toast.error("Please enter a node name");
       return;
     }
+    // Since core rc.17 the admin account is minted at init — a node created
+    // without credentials cannot be logged into.
+    if (!newAdminUser.trim() || !newAdminPassword) {
+      toast.error("Please choose an admin username and password for the node");
+      return;
+    }
+    if (newAdminPassword.length < 8) {
+      toast.error("The admin password must be at least 8 characters");
+      return;
+    }
 
     const createdName = newNodeName.trim();
     setLoading(true);
     try {
-      await initMerodNode(createdName, homeDir);
+      await initMerodNode(createdName, homeDir, newAdminUser.trim(), newAdminPassword);
       toast.success(`Node "${createdName}" created successfully`);
       setNewNodeName("");
+      setNewAdminUser("");
+      setNewAdminPassword("");
       await loadNodes();
       await detectRunning(); // Fresh running nodes so port-bump effect uses correct ports
       setSelectedNode(createdName);
@@ -398,12 +412,34 @@ export default function NodeManagement() {
                   value={newNodeName}
                   onChange={(e) => setNewNodeName(e.target.value)}
                   placeholder="default, node1, etc."
+                />
+              </div>
+              <label htmlFor="new-admin-user">Admin Username</label>
+              <div className="input-group">
+                <input
+                  id="new-admin-user"
+                  type="text"
+                  value={newAdminUser}
+                  onChange={(e) => setNewAdminUser(e.target.value)}
+                  placeholder="Username you will log in with"
+                  autoComplete="username"
+                />
+              </div>
+              <label htmlFor="new-admin-password">Admin Password</label>
+              <div className="input-group">
+                <input
+                  id="new-admin-password"
+                  type="password"
+                  value={newAdminPassword}
+                  onChange={(e) => setNewAdminPassword(e.target.value)}
+                  placeholder="At least 8 characters"
+                  autoComplete="new-password"
                   onKeyPress={(e) => e.key === 'Enter' && handleCreateNode()}
                 />
                 <button
                   onClick={handleCreateNode}
                   className="button button-primary"
-                  disabled={!newNodeName.trim() || loading}
+                  disabled={!newNodeName.trim() || !newAdminUser.trim() || !newAdminPassword || loading}
                 >
                   {loading ? 'Creating...' : 'Create'}
                 </button>

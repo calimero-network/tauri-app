@@ -28,6 +28,8 @@ export default function Nodes({ onBack }: NodesProps) {
   const [selectedNode, setSelectedNode] = useState<string>("");
   const [creatingNode, setCreatingNode] = useState(false);
   const [newNodeName, setNewNodeName] = useState("");
+  const [newAdminUser, setNewAdminUser] = useState("");
+  const [newAdminPassword, setNewAdminPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState<MerodStatus>({ running: false });
   const [currentNodeUrl, setCurrentNodeUrl] = useState<string>("");
@@ -134,12 +136,24 @@ export default function Nodes({ onBack }: NodesProps) {
       toast.warning("Please enter a node name");
       return;
     }
-    
+    // Since core rc.17 the admin account is minted at init — a node created
+    // without credentials cannot be logged into.
+    if (!newAdminUser.trim() || !newAdminPassword) {
+      toast.warning("Please choose an admin username and password for the node");
+      return;
+    }
+    if (newAdminPassword.length < 8) {
+      toast.warning("The admin password must be at least 8 characters");
+      return;
+    }
+
     setLoading(true);
     try {
-      await initMerodNode(newNodeName.trim(), homeDir);
+      await initMerodNode(newNodeName.trim(), homeDir, newAdminUser.trim(), newAdminPassword);
       const createdNodeName = newNodeName.trim();
       setNewNodeName("");
+      setNewAdminUser("");
+      setNewAdminPassword("");
       setCreatingNode(false);
       await loadNodes();
       // Select the newly created node
@@ -285,20 +299,38 @@ export default function Nodes({ onBack }: NodesProps) {
           ) : (
             <div className="nodes-field">
               <label htmlFor="new-node-name">Node Name</label>
-              <div style={{ display: 'flex', gap: '8px' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                 <input
                   id="new-node-name"
                   type="text"
                   value={newNodeName}
                   onChange={(e) => setNewNodeName(e.target.value)}
                   placeholder="node1, node2, etc."
-                  onKeyPress={(e) => e.key === 'Enter' && handleCreateNode()}
                   style={{ flex: 1 }}
+                />
+                <label htmlFor="new-admin-user">Admin Username</label>
+                <input
+                  id="new-admin-user"
+                  type="text"
+                  value={newAdminUser}
+                  onChange={(e) => setNewAdminUser(e.target.value)}
+                  placeholder="Username you will log in with"
+                  autoComplete="username"
+                />
+                <label htmlFor="new-admin-password">Admin Password</label>
+                <input
+                  id="new-admin-password"
+                  type="password"
+                  value={newAdminPassword}
+                  onChange={(e) => setNewAdminPassword(e.target.value)}
+                  placeholder="At least 8 characters"
+                  autoComplete="new-password"
+                  onKeyPress={(e) => e.key === 'Enter' && handleCreateNode()}
                 />
                 <button
                   onClick={handleCreateNode}
                   className="button button-primary"
-                  disabled={!newNodeName.trim() || loading}
+                  disabled={!newNodeName.trim() || !newAdminUser.trim() || !newAdminPassword || loading}
                 >
                   {loading ? 'Creating...' : 'Create'}
                 </button>
@@ -306,6 +338,8 @@ export default function Nodes({ onBack }: NodesProps) {
                   onClick={() => {
                     setCreatingNode(false);
                     setNewNodeName("");
+                    setNewAdminUser("");
+                    setNewAdminPassword("");
                   }}
                   className="button"
                   disabled={loading}

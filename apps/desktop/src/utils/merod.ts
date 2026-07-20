@@ -86,10 +86,21 @@ export interface RunningMerodNode {
 }
 
 /**
- * Initialize/create a new merod node
+ * Initialize/create a new merod node.
+ *
+ * Since core rc.17 the admin account is minted AT INIT from these
+ * credentials (the login path never mints accounts), so creating a usable
+ * node requires choosing its admin username/password here. Omitting them
+ * defers provisioning (`--no-admin`): the node initializes but login stays
+ * disabled until an account is provisioned out of band.
  */
-export async function initMerodNode(nodeName: string, homeDir?: string): Promise<string> {
-  return await invoke('init_merod_node', { nodeName, homeDir });
+export async function initMerodNode(
+  nodeName: string,
+  homeDir?: string,
+  adminUser?: string,
+  adminPassword?: string
+): Promise<string> {
+  return await invoke('init_merod_node', { nodeName, homeDir, adminUser, adminPassword });
 }
 
 /**
@@ -108,20 +119,6 @@ export async function getMerodLogs(
   lines?: number
 ): Promise<string> {
   return await invoke('get_merod_logs', { nodeName, homeDir, lines });
-}
-
-/**
- * Read the node's first-login setup code (embedded-auth bootstrap secret,
- * core#3221) from its config.toml. Fresh rc.14+ nodes only mint their first
- * account when the login presents this code; the app reads it transparently
- * so first-run stays a plain username/password login. Returns null when the
- * node has no secret configured (pre-rc.14 nodes, proxy-mode nodes).
- */
-export async function getBootstrapSecret(
-  nodeName: string,
-  homeDir?: string
-): Promise<string | null> {
-  return await invoke('get_bootstrap_secret', { nodeName, homeDir });
 }
 
 /**

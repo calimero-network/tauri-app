@@ -57,7 +57,7 @@ export function LoginView({ onSuccess, onError, variant = 'light' }: LoginViewPr
   }, [loadProviders]);
 
   const handleProviderSelect = async (provider: Provider) => {
-    if (provider.name === 'user_password' || provider.name === 'username_password') {
+    if (isUserPasswordProvider(provider)) {
       setShowProviders(false);
       setShowUsernamePasswordForm(true);
     } else {

@@ -1152,19 +1152,31 @@ fn spawn_log_drain<R>(
 {
     use tokio::io::{AsyncBufReadExt, BufReader};
     tokio::spawn(async move {
-        let mut lines = BufReader::new(reader).lines();
+        // Read raw bytes with read_until rather than lines(): merod can emit
+        // non-UTF-8 (panic backtraces, stray binary), which lines() surfaces as an
+        // Err that would permanently — and silently — kill the drain, so logs just
+        // stop appearing. read_until preserves the bytes verbatim (ANSI colour
+        // codes included) and never fails on invalid UTF-8; the writer's rotation
+        // and the viewer's lossy decode handle anything unusual downstream.
+        let mut buf_reader = BufReader::new(reader);
+        let mut buf: Vec<u8> = Vec::with_capacity(1024);
         loop {
-            match lines.next_line().await {
-                Ok(Some(mut line)) => {
-                    line.push('\n');
+            buf.clear();
+            match buf_reader.read_until(b'\n', &mut buf).await {
+                Ok(0) => break, // EOF: process exited / stream closed
+                Ok(_) => {
                     if let Ok(mut w) = writer.lock() {
                         // Keep draining even if a write fails, so a write error can
                         // never wedge merod by leaving its pipe unread.
-                        let _ = w.write_line(line.as_bytes());
+                        let _ = w.write_line(&buf);
                     }
                 }
-                Ok(None) => break, // EOF: process exited / stream closed
-                Err(_) => break,
+                Err(e) => {
+                    // A genuine I/O error (not a decode error) — log it so a
+                    // stream that stops mid-run is diagnosable, then exit.
+                    warn!("[Merod] log drain stopped on read error: {}", e);
+                    break;
+                }
             }
         }
     });

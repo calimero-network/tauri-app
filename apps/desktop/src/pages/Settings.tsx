@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { getSettings, saveSettings, clearAllAppData } from "../utils/settings";
 import { parseTauriError } from "../utils/appUtils";
-import { invoke } from "@tauri-apps/api/tauri";
+import { invoke } from "@tauri-apps/api/core";
 import { killAllMerodProcesses, deleteCalimeroDataDir, stopMerod, getMerodStatus } from "../utils/merod";
 import { startCloudLogin, disconnectCloud } from "../utils/cloudAuth";
 import { getCloudSubscription, CloudSessionExpiredError } from "../utils/cloudApi";

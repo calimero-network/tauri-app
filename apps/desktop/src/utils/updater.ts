@@ -6,7 +6,9 @@
 import { stopMerod, killAllMerodProcesses, downloadAndReplaceMerod } from './merod';
 
 export function isTauri(): boolean {
-  return typeof window !== 'undefined' && '__TAURI__' in window;
+  // Tauri v2 injects __TAURI_INTERNALS__ into every webview regardless of the
+  // withGlobalTauri setting (which is false here), so __TAURI__ is unreliable.
+  return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 }
 
 export interface UpdateInfo {
@@ -26,15 +28,15 @@ export async function checkForUpdates(): Promise<UpdateStatus> {
     return { available: false, error: 'Not running in Tauri environment' };
   }
   try {
-    const { checkUpdate } = await import('@tauri-apps/api/updater');
-    const { shouldUpdate, manifest } = await checkUpdate();
-    if (shouldUpdate && manifest) {
+    const { check } = await import('@tauri-apps/plugin-updater');
+    const update = await check();
+    if (update) {
       return {
         available: true,
         info: {
-          version: manifest.version,
-          date: manifest.date || new Date().toISOString(),
-          body: manifest.body || 'A new version is available.',
+          version: update.version,
+          date: update.date || new Date().toISOString(),
+          body: update.body || 'A new version is available.',
         },
       };
     }
@@ -90,11 +92,17 @@ export async function installUpdate(onStatus: (status: string) => void = () => {
     console.warn('[updater] merod download/replace failed (proceeding with app update):', msg);
   }
 
-  // 3. Install Tauri app update (new shell / frontend bundle)
+  // 3. Install Tauri app update (new shell / frontend bundle).
+  // v2's plugin-updater installs via the Update handle returned by check(),
+  // so re-resolve it here before downloading + installing.
   onStatus('Installing app update...');
-  const { installUpdate: tauriInstallUpdate } = await import('@tauri-apps/api/updater');
-  const { relaunch } = await import('@tauri-apps/api/process');
-  await tauriInstallUpdate();
+  const { check } = await import('@tauri-apps/plugin-updater');
+  const { relaunch } = await import('@tauri-apps/plugin-process');
+  const update = await check();
+  if (!update) {
+    throw new Error('No update available to install');
+  }
+  await update.downloadAndInstall();
 
   // 4. Relaunch — app closes and reopens with the new binary
   onStatus('Restarting...');

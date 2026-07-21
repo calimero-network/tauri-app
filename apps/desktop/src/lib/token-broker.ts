@@ -39,7 +39,7 @@
  * `/auth/refresh` and gets a well-formed reply.
  */
 import { listen } from '@tauri-apps/api/event';
-import { invoke } from '@tauri-apps/api/tauri';
+import { invoke } from '@tauri-apps/api/core';
 import { getSettings } from '../utils/settings';
 import {
   getAccessToken,

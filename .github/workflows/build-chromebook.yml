@@ -83,7 +83,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            libwebkit2gtk-4.0-dev \
+            libwebkit2gtk-4.1-dev \
             libgtk-3-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev \
@@ -161,7 +161,7 @@ jobs:
           node -e "
             const fs = require('fs');
             const config = JSON.parse(fs.readFileSync('tauri.conf.json', 'utf8'));
-            config.package.version = '$VERSION';
+            config.version = '$VERSION';
             fs.writeFileSync('tauri.conf.json', JSON.stringify(config, null, 2));
           "
 
@@ -175,34 +175,14 @@ jobs:
             node -e "
               const fs = require('fs');
               const config = JSON.parse(fs.readFileSync('tauri.conf.json', 'utf8'));
-              config.tauri.updater.pubkey = process.env.TAURI_PUBLIC_KEY;
+              config.plugins = config.plugins || {};
+              config.plugins.updater = config.plugins.updater || {};
+              config.plugins.updater.pubkey = process.env.TAURI_PUBLIC_KEY;
               fs.writeFileSync('tauri.conf.json', JSON.stringify(config, null, 2));
             "
             echo "Injected TAURI_PUBLIC_KEY into tauri.conf.json"
           else
             echo "No TAURI_PUBLIC_KEY provided, using default pubkey"
-          fi
-
-      - name: Patch wry for webkit2gtk 0.18.2 compatibility
-        run: |
-          # wry 0.24.11 uses `use webkit2gtk::{traits::*, ...}` but on Linux with webkit2gtk 0.18.2
-          # the trait methods from SettingsExt are not resolved through the glob. Adding the
-          # explicit import is the fix the Rust compiler itself suggests.
-          # wry 0.24.12+ already imports SettingsExt explicitly, so the guard below must skip
-          # patching to avoid a duplicate import (E0252). Matching the bare `SettingsExt` token
-          # is correct for both: 0.24.11 never mentions it (glob), 0.24.12 lists it by name.
-          cargo fetch --manifest-path apps/desktop/src-tauri/Cargo.toml
-          WRY_MOD=$(find ~/.cargo/registry/src -name "mod.rs" -path "*/wry-0.24.*/src/webview/webkitgtk/*" 2>/dev/null | head -1)
-          if [ -n "$WRY_MOD" ]; then
-            if ! grep -q "SettingsExt" "$WRY_MOD"; then
-              sed -i 's/^use webkit2gtk::{/use webkit2gtk::SettingsExt;\nuse webkit2gtk::{/' "$WRY_MOD"
-              echo "Patched: $WRY_MOD"
-            else
-              echo "SettingsExt already imported (wry >= 0.24.12 or already patched); skipping."
-            fi
-          else
-            echo "wry webkitgtk mod.rs not found in cargo cache"
-            exit 1
           fi
 
       - name: Build Tauri app for Chromebook (Linux ARM64)

@@ -23,7 +23,7 @@ import Sidebar from "./components/Sidebar";
 import { NodeStatusIndicator } from "./components/NodeStatusIndicator";
 import ToastContainer from "./components/ToastContainer";
 import { getCurrentVersion } from "./utils/updater";
-import { invoke } from "@tauri-apps/api/tauri";
+import { invoke } from "@tauri-apps/api/core";
 import { Settings as SettingsIcon, ArrowRight, Package, ShoppingCart } from "lucide-react";
 import calimeroLogo from "./assets/calimero-logo.svg";
 import { useTheme } from "./contexts/ThemeContext";

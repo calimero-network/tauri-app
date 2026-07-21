@@ -3,7 +3,7 @@ import { checkOnboardingState, getOnboardingMessage, type OnboardingState } from
 import { apiClient } from "../lib/mero-client";
 import { LoginView } from "../components/LoginView";
 import { initMerodNode, startMerod, listMerodNodes, detectRunningMerodNodes, waitForNodeHealthy, stopMerod, killAllMerodProcesses, deleteCalimeroDataDir } from "../utils/merod";
-import { invoke } from "@tauri-apps/api/tauri";
+import { invoke } from "@tauri-apps/api/core";
 import { saveSettings, getSettings, clearAllAppData } from "../utils/settings";
 import { saveOnboardingProgress, loadOnboardingProgress } from "../utils/onboardingProgress";
 import { startCloudLogin } from "../utils/cloudAuth";

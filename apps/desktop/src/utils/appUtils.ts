@@ -1,5 +1,5 @@
-import { invoke } from "@tauri-apps/api/tauri";
-import { WebviewWindow } from "@tauri-apps/api/window";
+import { invoke } from "@tauri-apps/api/core";
+import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { getSettings } from "./settings";
 import { getAccessToken, getRefreshToken, getTokenExpiresAt } from "../lib/token-storage";
 import { BROKERED_REFRESH_TOKEN } from "../lib/token-broker";
@@ -144,7 +144,8 @@ export async function openAppFrontend(
     // clicking "Open" on an already-open-but-minimized app appears to do nothing.
     // These run before the emit: if any throw (window closed), we skip the emit
     // so no credentials reach a window that may have navigated to a different origin.
-    const existing = WebviewWindow.getByLabel(windowLabel);
+    // v2: WebviewWindow.getByLabel is async and resolves to null when absent.
+    const existing = await WebviewWindow.getByLabel(windowLabel);
     if (existing) {
       try {
         if (await existing.isMinimized()) await existing.unminimize();

@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
-import { invoke } from "@tauri-apps/api/tauri";
+import { invoke } from "@tauri-apps/api/core";
 import { getSettings } from "../utils/settings";
 import { fetchAppsFromAllRegistries, fetchAppVersions, fetchAppManifest, recordDownload, type AppSummary, type VersionInfo } from "../utils/registry";
 import { apiClient } from "../lib/mero-client";

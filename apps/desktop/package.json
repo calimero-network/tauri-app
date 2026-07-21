@@ -26,8 +26,12 @@
   "dependencies": {
     "@calimero-network/mero-js": "^2.2.1",
     "@calimero-network/mero-react": "^2.4.0",
-    "@tauri-apps/api": "^1.5.0",
+    "@tauri-apps/api": "^2.10.1",
     "@tauri-apps/plugin-autostart": "^2.5.1",
+    "@tauri-apps/plugin-dialog": "~2",
+    "@tauri-apps/plugin-process": "~2",
+    "@tauri-apps/plugin-shell": "~2",
+    "@tauri-apps/plugin-updater": "~2",
     "ansi-to-html": "^0.7.2",
     "bs58": "^6.0.0",
     "lucide-react": "^0.563.0",

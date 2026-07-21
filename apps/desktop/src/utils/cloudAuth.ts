@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api';
+import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getSettings, saveSettings } from './settings';
 import { CLOUD_BASE_URL, getCloudNode } from './cloudApi';

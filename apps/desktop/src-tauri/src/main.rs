@@ -1292,23 +1292,9 @@ async fn start_merod(
         .map_err(|e| TauriError::new(TauriErrorCode::FileNotFound, e))?;
 
     // Prepare home directory (where .calimero folder is, e.g., ~/.calimero)
-    let home_dir_path = if let Some(dir) = data_dir {
-        // Expand ~ if present
-        let expanded = if dir.starts_with("~") {
-            if let Some(home) = dirs::home_dir() {
-                dir.replacen("~", &home.to_string_lossy(), 1)
-            } else {
-                dir
-            }
-        } else {
-            dir
-        };
-        std::path::PathBuf::from(expanded)
-    } else {
-        dirs::home_dir()
-            .ok_or_else(|| TauriError::new(TauriErrorCode::HomeDirNotFound, "Failed to get home directory"))?
-            .join(".calimero")
-    };
+    // Same resolver as get_merod_logs/clear_merod_logs, so a node writes logs at
+    // exactly the path the viewer/Clear later resolve (no ~-expansion drift).
+    let home_dir_path = resolve_home_dir(data_dir)?;
 
     std::fs::create_dir_all(&home_dir_path)
         .map_err(|e| TauriError::with_details(TauriErrorCode::DirectoryError, "Failed to create home directory", e.to_string()))?;

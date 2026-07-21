@@ -528,31 +528,35 @@ async fn proxy_http_request_inner(request: HttpRequest, configured_node_url: Opt
         }
     }
     
-    // Decide text vs binary from the response Content-Type. Text stays a UTF-8
-    // string (unchanged wire shape for JSON/text); binary (images, octet-stream)
-    // is base64-encoded so the raw bytes reach the webview byte-exact. A missing
-    // content-type is treated as text to preserve prior behavior for plain APIs.
+    // Decide text vs binary from the response Content-Type BEFORE consuming the
+    // body: textual replies keep the plain-string wire shape (unchanged for
+    // JSON/text); binary (images, octet-stream) is base64 so the raw bytes reach
+    // the webview byte-exact. A missing content-type is treated as text to
+    // preserve prior behavior for plain APIs.
     let content_type = response_headers
         .iter()
         .find(|(k, _)| k.eq_ignore_ascii_case("content-type"))
         .map(|(_, v)| v.clone())
         .unwrap_or_default();
-    let bytes = response.bytes()
-        .await
-        .map_err(|e| TauriError::with_details(TauriErrorCode::ResponseReadError, format!("Failed to read response from {}", request.url), e.to_string()))?;
-
     let textual = content_type.is_empty() || is_textual_content_type(&content_type);
     info!(
-        "[Tauri Proxy] Response: {} ({} bytes, content-type: {}, {})",
+        "[Tauri Proxy] Response: {} (content-type: {}, {})",
         status,
-        bytes.len(),
         if content_type.is_empty() { "<none>" } else { content_type.as_str() },
         if textual { "text" } else { "binary/base64" },
     );
 
     let (body, body_base64) = if textual {
-        (String::from_utf8_lossy(&bytes).into_owned(), None)
+        // reqwest's text() honors the Content-Type charset (defaulting to UTF-8),
+        // so a non-UTF-8 text response isn't garbled the way from_utf8_lossy would.
+        let text = response.text().await.map_err(|e| {
+            TauriError::with_details(TauriErrorCode::ResponseReadError, format!("Failed to read response from {}", request.url), e.to_string())
+        })?;
+        (text, None)
     } else {
+        let bytes = response.bytes().await.map_err(|e| {
+            TauriError::with_details(TauriErrorCode::ResponseReadError, format!("Failed to read response from {}", request.url), e.to_string())
+        })?;
         (String::new(), Some(base64::engine::general_purpose::STANDARD.encode(&bytes)))
     };
 

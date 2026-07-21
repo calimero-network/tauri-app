@@ -33,6 +33,11 @@ export function LoginView({ onSuccess, onError, variant = 'light' }: LoginViewPr
       const response = await apiClient.auth.getProviders();
       if (response.error) {
         setError(response.error.message);
+        // Discovery failed — never leave the (default) credential form up, or a
+        // node without password auth would show the wrong screen. Show the
+        // provider view, which renders the error / empty state.
+        setShowUsernamePasswordForm(false);
+        setShowProviders(true);
         return;
       }
       if (response.data) {
@@ -47,6 +52,9 @@ export function LoginView({ onSuccess, onError, variant = 'light' }: LoginViewPr
     } catch (err) {
       console.error('Failed to load providers:', err);
       setError('Failed to load authentication providers');
+      // Same as above: fall back to the provider view rather than the form.
+      setShowUsernamePasswordForm(false);
+      setShowProviders(true);
     } finally {
       setLoading(false);
     }

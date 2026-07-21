@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 use log::{debug, info, warn};
 use std::sync::OnceLock;
 use thiserror::Error;
+// Brings `.encode()` / `.decode()` onto the base64 engine used by the HTTP proxy.
+use base64::Engine as _;
 
 mod log_rotation;
 
@@ -127,14 +129,61 @@ struct HttpRequest {
     url: String,
     method: String,
     headers: Option<std::collections::HashMap<String, String>>,
+    /// Text bodies (JSON, form-encoded, …) — sent as a UTF-8 string.
     body: Option<String>,
+    /// Binary bodies (image uploads, octet-stream, …) — base64 of the raw bytes.
+    /// Set by the proxy script instead of `body` so bytes survive the IPC hop
+    /// intact; `String(arrayBuffer)`/`.text()` would otherwise mangle them.
+    #[serde(default)]
+    body_base64: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 struct HttpResponse {
     status: u16,
     headers: std::collections::HashMap<String, String>,
+    /// Text responses — a UTF-8 string (unchanged wire shape for JSON/text).
     body: String,
+    /// Binary responses (images, octet-stream, …) — base64 of the raw bytes.
+    /// When present the proxy script decodes this instead of reading `body`,
+    /// so downloaded blobs are byte-exact rather than UTF-8-lossy corrupted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    body_base64: Option<String>,
+}
+
+/// Whether a response/request body of this content-type is safe to carry as a
+/// UTF-8 string. Anything else (images, octet-stream, video, …) must go over the
+/// IPC boundary as base64 to avoid lossy UTF-8 corruption.
+///
+/// Precise on purpose: a broad `contains("xml")`/`contains("json")` would
+/// misclassify ZIP-based Office Open XML types (`application/vnd.openxmlformats-*`
+/// = docx/xlsx/pptx) as text and corrupt them. Note the asymmetry — treating a
+/// genuinely textual type as binary is harmless (base64 round-trips exactly),
+/// while treating binary as text corrupts, so we bias toward binary.
+fn is_textual_content_type(content_type: &str) -> bool {
+    // Media type only, ignoring any `; charset=…` parameters.
+    let ct = content_type
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    // Vendor types are overwhelmingly binary containers (OOXML, .xls, …); never
+    // treat them as text even though some contain "xml"/"json" in the name.
+    if ct.starts_with("application/vnd.") {
+        return false;
+    }
+    ct.starts_with("text/")
+        || ct == "application/json"
+        || ct.ends_with("+json")
+        || ct == "application/xml"
+        || ct == "text/xml"
+        || ct.ends_with("+xml")
+        || ct.contains("javascript")
+        || ct.contains("ecmascript")
+        || ct == "application/x-www-form-urlencoded"
+        || ct == "text/csv"
+        || ct.starts_with("multipart/") // boundaries + text fields; keep as-is
 }
 
 /// Parses --open-app-url, --open-app-name, --open-app-id from CLI args (used when launched from a desktop shortcut).
@@ -428,17 +477,33 @@ async fn proxy_http_request_inner(request: HttpRequest, configured_node_url: Opt
         }
         debug!("[Tauri Proxy] Total headers processed: {}", headers.len());
         
-        // Add default Content-Type if body exists but no Content-Type header
-        if !has_content_type && request.body.is_some() {
-            req_builder = req_builder.header("Content-Type", "application/json");
+        // Add default Content-Type if a body exists but no Content-Type header.
+        // Binary bodies default to octet-stream, text bodies to JSON.
+        if !has_content_type {
+            if request.body_base64.is_some() {
+                req_builder = req_builder.header("Content-Type", "application/octet-stream");
+            } else if request.body.is_some() {
+                req_builder = req_builder.header("Content-Type", "application/json");
+            }
         }
-    } else if request.body.is_some() {
+    } else if request.body.is_some() || request.body_base64.is_some() {
         // No headers provided but body exists - add default Content-Type
-        req_builder = req_builder.header("Content-Type", "application/json");
+        let default_ct = if request.body_base64.is_some() {
+            "application/octet-stream"
+        } else {
+            "application/json"
+        };
+        req_builder = req_builder.header("Content-Type", default_ct);
     }
-    
-    // Add body
-    if let Some(body) = request.body {
+
+    // Add body: a base64 binary body (decoded to raw bytes) wins over the text
+    // body, so image/octet-stream uploads are sent as bytes, not mangled text.
+    if let Some(b64) = request.body_base64 {
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(b64.as_bytes())
+            .map_err(|e| TauriError::with_details(TauriErrorCode::InvalidInput, "Invalid base64 request body", e.to_string()))?;
+        req_builder = req_builder.body(bytes);
+    } else if let Some(body) = request.body {
         req_builder = req_builder.body(body);
     }
     
@@ -465,16 +530,43 @@ async fn proxy_http_request_inner(request: HttpRequest, configured_node_url: Opt
         }
     }
     
-    let body = response.text()
-        .await
-        .map_err(|e| TauriError::with_details(TauriErrorCode::ResponseReadError, format!("Failed to read response from {}", request.url), e.to_string()))?;
-    
-    info!("[Tauri Proxy] Response: {} ({} bytes)", status, body.len());
-    
+    // Decide text vs binary from the response Content-Type BEFORE consuming the
+    // body: textual replies keep the plain-string wire shape (unchanged for
+    // JSON/text); binary (images, octet-stream) is base64 so the raw bytes reach
+    // the webview byte-exact. A missing content-type is treated as text to
+    // preserve prior behavior for plain APIs.
+    let content_type = response_headers
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("content-type"))
+        .map(|(_, v)| v.clone())
+        .unwrap_or_default();
+    let textual = content_type.is_empty() || is_textual_content_type(&content_type);
+    info!(
+        "[Tauri Proxy] Response: {} (content-type: {}, {})",
+        status,
+        if content_type.is_empty() { "<none>" } else { content_type.as_str() },
+        if textual { "text" } else { "binary/base64" },
+    );
+
+    let (body, body_base64) = if textual {
+        // reqwest's text() honors the Content-Type charset (defaulting to UTF-8),
+        // so a non-UTF-8 text response isn't garbled the way from_utf8_lossy would.
+        let text = response.text().await.map_err(|e| {
+            TauriError::with_details(TauriErrorCode::ResponseReadError, format!("Failed to read response from {}", request.url), e.to_string())
+        })?;
+        (text, None)
+    } else {
+        let bytes = response.bytes().await.map_err(|e| {
+            TauriError::with_details(TauriErrorCode::ResponseReadError, format!("Failed to read response from {}", request.url), e.to_string())
+        })?;
+        (String::new(), Some(base64::engine::general_purpose::STANDARD.encode(&bytes)))
+    };
+
     Ok(HttpResponse {
         status,
         headers: response_headers,
         body,
+        body_base64,
     })
 }
 
@@ -3240,7 +3332,8 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{merod_target_triple, score_merod_asset, validate_allowed_url};
+    use super::{is_textual_content_type, merod_target_triple, score_merod_asset, validate_allowed_url};
+    use base64::Engine as _;
 
     #[test]
     fn test_allowed_localhost_urls() {
@@ -3498,5 +3591,51 @@ mod tests {
         assert_ne!(triple, "unknown", "target triple should be known on supported platforms");
         // Must contain OS and arch info
         assert!(triple.contains('-'), "triple should be dash-separated");
+    }
+
+    #[test]
+    fn test_is_textual_content_type() {
+        // Text — carried as a UTF-8 string.
+        for ct in [
+            "application/json",
+            "application/json; charset=utf-8",
+            "text/plain",
+            "text/html; charset=utf-8",
+            "application/xml",
+            "application/javascript",
+            "application/x-www-form-urlencoded",
+            "text/csv",
+            "multipart/form-data; boundary=xyz",
+            "image/svg+xml",              // +xml suffix
+            "application/problem+json",   // +json suffix
+            "text/xml",
+        ] {
+            assert!(is_textual_content_type(ct), "should be textual: {ct}");
+        }
+        // Binary — must go over IPC as base64, not lossy UTF-8.
+        for ct in [
+            "application/octet-stream",
+            "image/png",
+            "image/jpeg",
+            "image/webp",
+            "video/mp4",
+            "application/pdf",
+            // Office Open XML / vendor types are ZIP binaries despite "xml" in the name.
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "application/vnd.ms-excel",
+        ] {
+            assert!(!is_textual_content_type(ct), "should be binary: {ct}");
+        }
+    }
+
+    #[test]
+    fn test_base64_roundtrip_preserves_binary() {
+        // Bytes that are NOT valid UTF-8 (a PNG-ish header) — the exact case
+        // response.text() used to corrupt.
+        let raw: Vec<u8> = vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0xff, 0x00, 0xfe];
+        let encoded = base64::engine::general_purpose::STANDARD.encode(&raw);
+        let decoded = base64::engine::general_purpose::STANDARD.decode(encoded.as_bytes()).unwrap();
+        assert_eq!(raw, decoded, "base64 round-trip must be byte-exact");
     }
 }

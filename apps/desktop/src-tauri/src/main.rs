@@ -1211,26 +1211,40 @@ fn spawn_log_drain<R>(
         // and the viewer's lossy decode handle anything unusual downstream.
         let mut buf_reader = BufReader::new(reader);
         let mut buf: Vec<u8> = Vec::with_capacity(1024);
-        // Log a persistent write failure (disk full, dir deleted, …) once so it's
-        // discoverable, without spamming a warning for every dropped line.
+        // Log a persistent write failure (disk full, dir deleted, …) or a
+        // poisoned writer lock once so it's discoverable, without spamming a
+        // warning for every dropped line.
         let mut write_error_logged = false;
+        let mut poison_logged = false;
         loop {
             buf.clear();
             match buf_reader.read_until(b'\n', &mut buf).await {
                 Ok(0) => break, // EOF: process exited / stream closed
                 Ok(_) => {
-                    if let Ok(mut w) = writer.lock() {
-                        // Keep draining even if a write fails, so a write error can
-                        // never wedge merod by leaving its pipe unread — but surface
-                        // the first failure so silent log loss is diagnosable.
-                        if let Err(e) = w.write_line(&buf) {
-                            if !write_error_logged {
-                                warn!("[Merod] log write failed (further errors suppressed): {}", e);
-                                write_error_logged = true;
+                    // Recover the guard even if the mutex was poisoned (some other
+                    // holder panicked): a std Mutex stays poisoned forever, so
+                    // ignoring the Err would silently stop all logging. into_inner()
+                    // keeps draining; we warn once so it's diagnosable.
+                    let mut w = match writer.lock() {
+                        Ok(g) => g,
+                        Err(poisoned) => {
+                            if !poison_logged {
+                                warn!("[Merod] log writer mutex poisoned; recovering and continuing: {}", poisoned);
+                                poison_logged = true;
                             }
-                        } else {
-                            write_error_logged = false;
+                            poisoned.into_inner()
                         }
+                    };
+                    // Keep draining even if a write fails, so a write error can
+                    // never wedge merod by leaving its pipe unread — but surface
+                    // the first failure so silent log loss is diagnosable.
+                    if let Err(e) = w.write_line(&buf) {
+                        if !write_error_logged {
+                            warn!("[Merod] log write failed (further errors suppressed): {}", e);
+                            write_error_logged = true;
+                        }
+                    } else {
+                        write_error_logged = false;
                     }
                 }
                 Err(e) => {

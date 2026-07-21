@@ -21,10 +21,14 @@ pub const SEGMENT_BYTES: u64 = 10 * 1024 * 1024; // 10 MB
 pub const MAX_SEGMENTS: u32 = 9;
 /// Rotated segments older than this are removed on cleanup.
 pub const RETENTION_DAYS: u64 = 14;
-/// Upper bound on bytes read from any single file when tailing. Protects the read
-/// path against a legacy, pre-rotation `merod.log` that may be far larger than a
-/// segment (it will be brought back under the cap on the next node start).
-const TAIL_READ_CAP_BYTES: u64 = 4 * 1024 * 1024; // 4 MB
+/// Upper bound on bytes read from any single file when tailing. Kept at the
+/// segment size so a properly-rotated segment (≤ SEGMENT_BYTES) is always read in
+/// full — reading less than a whole file would skip its older half and leave a
+/// silent chronological gap before the next (older) segment. A legacy
+/// pre-rotation `merod.log` larger than this is still bounded to its last slice
+/// (and gets brought under the cap on the next node start); since no older
+/// segments exist in that case there is no misleading interleaving.
+const TAIL_READ_CAP_BYTES: u64 = SEGMENT_BYTES; // 10 MB — one full segment
 
 const ACTIVE_NAME: &str = "merod.log";
 

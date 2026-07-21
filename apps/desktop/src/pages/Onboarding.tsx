@@ -210,12 +210,17 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
           setCreatingNode(false);
           setLoadingExistingNodes(false);
         } else {
+          // No nodes exist at this data dir — clear any stale `useExistingNode`
+          // (persisted in localStorage from a prior session) so the create flow
+          // actually runs init instead of trying to start a node that isn't there.
+          setUseExistingNode(null);
           setNodeSetupMode('create-new');
           setLoadingExistingNodes(false);
         }
       } catch (e) {
         console.warn('Could not list existing nodes:', e);
         setExistingNodes([]);
+        setUseExistingNode(null);
         setNodeSetupMode('create-new');
         setLoadingExistingNodes(false);
       }
@@ -823,7 +828,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
                   <button
                     type="button"
                     className="node-setup-choice-card"
-                    onClick={() => setNodeSetupMode('create-new')}
+                    onClick={() => { setUseExistingNode(null); setNodeSetupMode('create-new'); }}
                   >
                     <strong>Create new node</strong>
                     <p>Set up a fresh node with custom configuration</p>

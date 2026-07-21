@@ -1448,6 +1448,20 @@ async fn start_merod(
         }
     };
 
+    // Drop the ref we just took, for the early-return paths before the exit
+    // monitor (which is what normally decrements) is spawned — otherwise a failed
+    // spawn / immediate exit would leak the registration (and its file handle).
+    let unregister_writer = || {
+        if let Ok(mut map) = log_writers.lock() {
+            if let Some(entry) = map.get_mut(&log_key) {
+                entry.refs = entry.refs.saturating_sub(1);
+                if entry.refs == 0 {
+                    map.remove(&log_key);
+                }
+            }
+        }
+    };
+
     // Build command - global options come BEFORE subcommand
     // Merod expects: merod --home ~/.calimero --node node1 run
     let mut cmd = Command::new(&merod_binary);
@@ -1481,8 +1495,13 @@ async fn start_merod(
     info!("[Merod] Running command: {}, logs at {:?}", cmd_str, log_path);
     
     // Start the process
-    let mut child = cmd.spawn()
-        .map_err(|e| TauriError::with_details(TauriErrorCode::MerodStartFailed, "Failed to start merod", e.to_string()))?;
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            unregister_writer();
+            return Err(TauriError::with_details(TauriErrorCode::MerodStartFailed, "Failed to start merod", e.to_string()));
+        }
+    };
     
     let pid = child.id().unwrap();
     info!("[Merod] Started with PID: {}", pid);
@@ -1504,6 +1523,7 @@ async fn start_merod(
         if let Some(code) = status.code() {
             let error_msg = format!("Merod process exited immediately with code: {}. Check merod logs for details.", code);
             warn!("[Merod] {}", error_msg);
+            unregister_writer();
             return Err(TauriError::new(TauriErrorCode::MerodProcessExited, error_msg));
         }
     }

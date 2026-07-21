@@ -60,8 +60,22 @@ impl RollingLogWriter {
     pub fn open_with(dir: &Path, segment_bytes: u64, max_segments: u32) -> io::Result<Self> {
         fs::create_dir_all(dir)?;
         let path = active_path(dir);
-        let file = OpenOptions::new().create(true).append(true).open(&path)?;
-        let len = file.metadata().map(|m| m.len()).unwrap_or(0);
+        let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
+        let mut len = file.metadata().map(|m| m.len()).unwrap_or(0);
+        // A legacy, pre-rotation merod.log may already exceed the cap. Trim it to
+        // its last segment on open so the active file honors segment_bytes right
+        // away — otherwise the first roll would rename the whole oversized file to
+        // merod.log.1, leaving disk use far above the advertised ~100 MB until it
+        // ages out over many rotations.
+        if len > segment_bytes {
+            let _ = file.flush();
+            let kept = tail_bytes_raw(&path, segment_bytes)?;
+            let mut wf = OpenOptions::new().write(true).truncate(true).open(&path)?;
+            wf.write_all(&kept)?;
+            wf.flush()?;
+            file = OpenOptions::new().create(true).append(true).open(&path)?;
+            len = kept.len() as u64;
+        }
         Ok(Self {
             dir: dir.to_path_buf(),
             file: Some(file),
@@ -309,6 +323,24 @@ fn read_tail_bytes(path: &Path, max_bytes: u64) -> io::Result<String> {
     Ok(text)
 }
 
+/// Read at most `max_bytes` of raw bytes from the end of `path`, dropping a
+/// leading partial line when we started mid-file. Byte-exact (no lossy decode) —
+/// used to trim an oversized active file in place on open.
+fn tail_bytes_raw(path: &Path, max_bytes: u64) -> io::Result<Vec<u8>> {
+    let mut f = File::open(path)?;
+    let len = f.metadata()?.len();
+    let start = len.saturating_sub(max_bytes);
+    f.seek(SeekFrom::Start(start))?;
+    let mut buf = Vec::with_capacity((len - start) as usize);
+    f.read_to_end(&mut buf)?;
+    if start > 0 {
+        if let Some(nl) = buf.iter().position(|&b| b == b'\n') {
+            buf.drain(..=nl);
+        }
+    }
+    Ok(buf)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -434,6 +466,23 @@ mod tests {
             }
         }
         assert_eq!(total, 25, "no bytes may be lost across the split");
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn oversized_legacy_active_file_is_trimmed_on_open() {
+        let dir = tmp();
+        // A pre-rotation merod.log larger than a segment.
+        {
+            let mut f = File::create(active_path(&dir)).unwrap();
+            f.write_all(&vec![b'x'; 250]).unwrap();
+            f.write_all(b"\nKEEP\n").unwrap();
+        }
+        let _w = RollingLogWriter::open_with(&dir, 100, 5).unwrap();
+        let active_len = active_path(&dir).metadata().unwrap().len();
+        assert!(active_len <= 100, "legacy active file should be trimmed to <= segment, got {active_len}");
+        // The most recent content survives, older overflow is dropped.
+        assert_eq!(read_tail(&dir, 10).unwrap(), "KEEP");
         fs::remove_dir_all(&dir).ok();
     }
 

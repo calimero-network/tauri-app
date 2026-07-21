@@ -11,12 +11,19 @@ export interface LoginViewProps {
   variant?: 'light' | 'dark';
 }
 
+const isUserPasswordProvider = (p: Provider) =>
+  p.name === 'user_password' || p.name === 'username_password';
+
 export function LoginView({ onSuccess, onError, variant = 'light' }: LoginViewProps) {
   const [providers, setProviders] = useState<Provider[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [showProviders, setShowProviders] = useState(true);
-  const [showUsernamePasswordForm, setShowUsernamePasswordForm] = useState(false);
+  // Username/password is the primary method, so the form is the default view —
+  // the credential fields sit at the top of the popup instead of being buried
+  // behind a provider-selection step. We only fall back to the provider list
+  // when the node has no username/password provider (or offers extra ones).
+  const [showProviders, setShowProviders] = useState(false);
+  const [showUsernamePasswordForm, setShowUsernamePasswordForm] = useState(true);
   const [usernamePasswordLoading, setUsernamePasswordLoading] = useState(false);
 
   const loadProviders = useCallback(async () => {
@@ -29,7 +36,13 @@ export function LoginView({ onSuccess, onError, variant = 'light' }: LoginViewPr
         return;
       }
       if (response.data) {
-        setProviders(response.data.providers);
+        const loaded = response.data.providers;
+        setProviders(loaded);
+        // Show the credential form directly when the node supports it; otherwise
+        // fall through to the provider list (which also renders the empty state).
+        const hasUserPassword = loaded.some(isUserPasswordProvider);
+        setShowUsernamePasswordForm(hasUserPassword);
+        setShowProviders(!hasUserPassword);
       }
     } catch (err) {
       console.error('Failed to load providers:', err);
@@ -119,10 +132,15 @@ export function LoginView({ onSuccess, onError, variant = 'light' }: LoginViewPr
   }
 
   if (showUsernamePasswordForm) {
+    // Only offer "Back" when there is somewhere to go — i.e. the node exposes
+    // other providers besides username/password. With a single provider the
+    // form is the whole login, so a back button would just bounce to a
+    // one-item list.
+    const hasOtherProviders = providers.some((p) => !isUserPasswordProvider(p));
     return (
       <UsernamePasswordForm
         onSubmit={handleUsernamePasswordAuth}
-        onBack={handleBack}
+        onBack={hasOtherProviders ? handleBack : undefined}
         loading={usernamePasswordLoading}
         error={error}
         containerClassName="login-form-container"

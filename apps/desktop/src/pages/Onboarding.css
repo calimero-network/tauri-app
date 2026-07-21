@@ -53,15 +53,17 @@
 /* Progress Indicator */
 .onboarding-progress {
   width: 100%;
-  max-width: 700px;
-  margin: 0 auto 32px;
+  max-width: 640px;
+  margin: 0 auto 24px;
   padding: 0;
   flex-shrink: 0;
   position: relative;
   background: transparent;
   z-index: 10;
   order: -1;
-  animation: fadeUp 0.5s ease-out;
+  /* Fade only (no translate): this element is stable across steps and keystrokes,
+     so a vertical entrance would read as the progress bar "jumping". */
+  animation: fadeIn 0.4s ease-out;
 }
 
 .progress-steps {
@@ -70,6 +72,7 @@
   align-items: center;
   position: relative;
   padding: 0 20px;
+  min-height: 16px;
 }
 
 .progress-steps::before {
@@ -136,9 +139,9 @@
   background: var(--gradient-surface), var(--surface-glass);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-xl);
-  padding: 40px 48px;
+  padding: 32px 40px;
   width: 100%;
-  max-width: 700px;
+  max-width: 640px;
   box-shadow: var(--shadow-lg);
   display: flex;
   flex-direction: column;
@@ -153,7 +156,14 @@
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
   z-index: 1;
-  animation: fadeUp 0.5s ease-out 0.1s both;
+  /* Keyed by currentStep in the TSX, so this replays as a clean per-step
+     entrance — subtle rise + fade, not a big vertical jump. */
+  animation: stepIn 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+@keyframes stepIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 /* Back Button */
@@ -190,7 +200,7 @@
   align-items: center;
   justify-content: flex-start;
   text-align: center;
-  padding: 32px;
+  padding: 20px 24px;
   min-height: 0;
   width: 100%;
   overflow: visible;
@@ -216,7 +226,6 @@
   margin-bottom: 24px;
   color: var(--accent-primary);
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  animation: iconFloat 3s ease-in-out infinite;
   padding: 20px;
   box-sizing: border-box;
 }
@@ -230,11 +239,11 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  margin-bottom: 24px;
+  margin-bottom: 20px;
 }
 
 .step-logo-wrapper .calimero-logo {
-  width: 200px;
+  width: 160px;
   height: auto;
   max-width: 100%;
   object-fit: contain;
@@ -270,20 +279,20 @@
 }
 
 .step-title {
-  margin: 0 0 16px 0;
-  font-size: 32px;
+  margin: 0 0 10px 0;
+  font-size: 24px;
   font-weight: 700;
   color: var(--text-primary);
-  line-height: 1.2;
-  letter-spacing: -0.5px;
+  line-height: 1.25;
+  letter-spacing: -0.4px;
 }
 
 .step-description {
-  margin: 0;
-  font-size: 17px;
-  line-height: 1.6;
+  margin: 0 auto;
+  font-size: 14px;
+  line-height: 1.55;
   color: var(--text-secondary);
-  max-width: 600px;
+  max-width: 460px;
   font-weight: 400;
   width: 100%;
 }
@@ -327,26 +336,27 @@
 .step-principles {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  margin-top: 24px;
+  gap: 8px;
+  margin-top: 20px;
   width: 100%;
-  max-width: 550px;
+  max-width: 420px;
   margin-left: auto;
   margin-right: auto;
 }
 
 .principle-item {
   display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  padding: 12px 16px;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
   background: var(--surface-glass-soft);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
   color: var(--text-primary);
-  font-size: 15px;
-  line-height: 1.5;
-  transition: all 0.2s;
+  font-size: 13px;
+  line-height: 1.45;
+  text-align: left;
+  transition: border-color 0.2s, transform 0.2s;
 }
 
 .principle-item:hover {
@@ -357,7 +367,8 @@
 .principle-item svg {
   color: var(--accent-primary);
   flex-shrink: 0;
-  margin-top: 2px;
+  width: 16px;
+  height: 16px;
 }
 
 .principle-item strong {
@@ -395,45 +406,25 @@
 
 @media (min-width: 1200px) {
   .onboarding-step-container {
-    max-width: 900px;
-    padding: 56px 64px;
+    max-width: 680px;
+    padding: 40px 48px;
   }
 
   .step-description {
-    max-width: 700px;
-    font-size: 18px;
+    max-width: 480px;
+    font-size: 15px;
   }
 
   .step-principles {
-    max-width: 700px;
+    max-width: 520px;
   }
 
   .step-title {
-    font-size: 40px;
+    font-size: 28px;
   }
 
   .step-features {
-    max-width: 500px;
-  }
-}
-
-@media (min-width: 1600px) {
-  .onboarding-step-container {
-    max-width: 1000px;
-    padding: 64px 72px;
-  }
-
-  .step-description {
-    max-width: 800px;
-    font-size: 19px;
-  }
-
-  .step-principles {
-    max-width: 800px;
-  }
-
-  .step-title {
-    font-size: 42px;
+    max-width: 460px;
   }
 }
 
@@ -471,9 +462,9 @@
 /* Step Form */
 .step-form {
   width: 100%;
-  max-width: 500px;
-  margin-top: 32px;
-  margin-bottom: 20px;
+  max-width: 420px;
+  margin-top: 24px;
+  margin-bottom: 16px;
   overflow-x: hidden;
   overflow-y: visible;
   position: relative;
@@ -481,14 +472,15 @@
   display: flex;
   flex-direction: column;
   gap: 0;
+  text-align: left;
 }
 
 .step-form .form-group {
-  margin-bottom: 20px;
+  margin-bottom: 16px;
 }
 
 .step-form > .form-group:first-of-type {
-  margin-bottom: 16px;
+  margin-bottom: 14px;
 }
 
 .step-form .form-group:last-child {
@@ -497,23 +489,23 @@
 
 .step-form label {
   display: block;
-  margin-bottom: 10px;
+  margin-bottom: 7px;
   font-weight: 600;
   color: var(--text-primary);
-  font-size: 14px;
+  font-size: 13px;
 }
 
 .step-form input,
 .step-form textarea,
 .step-form select {
   width: 100%;
-  padding: 14px 16px;
+  padding: 11px 14px;
   border: 1px solid var(--border-color);
   border-radius: var(--radius-lg);
-  font-size: 15px;
+  font-size: 14px;
   background: var(--surface-glass-soft);
   color: var(--text-primary);
-  transition: all 0.2s;
+  transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
   box-sizing: border-box;
 }
 
@@ -575,8 +567,9 @@
 }
 
 .step-form .field-hint {
-  margin-top: 8px;
-  font-size: 12px;
+  margin-top: 6px;
+  font-size: 11.5px;
+  line-height: 1.4;
   color: var(--text-tertiary);
 }
 
@@ -591,8 +584,8 @@
 .step-actions {
   display: flex;
   justify-content: center;
-  gap: 12px;
-  margin-top: 32px;
+  gap: 10px;
+  margin-top: 24px;
   padding-top: 0;
   padding-bottom: 0;
   flex-shrink: 0;
@@ -601,23 +594,23 @@
 }
 
 .step-content .step-actions {
-  margin-top: 32px;
+  margin-top: 24px;
   margin-bottom: 0;
 }
 
 .step-button {
-  padding: 16px 32px;
+  padding: 12px 26px;
   border: 1px solid transparent;
   border-radius: var(--radius-lg);
-  font-size: 16px;
+  font-size: 14px;
   font-weight: 600;
   cursor: pointer;
-  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: transform 0.15s cubic-bezier(0.4, 0, 0.2, 1), background 0.15s, border-color 0.15s, box-shadow 0.15s;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
-  min-width: 180px;
+  min-width: 160px;
   letter-spacing: 0.2px;
 }
 
@@ -664,22 +657,22 @@
 .node-setup-choice-cards {
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  margin-top: 24px;
+  gap: 12px;
+  margin-top: 20px;
   width: 100%;
-  max-width: 480px;
+  max-width: 420px;
 }
 
 .node-setup-choice-card {
   display: block;
   width: 100%;
-  padding: 24px;
+  padding: 16px 18px;
   text-align: left;
   background: var(--surface-glass-soft);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-lg);
   cursor: pointer;
-  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1), border-color 0.2s, background 0.2s, box-shadow 0.2s;
   color: var(--text-primary);
 }
 
@@ -692,13 +685,14 @@
 
 .node-setup-choice-card strong {
   display: block;
-  font-size: 16px;
-  margin-bottom: 8px;
+  font-size: 14px;
+  margin-bottom: 5px;
 }
 
 .node-setup-choice-card p {
   margin: 0;
-  font-size: 14px;
+  font-size: 12.5px;
+  line-height: 1.45;
   color: var(--text-secondary);
 }
 
@@ -1405,22 +1399,18 @@
   padding-top: 16px;
   padding-bottom: 8px;
   border-top: 1px solid var(--border-color);
-  animation: slideDown 0.2s ease-out;
+  /* Fade in place — no vertical slide, so revealing the section doesn't shove
+     the surrounding fields around. */
+  animation: onbFade 0.2s ease-out;
   position: relative;
   z-index: 0;
   overflow: visible;
   width: 100%;
 }
 
-@keyframes slideDown {
-  from {
-    opacity: 0;
-    transform: translateY(-8px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+@keyframes onbFade {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 .success-message,

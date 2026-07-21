@@ -83,8 +83,10 @@ describeAfter35("onboarding flow", () => {
       page.getByText("Create your first Calimero node"),
     ).toBeVisible({ timeout: 15_000 });
     await expect(page.getByLabel("Data Directory")).toBeVisible();
+    // Credentials moved to the auth step; node-setup is config-only and its
+    // primary action is now "Continue".
     await expect(
-      page.getByRole("button", { name: /Create Node & Continue/i }),
+      page.getByRole("button", { name: "Continue", exact: true }),
     ).toBeVisible();
   });
 

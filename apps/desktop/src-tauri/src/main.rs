@@ -1363,7 +1363,10 @@ fn get_merod_binary_path(app_handle: &tauri::AppHandle) -> Result<std::path::Pat
     };
 
     for candidate in &resource_candidates {
-        if let Some(resource_path) = app_handle.path_resolver().resolve_resource(candidate) {
+        if let Ok(resource_path) = app_handle
+            .path()
+            .resolve(candidate, tauri::path::BaseDirectory::Resource)
+        {
             if resource_path.exists() {
                 return Ok(resource_path);
             }
@@ -1379,9 +1382,9 @@ fn get_merod_binary_path(app_handle: &tauri::AppHandle) -> Result<std::path::Pat
 /// Get the app data directory for storing merod data
 fn get_app_data_dir(app_handle: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
     let app_data_dir = app_handle
-        .path_resolver()
+        .path()
         .app_data_dir()
-        .ok_or("Failed to get app data directory")?;
+        .map_err(|e| format!("Failed to get app data directory: {e}"))?;
 
     std::fs::create_dir_all(&app_data_dir)
         .map_err(|e| format!("Failed to create app data directory: {}", e))?;

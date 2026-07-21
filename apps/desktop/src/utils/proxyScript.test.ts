@@ -45,7 +45,7 @@ function makeMockWindow(pageProtocol = "https:") {
     dispatchEvent() {},
     addEventListener() {},
   };
-  return {
+  const win: any = {
     __TAURI_FETCH_PROXY_INJECTED__: undefined as boolean | undefined,
     // The proxy only runs on HTTPS-hosted pages (mixed-content bypass);
     // default the mock to an HTTPS page so proxy-path tests exercise it.
@@ -53,7 +53,22 @@ function makeMockWindow(pageProtocol = "https:") {
     // Stored by the script as `originalFetch` — returned for non-proxied URLs.
     fetch: vi.fn().mockResolvedValue(new Response("original", { status: 200 })),
     XMLHttpRequest: FakeXHR,
-  } as any;
+  };
+  // Tauri v2 exposes IPC via window.__TAURI_INTERNALS__ (getTauriInvoke reads
+  // .invoke there). Tests still assign the invoke stub to win.__TAURI_INVOKE__
+  // for readability/assertions, so delegate to it dynamically. transformCallback
+  // backs the low-level event-listen fallback.
+  win.__TAURI_INTERNALS__ = {
+    transformCallback: (cb: any) => cb,
+    // Only expose invoke when a test has wired up __TAURI_INVOKE__; otherwise
+    // getTauriInvoke() must see no IPC (so "fails closed" tests still fail closed).
+    get invoke() {
+      return win.__TAURI_INVOKE__
+        ? (...args: any[]) => win.__TAURI_INVOKE__(...args)
+        : undefined;
+    },
+  };
+  return win as any;
 }
 
 describe("proxy_script SSE routing", () => {

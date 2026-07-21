@@ -3,17 +3,18 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // vi.mock is hoisted — use vi.hoisted() so the mock vars are available when
 // the factory runs.
 const {
-  mockTauriInstallUpdate,
+  mockDownloadAndInstall,
   mockRelaunch,
-  mockCheckUpdate,
+  mockCheck,
   mockGetVersion,
   mockStopMerod,
   mockKillAll,
   mockDownloadAndReplace,
 } = vi.hoisted(() => ({
-  mockTauriInstallUpdate: vi.fn().mockResolvedValue(undefined),
+  mockDownloadAndInstall: vi.fn().mockResolvedValue(undefined),
   mockRelaunch: vi.fn().mockResolvedValue(undefined),
-  mockCheckUpdate: vi.fn().mockResolvedValue({ shouldUpdate: false, manifest: null }),
+  // Tauri v2 plugin-updater: check() resolves to an Update handle or null.
+  mockCheck: vi.fn(),
   mockGetVersion: vi.fn().mockResolvedValue('0.0.39'),
   mockStopMerod: vi.fn().mockResolvedValue('stopped'),
   mockKillAll: vi.fn().mockResolvedValue('killed'),
@@ -25,11 +26,18 @@ const {
   }),
 }));
 
-vi.mock('@tauri-apps/api/updater', () => ({
-  installUpdate: mockTauriInstallUpdate,
-  checkUpdate: mockCheckUpdate,
-}));
-vi.mock('@tauri-apps/api/process', () => ({ relaunch: mockRelaunch }));
+// A fake v2 Update handle. downloadAndInstall is delegated to the shared mock
+// so tests can assert on / reorder it.
+const makeUpdate = (over: Record<string, unknown> = {}) => ({
+  version: '0.0.40',
+  date: '2026-05-22',
+  body: 'bug fixes',
+  downloadAndInstall: mockDownloadAndInstall,
+  ...over,
+});
+
+vi.mock('@tauri-apps/plugin-updater', () => ({ check: mockCheck }));
+vi.mock('@tauri-apps/plugin-process', () => ({ relaunch: mockRelaunch }));
 vi.mock('@tauri-apps/api/app', () => ({ getVersion: mockGetVersion }));
 vi.mock('./merod', () => ({
   stopMerod: mockStopMerod,
@@ -38,16 +46,18 @@ vi.mock('./merod', () => ({
 }));
 
 // Fake Tauri environment — vitest runs in node where `window` doesn't exist,
-// so we define it on globalThis so that isTauri() returns true.
-(globalThis as any).window = { __TAURI__: {} };
+// so we define it on globalThis so that isTauri() returns true. Tauri v2
+// injects __TAURI_INTERNALS__ regardless of withGlobalTauri.
+(globalThis as any).window = { __TAURI_INTERNALS__: {} };
 
 import { installUpdate, checkForUpdates, getCurrentVersion } from './updater';
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockTauriInstallUpdate.mockResolvedValue(undefined);
+  mockDownloadAndInstall.mockResolvedValue(undefined);
   mockRelaunch.mockResolvedValue(undefined);
-  mockCheckUpdate.mockResolvedValue({ shouldUpdate: false, manifest: null });
+  // Default: an update is available (installUpdate tests rely on this).
+  mockCheck.mockResolvedValue(makeUpdate());
   mockGetVersion.mockResolvedValue('0.0.39');
   mockStopMerod.mockResolvedValue('stopped');
   mockKillAll.mockResolvedValue('killed');
@@ -68,12 +78,12 @@ describe('installUpdate', () => {
       callOrder.push('downloadAndReplace');
       return { replaced: true, expected_version: '0.10.1-rc.43', current_version: 'merod 0.10.1-rc.43', message: '' };
     });
-    mockTauriInstallUpdate.mockImplementation(async () => { callOrder.push('tauriInstallUpdate'); });
+    mockDownloadAndInstall.mockImplementation(async () => { callOrder.push('downloadAndInstall'); });
     mockRelaunch.mockImplementation(async () => { callOrder.push('relaunch'); });
 
     await installUpdate();
 
-    expect(callOrder).toEqual(['stopMerod', 'killAll', 'downloadAndReplace', 'tauriInstallUpdate', 'relaunch']);
+    expect(callOrder).toEqual(['stopMerod', 'killAll', 'downloadAndReplace', 'downloadAndInstall', 'relaunch']);
   });
 
   it('calls onStatus with each step label', async () => {
@@ -105,7 +115,7 @@ describe('installUpdate', () => {
       new Error("Version mismatch after replace: expected '0.10.1-rc.43', binary reports 'merod 0.10.1-rc.42'"),
     );
     await expect(installUpdate()).rejects.toThrow('Version mismatch');
-    expect(mockTauriInstallUpdate).not.toHaveBeenCalled();
+    expect(mockDownloadAndInstall).not.toHaveBeenCalled();
     expect(mockRelaunch).not.toHaveBeenCalled();
   });
 
@@ -116,7 +126,7 @@ describe('installUpdate', () => {
       code: 'InternalError',
     });
     await expect(installUpdate()).rejects.toMatchObject({ message: expect.stringContaining('Version mismatch') });
-    expect(mockTauriInstallUpdate).not.toHaveBeenCalled();
+    expect(mockDownloadAndInstall).not.toHaveBeenCalled();
     expect(mockRelaunch).not.toHaveBeenCalled();
   });
 
@@ -132,8 +142,8 @@ describe('installUpdate', () => {
     expect(mockRelaunch).toHaveBeenCalledOnce();
   });
 
-  it('throws and does NOT relaunch when tauriInstallUpdate fails', async () => {
-    mockTauriInstallUpdate.mockRejectedValue(new Error('no update package'));
+  it('throws and does NOT relaunch when downloadAndInstall fails', async () => {
+    mockDownloadAndInstall.mockRejectedValue(new Error('no update package'));
     await expect(installUpdate()).rejects.toThrow('no update package');
     expect(mockRelaunch).not.toHaveBeenCalled();
   });
@@ -152,16 +162,14 @@ describe('installUpdate', () => {
 });
 
 describe('checkForUpdates', () => {
-  it('returns available=false when shouldUpdate is false', async () => {
+  it('returns available=false when check() resolves to null', async () => {
+    mockCheck.mockResolvedValue(null);
     const result = await checkForUpdates();
     expect(result.available).toBe(false);
   });
 
-  it('returns available=true with manifest when update exists', async () => {
-    mockCheckUpdate.mockResolvedValue({
-      shouldUpdate: true,
-      manifest: { version: '0.0.40', date: '2026-05-22', body: 'bug fixes' },
-    });
+  it('returns available=true with info when an update exists', async () => {
+    mockCheck.mockResolvedValue(makeUpdate({ version: '0.0.40', date: '2026-05-22', body: 'bug fixes' }));
     const result = await checkForUpdates();
     expect(result.available).toBe(true);
     expect(result.info?.version).toBe('0.0.40');

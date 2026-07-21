@@ -66,13 +66,42 @@ impl RollingLogWriter {
     }
 
     /// Append one already-newline-terminated log line, rotating first if it would
-    /// push the active file over the segment size.
+    /// push the active file over the segment size. A write larger than a whole
+    /// segment (e.g. a newline-less blob) is split across segments so none
+    /// exceeds the cap.
     pub fn write_line(&mut self, bytes: &[u8]) -> io::Result<()> {
-        if self.len > 0 && self.len + bytes.len() as u64 > self.segment_bytes {
-            self.roll()?;
+        // Reconcile the cached length with the file's real size before any
+        // rotation decision: `clear_logs` (the "Clear" button) may have
+        // truncated the active file (set_len(0)) out from under us, which would
+        // otherwise leave `self.len` stale-high and trigger a spurious early
+        // roll. Only stat when we're at/over the limit, so the common path stays
+        // syscall-free.
+        if self.len + bytes.len() as u64 > self.segment_bytes {
+            if let Ok(meta) = self.file.metadata() {
+                self.len = meta.len();
+            }
         }
-        self.file.write_all(bytes)?;
-        self.len += bytes.len() as u64;
+
+        let mut rest = bytes;
+        while !rest.is_empty() {
+            // Roll a non-empty segment before it would spill past the cap.
+            // (Never roll an empty active file — that just makes empty segments.)
+            if self.len > 0 && self.len + rest.len() as u64 > self.segment_bytes {
+                self.roll()?;
+            }
+            let room = self.segment_bytes.saturating_sub(self.len);
+            // If a single write is bigger than a whole segment, take one
+            // segment's worth and loop (the next iteration rolls); otherwise
+            // write it all.
+            let take = if room > 0 && rest.len() as u64 > room {
+                room as usize
+            } else {
+                rest.len()
+            };
+            self.file.write_all(&rest[..take])?;
+            self.len += take as u64;
+            rest = &rest[take..];
+        }
         Ok(())
     }
 
@@ -337,5 +366,45 @@ mod tests {
         let dir = tmp();
         fs::remove_dir_all(&dir).ok();
         assert_eq!(read_tail(&dir, 10).unwrap(), "");
+    }
+
+    #[test]
+    fn single_write_larger_than_segment_is_split_and_capped() {
+        let dir = tmp();
+        let mut w = RollingLogWriter::open_with(&dir, 10, 5).unwrap();
+        // One 25-byte write, no newline, into 10-byte segments → must span
+        // multiple files, none exceeding the cap, with no bytes lost.
+        w.write_line(b"0123456789ABCDEFGHIJKLMNO").unwrap();
+        assert!(active_path(&dir).metadata().unwrap().len() <= 10);
+        let mut total = active_path(&dir).metadata().unwrap().len();
+        let mut k = 1;
+        loop {
+            let p = seg_path(&dir, k);
+            if p.exists() {
+                let l = p.metadata().unwrap().len();
+                assert!(l <= 10, "segment {k} exceeds cap: {l}");
+                total += l;
+                k += 1;
+            } else {
+                break;
+            }
+        }
+        assert_eq!(total, 25, "no bytes may be lost across the split");
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn write_after_external_clear_does_not_spuriously_roll() {
+        let dir = tmp();
+        let mut w = RollingLogWriter::open_with(&dir, 50, 5).unwrap();
+        w.write_line(&vec![b'a'; 45]).unwrap(); // near the limit
+        // The "Clear" button truncates the active file out from under the writer.
+        clear_logs(&dir).unwrap();
+        // A normal write must NOT roll — the file is actually empty now, so the
+        // stale cached len (45) must be reconciled first.
+        w.write_line(b"hello\n").unwrap();
+        assert!(!seg_path(&dir, 1).exists(), "must not roll after an external clear");
+        assert_eq!(read_tail(&dir, 10).unwrap(), "hello");
+        fs::remove_dir_all(&dir).ok();
     }
 }

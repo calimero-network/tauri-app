@@ -87,7 +87,8 @@ jobs:
             libgtk-3-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev \
-            patchelf
+            patchelf \
+            xdg-utils
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -190,8 +191,8 @@ jobs:
         env:
           # beforeBuildCommand runs merod:prepare again; reuse binary from "Prepare merod binary" (no GITHUB_TOKEN here).
           MEROD_SKIP_IF_EXISTS: "1"
-          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
-          TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
           # Baked into the binary via option_env! so installed apps reach the TURN relay
           CALIMERO_ICE_ENDPOINT: ${{ vars.CALIMERO_ICE_ENDPOINT }}
           CALIMERO_ICE_ENDPOINT_KEY: ${{ secrets.CALIMERO_ICE_ENDPOINT_KEY }}

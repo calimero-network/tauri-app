@@ -249,8 +249,70 @@
         });
     }
 
+    // ─── Binary-safe body helpers ───────────────────────────────────────────
+    // The Tauri proxy carries request/response bodies across IPC. Binary
+    // payloads (image uploads, blob downloads) must travel as base64 or a UTF-8
+    // round-trip corrupts them (String(arrayBuffer) → "[object ArrayBuffer]",
+    // response.text() → mojibake). Text bodies stay plain strings.
+    function bytesToBase64(bytes) {
+        let binary = '';
+        const CHUNK = 0x8000; // avoid arg-count limits in String.fromCharCode
+        for (let i = 0; i < bytes.length; i += CHUNK) {
+            binary += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+        }
+        return btoa(binary);
+    }
+
+    function base64ToBytes(b64) {
+        const binary = atob(b64 || '');
+        const len = binary.length;
+        const out = new Uint8Array(len);
+        for (let i = 0; i < len; i++) out[i] = binary.charCodeAt(i);
+        return out;
+    }
+
+    // A fetch/XHR body is "binary" when it isn't naturally a string. FormData is
+    // deliberately treated as text (its multipart boundary lives in a header we
+    // don't reconstruct here) — same as the previous behavior, not a regression.
+    function isBinaryBody(body) {
+        if (body == null || typeof body === 'string') return false;
+        if (typeof URLSearchParams !== 'undefined' && body instanceof URLSearchParams) return false;
+        if (typeof FormData !== 'undefined' && body instanceof FormData) return false;
+        return true;
+    }
+
+    // Resolve any fetch/XHR body into { body, bodyBase64 } for proxyRequest:
+    // exactly one is non-null (or both null for an empty body).
+    async function encodeBody(body) {
+        if (body == null) return { body: null, bodyBase64: null };
+        if (!isBinaryBody(body)) {
+            if (typeof body === 'string') return { body: body, bodyBase64: null };
+            // URLSearchParams / FormData → serialize to text (unchanged behavior)
+            return { body: await new Response(body).text(), bodyBase64: null };
+        }
+        let bytes;
+        if (body instanceof ArrayBuffer) {
+            bytes = new Uint8Array(body);
+        } else if (ArrayBuffer.isView(body)) {
+            bytes = new Uint8Array(body.buffer, body.byteOffset, body.byteLength);
+        } else {
+            // Blob / File
+            bytes = new Uint8Array(await new Response(body).arrayBuffer());
+        }
+        return { body: null, bodyBase64: bytesToBase64(bytes) };
+    }
+
+    // A proxy reply's body → a BodyInit for `new Response(...)`: raw bytes when
+    // the backend flagged it binary (body_base64), else the plain string body.
+    function decodeResponseBody(response) {
+        if (response && typeof response.body_base64 === 'string') {
+            return base64ToBytes(response.body_base64);
+        }
+        return (response && response.body) || '';
+    }
+
     // Helper function to proxy regular HTTP requests through Tauri
-    async function proxyRequest(url, method, headers, body) {
+    async function proxyRequest(url, method, headers, body, bodyBase64) {
         // /auth/refresh is answered by the desktop, never forwarded to the node.
         // Both the fetch and XHR interceptors funnel through here, so this single
         // check covers both.
@@ -270,7 +332,8 @@
                 url: url,
                 method: method || 'GET',
                 headers: headers && Object.keys(headers).length > 0 ? headers : null,
-                body: body
+                body: body != null ? body : null,
+                body_base64: bodyBase64 != null ? bodyBase64 : null
             },
             configured_node_url: nodeUrl
         });
@@ -349,22 +412,17 @@
                     }
                 }
 
-                let bodyStr = null;
-                if (init && init.body) {
-                    if (typeof init.body === 'string') {
-                        bodyStr = init.body;
-                    } else if (init.body instanceof FormData || init.body instanceof Blob) {
-                        bodyStr = await new Response(init.body).text();
-                    } else {
-                        bodyStr = await new Response(init.body).text();
-                    }
-                }
+                // Encode the body binary-safely: strings pass through, binary
+                // (Blob/ArrayBuffer/typed array) becomes base64 so image uploads
+                // survive the IPC hop intact.
+                const { body: reqBody, bodyBase64: reqBodyBase64 } =
+                    init && init.body ? await encodeBody(init.body) : { body: null, bodyBase64: null };
 
                 console.log('[Tauri Proxy] Intercepting fetch:', urlStr, 'method:', init?.method || 'GET');
                 console.log('[Tauri Proxy] Headers being sent:', JSON.stringify(headers, null, 2));
                 console.log('[Tauri Proxy] Has Authorization header?', 'Authorization' in headers || 'authorization' in headers);
 
-                const requestPromise = proxyRequest(urlStr, effectiveMethod, headers, bodyStr);
+                const requestPromise = proxyRequest(urlStr, effectiveMethod, headers, reqBody, reqBodyBase64);
 
                 let response;
                 if (effectiveSignal) {
@@ -384,7 +442,9 @@
 
                 console.log('[Tauri Proxy] Proxy response:', response.status, urlStr);
 
-                return new Response(response.body, {
+                // decodeResponseBody yields raw bytes for binary replies (images,
+                // blobs) so response.blob()/arrayBuffer() are byte-exact.
+                return new Response(decodeResponseBody(response), {
                     status: response.status,
                     statusText: response.status === 200 ? 'OK' : (response.statusText || 'Error'),
                     headers: new Headers(response.headers)
@@ -437,14 +497,42 @@
             if (shouldProxy) {
                 console.log('[Tauri Proxy] XHR intercepted:', xhrMethod, xhrUrl);
 
-                proxyRequest(xhrUrl, xhrMethod, xhrHeaders, body ? String(body) : null)
+                // Encode the request body binary-safely (this is the image-upload
+                // path: axios PUTs an ArrayBuffer, which String(body) used to turn
+                // into the literal "[object ArrayBuffer]").
+                encodeBody(body)
+                    .then(function(enc) {
+                        return proxyRequest(xhrUrl, xhrMethod, xhrHeaders, enc.body, enc.bodyBase64);
+                    })
                     .then(function(response) {
                         console.log('[Tauri Proxy] XHR proxy response:', response.status, xhrUrl);
-                        Object.defineProperty(xhr, 'status', { value: response.status, writable: false });
-                        Object.defineProperty(xhr, 'statusText', { value: response.status === 200 ? 'OK' : 'Error', writable: false });
-                        Object.defineProperty(xhr, 'responseText', { value: response.body || '', writable: false });
-                        Object.defineProperty(xhr, 'response', { value: response.body || '', writable: false });
-                        Object.defineProperty(xhr, 'readyState', { value: 4, writable: false });
+
+                        // Decode the reply for whichever mode the caller reads.
+                        const hasBinary = response && typeof response.body_base64 === 'string';
+                        const bytes = hasBinary ? base64ToBytes(response.body_base64) : null;
+                        const text = hasBinary ? new TextDecoder().decode(bytes) : (response.body || '');
+                        const rt = (xhr.responseType || '').toLowerCase();
+                        // Content-Type for the Blob's `type` (native XHR sets it from this header).
+                        const contentType = response.headers
+                            ? (response.headers['content-type'] || response.headers['Content-Type'] || '')
+                            : '';
+                        let responseValue;
+                        if (rt === 'arraybuffer') {
+                            responseValue = bytes ? bytes.buffer : new TextEncoder().encode(text).buffer;
+                        } else if (rt === 'blob') {
+                            const blobOpts = contentType ? { type: contentType } : undefined;
+                            responseValue = bytes ? new Blob([bytes], blobOpts) : new Blob([text], blobOpts);
+                        } else if (rt === 'json') {
+                            try { responseValue = JSON.parse(text); } catch (_) { responseValue = null; }
+                        } else {
+                            responseValue = text;
+                        }
+
+                        Object.defineProperty(xhr, 'status', { value: response.status, writable: false, configurable: true });
+                        Object.defineProperty(xhr, 'statusText', { value: response.status === 200 ? 'OK' : 'Error', writable: false, configurable: true });
+                        Object.defineProperty(xhr, 'responseText', { value: text, writable: false, configurable: true });
+                        Object.defineProperty(xhr, 'response', { value: responseValue, writable: false, configurable: true });
+                        Object.defineProperty(xhr, 'readyState', { value: 4, writable: false, configurable: true });
 
                         let headerStr = '';
                         if (response.headers) {

@@ -506,6 +506,7 @@ dependencies = [
 name = "calimero-tauri-app"
 version = "0.1.0"
 dependencies = [
+ "base64 0.21.7",
  "dirs 5.0.1",
  "env_logger",
  "futures-util",

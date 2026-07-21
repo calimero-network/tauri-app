@@ -6,7 +6,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 const listen = vi.fn();
 const invoke = vi.fn();
 vi.mock('@tauri-apps/api/event', () => ({ listen: (...a: unknown[]) => listen(...a) }));
-vi.mock('@tauri-apps/api/tauri', () => ({ invoke: (...a: unknown[]) => invoke(...a) }));
+vi.mock('@tauri-apps/api/core', () => ({ invoke: (...a: unknown[]) => invoke(...a) }));
 
 vi.mock('../utils/settings', () => ({
   getSettings: () => ({ nodeUrl: 'http://localhost:2528' }),

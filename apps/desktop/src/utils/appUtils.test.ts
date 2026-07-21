@@ -1,10 +1,10 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 const invoke = vi.fn();
-vi.mock('@tauri-apps/api/tauri', () => ({ invoke: (...a: unknown[]) => invoke(...a) }));
+vi.mock('@tauri-apps/api/core', () => ({ invoke: (...a: unknown[]) => invoke(...a) }));
 
 const getByLabel = vi.fn();
-vi.mock('@tauri-apps/api/window', () => ({
+vi.mock('@tauri-apps/api/webviewWindow', () => ({
   WebviewWindow: { getByLabel: (...a: unknown[]) => getByLabel(...a) },
 }));
 
@@ -47,7 +47,7 @@ beforeEach(() => {
   developerMode = false;
   accessToken = 'the-access-token';
   refreshToken = REAL_REFRESH_TOKEN;
-  getByLabel.mockReturnValue(null);
+  getByLabel.mockResolvedValue(null);
   invoke.mockResolvedValue(undefined);
 });
 
@@ -138,7 +138,7 @@ describe('openAppFrontend re-opening an existing window', () => {
       setFocus: vi.fn().mockResolvedValue(undefined),
       emit,
     };
-    getByLabel.mockReturnValue(existing);
+    getByLabel.mockResolvedValue(existing);
 
     await openAppFrontend('https://app.example.com/', 'Example', undefined, {
       applicationId: 'app-1',

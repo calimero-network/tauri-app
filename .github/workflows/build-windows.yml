@@ -182,7 +182,7 @@ jobs:
           node -e "
             const fs = require('fs');
             const config = JSON.parse(fs.readFileSync('tauri.conf.json', 'utf8'));
-            config.package.version = '$VERSION';
+            config.version = '$VERSION';
             fs.writeFileSync('tauri.conf.json', JSON.stringify(config, null, 2));
           "
 
@@ -197,7 +197,9 @@ jobs:
             node -e "
               const fs = require('fs');
               const config = JSON.parse(fs.readFileSync('tauri.conf.json', 'utf8'));
-              config.tauri.updater.pubkey = process.env.TAURI_PUBLIC_KEY;
+              config.plugins = config.plugins || {};
+              config.plugins.updater = config.plugins.updater || {};
+              config.plugins.updater.pubkey = process.env.TAURI_PUBLIC_KEY;
               fs.writeFileSync('tauri.conf.json', JSON.stringify(config, null, 2));
             "
             echo "Injected TAURI_PUBLIC_KEY into tauri.conf.json"
@@ -210,8 +212,8 @@ jobs:
         working-directory: apps/desktop
         env:
           MEROD_SKIP_IF_EXISTS: "1"
-          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
-          TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
         run: pnpm tauri build
 
       - name: Build Tauri app for Windows (validation)
@@ -221,8 +223,8 @@ jobs:
           MEROD_SKIP_IF_EXISTS: "1"
           CARGO_PROFILE_RELEASE_LTO: "thin"
           CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
-          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
-          TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
         run: pnpm tauri build
 
       - name: Sign Windows installer (optional)

@@ -1,6 +1,6 @@
 {
   "name": "desktop",
-  "version": "0.0.71",
+  "version": "0.0.72",
   "description": "Calimero Desktop Application",
   "type": "module",
   "scripts": {
@@ -26,8 +26,12 @@
   "dependencies": {
     "@calimero-network/mero-js": "^2.2.1",
     "@calimero-network/mero-react": "^2.4.0",
-    "@tauri-apps/api": "^1.5.0",
+    "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/plugin-autostart": "^2.5.1",
+    "@tauri-apps/plugin-dialog": "~2",
+    "@tauri-apps/plugin-process": "~2",
+    "@tauri-apps/plugin-shell": "~2",
+    "@tauri-apps/plugin-updater": "~2",
     "ansi-to-html": "^0.7.2",
     "bs58": "^6.0.0",
     "lucide-react": "^0.563.0",
@@ -36,7 +40,7 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.58.2",
-    "@tauri-apps/cli": "1.5.0",
+    "@tauri-apps/cli": "2.11.4",
     "@types/react": "^19.2.2",
     "@types/react-dom": "^19.2.2",
     "@vitejs/plugin-react": "^3.1.0",

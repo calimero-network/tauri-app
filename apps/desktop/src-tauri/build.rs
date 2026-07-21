@@ -36,4 +36,3 @@ fn extract_json_string(json: &str, field: &str) -> Option<String> {
     let end = inner.find('"')?;
     Some(inner[..end].to_string())
 }
-

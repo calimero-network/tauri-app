@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import { checkOnboardingState, getOnboardingMessage, type OnboardingState } from "../utils/onboarding";
-import { apiClient } from "../lib/mero-client";
+import { apiClient, createClientAsync } from "../lib/mero-client";
 import { LoginView } from "../components/LoginView";
 import { initMerodNode, startMerod, listMerodNodes, detectRunningMerodNodes, waitForNodeHealthy, stopMerod, killAllMerodProcesses, deleteCalimeroDataDir } from "../utils/merod";
-import { invoke } from "@tauri-apps/api/tauri";
-import { saveSettings, getSettings, clearAllAppData } from "../utils/settings";
+import { invoke } from "@tauri-apps/api/core";
+import { saveSettings, getSettings, getAuthUrl, clearAllAppData } from "../utils/settings";
+import { setAccessToken, setRefreshToken, setTokenExpiresAt } from "../lib/token-storage";
 import { saveOnboardingProgress, loadOnboardingProgress } from "../utils/onboardingProgress";
 import { startCloudLogin } from "../utils/cloudAuth";
 import { isCloudEnabled } from "../utils/featureFlags";
@@ -210,18 +211,120 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
           setCreatingNode(false);
           setLoadingExistingNodes(false);
         } else {
+          // No nodes exist at this data dir — clear any stale `useExistingNode`
+          // (persisted in localStorage from a prior session) so the create flow
+          // actually runs init instead of trying to start a node that isn't there.
+          setUseExistingNode(null);
           setNodeSetupMode('create-new');
           setLoadingExistingNodes(false);
         }
       } catch (e) {
         console.warn('Could not list existing nodes:', e);
         setExistingNodes([]);
+        setUseExistingNode(null);
         setNodeSetupMode('create-new');
         setLoadingExistingNodes(false);
       }
     }
     loadAndContinueIfExisting();
   }, [currentStep, dataDir, creatingNode, nodeCreated, onComplete, setTheme, serverPort, swarmPort]);
+
+  // Log in with the admin credentials, mirroring LoginView's user_password
+  // flow, and store the tokens. Used by the auth step after it initializes the
+  // node. Best-effort: returns false on any failure so the caller can surface it.
+  const attemptLogin = async (nodeUrl: string, username: string, password: string): Promise<boolean> => {
+    try {
+      const nodeBaseUrl = nodeUrl.replace(/\/$/, "");
+      const authBaseUrl = getAuthUrl(getSettings()).replace(/\/$/, "");
+      await createClientAsync({ baseUrl: nodeBaseUrl, authBaseUrl, requestCredentials: "omit" });
+      const tokenResponse = await apiClient.auth.requestToken({
+        auth_method: "user_password",
+        public_key: username,
+        client_name: "calimero-desktop",
+        timestamp: Date.now(),
+        permissions: [],
+        provider_data: { username, password },
+      });
+      if (tokenResponse.data?.access_token && tokenResponse.data?.refresh_token) {
+        setAccessToken(tokenResponse.data.access_token);
+        setRefreshToken(tokenResponse.data.refresh_token);
+        try {
+          const payload = JSON.parse(atob(tokenResponse.data.access_token.split(".")[1]));
+          setTokenExpiresAt(payload.exp * 1000);
+        } catch {
+          setTokenExpiresAt(Date.now() + 3600 * 1000);
+        }
+        return true;
+      }
+    } catch (e) {
+      console.warn("[onboarding] login failed", e);
+    }
+    return false;
+  };
+
+  // Node-setup "Continue" (create-new): just advance to the auth step. The node
+  // is created there, from the admin credentials, so setup collects no secrets.
+  const handleContinueToAuth = () => {
+    if (!nodeName.trim()) {
+      setNodeError("Please enter a node name");
+      return;
+    }
+    setNodeError(null);
+    setCurrentStep("login");
+  };
+
+  // Auth step (create-new): create the admin account by initializing the node
+  // with these credentials, start it, then sign in — all from the one screen.
+  const handleCreateNodeWithAuth = async (username: string, password: string) => {
+    if (!username.trim() || !password) {
+      setNodeError("Please choose an admin username and password");
+      return;
+    }
+    if (password.length < 8) {
+      setNodeError("The admin password must be at least 8 characters");
+      return;
+    }
+    setCreatingNode(true);
+    setNodeError(null);
+    setLoginTransitioning(true);
+    try {
+      const targetNodeName = nodeName.trim();
+      await initMerodNode(targetNodeName, dataDir, username.trim(), password);
+      await startMerod(serverPort, swarmPort, dataDir, targetNodeName, getSettings().debugLogs);
+      const nodeUrl = `http://localhost:${serverPort}`;
+      saveSettings({
+        ...getSettings(),
+        nodeUrl,
+        useEmbeddedNode: true,
+        embeddedNodeDataDir: dataDir,
+        embeddedNodeName: targetNodeName,
+        embeddedNodePort: serverPort,
+      });
+      await waitForNodeHealthy(`${nodeUrl}/auth`, 20000);
+      const loggedIn = await attemptLogin(nodeUrl, username.trim(), password);
+      if (!loggedIn) {
+        throw new Error("Node created, but automatic sign-in failed. Please try again.");
+      }
+      setNodeCreated(true);
+      setNodeStarted(true);
+      setTheme("dark");
+      try {
+        await loadApps();
+      } catch (e) {
+        console.error("Failed to load apps:", e);
+      }
+      setCurrentStep("install-app");
+    } catch (error: any) {
+      const msg = error?.message || error?.toString() || "";
+      if (msg.toLowerCase().includes("exist") || msg.toLowerCase().includes("already")) {
+        setNodeError(`Node "${nodeName.trim()}" already exists. Go back and choose "Use existing node".`);
+      } else {
+        setNodeError(msg || "Failed to create node");
+      }
+      setCreatingNode(false);
+      setLoginTransitioning(false);
+    }
+  };
 
 
   const handlePickDataDir = async () => {
@@ -823,7 +926,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
                   <button
                     type="button"
                     className="node-setup-choice-card"
-                    onClick={() => setNodeSetupMode('create-new')}
+                    onClick={() => { setUseExistingNode(null); setNodeSetupMode('create-new'); }}
                   >
                     <strong>Create new node</strong>
                     <p>Set up a fresh node with custom configuration</p>
@@ -930,33 +1033,6 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
                 </div>
               </div>
 
-              <div className="form-group">
-                <label htmlFor="admin-user">Admin Username</label>
-                <input
-                  id="admin-user"
-                  type="text"
-                  value={adminUser}
-                  onChange={(e) => setAdminUser(e.target.value)}
-                  placeholder="Username you will log in with"
-                  autoComplete="username"
-                  disabled={creatingNode || nodeCreated}
-                />
-                <p className="field-hint">The node's admin account is created now — you will sign in with these credentials</p>
-              </div>
-
-              <div className="form-group">
-                <label htmlFor="admin-password">Admin Password</label>
-                <input
-                  id="admin-password"
-                  type="password"
-                  value={adminPassword}
-                  onChange={(e) => setAdminPassword(e.target.value)}
-                  placeholder="At least 8 characters"
-                  autoComplete="new-password"
-                  disabled={creatingNode || nodeCreated}
-                />
-              </div>
-
               <div className="advanced-options-section">
                 <button
                   type="button"
@@ -1022,12 +1098,12 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
 
               <div className="step-actions">
                 <button
-                  onClick={handleCreateNode}
+                  onClick={handleContinueToAuth}
                   className="step-button step-button-primary"
-                  disabled={creatingNode || nodeCreated || !nodeName.trim() || !adminUser.trim() || !adminPassword}
+                  disabled={creatingNode || nodeCreated || !nodeName.trim()}
                 >
-                  {creatingNode ? 'Creating Node...' : nodeCreated && nodeStarted ? 'Setting Up...' : 'Create Node & Continue'}
-                  {!creatingNode && !nodeCreated && <ArrowRight size={18} />}
+                  Continue
+                  <ArrowRight size={18} />
                 </button>
               </div>
             </div>
@@ -1126,6 +1202,9 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
 
   // Login step - show after node is created
   if (currentStep === 'login') {
+      // Create-new nodes are initialized here from the admin credentials (setup
+      // collects none). Existing nodes are already running, so it's a plain login.
+      const isCreateNewAuth = nodeSetupMode === 'create-new' && !nodeStarted;
       return (
         <div className="onboarding-page" data-testid="onboarding-page">
         {progressIndicator}
@@ -1133,7 +1212,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
           <div ref={stepContainerRef} key={currentStep} className="onboarding-step-container onboarding-step-login">
             <button
               onClick={() => {
-                if (STEP_AFTER_NODE_SETUP === 'node-setup') {
+                if (isCreateNewAuth || STEP_AFTER_NODE_SETUP === 'node-setup') {
                   goBackToNodeSetup();
                 } else {
                   setNodeCreated(false);
@@ -1150,15 +1229,59 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
             <div className="step-content" style={{ justifyContent: 'center' }}>
               <h1 className="step-title">Set Up Authentication</h1>
               <p className="step-description">
-                Create a username and password to authenticate with your Calimero node.
-                This account will be used to securely access your node and manage your applications.
+                {isCreateNewAuth
+                  ? "Choose the admin username and password for your node. Your node is created with this account, and you'll sign in with it."
+                  : "Sign in to your Calimero node to manage your applications."}
               </p>
               <div className="onboarding-card" style={{ alignItems: 'center' }}>
                 {loginTransitioning ? (
                   <div className="loading-spinner">
                     <div className="spinner" />
-                    <p>Setting up your account...</p>
+                    <p>Setting up your node...</p>
                   </div>
+                ) : isCreateNewAuth ? (
+                  <form
+                    className="step-form"
+                    style={{ width: '100%' }}
+                    onSubmit={(e) => { e.preventDefault(); handleCreateNodeWithAuth(adminUser, adminPassword); }}
+                  >
+                    <div className="form-group">
+                      <label htmlFor="auth-admin-user">Admin Username</label>
+                      <input
+                        id="auth-admin-user"
+                        type="text"
+                        value={adminUser}
+                        onChange={(e) => setAdminUser(e.target.value)}
+                        placeholder="Username you will log in with"
+                        autoComplete="username"
+                        disabled={creatingNode}
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label htmlFor="auth-admin-password">Admin Password</label>
+                      <input
+                        id="auth-admin-password"
+                        type="password"
+                        value={adminPassword}
+                        onChange={(e) => setAdminPassword(e.target.value)}
+                        placeholder="At least 8 characters"
+                        autoComplete="new-password"
+                        disabled={creatingNode}
+                      />
+                    </div>
+                    {nodeError && (
+                      <div className="step-message step-message-error">{nodeError}</div>
+                    )}
+                    <div className="step-actions">
+                      <button
+                        type="submit"
+                        className="step-button step-button-primary"
+                        disabled={creatingNode || !adminUser.trim() || !adminPassword}
+                      >
+                        {creatingNode ? 'Creating Node…' : 'Create Node & Sign In'}
+                      </button>
+                    </div>
+                  </form>
                 ) : (
                   <LoginView
                     variant="dark"

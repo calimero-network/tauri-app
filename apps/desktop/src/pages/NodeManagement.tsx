@@ -13,7 +13,7 @@ import {
   getMerodBinaryVersion,
   type RunningMerodNode,
 } from "../utils/merod";
-import { invoke } from "@tauri-apps/api/tauri";
+import { invoke } from "@tauri-apps/api/core";
 import { useToast } from "../contexts/ToastContext";
 import { Play, Square, RefreshCw, Check, FileText, ChevronDown } from "lucide-react";
 import { LogsViewer } from "../components/LogsViewer";

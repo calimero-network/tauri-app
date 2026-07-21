@@ -134,46 +134,49 @@
         return '';
     }
 
-    // Get the Tauri invoke function (resolves both API shapes)
+    // Get the Tauri invoke function (Tauri v2 API shapes).
+    // __TAURI_INTERNALS__.invoke is injected into every webview the app's
+    // capabilities cover (including remote app windows), regardless of
+    // withGlobalTauri. window.__TAURI__.core.invoke only exists when the
+    // global API bundle is enabled.
     function getTauriInvoke() {
-        if (typeof window.__TAURI_INVOKE__ === 'function') return window.__TAURI_INVOKE__;
-        if (typeof window.__TAURI__ !== 'undefined' && typeof window.__TAURI__.invoke === 'function') {
-            return window.__TAURI__.invoke.bind(window.__TAURI__);
+        if (window.__TAURI_INTERNALS__ && typeof window.__TAURI_INTERNALS__.invoke === 'function') {
+            return window.__TAURI_INTERNALS__.invoke.bind(window.__TAURI_INTERNALS__);
+        }
+        if (typeof window.__TAURI__ !== 'undefined'
+            && window.__TAURI__.core
+            && typeof window.__TAURI__.core.invoke === 'function') {
+            return window.__TAURI__.core.invoke.bind(window.__TAURI__.core);
         }
         return null;
     }
 
-    // Low-level Tauri event listener that works with just window.__TAURI_INVOKE__
-    // (always injected natively) without needing window.__TAURI__.event (which
-    // requires the @tauri-apps/api JS bundle to be loaded by the page — Vercel
-    // hosted apps don't load it, so window.__TAURI__ is undefined there).
+    // Low-level Tauri v2 event listener that works with just
+    // window.__TAURI_INTERNALS__ (always injected natively) without needing
+    // the @tauri-apps/api JS bundle (Vercel-hosted apps don't load it, so
+    // window.__TAURI__ is undefined there).
     //
-    // Mirrors what @tauri-apps/api/event does internally:
-    //   1. Register a callback on window['_<id>'] — Tauri calls it when the event fires.
-    //   2. Tell the Tauri runtime to route the named event to that callback id.
+    // Mirrors what @tauri-apps/api/event does internally in v2:
+    //   1. transformCallback() registers the handler and returns a numeric id.
+    //   2. The `plugin:event|listen` command routes the named event to it.
     async function tauriListen(eventName, handler, invokeFn) {
         // Happy-path: @tauri-apps/api is loaded (e.g. localhost dev or app with bundled API).
         if (window.__TAURI__ && window.__TAURI__.event && typeof window.__TAURI__.event.listen === 'function') {
             return window.__TAURI__.event.listen(eventName, handler);
         }
-        // Fallback: use __TAURI_INVOKE__ directly.
-        const id = Math.random() * 2147483647 | 0;
-        const prop = '_' + id;
-        Object.defineProperty(window, prop, {
-            value: handler,
-            writable: false,
-            configurable: true,
-        });
-        await invokeFn('tauri', {
-            __tauriModule: 'Event',
-            message: { cmd: 'listen', event: eventName, windowLabel: null, handler: id },
+        // Fallback: use the internal IPC directly.
+        const internals = window.__TAURI_INTERNALS__;
+        if (!internals || typeof internals.transformCallback !== 'function') {
+            throw new Error('Tauri internals unavailable for event listen');
+        }
+        const handlerId = internals.transformCallback(handler);
+        const eventId = await invokeFn('plugin:event|listen', {
+            event: eventName,
+            target: { kind: 'Any' },
+            handler: handlerId,
         });
         return function unlisten() {
-            Reflect.deleteProperty(window, prop);
-            invokeFn('tauri', {
-                __tauriModule: 'Event',
-                message: { cmd: 'unlisten', event: eventName, eventId: id },
-            }).catch(() => {});
+            invokeFn('plugin:event|unlisten', { event: eventName, eventId }).catch(() => {});
         };
     }
 

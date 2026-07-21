@@ -10,7 +10,7 @@ import {
   type RunningMerodNode,
   type MerodStatus
 } from "../utils/merod";
-import { invoke } from "@tauri-apps/api/tauri";
+import { invoke } from "@tauri-apps/api/core";
 import { getSettings, saveSettings } from "../utils/settings";
 import { clearAccessToken, clearRefreshToken } from "../lib/token-storage";
 import { useToast } from "../contexts/ToastContext";

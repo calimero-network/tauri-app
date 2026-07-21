@@ -1,0 +1,25 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "remote-app-windows",
+  "description": "IPC access for dynamically created external app windows (label app-*). Replaces the v1 runtime RemoteDomainAccessScope / ipc_scope().configure_remote_access() calls, which no longer exist in Tauri v2. Grants the injected proxy script and app-hosted pages access to the app's own commands.",
+  "windows": [
+    "app-*"
+  ],
+  "remote": {
+    "urls": [
+      "http://localhost:*",
+      "http://127.0.0.1:*",
+      "https://localhost:*",
+      "https://apps.calimero.network",
+      "https://*.calimero.network"
+    ]
+  },
+  "permissions": [
+    "core:default",
+    "core:event:default",
+    "core:window:allow-show",
+    "core:window:allow-hide",
+    "core:window:allow-close",
+    "core:window:allow-set-focus"
+  ]
+}

@@ -3,7 +3,14 @@
  * Handles checking for updates and installing them
  */
 
+import type { Update } from '@tauri-apps/plugin-updater';
 import { stopMerod, killAllMerodProcesses, downloadAndReplaceMerod } from './merod';
+
+// The Update handle from the most recent checkForUpdates(). installUpdate()
+// reuses it instead of calling check() a second time — avoiding an extra network
+// round-trip and a race where the second check could disagree with (or fail to
+// re-find) the update already shown to the user.
+let pendingUpdate: Update | null = null;
 
 export function isTauri(): boolean {
   // Tauri v2 injects __TAURI_INTERNALS__ into every webview regardless of the
@@ -30,6 +37,7 @@ export async function checkForUpdates(): Promise<UpdateStatus> {
   try {
     const { check } = await import('@tauri-apps/plugin-updater');
     const update = await check();
+    pendingUpdate = update;
     if (update) {
       return {
         available: true,
@@ -93,16 +101,21 @@ export async function installUpdate(onStatus: (status: string) => void = () => {
   }
 
   // 3. Install Tauri app update (new shell / frontend bundle).
-  // v2's plugin-updater installs via the Update handle returned by check(),
-  // so re-resolve it here before downloading + installing.
+  // v2's plugin-updater installs via the Update handle returned by check().
+  // Reuse the handle from the preceding checkForUpdates() when available;
+  // only re-check if installUpdate() was somehow called without one.
   onStatus('Installing app update...');
-  const { check } = await import('@tauri-apps/plugin-updater');
   const { relaunch } = await import('@tauri-apps/plugin-process');
-  const update = await check();
+  let update = pendingUpdate;
+  if (!update) {
+    const { check } = await import('@tauri-apps/plugin-updater');
+    update = await check();
+  }
   if (!update) {
     throw new Error('No update available to install');
   }
   await update.downloadAndInstall();
+  pendingUpdate = null;
 
   // 4. Relaunch — app closes and reopens with the new binary
   onStatus('Restarting...');

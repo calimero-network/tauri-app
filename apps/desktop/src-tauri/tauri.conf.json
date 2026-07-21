@@ -31,7 +31,7 @@
   },
   "productName": "Calimero Desktop",
   "mainBinaryName": "Calimero Desktop",
-  "version": "0.0.70",
+  "version": "0.0.71",
   "identifier": "network.calimero.desktop",
   "plugins": {
     "updater": {
@@ -50,7 +50,7 @@
     "withGlobalTauri": false,
     "security": {
       "dangerousDisableAssetCspModification": true,
-      "csp": "default-src 'self' 'unsafe-inline' 'unsafe-eval' http://localhost:* http://127.0.0.1:* https://api.github.com; connect-src ipc: http://ipc.localhost 'self' https://apps.calimero.network https://*.calimero.network http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:* wss://* https: http: ws: wss: https://api.github.com https://github.com; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: http:; font-src 'self' data:; frame-src 'self' https: http:;"
+      "csp": "default-src 'self' 'unsafe-inline' 'unsafe-eval' http://localhost:* http://127.0.0.1:* https://api.github.com; connect-src ipc: http://ipc.localhost https://ipc.localhost 'self' https://apps.calimero.network https://*.calimero.network http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:* wss://* https: http: ws: wss: https://api.github.com https://github.com; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: http:; font-src 'self' data:; frame-src 'self' https: http:;"
     },
     "windows": [
       {

@@ -509,11 +509,16 @@
                         const bytes = hasBinary ? base64ToBytes(response.body_base64) : null;
                         const text = hasBinary ? new TextDecoder().decode(bytes) : (response.body || '');
                         const rt = (xhr.responseType || '').toLowerCase();
+                        // Content-Type for the Blob's `type` (native XHR sets it from this header).
+                        const contentType = response.headers
+                            ? (response.headers['content-type'] || response.headers['Content-Type'] || '')
+                            : '';
                         let responseValue;
                         if (rt === 'arraybuffer') {
                             responseValue = bytes ? bytes.buffer : new TextEncoder().encode(text).buffer;
                         } else if (rt === 'blob') {
-                            responseValue = bytes ? new Blob([bytes]) : new Blob([text]);
+                            const blobOpts = contentType ? { type: contentType } : undefined;
+                            responseValue = bytes ? new Blob([bytes], blobOpts) : new Blob([text], blobOpts);
                         } else if (rt === 'json') {
                             try { responseValue = JSON.parse(text); } catch (_) { responseValue = null; }
                         } else {

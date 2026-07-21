@@ -39,7 +39,9 @@ fn seg_path(dir: &Path, n: u32) -> PathBuf {
 /// Append-only writer for `merod.log` that rotates by size and enforces the cap.
 pub struct RollingLogWriter {
     dir: PathBuf,
-    file: File,
+    // Option so roll() can drop the handle before renaming the active file —
+    // Windows refuses to rename a file that still has an open handle.
+    file: Option<File>,
     len: u64,
     segment_bytes: u64,
     max_segments: u32,
@@ -58,11 +60,21 @@ impl RollingLogWriter {
         let len = file.metadata().map(|m| m.len()).unwrap_or(0);
         Ok(Self {
             dir: dir.to_path_buf(),
-            file,
+            file: Some(file),
             len,
             segment_bytes,
             max_segments,
         })
+    }
+
+    /// The active file handle, reopening it if a prior roll left it closed.
+    fn file_mut(&mut self) -> io::Result<&mut File> {
+        if self.file.is_none() {
+            self.file = Some(
+                OpenOptions::new().create(true).append(true).open(active_path(&self.dir))?,
+            );
+        }
+        Ok(self.file.as_mut().expect("just set"))
     }
 
     /// Append one already-newline-terminated log line, rotating first if it would
@@ -77,7 +89,7 @@ impl RollingLogWriter {
         // roll. Only stat when we're at/over the limit, so the common path stays
         // syscall-free.
         if self.len + bytes.len() as u64 > self.segment_bytes {
-            if let Ok(meta) = self.file.metadata() {
+            if let Ok(meta) = self.file_mut()?.metadata() {
                 self.len = meta.len();
             }
         }
@@ -98,15 +110,31 @@ impl RollingLogWriter {
             } else {
                 rest.len()
             };
-            self.file.write_all(&rest[..take])?;
+            self.file_mut()?.write_all(&rest[..take])?;
             self.len += take as u64;
             rest = &rest[take..];
         }
         Ok(())
     }
 
+    /// Truncate the active file in place and delete rotated segments, resetting
+    /// the in-memory length. Called on the *live* writer (under its lock) so a
+    /// "Clear" can't race the drain tasks or desync the cached length. Returns
+    /// how many rotated segments were removed.
+    pub fn clear(&mut self) -> io::Result<usize> {
+        {
+            let f = self.file_mut()?;
+            let _ = f.flush();
+            f.set_len(0)?;
+        }
+        self.len = 0;
+        Ok(remove_rotated_segments(&self.dir))
+    }
+
     fn roll(&mut self) -> io::Result<()> {
-        let _ = self.file.flush();
+        if let Some(f) = self.file.as_mut() {
+            let _ = f.flush();
+        }
         // Drop the oldest segment that would otherwise fall off the end.
         let oldest = seg_path(&self.dir, self.max_segments);
         if oldest.exists() {
@@ -119,15 +147,37 @@ impl RollingLogWriter {
                 fs::rename(&from, seg_path(&self.dir, k + 1))?;
             }
         }
+        // Close the active handle BEFORE renaming it: Windows refuses to rename a
+        // file that still has an open handle, which would otherwise make the
+        // rename fail and stall the drain once the segment fills.
+        self.file = None;
         // merod.log -> merod.log.1, then reopen a fresh active file.
         let active = active_path(&self.dir);
         if active.exists() {
             fs::rename(&active, seg_path(&self.dir, 1))?;
         }
-        self.file = OpenOptions::new().create(true).append(true).open(&active)?;
+        self.file = Some(OpenOptions::new().create(true).append(true).open(&active)?);
         self.len = 0;
         Ok(())
     }
+}
+
+/// Delete `merod.log.1`, `.2`, … in order; returns how many were removed.
+fn remove_rotated_segments(dir: &Path) -> usize {
+    let mut removed = 0;
+    let mut k = 1;
+    loop {
+        let p = seg_path(dir, k);
+        if p.exists() {
+            if fs::remove_file(&p).is_ok() {
+                removed += 1;
+            }
+            k += 1;
+        } else {
+            break;
+        }
+    }
+    removed
 }
 
 /// Delete rotated segments beyond `MAX_SEGMENTS`, drop rotated segments older than
@@ -180,6 +230,10 @@ pub fn cleanup_logs_with(dir: &Path, max_segments: u32, retention_days: u64) -> 
 /// Truncate the active file and remove all rotated segments. Returns how many
 /// rotated segments were removed. Safe to call whether or not a node is running:
 /// the active file is truncated in place so a live writer keeps appending at 0.
+/// Clear logs on disk when there is NO live writer for this node (node not
+/// running). When a node IS running, clear through the live
+/// [`RollingLogWriter::clear`] instead so the operation is serialized with the
+/// drain tasks (no TOCTOU on the log dir, no cached-length desync).
 pub fn clear_logs(dir: &Path) -> io::Result<usize> {
     if !dir.exists() {
         return Ok(0);
@@ -188,20 +242,7 @@ pub fn clear_logs(dir: &Path) -> io::Result<usize> {
     if active.exists() {
         OpenOptions::new().write(true).open(&active)?.set_len(0)?;
     }
-    let mut removed = 0;
-    let mut k = 1;
-    loop {
-        let p = seg_path(dir, k);
-        if p.exists() {
-            if fs::remove_file(&p).is_ok() {
-                removed += 1;
-            }
-            k += 1;
-        } else {
-            break;
-        }
-    }
-    Ok(removed)
+    Ok(remove_rotated_segments(dir))
 }
 
 /// Read up to `max_lines` trailing lines across the active file and rotated
@@ -390,6 +431,25 @@ mod tests {
             }
         }
         assert_eq!(total, 25, "no bytes may be lost across the split");
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn writer_clear_resets_length_and_segments() {
+        let dir = tmp();
+        let mut w = RollingLogWriter::open_with(&dir, 30, 5).unwrap();
+        for i in 0..10 {
+            w.write_line(format!("line{:02}\n", i).as_bytes()).unwrap();
+        }
+        assert!(seg_path(&dir, 1).exists());
+        let removed = w.clear().unwrap();
+        assert!(removed >= 1);
+        assert!(!seg_path(&dir, 1).exists());
+        assert_eq!(active_path(&dir).metadata().unwrap().len(), 0);
+        // A normal write right after clear must not spuriously roll (len reset).
+        w.write_line(b"fresh\n").unwrap();
+        assert!(!seg_path(&dir, 1).exists());
+        assert_eq!(read_tail(&dir, 10).unwrap(), "fresh");
         fs::remove_dir_all(&dir).ok();
     }
 

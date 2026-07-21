@@ -117,6 +117,24 @@ export function LoginView({ onSuccess, onError, variant = 'light' }: LoginViewPr
     setError(null);
   };
 
+  // Until provider discovery finishes, show the neutral loading state rather
+  // than a concrete form — otherwise a node without username/password would
+  // briefly flash the credential form and let the user submit before discovery
+  // resolved which method(s) the node actually supports.
+  if (loading) {
+    return (
+      <ProviderSelector
+        providers={[]}
+        onProviderSelect={handleProviderSelect}
+        loading={true}
+        error={error}
+        containerClassName="login-provider-container"
+        cardClassName="login-provider-card"
+        variant={variant}
+      />
+    );
+  }
+
   if (showProviders) {
     return (
       <ProviderSelector

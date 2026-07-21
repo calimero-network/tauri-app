@@ -1106,6 +1106,57 @@ struct MerodProcess {
 
 type MerodState = Arc<Mutex<Vec<MerodProcess>>>;
 
+/// Live rotating log writers, keyed by log directory. Lets `clear_merod_logs`
+/// clear through the same writer the drain tasks use (serialized by the inner
+/// Mutex) rather than racing it via free functions on raw paths.
+type MerodLogWriters =
+    Arc<Mutex<std::collections::HashMap<String, Arc<Mutex<log_rotation::RollingLogWriter>>>>>;
+
+/// Resolve an optional caller-supplied home dir: expand a leading `~`, or fall
+/// back to `~/.calimero`. Single source of truth for the node commands.
+fn resolve_home_dir(home_dir: Option<String>) -> Result<std::path::PathBuf, TauriError> {
+    if let Some(dir) = home_dir {
+        let expanded = if dir.starts_with("~") {
+            match dirs::home_dir() {
+                Some(home) => dir.replacen("~", &home.to_string_lossy(), 1),
+                None => return Err(TauriError::new(TauriErrorCode::HomeDirNotFound, "Failed to get home directory")),
+            }
+        } else {
+            dir
+        };
+        Ok(std::path::PathBuf::from(expanded))
+    } else {
+        Ok(dirs::home_dir()
+            .ok_or_else(|| TauriError::new(TauriErrorCode::HomeDirNotFound, "Failed to get home directory"))?
+            .join(".calimero"))
+    }
+}
+
+/// Guard destructive/log commands: the resolved path must sit under the user's
+/// home directory (mirrors delete_calimero_data_dir). Uses lexical containment
+/// so it works for paths that don't exist yet.
+fn ensure_under_home(path: &std::path::Path) -> Result<(), TauriError> {
+    if let Some(home) = dirs::home_dir() {
+        let home = home.canonicalize().unwrap_or(home);
+        // Compare against the deepest existing ancestor so a not-yet-created
+        // logs dir still validates against its real (canonical) parent.
+        let mut probe = path.to_path_buf();
+        let anchor = loop {
+            if probe.exists() {
+                break probe.canonicalize().unwrap_or(probe);
+            }
+            match probe.parent() {
+                Some(p) => probe = p.to_path_buf(),
+                None => break path.to_path_buf(),
+            }
+        };
+        if !anchor.starts_with(&home) {
+            return Err(TauriError::new(TauriErrorCode::PathNotAllowed, "Path must be under your home directory"));
+        }
+    }
+    Ok(())
+}
+
 /// Get the path to the bundled merod binary
 fn get_merod_binary_path(app_handle: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
     let resource_candidates = if cfg!(target_os = "windows") {
@@ -1160,6 +1211,9 @@ fn spawn_log_drain<R>(
         // and the viewer's lossy decode handle anything unusual downstream.
         let mut buf_reader = BufReader::new(reader);
         let mut buf: Vec<u8> = Vec::with_capacity(1024);
+        // Log a persistent write failure (disk full, dir deleted, …) once so it's
+        // discoverable, without spamming a warning for every dropped line.
+        let mut write_error_logged = false;
         loop {
             buf.clear();
             match buf_reader.read_until(b'\n', &mut buf).await {
@@ -1167,8 +1221,16 @@ fn spawn_log_drain<R>(
                 Ok(_) => {
                     if let Ok(mut w) = writer.lock() {
                         // Keep draining even if a write fails, so a write error can
-                        // never wedge merod by leaving its pipe unread.
-                        let _ = w.write_line(&buf);
+                        // never wedge merod by leaving its pipe unread — but surface
+                        // the first failure so silent log loss is diagnosable.
+                        if let Err(e) = w.write_line(&buf) {
+                            if !write_error_logged {
+                                warn!("[Merod] log write failed (further errors suppressed): {}", e);
+                                write_error_logged = true;
+                            }
+                        } else {
+                            write_error_logged = false;
+                        }
                     }
                 }
                 Err(e) => {
@@ -1191,6 +1253,7 @@ async fn start_merod(
     debug_logs: Option<bool>,
     app_handle: tauri::AppHandle,
     merod_state: tauri::State<'_, MerodState>,
+    log_writers: tauri::State<'_, MerodLogWriters>,
 ) -> Result<String, TauriError> {
     let server_port = server_port.unwrap_or(2528);
     let swarm_port = swarm_port.unwrap_or(2428);
@@ -1363,11 +1426,16 @@ async fn start_merod(
         warn!("[Merod] Log cleanup failed (non-fatal): {}", e);
     }
 
-    // Rotating writer shared by the stdout and stderr drain tasks.
+    // Rotating writer shared by the stdout and stderr drain tasks. Registered in
+    // MerodLogWriters so clear_merod_logs can clear through this same instance
+    // (serialized by the inner Mutex) instead of racing it on raw paths.
     let log_writer = std::sync::Arc::new(std::sync::Mutex::new(
         log_rotation::RollingLogWriter::open(&log_dir)
             .map_err(|e| TauriError::with_details(TauriErrorCode::FileWriteError, "Failed to open log writer", e.to_string()))?,
     ));
+    if let Ok(mut map) = log_writers.lock() {
+        map.insert(log_dir.to_string_lossy().to_string(), log_writer.clone());
+    }
 
     // Build command - global options come BEFORE subcommand
     // Merod expects: merod --home ~/.calimero --node node1 run
@@ -2432,24 +2500,9 @@ async fn get_merod_logs(
     validate_node_name(&node_name).map_err(|e| TauriError::new(TauriErrorCode::InvalidInput, e))?;
     let lines = lines.unwrap_or(500).min(10_000);
 
-    let home_dir_path = if let Some(dir) = home_dir {
-        let expanded = if dir.starts_with("~") {
-            if let Some(home) = dirs::home_dir() {
-                dir.replacen("~", &home.to_string_lossy(), 1)
-            } else {
-                dir
-            }
-        } else {
-            dir
-        };
-        std::path::PathBuf::from(expanded)
-    } else {
-        dirs::home_dir()
-            .ok_or_else(|| TauriError::new(TauriErrorCode::HomeDirNotFound, "Failed to get home directory"))?
-            .join(".calimero")
-    };
-
+    let home_dir_path = resolve_home_dir(home_dir)?;
     let log_path = home_dir_path.join(&node_name).join("logs").join("merod.log");
+    ensure_under_home(&log_path)?;
 
     if !log_path.exists() {
         return Err(TauriError::new(
@@ -2478,31 +2531,36 @@ async fn get_merod_logs(
 async fn clear_merod_logs(
     node_name: String,
     home_dir: Option<String>,
+    log_writers: tauri::State<'_, MerodLogWriters>,
 ) -> Result<String, TauriError> {
     validate_node_name(&node_name).map_err(|e| TauriError::new(TauriErrorCode::InvalidInput, e))?;
 
-    let home_dir_path = if let Some(dir) = home_dir {
-        let expanded = if dir.starts_with("~") {
-            if let Some(home) = dirs::home_dir() {
-                dir.replacen("~", &home.to_string_lossy(), 1)
-            } else {
-                dir
-            }
-        } else {
-            dir
-        };
-        std::path::PathBuf::from(expanded)
-    } else {
-        dirs::home_dir()
-            .ok_or_else(|| TauriError::new(TauriErrorCode::HomeDirNotFound, "Failed to get home directory"))?
-            .join(".calimero")
-    };
-
+    let home_dir_path = resolve_home_dir(home_dir)?;
     let log_dir = home_dir_path.join(&node_name).join("logs");
-    let removed = tokio::task::spawn_blocking(move || log_rotation::clear_logs(&log_dir))
-        .await
-        .map_err(|e| TauriError::with_details(TauriErrorCode::InternalError, "Log clear task failed", e.to_string()))?
-        .map_err(|e| TauriError::with_details(TauriErrorCode::FileWriteError, "Failed to clear log files", e.to_string()))?;
+    // Destructive: constrain to the user's home directory (mirrors
+    // delete_calimero_data_dir) so an arbitrary home_dir can't truncate/delete
+    // files elsewhere on disk.
+    ensure_under_home(&log_dir)?;
+
+    // If a node is running, clear through its live writer (serialized with the
+    // drain tasks by the inner Mutex) so we don't race a concurrent rotation or
+    // leave the writer's cached length desynced. Otherwise clear on disk.
+    let key = log_dir.to_string_lossy().to_string();
+    let live = log_writers.lock().ok().and_then(|m| m.get(&key).cloned());
+
+    let removed = tokio::task::spawn_blocking(move || -> std::io::Result<usize> {
+        if let Some(writer) = live {
+            let mut w = writer
+                .lock()
+                .map_err(|_| std::io::Error::new(std::io::ErrorKind::Other, "log writer lock poisoned"))?;
+            w.clear()
+        } else {
+            log_rotation::clear_logs(&log_dir)
+        }
+    })
+    .await
+    .map_err(|e| TauriError::with_details(TauriErrorCode::InternalError, "Log clear task failed", e.to_string()))?
+    .map_err(|e| TauriError::with_details(TauriErrorCode::FileWriteError, "Failed to clear log files", e.to_string()))?;
 
     Ok(format!("Cleared logs ({} rotated segment(s) removed)", removed))
 }
@@ -3094,6 +3152,7 @@ fn main() {
             Ok(())
         })
         .manage(MerodState::default())
+        .manage(MerodLogWriters::default())
         .manage(SseCancelRegistry::new(std::sync::Mutex::new(std::collections::HashMap::new())))
         .manage(TokenBrokerRegistry::new(std::sync::Mutex::new(std::collections::HashMap::new())))
         .invoke_handler(tauri::generate_handler![

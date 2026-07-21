@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import { checkOnboardingState, getOnboardingMessage, type OnboardingState } from "../utils/onboarding";
-import { apiClient } from "../lib/mero-client";
+import { apiClient, createClientAsync } from "../lib/mero-client";
 import { LoginView } from "../components/LoginView";
 import { initMerodNode, startMerod, listMerodNodes, detectRunningMerodNodes, waitForNodeHealthy, stopMerod, killAllMerodProcesses, deleteCalimeroDataDir } from "../utils/merod";
 import { invoke } from "@tauri-apps/api/core";
-import { saveSettings, getSettings, clearAllAppData } from "../utils/settings";
+import { saveSettings, getSettings, getAuthUrl, clearAllAppData } from "../utils/settings";
+import { setAccessToken, setRefreshToken, setTokenExpiresAt } from "../lib/token-storage";
 import { saveOnboardingProgress, loadOnboardingProgress } from "../utils/onboardingProgress";
 import { startCloudLogin } from "../utils/cloudAuth";
 import { isCloudEnabled } from "../utils/featureFlags";
@@ -228,6 +229,68 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
     loadAndContinueIfExisting();
   }, [currentStep, dataDir, creatingNode, nodeCreated, onComplete, setTheme, serverPort, swarmPort]);
 
+  // Auto-login state: set when node creation logs in automatically with the
+  // admin credentials just entered, so the separate login step is skipped
+  // (auth is set up once, not twice). The skip-once ref lets the user still
+  // navigate back to the login step from install-app without being bounced.
+  const autoLoggedInRef = useRef(false);
+  const autoSkippedLoginRef = useRef(false);
+
+  // Log in with the admin credentials used to create the node, mirroring
+  // LoginView's user_password flow, so the user isn't asked to re-enter the
+  // same username/password at the login step. Best-effort: on any failure we
+  // fall back to showing the manual login form.
+  const attemptAutoLogin = async (nodeUrl: string, username: string, password: string): Promise<boolean> => {
+    try {
+      const nodeBaseUrl = nodeUrl.replace(/\/$/, "");
+      const authBaseUrl = getAuthUrl(getSettings()).replace(/\/$/, "");
+      await createClientAsync({ baseUrl: nodeBaseUrl, authBaseUrl, requestCredentials: "omit" });
+      const tokenResponse = await apiClient.auth.requestToken({
+        auth_method: "user_password",
+        public_key: username,
+        client_name: "calimero-desktop",
+        timestamp: Date.now(),
+        permissions: [],
+        provider_data: { username, password },
+      });
+      if (tokenResponse.data?.access_token && tokenResponse.data?.refresh_token) {
+        setAccessToken(tokenResponse.data.access_token);
+        setRefreshToken(tokenResponse.data.refresh_token);
+        try {
+          const payload = JSON.parse(atob(tokenResponse.data.access_token.split(".")[1]));
+          setTokenExpiresAt(payload.exp * 1000);
+        } catch {
+          setTokenExpiresAt(Date.now() + 3600 * 1000);
+        }
+        autoLoggedInRef.current = true;
+        return true;
+      }
+    } catch (e) {
+      console.warn("[onboarding] auto-login after node creation failed; showing login step", e);
+    }
+    return false;
+  };
+
+  // When we auto-logged in during node creation, skip the redundant login step.
+  useEffect(() => {
+    if (currentStep !== "login") return;
+    if (!autoLoggedInRef.current || autoSkippedLoginRef.current) return;
+    autoSkippedLoginRef.current = true;
+    let cancelled = false;
+    (async () => {
+      setLoginTransitioning(true);
+      try {
+        await loadApps();
+      } catch (e) {
+        console.error("Failed to load apps:", e);
+      }
+      if (!cancelled) setCurrentStep("install-app");
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentStep]);
+
 
   const handlePickDataDir = async () => {
     try {
@@ -348,6 +411,10 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
         });
         // check_merod_health appends /health — use /auth so it hits /auth/health
         await waitForNodeHealthy(`${nodeUrl}/auth`, 20000);
+        // Log in automatically with the admin credentials just used to create
+        // the node, so the user isn't prompted to re-enter them at the login
+        // step (auth is set up once). Falls back to the login form on failure.
+        await attemptAutoLogin(nodeUrl, adminUser.trim(), adminPassword);
         advanceToCloudConnect();
       }
     } catch (error: any) {

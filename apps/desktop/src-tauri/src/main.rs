@@ -152,15 +152,35 @@ struct HttpResponse {
 /// Whether a response/request body of this content-type is safe to carry as a
 /// UTF-8 string. Anything else (images, octet-stream, video, …) must go over the
 /// IPC boundary as base64 to avoid lossy UTF-8 corruption.
+///
+/// Precise on purpose: a broad `contains("xml")`/`contains("json")` would
+/// misclassify ZIP-based Office Open XML types (`application/vnd.openxmlformats-*`
+/// = docx/xlsx/pptx) as text and corrupt them. Note the asymmetry — treating a
+/// genuinely textual type as binary is harmless (base64 round-trips exactly),
+/// while treating binary as text corrupts, so we bias toward binary.
 fn is_textual_content_type(content_type: &str) -> bool {
-    let ct = content_type.trim().to_ascii_lowercase();
+    // Media type only, ignoring any `; charset=…` parameters.
+    let ct = content_type
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    // Vendor types are overwhelmingly binary containers (OOXML, .xls, …); never
+    // treat them as text even though some contain "xml"/"json" in the name.
+    if ct.starts_with("application/vnd.") {
+        return false;
+    }
     ct.starts_with("text/")
-        || ct.contains("json")
-        || ct.contains("xml")
+        || ct == "application/json"
+        || ct.ends_with("+json")
+        || ct == "application/xml"
+        || ct == "text/xml"
+        || ct.ends_with("+xml")
         || ct.contains("javascript")
         || ct.contains("ecmascript")
-        || ct.contains("x-www-form-urlencoded")
-        || ct.contains("csv")
+        || ct == "application/x-www-form-urlencoded"
+        || ct == "text/csv"
         || ct.starts_with("multipart/") // boundaries + text fields; keep as-is
 }
 
@@ -3397,6 +3417,9 @@ mod tests {
             "application/x-www-form-urlencoded",
             "text/csv",
             "multipart/form-data; boundary=xyz",
+            "image/svg+xml",              // +xml suffix
+            "application/problem+json",   // +json suffix
+            "text/xml",
         ] {
             assert!(is_textual_content_type(ct), "should be textual: {ct}");
         }
@@ -3408,6 +3431,10 @@ mod tests {
             "image/webp",
             "video/mp4",
             "application/pdf",
+            // Office Open XML / vendor types are ZIP binaries despite "xml" in the name.
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "application/vnd.ms-excel",
         ] {
             assert!(!is_textual_content_type(ct), "should be binary: {ct}");
         }

@@ -2542,10 +2542,14 @@ async fn get_merod_logs(
     let lines = lines.unwrap_or(500).min(10_000);
 
     let home_dir_path = resolve_home_dir(home_dir)?;
-    let log_path = home_dir_path.join(&node_name).join("logs").join("merod.log");
-    ensure_under_home(&log_path)?;
+    let log_dir = home_dir_path.join(&node_name).join("logs");
+    ensure_under_home(&log_dir)?;
 
-    if !log_path.exists() {
+    // Only hard-error when the node has no logs dir at all (never started by the
+    // app). If the dir exists, read_tail returns whatever is present — including
+    // rotated segments alone when the active merod.log has been cleared/rotated
+    // away — or "" when empty.
+    if !log_dir.exists() {
         return Err(TauriError::new(
             TauriErrorCode::FileNotFound,
             format!("No log file found for node '{}'. Logs are only available for nodes started by the app.", node_name),
@@ -2554,10 +2558,6 @@ async fn get_merod_logs(
 
     // Bounded reverse tail across the active file + rotated segments — never loads
     // the whole (up to ~100 MB) history into memory just to return the last N lines.
-    let log_dir = log_path
-        .parent()
-        .map(|p| p.to_path_buf())
-        .ok_or_else(|| TauriError::new(TauriErrorCode::InternalError, "Invalid log path"))?;
     let max_lines = lines as usize;
     let result = tokio::task::spawn_blocking(move || log_rotation::read_tail(&log_dir, max_lines))
         .await

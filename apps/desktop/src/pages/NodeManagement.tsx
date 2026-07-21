@@ -302,12 +302,19 @@ export default function NodeManagement() {
     setLogsLoading(true);
     try {
       await clearMerodLogs(selectedNode, homeDir);
-      // Re-read so the viewer reflects the now-empty (or freshly appended) file.
-      const logs = await getMerodLogs(selectedNode, homeDir, 500);
-      setLogsContent(logs || "(No log output yet)");
       toast.success("Logs cleared");
     } catch (err: any) {
       toast.error(err?.message || "Failed to clear logs");
+      setLogsLoading(false);
+      return;
+    }
+    // Re-read in a separate step: a failed re-fetch (e.g. no merod.log yet after
+    // clearing) must not be reported as a clear failure — the clear succeeded.
+    try {
+      const logs = await getMerodLogs(selectedNode, homeDir, 500);
+      setLogsContent(logs || "(No log output yet)");
+    } catch {
+      setLogsContent("(No log output yet)");
     } finally {
       setLogsLoading(false);
     }

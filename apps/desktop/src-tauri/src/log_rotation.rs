@@ -81,10 +81,9 @@ impl RollingLogWriter {
         Ok(self.file.as_mut().expect("just set"))
     }
 
-    /// Append one already-newline-terminated log line, rotating first if it would
-    /// push the active file over the segment size. A write larger than a whole
-    /// segment (e.g. a newline-less blob) is split across segments so none
-    /// exceeds the cap.
+    /// Append a chunk of raw log bytes, rotating first if it would push the active
+    /// file over the segment size. A chunk larger than a whole segment (e.g. a
+    /// newline-less blob) is split across segments so none exceeds the cap.
     pub fn write_line(&mut self, bytes: &[u8]) -> io::Result<()> {
         // Reconcile the cached length with the file's real size before any
         // rotation decision: `clear_logs` (the "Clear" button) may have

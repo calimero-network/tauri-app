@@ -1136,23 +1136,25 @@ fn resolve_home_dir(home_dir: Option<String>) -> Result<std::path::PathBuf, Taur
 /// home directory (mirrors delete_calimero_data_dir). Uses lexical containment
 /// so it works for paths that don't exist yet.
 fn ensure_under_home(path: &std::path::Path) -> Result<(), TauriError> {
-    if let Some(home) = dirs::home_dir() {
-        let home = home.canonicalize().unwrap_or(home);
-        // Compare against the deepest existing ancestor so a not-yet-created
-        // logs dir still validates against its real (canonical) parent.
-        let mut probe = path.to_path_buf();
-        let anchor = loop {
-            if probe.exists() {
-                break probe.canonicalize().unwrap_or(probe);
-            }
-            match probe.parent() {
-                Some(p) => probe = p.to_path_buf(),
-                None => break path.to_path_buf(),
-            }
-        };
-        if !anchor.starts_with(&home) {
-            return Err(TauriError::new(TauriErrorCode::PathNotAllowed, "Path must be under your home directory"));
+    // Fail closed: if we can't resolve the home directory we can't prove the
+    // path is safe, so refuse rather than skip the check.
+    let home = dirs::home_dir()
+        .ok_or_else(|| TauriError::new(TauriErrorCode::PathNotAllowed, "Cannot resolve home directory to validate the path"))?;
+    let home = home.canonicalize().unwrap_or(home);
+    // Compare against the deepest existing ancestor so a not-yet-created
+    // logs dir still validates against its real (canonical) parent.
+    let mut probe = path.to_path_buf();
+    let anchor = loop {
+        if probe.exists() {
+            break probe.canonicalize().unwrap_or(probe);
         }
+        match probe.parent() {
+            Some(p) => probe = p.to_path_buf(),
+            None => break path.to_path_buf(),
+        }
+    };
+    if !anchor.starts_with(&home) {
+        return Err(TauriError::new(TauriErrorCode::PathNotAllowed, "Path must be under your home directory"));
     }
     Ok(())
 }
@@ -1192,35 +1194,34 @@ fn get_app_data_dir(app_handle: &tauri::AppHandle) -> Result<std::path::PathBuf,
     Ok(app_data_dir)
 }
 
-/// Drain a child stdout/stderr stream line-by-line into the rotating log writer.
+/// Drain a child stdout/stderr stream into the rotating log writer.
 /// The lock is held only for each short synchronous write (never across an await),
-/// so the two drain tasks (stdout + stderr) interleave without corrupting lines.
+/// so the two drain tasks (stdout + stderr) interleave without corrupting output.
 fn spawn_log_drain<R>(
     reader: R,
     writer: std::sync::Arc<std::sync::Mutex<log_rotation::RollingLogWriter>>,
 ) where
     R: tokio::io::AsyncRead + Unpin + Send + 'static,
 {
-    use tokio::io::{AsyncBufReadExt, BufReader};
+    use tokio::io::AsyncReadExt;
     tokio::spawn(async move {
-        // Read raw bytes with read_until rather than lines(): merod can emit
-        // non-UTF-8 (panic backtraces, stray binary), which lines() surfaces as an
-        // Err that would permanently — and silently — kill the drain, so logs just
-        // stop appearing. read_until preserves the bytes verbatim (ANSI colour
-        // codes included) and never fails on invalid UTF-8; the writer's rotation
-        // and the viewer's lossy decode handle anything unusual downstream.
-        let mut buf_reader = BufReader::new(reader);
-        let mut buf: Vec<u8> = Vec::with_capacity(1024);
+        // Read into a fixed-size buffer rather than read_until(b'\n'): raw bytes
+        // never fail on non-UTF-8 (merod panic backtraces / stray binary) the way
+        // lines() would, and a fixed buffer can't grow unbounded on a runaway
+        // newline-less stream (an OOM vector). Bytes are written verbatim (ANSI
+        // colours included); the writer's rotation and the viewer's lossy decode
+        // handle anything unusual downstream.
+        let mut reader = reader;
+        let mut buf = [0u8; 8192];
         // Log a persistent write failure (disk full, dir deleted, …) or a
         // poisoned writer lock once so it's discoverable, without spamming a
-        // warning for every dropped line.
+        // warning for every dropped chunk.
         let mut write_error_logged = false;
         let mut poison_logged = false;
         loop {
-            buf.clear();
-            match buf_reader.read_until(b'\n', &mut buf).await {
+            match reader.read(&mut buf).await {
                 Ok(0) => break, // EOF: process exited / stream closed
-                Ok(_) => {
+                Ok(n) => {
                     // Recover the guard even if the mutex was poisoned (some other
                     // holder panicked): a std Mutex stays poisoned forever, so
                     // ignoring the Err would silently stop all logging. into_inner()
@@ -1238,7 +1239,7 @@ fn spawn_log_drain<R>(
                     // Keep draining even if a write fails, so a write error can
                     // never wedge merod by leaving its pipe unread — but surface
                     // the first failure so silent log loss is diagnosable.
-                    if let Err(e) = w.write_line(&buf) {
+                    if let Err(e) = w.write_line(&buf[..n]) {
                         if !write_error_logged {
                             warn!("[Merod] log write failed (further errors suppressed): {}", e);
                             write_error_logged = true;
@@ -1248,8 +1249,8 @@ fn spawn_log_drain<R>(
                     }
                 }
                 Err(e) => {
-                    // A genuine I/O error (not a decode error) — log it so a
-                    // stream that stops mid-run is diagnosable, then exit.
+                    // A genuine I/O error — log it so a stream that stops mid-run
+                    // is diagnosable, then exit.
                     warn!("[Merod] log drain stopped on read error: {}", e);
                     break;
                 }
@@ -1442,14 +1443,27 @@ async fn start_merod(
 
     // Rotating writer shared by the stdout and stderr drain tasks. Registered in
     // MerodLogWriters so clear_merod_logs can clear through this same instance
-    // (serialized by the inner Mutex) instead of racing it on raw paths.
-    let log_writer = std::sync::Arc::new(std::sync::Mutex::new(
-        log_rotation::RollingLogWriter::open(&log_dir)
-            .map_err(|e| TauriError::with_details(TauriErrorCode::FileWriteError, "Failed to open log writer", e.to_string()))?,
-    ));
-    if let Ok(mut map) = log_writers.lock() {
-        map.insert(log_dir.to_string_lossy().to_string(), log_writer.clone());
-    }
+    // (serialized by the inner Mutex) instead of racing it on raw paths. We
+    // get-or-create per log dir: if a writer already exists for this dir (e.g. a
+    // second start for the same node on a different port), reuse it so both sets
+    // of drains write through ONE writer rather than two racing on the same files.
+    let log_key = log_dir.to_string_lossy().to_string();
+    let log_writer = {
+        let mut map = log_writers
+            .lock()
+            .map_err(|_| TauriError::new(TauriErrorCode::InternalError, "log writers lock poisoned"))?;
+        match map.get(&log_key) {
+            Some(existing) => existing.clone(),
+            None => {
+                let w = std::sync::Arc::new(std::sync::Mutex::new(
+                    log_rotation::RollingLogWriter::open(&log_dir)
+                        .map_err(|e| TauriError::with_details(TauriErrorCode::FileWriteError, "Failed to open log writer", e.to_string()))?,
+                ));
+                map.insert(log_key.clone(), w.clone());
+                w
+            }
+        }
+    };
 
     // Build command - global options come BEFORE subcommand
     // Merod expects: merod --home ~/.calimero --node node1 run
@@ -1519,16 +1533,29 @@ async fn start_merod(
     
     // Spawn a task to monitor the process
     let merod_state_clone = merod_state.inner().clone();
+    let log_writers_clone = log_writers.inner().clone();
+    let exit_log_key = log_key.clone();
+    let exit_writer = log_writer.clone();
     let monitored_pid = pid; // Capture PID for verification
     tokio::spawn(async move {
         let status = child.wait().await;
-        let mut state = merod_state_clone.lock().unwrap();
-        if let Ok(exit_status) = status {
-            if let Some(code) = exit_status.code() {
-                warn!("[Merod] Process {} exited with code: {}", monitored_pid, code);
+        {
+            let mut state = merod_state_clone.lock().unwrap();
+            if let Ok(exit_status) = status {
+                if let Some(code) = exit_status.code() {
+                    warn!("[Merod] Process {} exited with code: {}", monitored_pid, code);
+                }
+            }
+            state.retain(|p| p.pid != monitored_pid);
+        }
+        // Drop this node's writer registration (only if it's still the one we
+        // registered — a restart may have replaced it) so the map doesn't leak an
+        // open file handle per node, and clear falls back to on-disk once stopped.
+        if let Ok(mut map) = log_writers_clone.lock() {
+            if map.get(&exit_log_key).map(|w| std::sync::Arc::ptr_eq(w, &exit_writer)).unwrap_or(false) {
+                map.remove(&exit_log_key);
             }
         }
-        state.retain(|p| p.pid != monitored_pid);
     });
     
     Ok(format!("Merod started successfully with PID: {}", pid))

@@ -9,6 +9,7 @@ import {
   stopMerodByPid,
   detectRunningMerodNodes,
   getMerodLogs,
+  clearMerodLogs,
   getMerodBinaryVersion,
   type RunningMerodNode,
 } from "../utils/merod";
@@ -291,6 +292,22 @@ export default function NodeManagement() {
     } catch (err: any) {
       setLogsContent(err?.message || "Failed to load logs");
       toast.error("Failed to refresh logs");
+    } finally {
+      setLogsLoading(false);
+    }
+  };
+
+  const handleClearLogs = async () => {
+    if (!selectedNode) return;
+    setLogsLoading(true);
+    try {
+      await clearMerodLogs(selectedNode, homeDir);
+      // Re-read so the viewer reflects the now-empty (or freshly appended) file.
+      const logs = await getMerodLogs(selectedNode, homeDir, 500);
+      setLogsContent(logs || "(No log output yet)");
+      toast.success("Logs cleared");
+    } catch (err: any) {
+      toast.error(err?.message || "Failed to clear logs");
     } finally {
       setLogsLoading(false);
     }
@@ -588,6 +605,7 @@ export default function NodeManagement() {
             title={selectedNode}
             loading={logsLoading}
             onRefresh={handleRefreshLogs}
+            onClear={handleClearLogs}
             onClose={() => setShowLogsModal(false)}
           />
         )}

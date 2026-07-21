@@ -174,3 +174,15 @@
   border-top: 1px solid var(--border-color);
   background: var(--surface-glass-soft);
 }
+
+.logs-viewer-truncated {
+  position: sticky;
+  top: 0;
+  margin: -16px -20px 12px;
+  padding: 8px 20px;
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+  background: var(--surface-glass-soft);
+  border-bottom: 1px solid var(--border-color);
+  font-family: system-ui, -apple-system, sans-serif;
+}

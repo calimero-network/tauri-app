@@ -1,5 +1,5 @@
 import { useState, useMemo, useRef, useEffect } from "react";
-import { Search, Copy, Check, RefreshCw, X } from "lucide-react";
+import { Search, Copy, Check, RefreshCw, X, Trash2 } from "lucide-react";
 import Convert from "ansi-to-html";
 import { useTheme } from "../contexts/ThemeContext";
 import "./LogsViewer.css";
@@ -10,7 +10,14 @@ interface LogsViewerProps {
   loading?: boolean;
   onRefresh: () => void;
   onClose: () => void;
+  onClear?: () => void;
 }
+
+// Cap how many lines are ever put in the DOM at once. The backend already tails
+// (default 500), but a large fetch or an unfiltered view could still push
+// thousands of nodes into one scroll container; rendering only the most recent
+// slice keeps the viewer responsive regardless of how much was fetched.
+const MAX_RENDERED_LINES = 3000;
 
 export function LogsViewer({
   content,
@@ -18,8 +25,10 @@ export function LogsViewer({
   loading = false,
   onRefresh,
   onClose,
+  onClear,
 }: LogsViewerProps) {
   const { theme } = useTheme();
+  const [filterInput, setFilterInput] = useState("");
   const [filter, setFilter] = useState("");
   const [caseSensitive, setCaseSensitive] = useState(false);
   const [levelFilter, setLevelFilter] = useState<string>("");
@@ -27,6 +36,9 @@ export function LogsViewer({
   const [copied, setCopied] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Whether the user is scrolled to (near) the bottom. Auto-scroll only nudges
+  // the view when they haven't deliberately scrolled up to read older lines.
+  const pinnedToBottomRef = useRef(true);
 
   const levels = [
     { id: "", label: "All" },
@@ -37,14 +49,22 @@ export function LogsViewer({
     { id: "TRACE", label: "Trace" },
   ];
 
+  // Debounce the filter so we don't re-scan every line on each keystroke.
+  useEffect(() => {
+    const t = setTimeout(() => setFilter(filterInput), 150);
+    return () => clearTimeout(t);
+  }, [filterInput]);
+
+  // Split the raw content exactly once; every derived value reuses this.
+  const allLines = useMemo(() => content.split("\n"), [content]);
+
   const filteredLines = useMemo(() => {
-    const lines = content.split("\n");
-    return lines.filter((line) => {
+    if (!filter && !levelFilter) return allLines;
+    const needle = caseSensitive ? filter : filter.toLowerCase();
+    return allLines.filter((line) => {
       const matchFilter =
         !filter ||
-        (caseSensitive
-          ? line.includes(filter)
-          : line.toLowerCase().includes(filter.toLowerCase()));
+        (caseSensitive ? line.includes(needle) : line.toLowerCase().includes(needle));
       const matchLevel =
         !levelFilter ||
         line.includes(`[${levelFilter}]`) ||
@@ -52,7 +72,14 @@ export function LogsViewer({
         line.toUpperCase().includes(levelFilter);
       return matchFilter && matchLevel;
     });
-  }, [content, filter, caseSensitive, levelFilter]);
+  }, [allLines, filter, caseSensitive, levelFilter]);
+
+  // Only the most recent slice is rendered; older lines stay out of the DOM.
+  const hiddenCount = Math.max(0, filteredLines.length - MAX_RENDERED_LINES);
+  const visibleLines = useMemo(
+    () => (hiddenCount > 0 ? filteredLines.slice(-MAX_RENDERED_LINES) : filteredLines),
+    [filteredLines, hiddenCount]
+  );
 
   const convert = useMemo(
     () =>
@@ -66,12 +93,13 @@ export function LogsViewer({
   );
 
   const renderedContent = useMemo(() => {
-    const text = filteredLines.join("\n");
+    const text = visibleLines.join("\n");
     return text ? convert.toHtml(text) : "";
-  }, [filteredLines, convert]);
+  }, [visibleLines, convert]);
 
   const handleCopy = async () => {
     try {
+      // Copy the full filtered set, not just the rendered slice.
       await navigator.clipboard.writeText(filteredLines.join("\n"));
       if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
       setCopied(true);
@@ -88,10 +116,18 @@ export function LogsViewer({
   }, []);
 
   useEffect(() => {
-    if (autoScroll && scrollRef.current) {
+    if (autoScroll && pinnedToBottomRef.current && scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [filteredLines, autoScroll]);
+  }, [visibleLines, autoScroll]);
+
+  const handleScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    // "Near bottom" tolerance so tiny rounding doesn't unpin the view.
+    pinnedToBottomRef.current =
+      el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+  };
 
   return (
     <div className="logs-viewer-overlay" onClick={onClose}>
@@ -116,6 +152,17 @@ export function LogsViewer({
               {copied ? <Check size={14} /> : <Copy size={14} />}
               {copied ? "Copied!" : "Copy"}
             </button>
+            {onClear && (
+              <button
+                onClick={onClear}
+                className="logs-viewer-btn"
+                disabled={loading}
+                title="Clear logs on disk"
+              >
+                <Trash2 size={14} />
+                Clear
+              </button>
+            )}
             <button
               onClick={onClose}
               className="logs-viewer-btn logs-viewer-close"
@@ -132,8 +179,8 @@ export function LogsViewer({
             <input
               type="text"
               placeholder="Filter logs..."
-              value={filter}
-              onChange={(e) => setFilter(e.target.value)}
+              value={filterInput}
+              onChange={(e) => setFilterInput(e.target.value)}
               className="logs-viewer-search-input"
             />
           </div>
@@ -166,18 +213,28 @@ export function LogsViewer({
           </label>
         </div>
 
-        <div ref={scrollRef} className="logs-viewer-content">
+        <div ref={scrollRef} className="logs-viewer-content" onScroll={handleScroll}>
           {loading ? (
             "Loading logs..."
           ) : renderedContent ? (
-            <div dangerouslySetInnerHTML={{ __html: renderedContent }} />
+            <>
+              {hiddenCount > 0 && (
+                <div className="logs-viewer-truncated">
+                  {hiddenCount.toLocaleString()} older line(s) hidden — showing the
+                  most recent {MAX_RENDERED_LINES.toLocaleString()}. Use the filter to
+                  narrow down, or Copy to export everything fetched.
+                </div>
+              )}
+              <div dangerouslySetInnerHTML={{ __html: renderedContent }} />
+            </>
           ) : (
             "(No log output)"
           )}
         </div>
         {(filter || levelFilter) && (
           <div className="logs-viewer-footer">
-            Showing {filteredLines.length} of {content.split("\n").length} lines
+            Showing {filteredLines.length.toLocaleString()} of{" "}
+            {allLines.length.toLocaleString()} lines
           </div>
         )}
       </div>

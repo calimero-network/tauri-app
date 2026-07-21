@@ -11,7 +11,22 @@ also cleaned up."_ Concretely:
 3. **Delete** old segments (and stale per-node log dirs) automatically.
 4. Make the **Nodes-tab log viewer** fast even when a node has logged a lot.
 
-This is a design/implementation plan only — no behaviour is changed by this document.
+> **Status (this PR):** the core of the plan is now **implemented** — 100 MB cap,
+> rotation, startup cleanup, a bounded tail read, a `clear_merod_logs` command, and a
+> faster viewer. What's implemented vs. deferred is called out inline with
+> **✅ Implemented** / **⏭️ Deferred** tags. The deferred items (incremental
+> `get_merod_logs_since` live-tail, DOM virtualization library, Settings knobs,
+> Download-full-log) are follow-ups, not required for the cap/cleanup goal.
+
+### Implemented in this PR
+- `src-tauri/src/log_rotation.rs` — `RollingLogWriter` (10 MB segments × up to 10 files
+  ≈ 100 MB), `cleanup_logs`, `clear_logs`, bounded `read_tail`; 6 unit tests.
+- `start_merod` now pipes merod stdout/stderr and drains them into the rotating writer,
+  and runs `cleanup_logs` before starting.
+- `get_merod_logs` uses the bounded reverse tail (no more whole-file read).
+- New `clear_merod_logs` Tauri command (+ `clearMerodLogs` in `utils/merod.ts`).
+- `LogsViewer.tsx`: single split, debounced filter, DOM capped to the last 3 000 lines,
+  ANSI conversion of only the rendered slice, pin-to-bottom auto-scroll, **Clear** button.
 
 ---
 
@@ -80,7 +95,9 @@ Keep giving merod the FD, and run a periodic capper.
   lost. Acceptable for diagnostics; keep the window small (truncate immediately after
   copy). Document it.
 
-### Strategy B — interpose a rotating writer (recommended)
+### Strategy B — interpose a rotating writer (recommended) — ✅ Implemented
+_This is the strategy that shipped (`log_rotation::RollingLogWriter` + `spawn_log_drain`)._
+
 Stop handing merod the file FD; drain its streams and write through a size-capped
 rotating sink.
 
@@ -119,24 +136,23 @@ rotating sink.
   file and remove rotated segments (wired to a "Clear logs" button, §4).
 - Optional: a global sweep on app startup across all `~/.calimero/*/logs` dirs.
 
-### Config
-- Extend `Settings` (`src/utils/settings.ts`, defaults ~L12/L89) with optional
-  `logMaxMb` (default 100) and `logRetentionDays` (default 14); thread into `start_merod`
-  args and the cleanup routine. Ship sensible defaults so no UI is strictly required.
+### Config — ⏭️ Deferred
+- Currently the cap/retention are constants in `log_rotation.rs` (`SEGMENT_BYTES` 10 MB,
+  `MAX_SEGMENTS` 9 ⇒ ~100 MB, `RETENTION_DAYS` 14). Optional follow-up: surface
+  `logMaxMb` / `logRetentionDays` in `Settings` (`src/utils/settings.ts`) and thread them
+  into `start_merod`. Not required for the cap/cleanup goal.
 
 ---
 
-## 3. Backend read path: tail without reading the whole file
+## 3. Backend read path: tail without reading the whole file — ✅ tail / ⏭️ since-API
 
 Replace the `read_to_string`-everything in `get_merod_logs` (`main.rs` ~L2403–2418) with
 a **bounded reverse tail**:
 
-- `open` the active file, `seek(SeekFrom::End(0))` to get length, then read backwards in
-  chunks (e.g. 64 KB) counting `\n` until we have `lines` newlines **or** hit a byte cap
-  (e.g. 2 MB). Decode only that slice. This makes cost O(tail) not O(file).
-- If the active file has fewer than `lines`, optionally continue into `merod.log.1`, `.2`
-  … to fill the request (walk segments newest→oldest).
-- Add an **incremental API** for live-tail: `get_merod_logs_since(node, home_dir, offset)`
+- ✅ Implemented as `log_rotation::read_tail`: reads at most `TAIL_READ_CAP_BYTES` (4 MB)
+  from the **end** of each file, walking segments newest→oldest until it has `lines`
+  lines. Cost is O(tail), and it's safe against a legacy huge `merod.log`.
+- ⏭️ **Deferred** — incremental API for live-tail: `get_merod_logs_since(node, home_dir, offset)`
   returning `{ bytes, next_offset }` (only data written since `offset`). This is what the
   viewer polls (§4) instead of re-pulling the whole tail. Handle truncation/rotation by
   detecting `current_len < offset` → reset to a fresh tail.
@@ -145,22 +161,17 @@ a **bounded reverse tail**:
 
 ## 4. Frontend viewer optimization (`LogsViewer.tsx` + `NodeManagement.tsx`)
 
-- **Virtualize** the line list (e.g. render only visible rows) or hard-cap the DOM to the
-  last N lines (e.g. 5 000). Keep an in-memory ring buffer capped at N so live-tail can't
-  grow unbounded.
-- **Split once, memoize:** derive `lines` from `content` a single time; drop the triple
-  `split("\n")` (filter body ~L40–55 and footer count ~L180 should reuse it).
-- **Debounce** the text filter input (~150 ms) so filtering doesn't run per keystroke.
-- **ANSI conversion per line, memoized** (convert only the visible/less-than-N lines),
-  not the whole blob each render (~L57–71).
-- **Live tail via polling** the incremental API (§3): when the modal is open and
-  "auto-scroll/live" is on, `setInterval` (~1–2 s) calls `get_merod_logs_since` and
-  appends only new bytes (currently there is **no** polling — refresh is manual).
-  Pause polling when the modal is closed or the tab is hidden.
-- **Auto-scroll only when pinned to bottom** (don't yank the view if the user scrolled up).
-- Add **"Clear logs"** (calls `clear_merod_logs`) and optionally **"Download full log"**
-  (stream file to a user-picked path) buttons.
-- Mirror new commands in `src/utils/merod.ts` (`getMerodLogsSince`, `clearMerodLogs`).
+- ✅ **Hard-cap the DOM** to the last `MAX_RENDERED_LINES` (3 000) with a "N older lines
+  hidden" banner. (⏭️ full windowed virtualization via a library is a further follow-up.)
+- ✅ **Split once, memoize:** `allLines` is derived from `content` a single time and reused
+  by the filter, the render slice and the footer count (was three separate `split("\n")`).
+- ✅ **Debounce** the filter input (150 ms).
+- ✅ **ANSI conversion of only the rendered slice**, not the whole blob each render.
+- ✅ **Auto-scroll only when pinned to bottom** (tracked via an `onScroll` handler) so it
+  no longer yanks the view when the user scrolls up.
+- ✅ **"Clear logs"** button → `clear_merod_logs` (via `clearMerodLogs` in `utils/merod.ts`).
+- ⏭️ **Deferred** — live-tail polling of the incremental API (§3); **"Download full log"**
+  button.
 
 ---
 

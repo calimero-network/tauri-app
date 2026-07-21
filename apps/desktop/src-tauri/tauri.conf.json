@@ -31,7 +31,7 @@
   },
   "productName": "Calimero Desktop",
   "mainBinaryName": "Calimero Desktop",
-  "version": "0.0.71",
+  "version": "0.0.72",
   "identifier": "network.calimero.desktop",
   "plugins": {
     "updater": {

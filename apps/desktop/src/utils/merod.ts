@@ -122,6 +122,16 @@ export async function getMerodLogs(
 }
 
 /**
+ * Truncate the active log file and delete rotated segments for a node.
+ */
+export async function clearMerodLogs(
+  nodeName: string,
+  homeDir?: string
+): Promise<string> {
+  return await invoke('clear_merod_logs', { nodeName, homeDir });
+}
+
+/**
  * Kill all merod processes on the system. Call before total nuke.
  */
 export async function killAllMerodProcesses(): Promise<string> {

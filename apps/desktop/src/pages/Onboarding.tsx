@@ -517,7 +517,10 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
     window.location.reload();
   };
 
-  const FloatingMenu = () => (
+  // Rendered as a plain JSX value (not a nested component) so it is NOT
+  // remounted on every parent render — remounting is what made the whole
+  // control replay its entrance animation on each keystroke.
+  const floatingMenu = (
     <>
       {showFloatingMenu && (
         <div
@@ -559,13 +562,35 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
 
   // Get current step index for progress
   const currentStepIndex = ONBOARDING_STEPS.indexOf(currentStep);
-  const progress = ((currentStepIndex + 1) / ONBOARDING_STEPS.length) * 100;
+  const totalSteps = ONBOARDING_STEPS.length;
+  const progress = totalSteps > 1 ? ((currentStepIndex + 1) / totalSteps) * 100 : 0;
+
+  // Progress indicator as a plain JSX value (see floatingMenu note above): a
+  // nested component would remount every render and re-run its fadeUp entrance,
+  // which is exactly the "green bar flickers when I type" bug. As a value it
+  // reconciles to the same DOM node, so only the fill width transitions.
+  const progressLineWidth = totalSteps > 1 ? `calc(${progress}% - 80px)` : '0px';
+  const progressIndicator = (
+    <div className="onboarding-progress">
+      <div className="progress-steps">
+        <div className="progress-fill-line" style={{ width: progressLineWidth }}></div>
+        {ONBOARDING_STEPS.map((step, index) => (
+          <div
+            key={step}
+            className={`progress-step ${index <= currentStepIndex ? 'active' : ''} ${index === currentStepIndex ? 'current' : ''}`}
+          >
+            <div className="progress-dot"></div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 
   // If loading and we have a step other than welcome/node-setup, show loading
   if (loading && !['welcome', 'what-is', 'node-setup'].includes(currentStep)) {
     return (
       <div className="onboarding-page" data-testid="onboarding-page">
-        <FloatingMenu />
+        {floatingMenu}
         <div className="onboarding-content">
           <div className="loading-spinner">
             <div className="spinner"></div>
@@ -604,29 +629,10 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
         setCurrentStep('node-setup');
       };
 
-      // Progress indicator component
-      const ProgressIndicator = () => (
-        <div className="onboarding-progress">
-          <div className="progress-bar">
-            <div className="progress-fill" style={{ width: `${progress}%` }}></div>
-          </div>
-          <div className="progress-steps">
-            {ONBOARDING_STEPS.map((step, index) => (
-              <div
-                key={step}
-                className={`progress-step ${index <= currentStepIndex ? 'active' : ''} ${index === currentStepIndex ? 'current' : ''}`}
-              >
-                <div className="progress-dot"></div>
-              </div>
-            ))}
-          </div>
-        </div>
-      );
-
     return (
       <div className="onboarding-page" data-testid="onboarding-page">
-          <ProgressIndicator />
-          <FloatingMenu />
+          {progressIndicator}
+          {floatingMenu}
         <div className="onboarding-content">
           <div className="onboarding-card error">
               <AlertTriangle className="onboarding-icon" size={48} />
@@ -667,36 +673,13 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
     // If no node configured, just continue with normal flow (welcome screen)
   }
 
-  // Progress indicator component
-  const ProgressIndicator = () => {
-    const totalSteps = ONBOARDING_STEPS.length;
-    const progressWidth = totalSteps > 1 ? ((currentStepIndex + 1) / totalSteps) * 100 : 0;
-    const lineWidth = totalSteps > 1 ? `calc(${progressWidth}% - 80px)` : '0px';
-    
-    return (
-      <div className="onboarding-progress">
-        <div className="progress-steps">
-          <div className="progress-fill-line" style={{ width: lineWidth }}></div>
-          {ONBOARDING_STEPS.map((step, index) => (
-            <div
-              key={step}
-              className={`progress-step ${index <= currentStepIndex ? 'active' : ''} ${index === currentStepIndex ? 'current' : ''}`}
-            >
-              <div className="progress-dot"></div>
-            </div>
-          ))}
-        </div>
-      </div>
-    );
-  };
-
   // Welcome screen
   if (currentStep === 'welcome') {
     return (
       <div className="onboarding-page" data-testid="onboarding-page">
-        <ProgressIndicator />
-        <FloatingMenu />
-        <div ref={stepContainerRef} className="onboarding-step-container">
+        {progressIndicator}
+        {floatingMenu}
+        <div ref={stepContainerRef} key={currentStep} className="onboarding-step-container">
           <div className="step-content">
             <div className="step-logo-wrapper">
               <img src={calimeroLogo} alt="Calimero" className="calimero-logo" />
@@ -725,9 +708,9 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
   if (currentStep === 'what-is') {
     return (
       <div className="onboarding-page" data-testid="onboarding-page">
-        <ProgressIndicator />
-        <FloatingMenu />
-        <div ref={stepContainerRef} className="onboarding-step-container">
+        {progressIndicator}
+        {floatingMenu}
+        <div ref={stepContainerRef} key={currentStep} className="onboarding-step-container">
           <button 
             onClick={() => setCurrentStep('welcome')} 
             className="step-back-button"
@@ -785,9 +768,9 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
 
     return (
       <div className="onboarding-page" data-testid="onboarding-page">
-        <ProgressIndicator />
-        <FloatingMenu />
-        <div ref={stepContainerRef} className="onboarding-step-container">
+        {progressIndicator}
+        {floatingMenu}
+        <div ref={stepContainerRef} key={currentStep} className="onboarding-step-container">
           <button 
             onClick={() => {
               setCurrentStep('what-is');
@@ -1059,9 +1042,9 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
   if (currentStep === 'cloud-connect') {
     return (
       <div className="onboarding-page" data-testid="onboarding-page">
-        <ProgressIndicator />
-        <FloatingMenu />
-        <div ref={stepContainerRef} className="onboarding-step-container">
+        {progressIndicator}
+        {floatingMenu}
+        <div ref={stepContainerRef} key={currentStep} className="onboarding-step-container">
           <div className="step-content">
             <h1 className="step-title">Connect to Calimero Cloud</h1>
             <p className="step-description">
@@ -1145,9 +1128,9 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
   if (currentStep === 'login') {
       return (
         <div className="onboarding-page" data-testid="onboarding-page">
-        <ProgressIndicator />
-        <FloatingMenu />
-          <div ref={stepContainerRef} className="onboarding-step-container onboarding-step-login">
+        {progressIndicator}
+        {floatingMenu}
+          <div ref={stepContainerRef} key={currentStep} className="onboarding-step-container onboarding-step-login">
             <button
               onClick={() => {
                 if (STEP_AFTER_NODE_SETUP === 'node-setup') {
@@ -1204,9 +1187,9 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
   if (currentStep === 'install-app') {
     return (
       <div className="onboarding-page" data-testid="onboarding-page">
-        <ProgressIndicator />
-        <FloatingMenu />
-        <div ref={stepContainerRef} className="onboarding-step-container">
+        {progressIndicator}
+        {floatingMenu}
+        <div ref={stepContainerRef} key={currentStep} className="onboarding-step-container">
           <button
             onClick={() => setCurrentStep('login')}
             className="step-back-button"

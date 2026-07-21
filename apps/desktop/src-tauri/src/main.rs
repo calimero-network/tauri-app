@@ -9,6 +9,8 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{Emitter, Manager};
 use thiserror::Error;
 
+mod log_rotation;
+
 static HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 static SSE_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 
@@ -1354,6 +1356,39 @@ struct MerodProcess {
 
 type MerodState = Arc<Mutex<Vec<MerodProcess>>>;
 
+/// A registered log writer plus a reference count of live processes using it.
+/// Ref-counting means a restart or a concurrent second start (which reuse the
+/// same writer) don't drop the shared registration until the *last* user exits.
+struct LogWriterEntry {
+    writer: Arc<Mutex<log_rotation::RollingLogWriter>>,
+    refs: usize,
+}
+
+/// Live rotating log writers, keyed by log directory. Lets `clear_merod_logs`
+/// clear through the same writer the drain tasks use (serialized by the inner
+/// Mutex) rather than racing it via free functions on raw paths.
+type MerodLogWriters = Arc<Mutex<std::collections::HashMap<String, LogWriterEntry>>>;
+
+/// Resolve an optional caller-supplied home dir: expand a leading `~`, or fall
+/// back to `~/.calimero`. Single source of truth for the node commands.
+fn resolve_home_dir(home_dir: Option<String>) -> Result<std::path::PathBuf, TauriError> {
+    if let Some(dir) = home_dir {
+        let expanded = if dir.starts_with("~") {
+            match dirs::home_dir() {
+                Some(home) => dir.replacen("~", &home.to_string_lossy(), 1),
+                None => return Err(TauriError::new(TauriErrorCode::HomeDirNotFound, "Failed to get home directory")),
+            }
+        } else {
+            dir
+        };
+        Ok(std::path::PathBuf::from(expanded))
+    } else {
+        Ok(dirs::home_dir()
+            .ok_or_else(|| TauriError::new(TauriErrorCode::HomeDirNotFound, "Failed to get home directory"))?
+            .join(".calimero"))
+    }
+}
+
 /// Get the path to the bundled merod binary
 fn get_merod_binary_path(app_handle: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
     let resource_candidates = if cfg!(target_os = "windows") {
@@ -1392,6 +1427,71 @@ fn get_app_data_dir(app_handle: &tauri::AppHandle) -> Result<std::path::PathBuf,
     Ok(app_data_dir)
 }
 
+/// Drain a child stdout/stderr stream into the rotating log writer.
+/// The lock is held only for each short synchronous write (never across an await),
+/// so the two drain tasks (stdout + stderr) interleave without corrupting output.
+fn spawn_log_drain<R>(
+    reader: R,
+    writer: std::sync::Arc<std::sync::Mutex<log_rotation::RollingLogWriter>>,
+) where
+    R: tokio::io::AsyncRead + Unpin + Send + 'static,
+{
+    use tokio::io::AsyncReadExt;
+    tokio::spawn(async move {
+        // Read into a fixed-size buffer rather than read_until(b'\n'): raw bytes
+        // never fail on non-UTF-8 (merod panic backtraces / stray binary) the way
+        // lines() would, and a fixed buffer can't grow unbounded on a runaway
+        // newline-less stream (an OOM vector). Bytes are written verbatim (ANSI
+        // colours included); the writer's rotation and the viewer's lossy decode
+        // handle anything unusual downstream.
+        let mut reader = reader;
+        let mut buf = [0u8; 8192];
+        // Log a persistent write failure (disk full, dir deleted, …) or a
+        // poisoned writer lock once so it's discoverable, without spamming a
+        // warning for every dropped chunk.
+        let mut write_error_logged = false;
+        let mut poison_logged = false;
+        loop {
+            match reader.read(&mut buf).await {
+                Ok(0) => break, // EOF: process exited / stream closed
+                Ok(n) => {
+                    // Recover the guard even if the mutex was poisoned (some other
+                    // holder panicked): a std Mutex stays poisoned forever, so
+                    // ignoring the Err would silently stop all logging. into_inner()
+                    // keeps draining; we warn once so it's diagnosable.
+                    let mut w = match writer.lock() {
+                        Ok(g) => g,
+                        Err(poisoned) => {
+                            if !poison_logged {
+                                warn!("[Merod] log writer mutex poisoned; recovering and continuing: {}", poisoned);
+                                poison_logged = true;
+                            }
+                            poisoned.into_inner()
+                        }
+                    };
+                    // Keep draining even if a write fails, so a write error can
+                    // never wedge merod by leaving its pipe unread — but surface
+                    // the first failure so silent log loss is diagnosable.
+                    if let Err(e) = w.write_line(&buf[..n]) {
+                        if !write_error_logged {
+                            warn!("[Merod] log write failed (further errors suppressed): {}", e);
+                            write_error_logged = true;
+                        }
+                    } else {
+                        write_error_logged = false;
+                    }
+                }
+                Err(e) => {
+                    // A genuine I/O error — log it so a stream that stops mid-run
+                    // is diagnosable, then exit.
+                    warn!("[Merod] log drain stopped on read error: {}", e);
+                    break;
+                }
+            }
+        }
+    });
+}
+
 #[tauri::command]
 async fn start_merod(
     server_port: Option<u16>,
@@ -1401,6 +1501,7 @@ async fn start_merod(
     debug_logs: Option<bool>,
     app_handle: tauri::AppHandle,
     merod_state: tauri::State<'_, MerodState>,
+    log_writers: tauri::State<'_, MerodLogWriters>,
 ) -> Result<String, TauriError> {
     let server_port = server_port.unwrap_or(2528);
     let swarm_port = swarm_port.unwrap_or(2428);
@@ -1444,28 +1545,9 @@ async fn start_merod(
         .map_err(|e| TauriError::new(TauriErrorCode::FileNotFound, e))?;
 
     // Prepare home directory (where .calimero folder is, e.g., ~/.calimero)
-    let home_dir_path = if let Some(dir) = data_dir {
-        // Expand ~ if present
-        let expanded = if dir.starts_with("~") {
-            if let Some(home) = dirs::home_dir() {
-                dir.replacen("~", &home.to_string_lossy(), 1)
-            } else {
-                dir
-            }
-        } else {
-            dir
-        };
-        std::path::PathBuf::from(expanded)
-    } else {
-        dirs::home_dir()
-            .ok_or_else(|| {
-                TauriError::new(
-                    TauriErrorCode::HomeDirNotFound,
-                    "Failed to get home directory",
-                )
-            })?
-            .join(".calimero")
-    };
+    // Same resolver as get_merod_logs/clear_merod_logs, so a node writes logs at
+    // exactly the path the viewer/Clear later resolve (no ~-expansion drift).
+    let home_dir_path = resolve_home_dir(data_dir)?;
 
     std::fs::create_dir_all(&home_dir_path).map_err(|e| {
         TauriError::with_details(
@@ -1599,7 +1681,8 @@ async fn start_merod(
         .ok_or_else(|| TauriError::new(TauriErrorCode::InvalidInput, "Node name is required"))?
         .clone();
 
-    // Create logs directory and open log file - redirect merod stdout/stderr here
+    // Create logs directory. merod's stdout/stderr are piped to the app and drained
+    // into a size-capped rotating writer (see below) so logs never grow unbounded.
     let log_dir = home_dir_path.join(&node_name_str).join("logs");
     std::fs::create_dir_all(&log_dir).map_err(|e| {
         TauriError::with_details(
@@ -1610,33 +1693,52 @@ async fn start_merod(
     })?;
     let log_path = log_dir.join("merod.log");
 
-    // Open log file for append - use separate handles for stdout and stderr
-    let log_file_stdout = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_path)
-        .map_err(|e| {
-            TauriError::with_details(
-                TauriErrorCode::FileWriteError,
-                "Failed to create log file",
-                e.to_string(),
-            )
-        })?;
-    let log_file_stderr = log_file_stdout
-        .try_clone()
-        .or_else(|_| {
-            std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&log_path)
-        })
-        .map_err(|e| {
-            TauriError::with_details(
-                TauriErrorCode::FileWriteError,
-                "Failed to open log file for stderr",
-                e.to_string(),
-            )
-        })?;
+    // Trim old/oversized rotated segments before we start writing (also brings a
+    // legacy pre-rotation merod.log back under the cap on next start).
+    if let Err(e) = log_rotation::cleanup_logs(&log_dir) {
+        warn!("[Merod] Log cleanup failed (non-fatal): {}", e);
+    }
+
+    // Rotating writer shared by the stdout and stderr drain tasks. Registered in
+    // MerodLogWriters so clear_merod_logs can clear through this same instance
+    // (serialized by the inner Mutex) instead of racing it on raw paths. We
+    // get-or-create per log dir: if a writer already exists for this dir (e.g. a
+    // second start for the same node on a different port), reuse it so both sets
+    // of drains write through ONE writer rather than two racing on the same files.
+    let log_key = log_dir.to_string_lossy().to_string();
+    let log_writer = {
+        let mut map = log_writers
+            .lock()
+            .map_err(|_| TauriError::new(TauriErrorCode::InternalError, "log writers lock poisoned"))?;
+        match map.get_mut(&log_key) {
+            Some(entry) => {
+                entry.refs += 1;
+                entry.writer.clone()
+            }
+            None => {
+                let w = std::sync::Arc::new(std::sync::Mutex::new(
+                    log_rotation::RollingLogWriter::open(&log_dir)
+                        .map_err(|e| TauriError::with_details(TauriErrorCode::FileWriteError, "Failed to open log writer", e.to_string()))?,
+                ));
+                map.insert(log_key.clone(), LogWriterEntry { writer: w.clone(), refs: 1 });
+                w
+            }
+        }
+    };
+
+    // Drop the ref we just took, for the early-return paths before the exit
+    // monitor (which is what normally decrements) is spawned — otherwise a failed
+    // spawn / immediate exit would leak the registration (and its file handle).
+    let unregister_writer = || {
+        if let Ok(mut map) = log_writers.lock() {
+            if let Some(entry) = map.get_mut(&log_key) {
+                entry.refs = entry.refs.saturating_sub(1);
+                if entry.refs == 0 {
+                    map.remove(&log_key);
+                }
+            }
+        }
+    };
 
     // Build command - global options come BEFORE subcommand
     // Merod expects: merod --home ~/.calimero --node node1 run
@@ -1661,9 +1763,9 @@ async fn start_merod(
     // Add 'run' subcommand last
     cmd.arg("run");
 
-    // Redirect stdout/stderr to log file - merod output goes directly to disk
-    cmd.stdout(Stdio::from(log_file_stdout));
-    cmd.stderr(Stdio::from(log_file_stderr));
+    // Pipe stdout/stderr so the app can drain them into the rotating writer.
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
     cmd.stdin(Stdio::null());
 
     // Log the command being run
@@ -1674,16 +1776,25 @@ async fn start_merod(
     );
 
     // Start the process
-    let mut child = cmd.spawn().map_err(|e| {
-        TauriError::with_details(
-            TauriErrorCode::MerodStartFailed,
-            "Failed to start merod",
-            e.to_string(),
-        )
-    })?;
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            unregister_writer();
+            return Err(TauriError::with_details(TauriErrorCode::MerodStartFailed, "Failed to start merod", e.to_string()));
+        }
+    };
 
     let pid = child.id().unwrap();
     info!("[Merod] Started with PID: {}", pid);
+
+    // Drain stdout+stderr into the rotating writer. Taken before the child is moved
+    // into the monitor task below.
+    if let Some(out) = child.stdout.take() {
+        spawn_log_drain(out, log_writer.clone());
+    }
+    if let Some(err) = child.stderr.take() {
+        spawn_log_drain(err, log_writer.clone());
+    }
 
     // Wait a brief moment to check if process is still alive
     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
@@ -1696,10 +1807,8 @@ async fn start_merod(
                 code
             );
             warn!("[Merod] {}", error_msg);
-            return Err(TauriError::new(
-                TauriErrorCode::MerodProcessExited,
-                error_msg,
-            ));
+            unregister_writer();
+            return Err(TauriError::new(TauriErrorCode::MerodProcessExited, error_msg));
         }
     }
 
@@ -1714,19 +1823,33 @@ async fn start_merod(
 
     // Spawn a task to monitor the process
     let merod_state_clone = merod_state.inner().clone();
+    let log_writers_clone = log_writers.inner().clone();
+    let exit_log_key = log_key.clone();
     let monitored_pid = pid; // Capture PID for verification
     tokio::spawn(async move {
         let status = child.wait().await;
-        let mut state = merod_state_clone.lock().unwrap();
-        if let Ok(exit_status) = status {
-            if let Some(code) = exit_status.code() {
-                warn!(
-                    "[Merod] Process {} exited with code: {}",
-                    monitored_pid, code
-                );
+        {
+            let mut state = merod_state_clone.lock().unwrap();
+            if let Ok(exit_status) = status {
+                if let Some(code) = exit_status.code() {
+                    warn!("[Merod] Process {} exited with code: {}", monitored_pid, code);
+                }
+            }
+            state.retain(|p| p.pid != monitored_pid);
+        }
+        // Drop one reference to this node's writer; remove the registration only
+        // when the last user exits. Ref-counting means a restart or a concurrent
+        // second start (which reuse the same writer) don't unregister it out from
+        // under a still-running drain — which would send clear() down the
+        // unsynchronized on-disk path while writes are live.
+        if let Ok(mut map) = log_writers_clone.lock() {
+            if let Some(entry) = map.get_mut(&exit_log_key) {
+                entry.refs = entry.refs.saturating_sub(1);
+                if entry.refs == 0 {
+                    map.remove(&exit_log_key);
+                }
             }
         }
-        state.retain(|p| p.pid != monitored_pid);
     });
 
     Ok(format!("Merod started successfully with PID: {}", pid))
@@ -2957,53 +3080,73 @@ async fn get_merod_logs(
     validate_node_name(&node_name).map_err(|e| TauriError::new(TauriErrorCode::InvalidInput, e))?;
     let lines = lines.unwrap_or(500).min(10_000);
 
-    let home_dir_path = if let Some(dir) = home_dir {
-        let expanded = if dir.starts_with("~") {
-            if let Some(home) = dirs::home_dir() {
-                dir.replacen("~", &home.to_string_lossy(), 1)
-            } else {
-                dir
-            }
-        } else {
-            dir
-        };
-        std::path::PathBuf::from(expanded)
-    } else {
-        dirs::home_dir()
-            .ok_or_else(|| {
-                TauriError::new(
-                    TauriErrorCode::HomeDirNotFound,
-                    "Failed to get home directory",
-                )
-            })?
-            .join(".calimero")
-    };
+    let home_dir_path = resolve_home_dir(home_dir)?;
+    let log_dir = home_dir_path.join(&node_name).join("logs");
+    // Path safety is from validate_node_name; the data dir is user-configurable
+    // (may be outside $HOME), so we don't constrain it here — this is a read-only
+    // tail of `<data_dir>/<node>/logs` and can't traverse out.
 
-    let log_path = home_dir_path
-        .join(&node_name)
-        .join("logs")
-        .join("merod.log");
-
-    if !log_path.exists() {
+    // Only hard-error when the node has no logs dir at all (never started by the
+    // app). If the dir exists, read_tail returns whatever is present — including
+    // rotated segments alone when the active merod.log has been cleared/rotated
+    // away — or "" when empty.
+    if !log_dir.exists() {
         return Err(TauriError::new(
             TauriErrorCode::FileNotFound,
             format!("No log file found for node '{}'. Logs are only available for nodes started by the app.", node_name),
         ));
     }
 
-    let content = tokio::fs::read_to_string(&log_path).await.map_err(|e| {
-        TauriError::with_details(
-            TauriErrorCode::FileReadError,
-            "Failed to read log file",
-            e.to_string(),
-        )
-    })?;
+    // Bounded reverse tail across the active file + rotated segments — never loads
+    // the whole (up to ~100 MB) history into memory just to return the last N lines.
+    let max_lines = lines as usize;
+    let result = tokio::task::spawn_blocking(move || log_rotation::read_tail(&log_dir, max_lines))
+        .await
+        .map_err(|e| TauriError::with_details(TauriErrorCode::InternalError, "Log read task failed", e.to_string()))?
+        .map_err(|e| TauriError::with_details(TauriErrorCode::FileReadError, "Failed to read log file", e.to_string()))?;
 
-    let all_lines: Vec<&str> = content.lines().collect();
-    let start = all_lines.len().saturating_sub(lines as usize);
-    let last_lines = &all_lines[start..];
+    Ok(result)
+}
 
-    Ok(last_lines.join("\n"))
+/// Truncate the active log file and delete rotated segments for a node.
+#[tauri::command]
+async fn clear_merod_logs(
+    node_name: String,
+    home_dir: Option<String>,
+    log_writers: tauri::State<'_, MerodLogWriters>,
+) -> Result<String, TauriError> {
+    validate_node_name(&node_name).map_err(|e| TauriError::new(TauriErrorCode::InvalidInput, e))?;
+
+    let home_dir_path = resolve_home_dir(home_dir)?;
+    let log_dir = home_dir_path.join(&node_name).join("logs");
+    // Path safety comes from validate_node_name (no separators / `..`), so the
+    // target is always `<data_dir>/<node>/logs` and can't traverse out. We do NOT
+    // constrain to $HOME here: the data dir is user-configurable (pick_directory
+    // can point at an external volume), and start_merod already writes logs there.
+    // Only files literally named merod.log[.N] under a validated node's logs dir
+    // are ever touched.
+
+    // If a node is running, clear through its live writer (serialized with the
+    // drain tasks by the inner Mutex) so we don't race a concurrent rotation or
+    // leave the writer's cached length desynced. Otherwise clear on disk.
+    let key = log_dir.to_string_lossy().to_string();
+    let live = log_writers.lock().ok().and_then(|m| m.get(&key).map(|e| e.writer.clone()));
+
+    let removed = tokio::task::spawn_blocking(move || -> std::io::Result<usize> {
+        if let Some(writer) = live {
+            let mut w = writer
+                .lock()
+                .map_err(|_| std::io::Error::new(std::io::ErrorKind::Other, "log writer lock poisoned"))?;
+            w.clear()
+        } else {
+            log_rotation::clear_logs(&log_dir)
+        }
+    })
+    .await
+    .map_err(|e| TauriError::with_details(TauriErrorCode::InternalError, "Log clear task failed", e.to_string()))?
+    .map_err(|e| TauriError::with_details(TauriErrorCode::FileWriteError, "Failed to clear log files", e.to_string()))?;
+
+    Ok(format!("Cleared logs ({} rotated segment(s) removed)", removed))
 }
 
 #[tauri::command]
@@ -3668,12 +3811,9 @@ fn main() {
             Ok(())
         })
         .manage(MerodState::default())
-        .manage(SseCancelRegistry::new(std::sync::Mutex::new(
-            std::collections::HashMap::new(),
-        )))
-        .manage(TokenBrokerRegistry::new(std::sync::Mutex::new(
-            std::collections::HashMap::new(),
-        )))
+        .manage(MerodLogWriters::default())
+        .manage(SseCancelRegistry::new(std::sync::Mutex::new(std::collections::HashMap::new())))
+        .manage(TokenBrokerRegistry::new(std::sync::Mutex::new(std::collections::HashMap::new())))
         .invoke_handler(tauri::generate_handler![
             get_pending_open_app,
             clear_pending_open_app,
@@ -3697,6 +3837,7 @@ fn main() {
             init_merod_node,
             detect_running_merod_nodes,
             get_merod_logs,
+            clear_merod_logs,
             get_merod_binary_version,
             download_and_replace_merod,
             set_tray_icon_connected,

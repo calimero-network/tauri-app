@@ -1106,11 +1106,18 @@ struct MerodProcess {
 
 type MerodState = Arc<Mutex<Vec<MerodProcess>>>;
 
+/// A registered log writer plus a reference count of live processes using it.
+/// Ref-counting means a restart or a concurrent second start (which reuse the
+/// same writer) don't drop the shared registration until the *last* user exits.
+struct LogWriterEntry {
+    writer: Arc<Mutex<log_rotation::RollingLogWriter>>,
+    refs: usize,
+}
+
 /// Live rotating log writers, keyed by log directory. Lets `clear_merod_logs`
 /// clear through the same writer the drain tasks use (serialized by the inner
 /// Mutex) rather than racing it via free functions on raw paths.
-type MerodLogWriters =
-    Arc<Mutex<std::collections::HashMap<String, Arc<Mutex<log_rotation::RollingLogWriter>>>>>;
+type MerodLogWriters = Arc<Mutex<std::collections::HashMap<String, LogWriterEntry>>>;
 
 /// Resolve an optional caller-supplied home dir: expand a leading `~`, or fall
 /// back to `~/.calimero`. Single source of truth for the node commands.
@@ -1130,33 +1137,6 @@ fn resolve_home_dir(home_dir: Option<String>) -> Result<std::path::PathBuf, Taur
             .ok_or_else(|| TauriError::new(TauriErrorCode::HomeDirNotFound, "Failed to get home directory"))?
             .join(".calimero"))
     }
-}
-
-/// Guard destructive/log commands: the resolved path must sit under the user's
-/// home directory (mirrors delete_calimero_data_dir). Uses lexical containment
-/// so it works for paths that don't exist yet.
-fn ensure_under_home(path: &std::path::Path) -> Result<(), TauriError> {
-    // Fail closed: if we can't resolve the home directory we can't prove the
-    // path is safe, so refuse rather than skip the check.
-    let home = dirs::home_dir()
-        .ok_or_else(|| TauriError::new(TauriErrorCode::PathNotAllowed, "Cannot resolve home directory to validate the path"))?;
-    let home = home.canonicalize().unwrap_or(home);
-    // Compare against the deepest existing ancestor so a not-yet-created
-    // logs dir still validates against its real (canonical) parent.
-    let mut probe = path.to_path_buf();
-    let anchor = loop {
-        if probe.exists() {
-            break probe.canonicalize().unwrap_or(probe);
-        }
-        match probe.parent() {
-            Some(p) => probe = p.to_path_buf(),
-            None => break path.to_path_buf(),
-        }
-    };
-    if !anchor.starts_with(&home) {
-        return Err(TauriError::new(TauriErrorCode::PathNotAllowed, "Path must be under your home directory"));
-    }
-    Ok(())
 }
 
 /// Get the path to the bundled merod binary
@@ -1452,14 +1432,17 @@ async fn start_merod(
         let mut map = log_writers
             .lock()
             .map_err(|_| TauriError::new(TauriErrorCode::InternalError, "log writers lock poisoned"))?;
-        match map.get(&log_key) {
-            Some(existing) => existing.clone(),
+        match map.get_mut(&log_key) {
+            Some(entry) => {
+                entry.refs += 1;
+                entry.writer.clone()
+            }
             None => {
                 let w = std::sync::Arc::new(std::sync::Mutex::new(
                     log_rotation::RollingLogWriter::open(&log_dir)
                         .map_err(|e| TauriError::with_details(TauriErrorCode::FileWriteError, "Failed to open log writer", e.to_string()))?,
                 ));
-                map.insert(log_key.clone(), w.clone());
+                map.insert(log_key.clone(), LogWriterEntry { writer: w.clone(), refs: 1 });
                 w
             }
         }
@@ -1535,7 +1518,6 @@ async fn start_merod(
     let merod_state_clone = merod_state.inner().clone();
     let log_writers_clone = log_writers.inner().clone();
     let exit_log_key = log_key.clone();
-    let exit_writer = log_writer.clone();
     let monitored_pid = pid; // Capture PID for verification
     tokio::spawn(async move {
         let status = child.wait().await;
@@ -1548,12 +1530,17 @@ async fn start_merod(
             }
             state.retain(|p| p.pid != monitored_pid);
         }
-        // Drop this node's writer registration (only if it's still the one we
-        // registered — a restart may have replaced it) so the map doesn't leak an
-        // open file handle per node, and clear falls back to on-disk once stopped.
+        // Drop one reference to this node's writer; remove the registration only
+        // when the last user exits. Ref-counting means a restart or a concurrent
+        // second start (which reuse the same writer) don't unregister it out from
+        // under a still-running drain — which would send clear() down the
+        // unsynchronized on-disk path while writes are live.
         if let Ok(mut map) = log_writers_clone.lock() {
-            if map.get(&exit_log_key).map(|w| std::sync::Arc::ptr_eq(w, &exit_writer)).unwrap_or(false) {
-                map.remove(&exit_log_key);
+            if let Some(entry) = map.get_mut(&exit_log_key) {
+                entry.refs = entry.refs.saturating_sub(1);
+                if entry.refs == 0 {
+                    map.remove(&exit_log_key);
+                }
             }
         }
     });
@@ -2543,7 +2530,9 @@ async fn get_merod_logs(
 
     let home_dir_path = resolve_home_dir(home_dir)?;
     let log_dir = home_dir_path.join(&node_name).join("logs");
-    ensure_under_home(&log_dir)?;
+    // Path safety is from validate_node_name; the data dir is user-configurable
+    // (may be outside $HOME), so we don't constrain it here — this is a read-only
+    // tail of `<data_dir>/<node>/logs` and can't traverse out.
 
     // Only hard-error when the node has no logs dir at all (never started by the
     // app). If the dir exists, read_tail returns whatever is present — including
@@ -2578,16 +2567,18 @@ async fn clear_merod_logs(
 
     let home_dir_path = resolve_home_dir(home_dir)?;
     let log_dir = home_dir_path.join(&node_name).join("logs");
-    // Destructive: constrain to the user's home directory (mirrors
-    // delete_calimero_data_dir) so an arbitrary home_dir can't truncate/delete
-    // files elsewhere on disk.
-    ensure_under_home(&log_dir)?;
+    // Path safety comes from validate_node_name (no separators / `..`), so the
+    // target is always `<data_dir>/<node>/logs` and can't traverse out. We do NOT
+    // constrain to $HOME here: the data dir is user-configurable (pick_directory
+    // can point at an external volume), and start_merod already writes logs there.
+    // Only files literally named merod.log[.N] under a validated node's logs dir
+    // are ever touched.
 
     // If a node is running, clear through its live writer (serialized with the
     // drain tasks by the inner Mutex) so we don't race a concurrent rotation or
     // leave the writer's cached length desynced. Otherwise clear on disk.
     let key = log_dir.to_string_lossy().to_string();
-    let live = log_writers.lock().ok().and_then(|m| m.get(&key).cloned());
+    let live = log_writers.lock().ok().and_then(|m| m.get(&key).map(|e| e.writer.clone()));
 
     let removed = tokio::task::spawn_blocking(move || -> std::io::Result<usize> {
         if let Some(writer) = live {

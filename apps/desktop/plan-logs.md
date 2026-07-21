@@ -149,7 +149,7 @@ rotating sink.
 Replace the `read_to_string`-everything in `get_merod_logs` (`main.rs` ~L2403–2418) with
 a **bounded reverse tail**:
 
-- ✅ Implemented as `log_rotation::read_tail`: reads at most `TAIL_READ_CAP_BYTES` (4 MB)
+- ✅ Implemented as `log_rotation::read_tail`: reads at most `TAIL_READ_CAP_BYTES` (10 MB = one full segment)
   from the **end** of each file, walking segments newest→oldest until it has `lines`
   lines. Cost is O(tail), and it's safe against a legacy huge `merod.log`.
 - ⏭️ **Deferred** — incremental API for live-tail: `get_merod_logs_since(node, home_dir, offset)`

@@ -229,18 +229,10 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
     loadAndContinueIfExisting();
   }, [currentStep, dataDir, creatingNode, nodeCreated, onComplete, setTheme, serverPort, swarmPort]);
 
-  // Auto-login state: set when node creation logs in automatically with the
-  // admin credentials just entered, so the separate login step is skipped
-  // (auth is set up once, not twice). The skip-once ref lets the user still
-  // navigate back to the login step from install-app without being bounced.
-  const autoLoggedInRef = useRef(false);
-  const autoSkippedLoginRef = useRef(false);
-
-  // Log in with the admin credentials used to create the node, mirroring
-  // LoginView's user_password flow, so the user isn't asked to re-enter the
-  // same username/password at the login step. Best-effort: on any failure we
-  // fall back to showing the manual login form.
-  const attemptAutoLogin = async (nodeUrl: string, username: string, password: string): Promise<boolean> => {
+  // Log in with the admin credentials, mirroring LoginView's user_password
+  // flow, and store the tokens. Used by the auth step after it initializes the
+  // node. Best-effort: returns false on any failure so the caller can surface it.
+  const attemptLogin = async (nodeUrl: string, username: string, password: string): Promise<boolean> => {
     try {
       const nodeBaseUrl = nodeUrl.replace(/\/$/, "");
       const authBaseUrl = getAuthUrl(getSettings()).replace(/\/$/, "");
@@ -262,34 +254,77 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
         } catch {
           setTokenExpiresAt(Date.now() + 3600 * 1000);
         }
-        autoLoggedInRef.current = true;
         return true;
       }
     } catch (e) {
-      console.warn("[onboarding] auto-login after node creation failed; showing login step", e);
+      console.warn("[onboarding] login failed", e);
     }
     return false;
   };
 
-  // When we auto-logged in during node creation, skip the redundant login step.
-  useEffect(() => {
-    if (currentStep !== "login") return;
-    if (!autoLoggedInRef.current || autoSkippedLoginRef.current) return;
-    autoSkippedLoginRef.current = true;
-    let cancelled = false;
-    (async () => {
-      setLoginTransitioning(true);
+  // Node-setup "Continue" (create-new): just advance to the auth step. The node
+  // is created there, from the admin credentials, so setup collects no secrets.
+  const handleContinueToAuth = () => {
+    if (!nodeName.trim()) {
+      setNodeError("Please enter a node name");
+      return;
+    }
+    setNodeError(null);
+    setCurrentStep("login");
+  };
+
+  // Auth step (create-new): create the admin account by initializing the node
+  // with these credentials, start it, then sign in — all from the one screen.
+  const handleCreateNodeWithAuth = async (username: string, password: string) => {
+    if (!username.trim() || !password) {
+      setNodeError("Please choose an admin username and password");
+      return;
+    }
+    if (password.length < 8) {
+      setNodeError("The admin password must be at least 8 characters");
+      return;
+    }
+    setCreatingNode(true);
+    setNodeError(null);
+    setLoginTransitioning(true);
+    try {
+      const targetNodeName = nodeName.trim();
+      await initMerodNode(targetNodeName, dataDir, username.trim(), password);
+      await startMerod(serverPort, swarmPort, dataDir, targetNodeName, getSettings().debugLogs);
+      const nodeUrl = `http://localhost:${serverPort}`;
+      saveSettings({
+        ...getSettings(),
+        nodeUrl,
+        useEmbeddedNode: true,
+        embeddedNodeDataDir: dataDir,
+        embeddedNodeName: targetNodeName,
+        embeddedNodePort: serverPort,
+      });
+      await waitForNodeHealthy(`${nodeUrl}/auth`, 20000);
+      const loggedIn = await attemptLogin(nodeUrl, username.trim(), password);
+      if (!loggedIn) {
+        throw new Error("Node created, but automatic sign-in failed. Please try again.");
+      }
+      setNodeCreated(true);
+      setNodeStarted(true);
+      setTheme("dark");
       try {
         await loadApps();
       } catch (e) {
         console.error("Failed to load apps:", e);
       }
-      if (!cancelled) setCurrentStep("install-app");
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [currentStep]);
+      setCurrentStep("install-app");
+    } catch (error: any) {
+      const msg = error?.message || error?.toString() || "";
+      if (msg.toLowerCase().includes("exist") || msg.toLowerCase().includes("already")) {
+        setNodeError(`Node "${nodeName.trim()}" already exists. Go back and choose "Use existing node".`);
+      } else {
+        setNodeError(msg || "Failed to create node");
+      }
+      setCreatingNode(false);
+      setLoginTransitioning(false);
+    }
+  };
 
 
   const handlePickDataDir = async () => {
@@ -411,10 +446,6 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
         });
         // check_merod_health appends /health — use /auth so it hits /auth/health
         await waitForNodeHealthy(`${nodeUrl}/auth`, 20000);
-        // Log in automatically with the admin credentials just used to create
-        // the node, so the user isn't prompted to re-enter them at the login
-        // step (auth is set up once). Falls back to the login form on failure.
-        await attemptAutoLogin(nodeUrl, adminUser.trim(), adminPassword);
         advanceToCloudConnect();
       }
     } catch (error: any) {
@@ -1002,33 +1033,6 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
                 </div>
               </div>
 
-              <div className="form-group">
-                <label htmlFor="admin-user">Admin Username</label>
-                <input
-                  id="admin-user"
-                  type="text"
-                  value={adminUser}
-                  onChange={(e) => setAdminUser(e.target.value)}
-                  placeholder="Username you will log in with"
-                  autoComplete="username"
-                  disabled={creatingNode || nodeCreated}
-                />
-                <p className="field-hint">The node's admin account is created now — you will sign in with these credentials</p>
-              </div>
-
-              <div className="form-group">
-                <label htmlFor="admin-password">Admin Password</label>
-                <input
-                  id="admin-password"
-                  type="password"
-                  value={adminPassword}
-                  onChange={(e) => setAdminPassword(e.target.value)}
-                  placeholder="At least 8 characters"
-                  autoComplete="new-password"
-                  disabled={creatingNode || nodeCreated}
-                />
-              </div>
-
               <div className="advanced-options-section">
                 <button
                   type="button"
@@ -1094,12 +1098,12 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
 
               <div className="step-actions">
                 <button
-                  onClick={handleCreateNode}
+                  onClick={handleContinueToAuth}
                   className="step-button step-button-primary"
-                  disabled={creatingNode || nodeCreated || !nodeName.trim() || !adminUser.trim() || !adminPassword}
+                  disabled={creatingNode || nodeCreated || !nodeName.trim()}
                 >
-                  {creatingNode ? 'Creating Node...' : nodeCreated && nodeStarted ? 'Setting Up...' : 'Create Node & Continue'}
-                  {!creatingNode && !nodeCreated && <ArrowRight size={18} />}
+                  Continue
+                  <ArrowRight size={18} />
                 </button>
               </div>
             </div>
@@ -1198,6 +1202,9 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
 
   // Login step - show after node is created
   if (currentStep === 'login') {
+      // Create-new nodes are initialized here from the admin credentials (setup
+      // collects none). Existing nodes are already running, so it's a plain login.
+      const isCreateNewAuth = nodeSetupMode === 'create-new' && !nodeStarted;
       return (
         <div className="onboarding-page" data-testid="onboarding-page">
         {progressIndicator}
@@ -1205,7 +1212,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
           <div ref={stepContainerRef} key={currentStep} className="onboarding-step-container onboarding-step-login">
             <button
               onClick={() => {
-                if (STEP_AFTER_NODE_SETUP === 'node-setup') {
+                if (isCreateNewAuth || STEP_AFTER_NODE_SETUP === 'node-setup') {
                   goBackToNodeSetup();
                 } else {
                   setNodeCreated(false);
@@ -1222,15 +1229,59 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
             <div className="step-content" style={{ justifyContent: 'center' }}>
               <h1 className="step-title">Set Up Authentication</h1>
               <p className="step-description">
-                Create a username and password to authenticate with your Calimero node.
-                This account will be used to securely access your node and manage your applications.
+                {isCreateNewAuth
+                  ? "Choose the admin username and password for your node. Your node is created with this account, and you'll sign in with it."
+                  : "Sign in to your Calimero node to manage your applications."}
               </p>
               <div className="onboarding-card" style={{ alignItems: 'center' }}>
                 {loginTransitioning ? (
                   <div className="loading-spinner">
                     <div className="spinner" />
-                    <p>Setting up your account...</p>
+                    <p>Setting up your node...</p>
                   </div>
+                ) : isCreateNewAuth ? (
+                  <form
+                    className="step-form"
+                    style={{ width: '100%' }}
+                    onSubmit={(e) => { e.preventDefault(); handleCreateNodeWithAuth(adminUser, adminPassword); }}
+                  >
+                    <div className="form-group">
+                      <label htmlFor="auth-admin-user">Admin Username</label>
+                      <input
+                        id="auth-admin-user"
+                        type="text"
+                        value={adminUser}
+                        onChange={(e) => setAdminUser(e.target.value)}
+                        placeholder="Username you will log in with"
+                        autoComplete="username"
+                        disabled={creatingNode}
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label htmlFor="auth-admin-password">Admin Password</label>
+                      <input
+                        id="auth-admin-password"
+                        type="password"
+                        value={adminPassword}
+                        onChange={(e) => setAdminPassword(e.target.value)}
+                        placeholder="At least 8 characters"
+                        autoComplete="new-password"
+                        disabled={creatingNode}
+                      />
+                    </div>
+                    {nodeError && (
+                      <div className="step-message step-message-error">{nodeError}</div>
+                    )}
+                    <div className="step-actions">
+                      <button
+                        type="submit"
+                        className="step-button step-button-primary"
+                        disabled={creatingNode || !adminUser.trim() || !adminPassword}
+                      >
+                        {creatingNode ? 'Creating Node…' : 'Create Node & Sign In'}
+                      </button>
+                    </div>
+                  </form>
                 ) : (
                   <LoginView
                     variant="dark"

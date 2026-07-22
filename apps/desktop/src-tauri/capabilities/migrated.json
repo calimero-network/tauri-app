@@ -48,6 +48,7 @@
     "dialog:allow-ask",
     "dialog:allow-confirm",
     "process:allow-restart",
-    "deep-link:default"
+    "deep-link:default",
+    "allow-app-commands"
   ]
 }

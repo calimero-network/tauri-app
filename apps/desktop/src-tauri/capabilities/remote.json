@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "remote-app-windows",
-  "description": "IPC access for dynamically created external app windows (label app-*). Replaces the v1 runtime RemoteDomainAccessScope / ipc_scope().configure_remote_access() calls, which no longer exist in Tauri v2. Grants the injected proxy script and app-hosted pages access to the app's own commands.",
+  "description": "IPC access for dynamically created external app windows (label app-*). Replaces the v1 runtime RemoteDomainAccessScope / ipc_scope().configure_remote_access() calls, which no longer exist in Tauri v2. Grants the injected proxy script and app-hosted pages access to the app's own proxy commands. URLs cover any HTTPS-hosted app (marketplace apps live on assorted origins, e.g. *.vercel.app) plus HTTP localhost for the node's own pages and locally-served apps — matching v1, which allowed whatever domain the desktop opened. Only the desktop opens app-* windows, and the granted proxy commands only reach the local node.",
   "windows": [
     "app-*"
   ],
@@ -9,9 +9,7 @@
     "urls": [
       "http://localhost:*",
       "http://127.0.0.1:*",
-      "https://localhost:*",
-      "https://apps.calimero.network",
-      "https://*.calimero.network"
+      "https://*"
     ]
   },
   "permissions": [
@@ -20,6 +18,10 @@
     "core:window:allow-show",
     "core:window:allow-hide",
     "core:window:allow-close",
-    "core:window:allow-set-focus"
+    "core:window:allow-set-focus",
+    "allow-proxy-http-request",
+    "allow-proxy-sse-stream",
+    "allow-cancel-sse-stream",
+    "allow-broker-token-refresh"
   ]
 }

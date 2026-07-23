@@ -13,6 +13,11 @@ use base64::Engine as _;
 
 mod log_rotation;
 
+// Per-app launcher foundation (macOS only): pure, zero-Tauri-API modules shared
+// with the `calimero-shell` binary via the crate's lib target.
+#[cfg(target_os = "macos")]
+use calimero_tauri_app::{app_registry, host_socket_path, launcher, token_broker_ipc};
+
 static HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 static SSE_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 
@@ -242,6 +247,12 @@ fn parse_deep_link_arg() -> Option<String> {
         }
     }
     None
+}
+
+/// True when a per-app shell auto-booted this host headless (`--headless-host`)
+/// solely to serve the token broker; the tray host runs window-less in that case.
+fn is_headless_host() -> bool {
+    std::env::args().any(|a| a == "--headless-host")
 }
 
 /// State for app to open when launched from a desktop shortcut (read by frontend on load).
@@ -773,13 +784,13 @@ struct TokenRequestPayload {
     request_id: String,
 }
 
-/// Broker an app window's `POST /auth/refresh` to the desktop window, which owns
-/// the refresh token. Returns a fresh access token — never a refresh token.
-#[tauri::command]
-async fn broker_token_refresh(
-    app_handle: tauri::AppHandle,
-    registry: tauri::State<'_, TokenBrokerRegistry>,
-) -> Result<String, TauriError> {
+/// Ask the desktop rotator window for a fresh access token. Shared by the
+/// in-process `broker_token_refresh` command and the Unix-socket broker service
+/// (macOS) that serves the separate per-app shell processes.
+async fn rotate_access_token(
+    app_handle: &tauri::AppHandle,
+    registry: &TokenBrokerRegistry,
+) -> Result<String, String> {
     static NEXT_REQUEST_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let request_id = format!(
         "tok-{}",
@@ -787,10 +798,7 @@ async fn broker_token_refresh(
     );
 
     let main_window = app_handle.get_webview_window("main").ok_or_else(|| {
-        TauriError::new(
-            TauriErrorCode::WindowOperationFailed,
-            "Desktop window is unavailable; cannot refresh the access token",
-        )
+        "Desktop window is unavailable; cannot refresh the access token".to_string()
     })?;
 
     let (reply_tx, reply_rx) = tokio::sync::oneshot::channel::<TokenBrokerReply>();
@@ -809,31 +817,92 @@ async fn broker_token_refresh(
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .remove(&request_id);
-        return Err(TauriError::with_details(
-            TauriErrorCode::WindowOperationFailed,
-            "Failed to reach the desktop window for a token refresh",
-            e.to_string(),
-        ));
+        return Err(format!("Failed to reach the desktop window: {e}"));
     }
 
     match tokio::time::timeout(TOKEN_BROKER_TIMEOUT, reply_rx).await {
         Ok(Ok(Ok(access_token))) => Ok(access_token),
-        Ok(Ok(Err(reason))) => Err(TauriError::new(TauriErrorCode::InternalError, reason)),
+        Ok(Ok(Err(reason))) => Err(reason),
         // Sender dropped without replying (desktop window closed mid-request).
-        Ok(Err(_)) => Err(TauriError::new(
-            TauriErrorCode::InternalError,
-            "Desktop window closed before the token refresh completed",
-        )),
+        Ok(Err(_)) => Err("Desktop window closed before the token refresh completed".into()),
         Err(_) => {
             registry
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())
                 .remove(&request_id);
-            Err(TauriError::new(
-                TauriErrorCode::Timeout,
-                "Timed out waiting for the desktop to refresh the access token",
-            ))
+            Err("Timed out waiting for the desktop to refresh the access token".into())
         }
+    }
+}
+
+/// Broker an app window's `POST /auth/refresh` to the desktop window, which owns
+/// the refresh token. Returns a fresh access token — never a refresh token.
+#[tauri::command]
+async fn broker_token_refresh(
+    app_handle: tauri::AppHandle,
+    registry: tauri::State<'_, TokenBrokerRegistry>,
+) -> Result<String, TauriError> {
+    rotate_access_token(&app_handle, &registry)
+        .await
+        .map_err(|reason| TauriError::new(TauriErrorCode::InternalError, reason))
+}
+
+/// Maps an issued capability token -> its app id. Populated when a per-app
+/// launcher is generated and loaded from `caps.json` at startup. The Unix-socket
+/// broker only rotates for a `(cap, app_id)` pair present here.
+#[cfg(target_os = "macos")]
+type CapRegistry = std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, String>>>;
+
+#[cfg(target_os = "macos")]
+fn cap_is_valid(registry: &CapRegistry, cap: &str, app_id: &str) -> bool {
+    registry
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .get(cap)
+        .map(|id| id == app_id)
+        .unwrap_or(false)
+}
+
+/// Bind the token-broker Unix socket and serve requests: reject other-user peers
+/// (handled in `token_broker_ipc::serve`), validate the peer's cap against the
+/// `CapRegistry`, then relay to the desktop rotator window. Returns a fresh
+/// access token only — never a refresh token.
+#[cfg(target_os = "macos")]
+async fn run_broker_service(app_handle: tauri::AppHandle) {
+    let path = host_socket_path();
+    let _ = std::fs::remove_file(&path); // clear a stale socket
+    let listener = match tokio::net::UnixListener::bind(&path) {
+        Ok(l) => l,
+        Err(e) => {
+            log::error!("[broker] failed to bind {}: {e}", path.display());
+            return;
+        }
+    };
+    let handler = move |req: token_broker_ipc::BrokerRequest| {
+        let app_handle = app_handle.clone();
+        async move {
+            let caps = app_handle.state::<CapRegistry>();
+            if !cap_is_valid(&caps, &req.cap, &req.app_id) {
+                return token_broker_ipc::BrokerResponse {
+                    access_token: None,
+                    error: Some("unknown capability".into()),
+                };
+            }
+            let registry = app_handle.state::<TokenBrokerRegistry>();
+            match rotate_access_token(&app_handle, &registry).await {
+                Ok(t) => token_broker_ipc::BrokerResponse {
+                    access_token: Some(t),
+                    error: None,
+                },
+                Err(e) => token_broker_ipc::BrokerResponse {
+                    access_token: None,
+                    error: Some(e),
+                },
+            }
+        }
+    };
+    if let Err(e) = token_broker_ipc::serve(listener, handler).await {
+        log::error!("[broker] serve ended: {e}");
     }
 }
 
@@ -903,6 +972,385 @@ fn focus_window(app_handle: tauri::AppHandle, window_label: String) -> Result<()
             .map_err(|e| TauriError::new(TauriErrorCode::WindowOperationFailed, e.to_string()))?;
     }
     Ok(())
+}
+
+// ─── Per-app launcher (macOS) ────────────────────────────────────────────────
+// A per-app `.app` is an UNSIGNED bash trampoline that execs a shared, loose,
+// ad-hoc-signed `calimero-shell` binary with `--app-config <bundle>/…/app.json`.
+// The shell owns the app's dock identity + badge/notify, and brokers refresh to
+// this host over the Unix socket.
+
+/// Where the host persists per-app capabilities (loaded into CapRegistry at startup).
+#[cfg(target_os = "macos")]
+fn caps_store_path() -> std::path::PathBuf {
+    let base = dirs::data_dir()
+        .unwrap_or_else(std::env::temp_dir)
+        .join("network.calimero.desktop");
+    let _ = std::fs::create_dir_all(&base);
+    base.join("caps.json")
+}
+
+/// A per-app capability token. Unguessable-enough for defense-in-depth atop the
+/// same-user socket.
+#[cfg(target_os = "macos")]
+fn new_cap(app_id: &str) -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("cap-{app_id}-{nanos:x}-{}", std::process::id())
+}
+
+/// The `calimero-shell` binary bundled inside this app's Resources.
+#[cfg(target_os = "macos")]
+fn bundled_shell_path(app_handle: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    app_handle
+        .path()
+        .resolve("shell/calimero-shell", tauri::path::BaseDirectory::Resource)
+        .ok()
+        .filter(|p| p.exists())
+}
+
+/// Stable per-app cache location for the generated launcher `.icns`, keyed by id.
+#[cfg(target_os = "macos")]
+fn app_icon_cache_path(app_id: &str) -> std::path::PathBuf {
+    let dir = dirs::data_dir()
+        .unwrap_or_else(std::env::temp_dir)
+        .join("network.calimero.desktop")
+        .join("app-icons");
+    let _ = std::fs::create_dir_all(&dir);
+    dir.join(format!("{app_id}.icns"))
+}
+
+/// Resolve a manifest icon `src` (which may be absolute, root-relative, or
+/// path-relative) against the app's `frontend_url` origin.
+#[cfg(target_os = "macos")]
+fn resolve_icon_url(base: &str, src: &str) -> Option<String> {
+    url::Url::parse(base)
+        .ok()?
+        .join(src)
+        .ok()
+        .map(|u| u.to_string())
+}
+
+/// Parse a web-app manifest body and pick the largest PNG icon `src`, resolved to
+/// an absolute URL against `base`.
+#[cfg(target_os = "macos")]
+fn pick_manifest_png(body: &str, base: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(body).ok()?;
+    let icons = v.get("icons")?.as_array()?;
+    let mut best: Option<(u64, String)> = None;
+    for icon in icons {
+        let Some(src) = icon.get("src").and_then(|s| s.as_str()) else {
+            continue;
+        };
+        let is_png = icon
+            .get("type")
+            .and_then(|t| t.as_str())
+            .map(|t| t.eq_ignore_ascii_case("image/png"))
+            .unwrap_or(false)
+            || src.to_ascii_lowercase().ends_with(".png");
+        if !is_png {
+            continue;
+        }
+        // "sizes" like "512x512" (may be a space-separated list, or "any").
+        let size = icon
+            .get("sizes")
+            .and_then(|s| s.as_str())
+            .and_then(|s| s.split_whitespace().next())
+            .and_then(|s| s.split(['x', 'X']).next())
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(0);
+        let Some(resolved) = resolve_icon_url(base, src) else {
+            continue;
+        };
+        if best.as_ref().map(|(bs, _)| size > *bs).unwrap_or(true) {
+            best = Some((size, resolved));
+        }
+    }
+    best.map(|(_, u)| u)
+}
+
+/// Fetch `url` and return its bytes iff the response is a real PNG (magic bytes).
+#[cfg(target_os = "macos")]
+async fn fetch_png_bytes(client: &reqwest::Client, url: &str) -> Option<Vec<u8>> {
+    let resp = client.get(url).send().await.ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let bytes = resp.bytes().await.ok()?;
+    if bytes.len() < 8 || &bytes[..8] != b"\x89PNG\r\n\x1a\n" {
+        return None;
+    }
+    Some(bytes.to_vec())
+}
+
+/// Best-effort: obtain a PNG app icon from the web app served at `base`. Tries the
+/// web manifest first (largest PNG), then falls back to common PWA icon paths.
+#[cfg(target_os = "macos")]
+async fn fetch_icon_png(base: &str) -> Option<Vec<u8>> {
+    let client = http_client();
+    // 1. Manifest → largest PNG.
+    for manifest in [
+        "/manifest.webmanifest",
+        "/site.webmanifest",
+        "/manifest.json",
+    ] {
+        let murl = format!("{base}{manifest}");
+        if let Ok(resp) = client.get(&murl).send().await {
+            if resp.status().is_success() {
+                if let Ok(text) = resp.text().await {
+                    if let Some(icon_url) = pick_manifest_png(&text, base) {
+                        if let Some(bytes) = fetch_png_bytes(client, &icon_url).await {
+                            return Some(bytes);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // 2. Fall back to well-known PWA icon paths.
+    for path in [
+        "/icons/icon-512x512.png",
+        "/icons/icon-192x192.png",
+        "/pwa-512x512.png",
+        "/apple-touch-icon.png",
+        "/favicon.png",
+    ] {
+        let url = format!("{base}{path}");
+        if let Some(bytes) = fetch_png_bytes(client, &url).await {
+            return Some(bytes);
+        }
+    }
+    None
+}
+
+/// Convert a PNG file to `.icns`. Prefers the macOS built-in `sips` single-size
+/// conversion; if that fails, materializes a minimal `.iconset` (via `sips`
+/// resizes) and runs `iconutil -c icns`.
+#[cfg(target_os = "macos")]
+fn png_to_icns(png: &std::path::Path, icns: &std::path::Path) -> std::io::Result<()> {
+    let out = std::process::Command::new("sips")
+        .args(["-s", "format", "icns"])
+        .arg(png)
+        .arg("--out")
+        .arg(icns)
+        .output()?;
+    if out.status.success() && icns.exists() {
+        return Ok(());
+    }
+    // Fallback: build a minimal .iconset and let iconutil assemble the .icns.
+    let iconset = icns.with_extension("iconset");
+    let _ = std::fs::remove_dir_all(&iconset);
+    std::fs::create_dir_all(&iconset)?;
+    for base_px in [16u32, 32, 128, 256, 512] {
+        for (name, px) in [
+            (format!("icon_{base_px}x{base_px}.png"), base_px),
+            (format!("icon_{base_px}x{base_px}@2x.png"), base_px * 2),
+        ] {
+            let dst = iconset.join(&name);
+            let _ = std::process::Command::new("sips")
+                .args(["-z", &px.to_string(), &px.to_string()])
+                .arg(png)
+                .arg("--out")
+                .arg(&dst)
+                .output();
+        }
+    }
+    let out = std::process::Command::new("iconutil")
+        .args(["-c", "icns"])
+        .arg(&iconset)
+        .arg("-o")
+        .arg(icns)
+        .output()?;
+    let _ = std::fs::remove_dir_all(&iconset);
+    if out.status.success() && icns.exists() {
+        Ok(())
+    } else {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "iconutil failed to produce .icns",
+        ))
+    }
+}
+
+/// Best-effort produce a `.icns` for the per-app launcher, sourced from the web
+/// app served at `frontend_url`. Returns the cached `.icns` path on success, or
+/// `None` on ANY failure so launcher creation never breaks.
+#[cfg(target_os = "macos")]
+fn ensure_app_launcher_icon(frontend_url: &str, app_id: &str) -> Option<std::path::PathBuf> {
+    let base = frontend_url.trim_end_matches('/').to_string();
+    // Sync command context (main thread, no active runtime) — block on the shared
+    // async HTTP client, mirroring the shell's build_app_url.
+    let png = tauri::async_runtime::block_on(fetch_icon_png(&base))?;
+    let tmp_png = std::env::temp_dir().join(format!("calimero-appicon-{app_id}.png"));
+    std::fs::write(&tmp_png, &png).ok()?;
+    let icns = app_icon_cache_path(app_id);
+    let result = png_to_icns(&tmp_png, &icns);
+    let _ = std::fs::remove_file(&tmp_png);
+    match result {
+        Ok(()) => Some(icns),
+        Err(_) => None,
+    }
+}
+
+/// Where per-app launchers live: the user's `~/Applications` folder. Unlike the
+/// Desktop it is NOT TCC-protected (no permission prompt), and it is visible in
+/// Finder / Spotlight / Launchpad. (This is where Chrome-style app launchers go.)
+#[cfg(target_os = "macos")]
+fn launcher_dir() -> Result<std::path::PathBuf, TauriError> {
+    let dir = dirs::home_dir()
+        .ok_or_else(|| {
+            TauriError::new(TauriErrorCode::HomeDirNotFound, "Could not find home folder")
+        })?
+        .join("Applications");
+    std::fs::create_dir_all(&dir).map_err(|e| {
+        TauriError::with_details(
+            TauriErrorCode::DirectoryError,
+            "Could not create ~/Applications",
+            e.to_string(),
+        )
+    })?;
+    Ok(dir)
+}
+
+/// Create-or-refresh the single launcher `.app` for an app under `dest_dir`:
+/// extract the shell, (re)generate the unsigned trampoline, persist + register
+/// the cap. Deduplicates by app id — reuses the app's existing cap and removes a
+/// stale bundle if the launcher moved (rename, or Desktop <-> managed).
+#[cfg(target_os = "macos")]
+fn ensure_app_launcher(
+    app_handle: &tauri::AppHandle,
+    app_name: &str,
+    frontend_url: &str,
+    app_id: &str,
+    dest_dir: &std::path::Path,
+) -> Result<std::path::PathBuf, TauriError> {
+    launcher::validate_app_id(app_id)
+        .map_err(|e| TauriError::new(TauriErrorCode::ShortcutCreationFailed, e.to_string()))?;
+
+    // sanitize the name for the .app filename
+    let safe: String = app_name
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == ' ' || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let safe = safe.trim().trim_matches('_');
+    let safe = if safe.is_empty() { "Calimero App" } else { safe };
+
+    // ensure the shared shell is extracted to its loose path (idempotent).
+    let shell_dest = launcher::shell_install_path();
+    let src = bundled_shell_path(app_handle).ok_or_else(|| {
+        TauriError::new(TauriErrorCode::ShortcutCreationFailed, "bundled shell missing")
+    })?;
+    launcher::extract_shell(&src, &shell_dest)
+        .map_err(|e| TauriError::new(TauriErrorCode::ShortcutCreationFailed, e.to_string()))?;
+
+    // Dedup by app id: keep a stable cap; drop any previous bundle elsewhere.
+    let store = caps_store_path();
+    let prev = app_registry::installed_apps(&store)
+        .into_iter()
+        .find(|a| a.id == app_id);
+    let cap = prev
+        .as_ref()
+        .map(|a| a.cap.clone())
+        .unwrap_or_else(|| new_cap(app_id));
+    let target = dest_dir.join(format!("{}.app", safe));
+    if let Some(p) = prev.as_ref() {
+        if !p.bundle_path.is_empty() && std::path::Path::new(&p.bundle_path) != target {
+            let _ = std::fs::remove_dir_all(&p.bundle_path);
+        }
+    }
+
+    // Best-effort real launcher icon sourced from the app's frontend; falls back
+    // to None (generic exec icon) if the app exposes no fetchable PNG icon.
+    let icon = ensure_app_launcher_icon(frontend_url, app_id);
+    let spec = launcher::AppSpec {
+        id: app_id.to_string(),
+        name: safe.to_string(),
+        url: frontend_url.to_string(),
+        node_url: "http://localhost:2528".to_string(),
+        cap: cap.clone(),
+        icon,
+    };
+    let bundle = launcher::generate_launcher(dest_dir, &shell_dest, &spec)
+        .map_err(|e| TauriError::new(TauriErrorCode::ShortcutCreationFailed, e.to_string()))?;
+
+    app_registry::persist_app(
+        &store,
+        &app_registry::InstalledApp {
+            id: app_id.to_string(),
+            name: safe.to_string(),
+            url: frontend_url.to_string(),
+            node_url: "http://localhost:2528".to_string(),
+            cap: cap.clone(),
+            bundle_path: bundle.to_string_lossy().into_owned(),
+            host_version: env!("CARGO_PKG_VERSION").to_string(),
+        },
+    )
+    .map_err(|e| TauriError::new(TauriErrorCode::ShortcutCreationFailed, e.to_string()))?;
+    app_handle
+        .state::<CapRegistry>()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .insert(cap, app_id.to_string());
+
+    Ok(bundle)
+}
+
+/// "Open" on macOS: launch the app through its per-app shell/launcher (first-class
+/// dock identity), creating a managed launcher if one doesn't exist yet. Reuses
+/// the app's existing launcher location (e.g. a Desktop one) when present.
+#[tauri::command]
+#[allow(unused_variables)]
+fn open_app_launcher(
+    app_handle: tauri::AppHandle,
+    app_name: String,
+    frontend_url: String,
+    app_id: String,
+) -> Result<String, TauriError> {
+    #[cfg(target_os = "macos")]
+    {
+        let existing_dir = app_registry::installed_apps(&caps_store_path())
+            .into_iter()
+            .find(|a| a.id == app_id)
+            .and_then(|a| {
+                std::path::Path::new(&a.bundle_path)
+                    .parent()
+                    .map(|p| p.to_path_buf())
+            })
+            .filter(|p| p.exists());
+        let dest_dir = match existing_dir {
+            Some(d) => d,
+            None => launcher_dir()?,
+        };
+        let bundle =
+            ensure_app_launcher(&app_handle, &app_name, &frontend_url, &app_id, &dest_dir)?;
+        std::process::Command::new("open")
+            .arg(&bundle)
+            .spawn()
+            .map_err(|e| {
+                TauriError::with_details(
+                    TauriErrorCode::ShortcutCreationFailed,
+                    "Failed to open launcher",
+                    e.to_string(),
+                )
+            })?;
+        Ok(bundle.to_string_lossy().into_owned())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err(TauriError::new(
+            TauriErrorCode::PlatformNotSupported,
+            "per-app launchers are only supported on macOS",
+        ))
+    }
 }
 
 #[tauri::command]
@@ -991,105 +1439,15 @@ fn create_desktop_shortcut(
 
     #[cfg(target_os = "macos")]
     {
-        let desktop = dirs::desktop_dir().ok_or_else(|| {
-            TauriError::new(
-                TauriErrorCode::HomeDirNotFound,
-                "Could not find Desktop folder",
-            )
-        })?;
-        // Run the binary directly with args so the process always receives --open-app-url/--open-app-name.
-        // (open -a "App" --args ... often just activates the existing process without passing args.)
-        let exe_esc = exe_str.replace('\\', "\\\\").replace('"', "\\\"");
-        let app_bundle = format!("{}.app", shortcut_name);
-        let app_path = desktop.join(&app_bundle);
-        let macos_dir = app_path.join("Contents/MacOS");
-        std::fs::create_dir_all(&macos_dir).map_err(|e| {
-            TauriError::with_details(
-                TauriErrorCode::DirectoryError,
-                "Failed to create .app bundle",
-                e.to_string(),
-            )
-        })?;
-        let launcher_path = macos_dir.join(shortcut_name);
-        let id_arg = app_id
-            .as_deref()
-            .map(|id| {
-                format!(
-                    " --open-app-id \"{}\"",
-                    id.replace('\\', "\\\\").replace('"', "\\\"")
-                )
-            })
-            .unwrap_or_default();
-        let script = format!(
-            "#!/bin/bash\nexec \"{}\" --open-app-url \"{}\" --open-app-name \"{}\"{}\n",
-            exe_esc,
-            frontend_url.replace('\\', "\\\\").replace('"', "\\\""),
-            app_name.replace('\\', "\\\\").replace('"', "\\\""),
-            id_arg
-        );
-        std::fs::write(&launcher_path, script).map_err(|e| {
-            TauriError::with_details(
-                TauriErrorCode::FileWriteError,
-                "Failed to write launcher script",
-                e.to_string(),
-            )
-        })?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = std::fs::metadata(&launcher_path)
-                .map_err(|e| {
-                    TauriError::with_details(
-                        TauriErrorCode::FileWriteError,
-                        "Failed to stat launcher",
-                        e.to_string(),
-                    )
-                })?
-                .permissions();
-            perms.set_mode(0o755);
-            std::fs::set_permissions(&launcher_path, perms).map_err(|e| {
-                TauriError::with_details(
-                    TauriErrorCode::FileWriteError,
-                    "Failed to chmod launcher",
-                    e.to_string(),
-                )
-            })?;
-        }
-        let plist = format!(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>CFBundleExecutable</key>
-    <string>{}</string>
-    <key>CFBundleIdentifier</key>
-    <string>network.calimero.desktop.shortcut.{}</string>
-    <key>CFBundleName</key>
-    <string>{}</string>
-    <key>LSUIElement</key>
-    <true/>
-</dict>
-</plist>
-"#,
-            shortcut_name
-                .replace('<', "&lt;")
-                .replace('>', "&gt;")
-                .replace('&', "&amp;"),
-            shortcut_name.replace(|c: char| !c.is_alphanumeric(), "_"),
-            shortcut_name
-                .replace('<', "&lt;")
-                .replace('>', "&gt;")
-                .replace('&', "&amp;")
-        );
-        let plist_path = app_path.join("Contents/Info.plist");
-        std::fs::write(&plist_path, plist).map_err(|e| {
-            TauriError::with_details(
-                TauriErrorCode::FileWriteError,
-                "Failed to write Info.plist",
-                e.to_string(),
-            )
-        })?;
-        return Ok(app_path.to_string_lossy().into_owned());
+        // Per-app launcher: an unsigned bash-trampoline `.app` in ~/Applications
+        // that execs the shared `calimero-shell`. First-class dock identity +
+        // badge/notify, no per-app signing. Replaces the earlier self-exec shim.
+        let dir = launcher_dir()?;
+        let app_id = app_id
+            .clone()
+            .unwrap_or_else(|| shortcut_name.replace(' ', "-").to_lowercase());
+        let bundle = ensure_app_launcher(&app_handle, &app_name, &frontend_url, &app_id, &dir)?;
+        return Ok(bundle.to_string_lossy().into_owned());
     }
 
     #[cfg(target_os = "linux")]
@@ -3741,6 +4099,15 @@ fn main() {
         .init();
 
     tauri::Builder::default()
+        // Single-instance must be registered first so a second launch is routed
+        // to the running host (which focuses the dashboard) instead of spawning a
+        // rival process that would fight over the merod node + broker socket.
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.show();
+                let _ = w.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
@@ -3808,6 +4175,13 @@ fn main() {
                 })
                 .build(app)?;
 
+            // The per-app capability registry (cap -> app id) backing the socket
+            // broker's peer check. Managed before `run_broker_service` reads it.
+            #[cfg(target_os = "macos")]
+            app.manage::<CapRegistry>(std::sync::Arc::new(std::sync::Mutex::new(
+                std::collections::HashMap::new(),
+            )));
+
             let pending = parse_open_app_args();
             app.manage(PendingOpenApp(std::sync::Mutex::new(pending.clone())));
 
@@ -3850,8 +4224,22 @@ fn main() {
                     }
                 });
             }
-            // When launched from a desktop shortcut, hide the main window so only the app window is shown
-            if pending.is_some() {
+            // Serve the Unix-socket token broker (per-app shells connect here to
+            // broker their POST /auth/refresh) and restore capabilities issued to
+            // launchers generated in previous sessions.
+            #[cfg(target_os = "macos")]
+            {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(run_broker_service(handle));
+
+                let caps = app.state::<CapRegistry>();
+                let loaded = app_registry::caps_map(&caps_store_path());
+                *caps.lock().unwrap_or_else(|p| p.into_inner()) = loaded;
+            }
+
+            // When launched from a desktop shortcut, or auto-booted headless by a
+            // per-app shell, hide the main window (tray-only host).
+            if pending.is_some() || is_headless_host() {
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.hide();
                 }
@@ -3906,6 +4294,7 @@ fn main() {
             hide_main_window,
             focus_window,
             create_desktop_shortcut,
+            open_app_launcher,
             create_app_window,
             open_devtools,
             proxy_http_request,

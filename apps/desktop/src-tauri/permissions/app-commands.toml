@@ -37,6 +37,11 @@ description = "Enables the create_desktop_shortcut command."
 commands.allow = ["create_desktop_shortcut"]
 
 [[permission]]
+identifier = "allow-open-app-launcher"
+description = "Enables the open_app_launcher command."
+commands.allow = ["open_app_launcher"]
+
+[[permission]]
 identifier = "allow-create-app-window"
 description = "Enables the create_app_window command."
 commands.allow = ["create_app_window"]
@@ -217,6 +222,7 @@ permissions = [
   "allow-hide-main-window",
   "allow-focus-window",
   "allow-create-desktop-shortcut",
+  "allow-open-app-launcher",
   "allow-create-app-window",
   "allow-open-devtools",
   "allow-proxy-http-request",

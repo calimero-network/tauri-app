@@ -6,6 +6,19 @@ authors = ["Calimero"]
 license = ""
 repository = ""
 edition = "2021"
+# Make the host the default binary so `tauri build` bundles it (never the shell).
+default-run = "calimero-tauri-app"
+
+# The per-app shell is a SEPARATE crate (workspace member) so tauri's bundler
+# only sees this package's one binary (the host) and never copies the shell into
+# Contents/MacOS/. A shared target dir avoids double-compiling the tauri stack.
+[workspace]
+members = ["calimero-shell"]
+
+# Shared, pure (zero-Tauri-API) modules reused by both binaries.
+[lib]
+name = "calimero_tauri_app"
+path = "src/lib.rs"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -31,6 +44,7 @@ tauri-plugin-deep-link = "2"
 tauri-plugin-shell = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-process = "2"
+tauri-plugin-single-instance = "2"
 
 [profile.release]
 strip = "symbols"

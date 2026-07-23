@@ -1,0 +1,20 @@
+{
+  "build": {
+    "frontendDist": "dist"
+  },
+  "productName": "Calimero Shell",
+  "mainBinaryName": "calimero-shell",
+  "version": "0.1.0",
+  "identifier": "network.calimero.shell",
+  "app": {
+    "withGlobalTauri": false,
+    "security": {
+      "dangerousDisableAssetCspModification": true,
+      "csp": "default-src 'self' 'unsafe-inline' 'unsafe-eval' http://localhost:* http://127.0.0.1:* https://api.github.com; connect-src ipc: http://ipc.localhost https://ipc.localhost 'self' https://apps.calimero.network https://*.calimero.network http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:* wss://* https: http: ws: wss: https://api.github.com https://github.com; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: http:; font-src 'self' data:; frame-src 'self' https: http:;"
+    },
+    "windows": []
+  },
+  "bundle": {
+    "active": false
+  }
+}

@@ -1,7 +1,7 @@
 {
   "build": {
     "beforeDevCommand": "pnpm merod:prepare && pnpm dev",
-    "beforeBuildCommand": "pnpm merod:prepare && pnpm build",
+    "beforeBuildCommand": "pnpm merod:prepare && pnpm shell:prepare && pnpm build",
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420"
   },
@@ -25,7 +25,8 @@
       "icons/icon.png"
     ],
     "resources": [
-      "merod"
+      "merod",
+      "shell/calimero-shell"
     ],
     "createUpdaterArtifacts": "v1Compatible"
   },

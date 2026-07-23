@@ -78,6 +78,23 @@ export async function openAppFrontend(
   context?: OpenAppFrontendContext,
 ): Promise<string | void> {
   try {
+    // Prefer opening the app as a first-class process via its per-app
+    // shell/launcher (own dock icon + Cmd-Tab + native summon; the shell injects
+    // SSO itself). `open_app_launcher` errors on non-macOS (or if the launcher
+    // can't be built), and we fall back to the in-process window below.
+    if (context?.applicationId) {
+      try {
+        await invoke('open_app_launcher', {
+          appName: appName ?? 'Application',
+          frontendUrl,
+          appId: context.applicationId,
+        });
+        return;
+      } catch (e) {
+        console.warn('[open] launcher path failed, falling back to in-process window:', e);
+      }
+    }
+
     const settings = getSettings();
     const nodeUrl = (settings.nodeUrl ?? '').replace(/\/$/, '');
 

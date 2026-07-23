@@ -11,6 +11,7 @@ import { startMerod, detectRunningMerodNodes, type RunningMerodNode } from "./ut
 import { useToast } from "./contexts/ToastContext";
 import { checkOnboardingState, type OnboardingState } from "./utils/onboarding";
 import { decodeMetadata, openAppFrontend, parseTauriError } from "./utils/appUtils";
+import { useAppDeepLink } from "./hooks/useAppDeepLink";
 import Settings from "./pages/Settings";
 import Onboarding from "./pages/Onboarding";
 import Marketplace from "./pages/Marketplace";
@@ -403,6 +404,11 @@ function App() {
   }, []);
 
 
+
+  // Route incoming app deep-links (calimero://<slug>/<action>?<params> and the
+  // https://links.calimero.network/... Universal Link) to the target app.
+  // Gated on clientReady since resolution lists installed apps via the client.
+  useAppDeepLink(clientReady);
 
   // Serve token refreshes for app windows. Refresh tokens are single-use
   // (calimero-network/core#3083), so the desktop keeps the only copy and is the

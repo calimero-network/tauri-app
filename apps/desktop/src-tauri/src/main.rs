@@ -239,14 +239,92 @@ fn parse_open_app_args() -> Option<(String, String, Option<String>)> {
     url.map(|u| (u, name.unwrap_or_else(|| "Application".to_string()), app_id))
 }
 
-/// Check CLI args for a calimero:// deep link URL (passed by OS when app is launched via URL scheme).
+/// Check CLI args for a deep-link URL passed by the OS at cold launch. Matches
+/// both the custom scheme (`calimero://…`, OAuth callback + app deep-links) and
+/// the Universal Link host (`https://links.calimero.network/…`, app deep-links
+/// on signed release builds). The caller routes it: OAuth callback vs app
+/// deep-link (see `parse_app_deep_link`).
 fn parse_deep_link_arg() -> Option<String> {
     for arg in std::env::args() {
-        if arg.starts_with("calimero://") {
+        if arg.starts_with("calimero://")
+            || arg.starts_with("https://links.calimero.network/")
+        {
             return Some(arg);
         }
     }
     None
+}
+
+/// An app deep-link parsed from a shared link, shaped
+/// `<scheme-or-host>/<slug>/<action>?<params>`. Emitted to the frontend as the
+/// `app-deep-link` event; the frontend resolves `slug` → an installed app and
+/// opens it with `params` appended to the app's frontend URL.
+#[derive(Clone, serde::Serialize)]
+pub struct AppDeepLink {
+    pub slug: String,
+    pub action: String,
+    /// The raw query string (without the leading `?`), e.g. `invitation=X`.
+    pub params: String,
+}
+
+/// State for a pending app deep-link (cold-launch case: the OS launched the app
+/// with the deep-link URL before any listener was set up). Read by the frontend
+/// via `get_pending_app_deep_link`. Mirrors `PendingCloudAuth`.
+pub struct PendingAppDeepLink(pub std::sync::Mutex<Option<AppDeepLink>>);
+
+/// Parse an app deep-link from either the custom scheme or the Universal Link
+/// host. Returns `None` for anything that is not an app deep-link — crucially
+/// the OAuth callback (`calimero://cloud-callback?…`), which the caller keeps
+/// routing through the existing cloud-auth path.
+///
+/// Accepted shapes:
+///   - `calimero://<slug>/<action>?<params>`          (host=slug, path=/action)
+///   - `https://links.calimero.network/<slug>/<action>?<params>`
+fn parse_app_deep_link(raw: &str) -> Option<AppDeepLink> {
+    let parsed = url::Url::parse(raw).ok()?;
+
+    let (slug, action) = match parsed.scheme() {
+        "calimero" => {
+            // `calimero://<slug>/<action>` → host is the slug, first path
+            // segment is the action.
+            let host = parsed.host_str()?;
+            // Reserve the OAuth callback host: it is NOT an app deep-link.
+            if host == "cloud-callback" {
+                return None;
+            }
+            let action = parsed
+                .path_segments()
+                .and_then(|mut segs| segs.next())
+                .filter(|s| !s.is_empty())?;
+            (host.to_string(), action.to_string())
+        }
+        "https" if parsed.host_str() == Some("links.calimero.network") => {
+            // `https://links.calimero.network/<slug>/<action>`
+            let mut segs = parsed.path_segments()?.filter(|s| !s.is_empty());
+            let slug = segs.next()?;
+            let action = segs.next()?;
+            (slug.to_string(), action.to_string())
+        }
+        _ => return None,
+    };
+
+    // Light shape validation: slug/action are lowercase-ish kebab tokens. Keep
+    // permissive (the frontend does the real resolve against installed apps and
+    // simply warns on no match), but reject obviously bogus segments.
+    let is_token = |s: &str| {
+        !s.is_empty()
+            && s.len() <= 128
+            && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    };
+    if !is_token(&slug) || !is_token(&action) {
+        return None;
+    }
+
+    Some(AppDeepLink {
+        slug,
+        action,
+        params: parsed.query().unwrap_or("").to_string(),
+    })
 }
 
 /// True when a per-app shell auto-booted this host headless (`--headless-host`)
@@ -949,6 +1027,18 @@ fn get_pending_cloud_auth(state: tauri::State<'_, PendingCloudAuth>) -> Option<S
 
 #[tauri::command]
 fn clear_pending_cloud_auth(state: tauri::State<'_, PendingCloudAuth>) {
+    if let Ok(mut g) = state.0.lock() {
+        *g = None;
+    }
+}
+
+#[tauri::command]
+fn get_pending_app_deep_link(state: tauri::State<'_, PendingAppDeepLink>) -> Option<AppDeepLink> {
+    state.0.lock().ok().and_then(|g| g.clone())
+}
+
+#[tauri::command]
+fn clear_pending_app_deep_link(state: tauri::State<'_, PendingAppDeepLink>) {
     if let Ok(mut g) = state.0.lock() {
         *g = None;
     }
@@ -4185,10 +4275,20 @@ fn main() {
             let pending = parse_open_app_args();
             app.manage(PendingOpenApp(std::sync::Mutex::new(pending.clone())));
 
-            // Check CLI args for calimero:// deep link URL (cold-launch case,
-            // e.g. macOS routes the URL via argv when the app was not running).
-            let cloud_auth = parse_deep_link_arg();
+            // Check CLI args for a deep-link URL (cold-launch case, e.g. macOS
+            // routes the URL via argv when the app was not running). Route it:
+            // an app deep-link (`<slug>/<action>`) goes to PendingAppDeepLink;
+            // anything else (the OAuth `calimero://cloud-callback` callback)
+            // stays on the existing PendingCloudAuth path.
+            let (cloud_auth, app_deep_link) = match parse_deep_link_arg() {
+                Some(raw) => match parse_app_deep_link(&raw) {
+                    Some(dl) => (None, Some(dl)),
+                    None => (Some(raw), None),
+                },
+                None => (None, None),
+            };
             app.manage(PendingCloudAuth(std::sync::Mutex::new(cloud_auth)));
+            app.manage(PendingAppDeepLink(std::sync::Mutex::new(app_deep_link)));
 
             // Hot-launch case: the app is already running when the browser
             // redirects to calimero://…. The plugin hooks NSAppleEventManager
@@ -4211,6 +4311,29 @@ fn main() {
                 app.deep_link().on_open_url(move |event| {
                     for url in event.urls() {
                         let request = url.to_string();
+
+                        // App deep-link (`<slug>/<action>?<params>`)? Emit the
+                        // `app-deep-link` event for the frontend to resolve +
+                        // open. `parse_app_deep_link` returns None for the OAuth
+                        // callback, so that path falls through unchanged below.
+                        if let Some(dl) = parse_app_deep_link(&request) {
+                            if let Some(state) =
+                                deep_link_handle.try_state::<PendingAppDeepLink>()
+                            {
+                                if let Ok(mut g) = state.0.lock() {
+                                    *g = Some(dl.clone());
+                                }
+                            }
+                            let _ = deep_link_handle.emit("app-deep-link", &dl);
+                            if let Some(window) = deep_link_handle.get_webview_window("main") {
+                                let _ = window.show();
+                                let _ = window.set_focus();
+                            }
+                            continue;
+                        }
+
+                        // OAuth callback path (calimero://cloud-callback…) —
+                        // unchanged.
                         if let Some(state) = deep_link_handle.try_state::<PendingCloudAuth>() {
                             if let Ok(mut g) = state.0.lock() {
                                 *g = Some(request.clone());
@@ -4328,7 +4451,9 @@ fn main() {
             secure_get_token,
             secure_delete_token,
             get_pending_cloud_auth,
-            clear_pending_cloud_auth
+            clear_pending_cloud_auth,
+            get_pending_app_deep_link,
+            clear_pending_app_deep_link
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -4336,8 +4461,50 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_textual_content_type, merod_target_triple, score_merod_asset, validate_allowed_url};
+    use super::{
+        is_textual_content_type, merod_target_triple, parse_app_deep_link, score_merod_asset,
+        validate_allowed_url,
+    };
     use base64::Engine as _;
+
+    #[test]
+    fn app_deep_link_custom_scheme() {
+        let dl = parse_app_deep_link("calimero://mero-chat/join?invitation=TESTTOKEN")
+            .expect("should parse app deep-link");
+        assert_eq!(dl.slug, "mero-chat");
+        assert_eq!(dl.action, "join");
+        assert_eq!(dl.params, "invitation=TESTTOKEN");
+    }
+
+    #[test]
+    fn app_deep_link_universal_link() {
+        let dl = parse_app_deep_link(
+            "https://links.calimero.network/mero-chat/join?invitation=TESTTOKEN",
+        )
+        .expect("should parse universal link");
+        assert_eq!(dl.slug, "mero-chat");
+        assert_eq!(dl.action, "join");
+        assert_eq!(dl.params, "invitation=TESTTOKEN");
+    }
+
+    #[test]
+    fn oauth_callback_is_not_an_app_deep_link() {
+        // The OAuth callback MUST fall through to the cloud-auth path.
+        assert!(parse_app_deep_link(
+            "calimero://cloud-callback?state=ABC#id_token=eyJ"
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn app_deep_link_rejects_unrelated_urls() {
+        // Missing action segment.
+        assert!(parse_app_deep_link("calimero://mero-chat").is_none());
+        // Wrong https host.
+        assert!(parse_app_deep_link("https://example.com/mero-chat/join").is_none());
+        // Non-deep-link scheme.
+        assert!(parse_app_deep_link("http://localhost:2528/api").is_none());
+    }
 
     #[test]
     fn test_allowed_localhost_urls() {

@@ -8,6 +8,51 @@ import {
   kebabCase,
   openAppFrontend,
 } from '../utils/appUtils';
+import { fetchAppsFromRegistry } from '../utils/registry';
+
+/**
+ * Deep-link slug → registry package, for install-on-demand when the app isn't
+ * installed. INTERIM: this map is the stopgap until Track C's manifest
+ * `handlers.slug` + a registry slug index replace it. Keys are the same slugs
+ * the link minter uses (kebab of the app's display name).
+ */
+const SLUG_PACKAGE_MAP: Record<string, string> = {
+  'mero-chat': 'com.calimero.curb',
+  'mero-meet': 'com.calimero.meromeet',
+  'mero-drive': 'com.calimero.mero-drive-docs',
+};
+
+const DEEP_LINK_REGISTRY = 'https://apps.calimero.network';
+
+/**
+ * Install-on-demand: fetch the latest published bundle for `pkg` from the
+ * registry and install it on the node. Returns the new applicationId, or null
+ * on failure. The `.mpk` install uses empty metadata — the node reads the
+ * bundle manifest's own metadata (name, links.frontend, etc.).
+ */
+async function installFromRegistry(pkg: string): Promise<string | null> {
+  try {
+    const bundles = await fetchAppsFromRegistry(DEEP_LINK_REGISTRY, { name: pkg });
+    const version = bundles.find((b) => b.id === pkg)?.latest_version
+      ?? bundles[0]?.latest_version;
+    if (!version) {
+      console.warn(`[deep-link] no published version for package "${pkg}"`);
+      return null;
+    }
+    // Registry artifact URL shape: /artifacts/<pkg>/<version>/<pkg>-<version>.mpk
+    const mpkUrl = `${DEEP_LINK_REGISTRY}/artifacts/${pkg}/${version}/${pkg}-${version}.mpk`;
+    console.log(`[deep-link] installing ${pkg}@${version} from ${mpkUrl}`);
+    const res = await apiClient.node.installApplication({ url: mpkUrl, metadata: [] });
+    if (res.error || !res.data?.applicationId) {
+      console.warn(`[deep-link] install failed for ${pkg}:`, res.error?.message ?? 'no applicationId');
+      return null;
+    }
+    return res.data.applicationId;
+  } catch (e) {
+    console.warn(`[deep-link] install-on-demand error for ${pkg}:`, e);
+    return null;
+  }
+}
 
 /**
  * Payload emitted by the host's `on_open_url` handler for an app deep-link
@@ -41,15 +86,32 @@ async function resolveAndOpen(dl: AppDeepLink): Promise<void> {
     return;
   }
 
-  const match = response.data.find((app: any) => {
+  const findBySlug = (apps: any[]) => apps.find((app: any) => {
     const metadata = decodeMetadata(app.metadata);
     const name: string | undefined = metadata?.name || metadata?.alias;
     return !!name && kebabCase(name) === dl.slug;
   });
 
+  let match = findBySlug(response.data);
+
+  // Install-on-demand (flow Case B): the app for this slug isn't installed —
+  // install it from the registry, then open it.
   if (!match) {
-    console.warn(`[deep-link] no installed app matches slug "${dl.slug}"`);
-    return;
+    const pkg = SLUG_PACKAGE_MAP[dl.slug];
+    if (!pkg) {
+      console.warn(`[deep-link] no installed app and no known package for slug "${dl.slug}"`);
+      return;
+    }
+    console.log(`[deep-link] "${dl.slug}" not installed — installing ${pkg} from the registry…`);
+    const installedId = await installFromRegistry(pkg);
+    if (!installedId) return;
+    const relist = await apiClient.node.listApplications();
+    const apps = Array.isArray(relist.data) ? relist.data : [];
+    match = apps.find((a: any) => a.id === installedId) ?? findBySlug(apps);
+    if (!match) {
+      console.warn(`[deep-link] installed ${pkg} but could not find it to open`);
+      return;
+    }
   }
 
   const metadata = decodeMetadata(match.metadata);

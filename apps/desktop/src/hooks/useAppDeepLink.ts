@@ -5,7 +5,6 @@ import { apiClient } from '../lib/mero-client';
 import {
   appendParamsToUrl,
   decodeMetadata,
-  kebabCase,
   openAppFrontend,
 } from '../utils/appUtils';
 
@@ -40,10 +39,11 @@ type OpenOutcome = 'opened' | 'retry' | 'forget';
  * follow-up (the pending-intent work); today a slug with no installed app is
  * simply forgotten.
  *
- * Slug resolution is INTERIM: we match `slug` against each installed app's
- * display name kebab-cased ("Mero Chat" → "mero-chat"). A future manifest
- * `handlers.slug` field will replace this; until then, kebab(name) is the
- * contract shared with the link minter.
+ * The `<slug>` segment is the app's PACKAGE — the registry identifier (e.g.
+ * `com.calimero.curb`): globally unique and stable across renames, unlike a
+ * display-name-derived slug (which collides and breaks on rename). The node
+ * returns it as `Application.package` for bundle/registry installs, and every
+ * app's invite builder emits it (`calimero://<package>/join?…`).
  */
 async function resolveAndOpen(dl: AppDeepLink): Promise<OpenOutcome> {
   const response = await apiClient.node.listApplications();
@@ -52,11 +52,7 @@ async function resolveAndOpen(dl: AppDeepLink): Promise<OpenOutcome> {
     return 'retry';
   }
 
-  const match = response.data.find((app: any) => {
-    const metadata = decodeMetadata(app.metadata);
-    const name: string | undefined = metadata?.name || metadata?.alias;
-    return !!name && kebabCase(name) === dl.slug;
-  });
+  const match = response.data.find((app: any) => !!app.package && app.package === dl.slug);
 
   if (!match) {
     console.warn(`[deep-link] no installed app matches slug "${dl.slug}" — ignoring link`);

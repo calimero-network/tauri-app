@@ -308,13 +308,14 @@ fn parse_app_deep_link(raw: &str) -> Option<AppDeepLink> {
         _ => return None,
     };
 
-    // Light shape validation: slug/action are lowercase-ish kebab tokens. Keep
-    // permissive (the frontend does the real resolve against installed apps and
-    // simply warns on no match), but reject obviously bogus segments.
+    // Light shape validation. The slug is the app PACKAGE — reverse-DNS with
+    // dots (e.g. `com.calimero.curb`) — so `.` must be allowed alongside `-`/`_`.
+    // Keep permissive (the frontend does the real resolve against installed apps
+    // and simply warns on no match), but reject obviously bogus segments.
     let is_token = |s: &str| {
         !s.is_empty()
             && s.len() <= 128
-            && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+            && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
     };
     if !is_token(&slug) || !is_token(&action) {
         return None;

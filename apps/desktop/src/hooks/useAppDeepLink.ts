@@ -7,6 +7,39 @@ import {
   decodeMetadata,
   openAppFrontend,
 } from '../utils/appUtils';
+import { fetchAppsFromRegistry } from '../utils/registry';
+
+const DEEP_LINK_REGISTRY = 'https://apps.calimero.network';
+
+/**
+ * Install-on-demand: fetch the latest published bundle for `pkg` (the deep-link
+ * slug is the registry package) and install it on the node. Returns the new
+ * applicationId, or null on failure. Empty metadata — the node reads the
+ * bundle manifest's own metadata (name, links.frontend, package, etc.).
+ */
+async function installFromRegistry(pkg: string): Promise<string | null> {
+  try {
+    const bundles = await fetchAppsFromRegistry(DEEP_LINK_REGISTRY, { name: pkg });
+    const version = bundles.find((b) => b.id === pkg)?.latest_version
+      ?? bundles[0]?.latest_version;
+    if (!version) {
+      console.warn(`[deep-link] no published version for package "${pkg}"`);
+      return null;
+    }
+    // Registry artifact URL: /artifacts/<pkg>/<version>/<pkg>-<version>.mpk
+    const mpkUrl = `${DEEP_LINK_REGISTRY}/artifacts/${pkg}/${version}/${pkg}-${version}.mpk`;
+    console.log(`[deep-link] installing ${pkg}@${version} from ${mpkUrl}`);
+    const res = await apiClient.node.installApplication({ url: mpkUrl, metadata: [] });
+    if (res.error || !res.data?.applicationId) {
+      console.warn(`[deep-link] install failed for ${pkg}:`, res.error?.message ?? 'no applicationId');
+      return null;
+    }
+    return res.data.applicationId;
+  } catch (e) {
+    console.warn(`[deep-link] install-on-demand error for ${pkg}:`, e);
+    return null;
+  }
+}
 
 /**
  * Payload emitted by the host's `on_open_url` handler for an app deep-link
@@ -31,13 +64,9 @@ export interface AppDeepLink {
 type OpenOutcome = 'opened' | 'retry' | 'forget';
 
 /**
- * Resolve a deep-link `slug` → an *installed* app and open it with the deep-link
- * params appended to the app's frontend URL.
- *
- * Scope note: this routes to apps already installed on the node. Install-on-
- * demand for a missing app — and doing the namespace join in the desktop — is a
- * follow-up (the pending-intent work); today a slug with no installed app is
- * simply forgotten.
+ * Resolve a deep-link `slug` → an app and open it with the deep-link params
+ * appended to the app's frontend URL. If the app isn't installed, install it
+ * from the registry first (install-on-demand), then open it.
  *
  * The `<slug>` segment is the app's PACKAGE — the registry identifier (e.g.
  * `com.calimero.curb`): globally unique and stable across renames, unlike a
@@ -52,11 +81,27 @@ async function resolveAndOpen(dl: AppDeepLink): Promise<OpenOutcome> {
     return 'retry';
   }
 
-  const match = response.data.find((app: any) => !!app.package && app.package === dl.slug);
+  const byPackage = (apps: any[]) =>
+    apps.find((app: any) => !!app.package && app.package === dl.slug);
 
+  let match = byPackage(response.data);
+
+  // Install-on-demand: the app for this package isn't installed — fetch it from
+  // the registry (the slug IS the package), install, then open.
   if (!match) {
-    console.warn(`[deep-link] no installed app matches slug "${dl.slug}" — ignoring link`);
-    return 'forget';
+    console.log(`[deep-link] "${dl.slug}" not installed — installing from registry…`);
+    const installedId = await installFromRegistry(dl.slug);
+    if (!installedId) {
+      console.warn(`[deep-link] could not install "${dl.slug}" — forgetting link`);
+      return 'forget';
+    }
+    const relist = await apiClient.node.listApplications();
+    const apps = Array.isArray(relist.data) ? relist.data : [];
+    match = apps.find((a: any) => a.id === installedId) ?? byPackage(apps);
+    if (!match) {
+      console.warn(`[deep-link] installed "${dl.slug}" but could not find it to open`);
+      return 'forget';
+    }
   }
 
   const metadata = decodeMetadata(match.metadata);

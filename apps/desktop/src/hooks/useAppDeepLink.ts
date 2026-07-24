@@ -8,51 +8,6 @@ import {
   kebabCase,
   openAppFrontend,
 } from '../utils/appUtils';
-import { fetchAppsFromRegistry } from '../utils/registry';
-
-/**
- * Deep-link slug → registry package, for install-on-demand when the app isn't
- * installed. INTERIM: this map is the stopgap until Track C's manifest
- * `handlers.slug` + a registry slug index replace it. Keys are the same slugs
- * the link minter uses (kebab of the app's display name).
- */
-const SLUG_PACKAGE_MAP: Record<string, string> = {
-  'mero-chat': 'com.calimero.curb',
-  'mero-meet': 'com.calimero.meromeet',
-  'mero-drive': 'com.calimero.mero-drive-docs',
-};
-
-const DEEP_LINK_REGISTRY = 'https://apps.calimero.network';
-
-/**
- * Install-on-demand: fetch the latest published bundle for `pkg` from the
- * registry and install it on the node. Returns the new applicationId, or null
- * on failure. The `.mpk` install uses empty metadata — the node reads the
- * bundle manifest's own metadata (name, links.frontend, etc.).
- */
-async function installFromRegistry(pkg: string): Promise<string | null> {
-  try {
-    const bundles = await fetchAppsFromRegistry(DEEP_LINK_REGISTRY, { name: pkg });
-    const version = bundles.find((b) => b.id === pkg)?.latest_version
-      ?? bundles[0]?.latest_version;
-    if (!version) {
-      console.warn(`[deep-link] no published version for package "${pkg}"`);
-      return null;
-    }
-    // Registry artifact URL shape: /artifacts/<pkg>/<version>/<pkg>-<version>.mpk
-    const mpkUrl = `${DEEP_LINK_REGISTRY}/artifacts/${pkg}/${version}/${pkg}-${version}.mpk`;
-    console.log(`[deep-link] installing ${pkg}@${version} from ${mpkUrl}`);
-    const res = await apiClient.node.installApplication({ url: mpkUrl, metadata: [] });
-    if (res.error || !res.data?.applicationId) {
-      console.warn(`[deep-link] install failed for ${pkg}:`, res.error?.message ?? 'no applicationId');
-      return null;
-    }
-    return res.data.applicationId;
-  } catch (e) {
-    console.warn(`[deep-link] install-on-demand error for ${pkg}:`, e);
-    return null;
-  }
-}
 
 /**
  * Payload emitted by the host's `on_open_url` handler for an app deep-link
@@ -68,50 +23,44 @@ export interface AppDeepLink {
 }
 
 /**
- * Resolve a deep-link `slug` → an installed app and open it with the deep-link
+ * Outcome of trying to resolve + open a deep-link:
+ *   - `opened`: the target app was opened — done.
+ *   - `forget`: terminal — no installed app for this slug, or it has no
+ *     frontend URL. Drop the link.
+ *   - `retry`: transient (node not ready to list apps yet) — try again later.
+ */
+type OpenOutcome = 'opened' | 'retry' | 'forget';
+
+/**
+ * Resolve a deep-link `slug` → an *installed* app and open it with the deep-link
  * params appended to the app's frontend URL.
  *
+ * Scope note: this routes to apps already installed on the node. Install-on-
+ * demand for a missing app — and doing the namespace join in the desktop — is a
+ * follow-up (the pending-intent work); today a slug with no installed app is
+ * simply forgotten.
+ *
  * Slug resolution is INTERIM: we match `slug` against each installed app's
- * display name kebab-cased ("Mero Chat" → "mero-chat"). Track C will add an
- * explicit `handlers.slug` field to the app manifest; prefer that field once it
- * ships. Until then, kebab(name) is the contract shared with the link minter.
+ * display name kebab-cased ("Mero Chat" → "mero-chat"). A future manifest
+ * `handlers.slug` field will replace this; until then, kebab(name) is the
+ * contract shared with the link minter.
  */
-async function resolveAndOpen(dl: AppDeepLink): Promise<void> {
+async function resolveAndOpen(dl: AppDeepLink): Promise<OpenOutcome> {
   const response = await apiClient.node.listApplications();
   if (response.error || !Array.isArray(response.data)) {
-    console.warn(
-      '[deep-link] could not list installed apps:',
-      response.error?.message ?? 'no data',
-    );
-    return;
+    // Node isn't ready to list apps yet (cold boot) — transient, retry.
+    return 'retry';
   }
 
-  const findBySlug = (apps: any[]) => apps.find((app: any) => {
+  const match = response.data.find((app: any) => {
     const metadata = decodeMetadata(app.metadata);
     const name: string | undefined = metadata?.name || metadata?.alias;
     return !!name && kebabCase(name) === dl.slug;
   });
 
-  let match = findBySlug(response.data);
-
-  // Install-on-demand (flow Case B): the app for this slug isn't installed —
-  // install it from the registry, then open it.
   if (!match) {
-    const pkg = SLUG_PACKAGE_MAP[dl.slug];
-    if (!pkg) {
-      console.warn(`[deep-link] no installed app and no known package for slug "${dl.slug}"`);
-      return;
-    }
-    console.log(`[deep-link] "${dl.slug}" not installed — installing ${pkg} from the registry…`);
-    const installedId = await installFromRegistry(pkg);
-    if (!installedId) return;
-    const relist = await apiClient.node.listApplications();
-    const apps = Array.isArray(relist.data) ? relist.data : [];
-    match = apps.find((a: any) => a.id === installedId) ?? findBySlug(apps);
-    if (!match) {
-      console.warn(`[deep-link] installed ${pkg} but could not find it to open`);
-      return;
-    }
+    console.warn(`[deep-link] no installed app matches slug "${dl.slug}" — ignoring link`);
+    return 'forget';
   }
 
   const metadata = decodeMetadata(match.metadata);
@@ -119,7 +68,7 @@ async function resolveAndOpen(dl: AppDeepLink): Promise<void> {
   const frontendUrl: string | undefined = metadata?.links?.frontend;
   if (!frontendUrl) {
     console.warn(`[deep-link] app "${appName}" has no frontend URL; cannot open`);
-    return;
+    return 'forget';
   }
 
   // Append the deep-link params to the frontend URL so the app reads them on
@@ -132,15 +81,21 @@ async function resolveAndOpen(dl: AppDeepLink): Promise<void> {
     (err) => console.error('[deep-link] failed to open app:', err),
     { applicationId: match.id },
   );
+  return 'opened';
 }
 
 /**
  * Listens for app deep-links and opens the target app.
  *
- * Two channels, mirroring the cloud-auth flow:
- *   - `app-deep-link` Tauri event (hot-launch: app already running).
- *   - polling `get_pending_app_deep_link` once (cold-launch: the OS launched
- *     the app with the deep-link before any listener existed).
+ * Two channels, deduped against each other by link key:
+ *   - `app-deep-link` Tauri event (hot: app already running when the URL fires).
+ *   - a cold-launch drain that polls the pending / current deep-link the OS
+ *     delivered before this listener existed.
+ *
+ * The drain must poll, not read once: on macOS the launch URL arrives via an
+ * Apple Event that can land after this effect mounts, and the node may take a
+ * few seconds to be ready to list apps. It clears the pending link only on a
+ * terminal outcome (opened or forgotten), so a transient failure never drops it.
  *
  * `enabled` gates activation until the app is past onboarding and the mero
  * client is ready — resolving requires listing installed apps.
@@ -150,22 +105,48 @@ export function useAppDeepLink(enabled: boolean): void {
     if (!enabled) return;
     let cancelled = false;
 
+    // Dedup the live event and the cold drain so the same link isn't handled
+    // twice. Key includes params so distinct links are treated separately.
+    const handled = new Set<string>();
+    const keyOf = (dl: AppDeepLink) => `${dl.slug}/${dl.action}?${dl.params}`;
+    const handle = async (dl: AppDeepLink): Promise<OpenOutcome> => {
+      const key = keyOf(dl);
+      if (handled.has(key)) return 'opened'; // another path already took it
+      handled.add(key);
+      const outcome = await resolveAndOpen(dl);
+      if (outcome === 'retry') handled.delete(key); // allow a later attempt
+      return outcome;
+    };
+
     const unlistenPromise = listen<AppDeepLink>('app-deep-link', (event) => {
       if (cancelled) return;
-      resolveAndOpen(event.payload).catch((e) =>
-        console.warn('[deep-link] resolve/open failed:', e),
-      );
+      handle(event.payload)
+        .then((o) => {
+          if (o !== 'retry') invoke('clear_pending_app_deep_link').catch(() => {});
+        })
+        .catch((e) => console.warn('[deep-link] resolve/open failed:', e));
     }).catch(() => null);
 
-    // Cold-launch: drain any deep-link the OS delivered before this listener.
     (async () => {
-      try {
-        const pending = await invoke<AppDeepLink | null>('get_pending_app_deep_link');
-        if (cancelled || !pending) return;
-        await invoke('clear_pending_app_deep_link');
-        await resolveAndOpen(pending);
-      } catch (e) {
-        console.warn('[deep-link] cold-start drain failed:', e);
+      for (let attempt = 0; attempt < 30 && !cancelled; attempt++) {
+        try {
+          // Two sources: `pending` (set via our on_open_url listener, which can
+          // race and miss on macOS) and `current` (the plugin's own launch-URL
+          // store, reliable on cold launch). Prefer whichever is present.
+          let dl = await invoke<AppDeepLink | null>('get_pending_app_deep_link');
+          if (!dl) dl = await invoke<AppDeepLink | null>('get_current_app_deep_link');
+          if (dl) {
+            const outcome = await handle(dl);
+            if (outcome !== 'retry') {
+              await invoke('clear_pending_app_deep_link').catch(() => {});
+              return;
+            }
+          }
+        } catch (e) {
+          console.warn('[deep-link] cold-start drain error:', e);
+        }
+        if (cancelled) return;
+        await new Promise((r) => setTimeout(r, 1000));
       }
     })();
 

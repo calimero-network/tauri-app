@@ -1044,6 +1044,27 @@ fn clear_pending_app_deep_link(state: tauri::State<'_, PendingAppDeepLink>) {
     }
 }
 
+/// Read the deep-link the app was launched with directly from the plugin's
+/// `get_current()`. On macOS the plugin populates this from the launch Open
+/// event independently of our `on_open_url` listener, so it's a reliable
+/// fallback when the `PendingAppDeepLink` (set via the event listener) races
+/// and comes up empty on a cold launch. Returns None for the OAuth callback.
+#[tauri::command]
+fn get_current_app_deep_link(app: tauri::AppHandle) -> Option<AppDeepLink> {
+    use tauri_plugin_deep_link::DeepLinkExt;
+    let raw = app
+        .deep_link()
+        .get_current()
+        .ok()
+        .flatten()?
+        .into_iter()
+        .map(|u| u.to_string())
+        .find(|s| {
+            s.starts_with("calimero://") || s.starts_with("https://links.calimero.network/")
+        })?;
+    parse_app_deep_link(&raw)
+}
+
 #[tauri::command]
 fn hide_main_window(app_handle: tauri::AppHandle) -> Result<(), TauriError> {
     if let Some(window) = app_handle.get_webview_window("main") {
@@ -4453,7 +4474,8 @@ fn main() {
             get_pending_cloud_auth,
             clear_pending_cloud_auth,
             get_pending_app_deep_link,
-            clear_pending_app_deep_link
+            clear_pending_app_deep_link,
+            get_current_app_deep_link
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

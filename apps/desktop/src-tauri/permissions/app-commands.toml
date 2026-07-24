@@ -211,6 +211,21 @@ identifier = "allow-clear-pending-cloud-auth"
 description = "Enables the clear_pending_cloud_auth command."
 commands.allow = ["clear_pending_cloud_auth"]
 
+[[permission]]
+identifier = "allow-get-pending-app-deep-link"
+description = "Enables the get_pending_app_deep_link command."
+commands.allow = ["get_pending_app_deep_link"]
+
+[[permission]]
+identifier = "allow-clear-pending-app-deep-link"
+description = "Enables the clear_pending_app_deep_link command."
+commands.allow = ["clear_pending_app_deep_link"]
+
+[[permission]]
+identifier = "allow-get-current-app-deep-link"
+description = "Enables the get_current_app_deep_link command."
+commands.allow = ["get_current_app_deep_link"]
+
 # Aggregate set so the main window can be granted every command with a single
 # permission reference instead of enumerating all of them in the capability.
 [[set]]
@@ -257,4 +272,7 @@ permissions = [
   "allow-secure-delete-token",
   "allow-get-pending-cloud-auth",
   "allow-clear-pending-cloud-auth",
+  "allow-get-pending-app-deep-link",
+  "allow-clear-pending-app-deep-link",
+  "allow-get-current-app-deep-link",
 ]

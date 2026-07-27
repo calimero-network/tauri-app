@@ -606,18 +606,23 @@
     // WKWebView doesn't implement the Badging or Notification web APIs. Route
     // them to the native shell so a per-app window can badge its own dock icon
     // and post banners. No-ops gracefully if the native commands aren't present
-    // (e.g. the in-process fallback window on non-macOS).
-    navigator.setAppBadge = function (count) {
-        const inv = getTauriInvoke();
-        if (!inv) return Promise.resolve();
-        return Promise.resolve(inv('set_badge', { count: Number(count) || 0 })).catch(function () {});
-    };
-    navigator.clearAppBadge = function () {
-        const inv = getTauriInvoke();
-        if (!inv) return Promise.resolve();
-        return Promise.resolve(inv('set_badge', { count: 0 })).catch(function () {});
-    };
+    // (e.g. the in-process fallback window on non-macOS). Wrapped + gated on
+    // `window.navigator` so injecting the script outside a real webview (e.g. a
+    // bare `new Function('window', src)` harness) can't throw.
     try {
+        const nav = window.navigator;
+        if (nav) {
+            nav.setAppBadge = function (count) {
+                const inv = getTauriInvoke();
+                if (!inv) return Promise.resolve();
+                return Promise.resolve(inv('set_badge', { count: Number(count) || 0 })).catch(function () {});
+            };
+            nav.clearAppBadge = function () {
+                const inv = getTauriInvoke();
+                if (!inv) return Promise.resolve();
+                return Promise.resolve(inv('set_badge', { count: 0 })).catch(function () {});
+            };
+        }
         const NativeNotification = function (title, options) {
             options = options || {};
             const inv = getTauriInvoke();

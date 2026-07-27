@@ -56,6 +56,38 @@ export function decodeMetadata(metadata: any): any {
 }
 
 /**
+ * Kebab-cases an app display name for deep-link slug matching.
+ * "Mero Chat" → "mero-chat". Collapses any run of non-alphanumeric chars to a
+ * single hyphen and trims leading/trailing hyphens.
+ */
+export function kebabCase(name: string): string {
+  return name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+/**
+ * Appends a raw query string (without leading `?`) to a URL, preserving any
+ * query already present on the base URL. Deep-link params take precedence on
+ * key collisions. Returns the base URL unchanged when `params` is empty.
+ */
+export function appendParamsToUrl(baseUrl: string, params: string): string {
+  if (!params) return baseUrl;
+  try {
+    const u = new URL(baseUrl);
+    const incoming = new URLSearchParams(params);
+    incoming.forEach((value, key) => u.searchParams.set(key, value));
+    return u.toString();
+  } catch {
+    // Non-absolute or unparseable base — fall back to naive concatenation.
+    const sep = baseUrl.includes('?') ? '&' : '?';
+    return `${baseUrl}${sep}${params}`;
+  }
+}
+
+/**
  * Opens an app frontend in a new Tauri window
  * @param frontendUrl - The URL of the frontend to open
  * @param appName - Optional name of the app for the window title
@@ -78,6 +110,23 @@ export async function openAppFrontend(
   context?: OpenAppFrontendContext,
 ): Promise<string | void> {
   try {
+    // Prefer opening the app as a first-class process via its per-app
+    // shell/launcher (own dock icon + Cmd-Tab + native summon; the shell injects
+    // SSO itself). `open_app_launcher` errors on non-macOS (or if the launcher
+    // can't be built), and we fall back to the in-process window below.
+    if (context?.applicationId) {
+      try {
+        await invoke('open_app_launcher', {
+          appName: appName ?? 'Application',
+          frontendUrl,
+          appId: context.applicationId,
+        });
+        return;
+      } catch (e) {
+        console.warn('[open] launcher path failed, falling back to in-process window:', e);
+      }
+    }
+
     const settings = getSettings();
     const nodeUrl = (settings.nodeUrl ?? '').replace(/\/$/, '');
 

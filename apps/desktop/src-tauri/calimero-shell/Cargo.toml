@@ -1,0 +1,23 @@
+[package]
+name = "calimero-shell"
+version = "0.1.0"
+description = "Calimero per-app shell (one webview, brokers refresh to the host)"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# The shared library lives in the host crate; the shell reuses proxy + webview +
+# broker code from it. Its default features pull tauri/custom-protocol.
+calimero-tauri-app = { path = ".." }
+tauri = { version = "2", features = [] }
+tauri-plugin-single-instance = "2"
+url = "2.5"
+tokio = { version = "1", features = ["time"] }
+
+# macOS dock-badge + notification bridge (NSApp.dockTile.setBadgeLabel,
+# NSUserNotificationCenter). Kept as raw cocoa/objc, not a Tauri plugin.
+[target.'cfg(target_os = "macos")'.dependencies]
+cocoa = "0.24"
+objc = "0.2"

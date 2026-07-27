@@ -1,0 +1,49 @@
+# App command permissions for the shell's Tauri v2 ACL.
+#
+# The shell's single "app" window renders an external app URL and is deny-by-
+# default for commands once any app-command permission is defined. Every command
+# in the shell's generate_handler! MUST be declared here and granted to the "app"
+# window via capabilities/app.json.
+
+[[permission]]
+identifier = "allow-broker-token-refresh"
+description = "Enables the broker_token_refresh command."
+commands.allow = ["broker_token_refresh"]
+
+[[permission]]
+identifier = "allow-set-badge"
+description = "Enables the set_badge command."
+commands.allow = ["set_badge"]
+
+[[permission]]
+identifier = "allow-notify"
+description = "Enables the notify command."
+commands.allow = ["notify"]
+
+[[permission]]
+identifier = "allow-proxy-http-request"
+description = "Enables the proxy_http_request command."
+commands.allow = ["proxy_http_request"]
+
+[[permission]]
+identifier = "allow-proxy-sse-stream"
+description = "Enables the proxy_sse_stream command."
+commands.allow = ["proxy_sse_stream"]
+
+[[permission]]
+identifier = "allow-cancel-sse-stream"
+description = "Enables the cancel_sse_stream command."
+commands.allow = ["cancel_sse_stream"]
+
+# Aggregate set referenced from capabilities/app.json.
+[[set]]
+identifier = "allow-shell-commands"
+description = "All shell commands, for the app webview."
+permissions = [
+  "allow-broker-token-refresh",
+  "allow-set-badge",
+  "allow-notify",
+  "allow-proxy-http-request",
+  "allow-proxy-sse-stream",
+  "allow-cancel-sse-stream",
+]

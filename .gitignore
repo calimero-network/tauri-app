@@ -39,6 +39,13 @@ target/
 **/src-tauri/gen
 **/src-tauri/merod/merod
 **/src-tauri/merod/merod.exe
+# Per-app shell: the release binary is staged here by scripts/prepare-shell.mjs
+# (bundled into the host as a resource); its placeholder frontend + generated
+# ACL schemas are build artifacts.
+**/src-tauri/shell/calimero-shell
+**/src-tauri/shell/calimero-shell.exe
+**/src-tauri/calimero-shell/dist
+**/src-tauri/calimero-shell/gen
 
 # Environment variables
 .env

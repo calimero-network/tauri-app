@@ -151,6 +151,12 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: pnpm merod:prepare
 
+      - name: Prepare calimero-shell binary (universal)
+        working-directory: apps/desktop
+        env:
+          TAURI_TARGET_TRIPLE: universal-apple-darwin
+        run: pnpm shell:prepare
+
       - name: Update version in tauri.conf.json
         if: steps.build-mode.outputs.mode == 'release'
         run: |
@@ -251,11 +257,44 @@ jobs:
             echo "Warning: merod binary not found at $MEROD_BINARY (will be downloaded during build)"
           fi
 
+      - name: Sign calimero-shell binary before bundling
+        if: steps.build-mode.outputs.mode == 'release'
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          if [ -z "$APPLE_SIGNING_IDENTITY" ]; then
+            echo "No signing identity provided, skipping shell signing"
+            exit 0
+          fi
+
+          SHELL_BINARY="apps/desktop/src-tauri/shell/calimero-shell"
+          # The shell hosts webviews (Mero Meet camera/mic) — reuse the app entitlements.
+          ENTITLEMENTS="apps/desktop/src-tauri/entitlements.plist"
+
+          if [ -f "$SHELL_BINARY" ]; then
+            echo "Signing calimero-shell before bundling: $SHELL_BINARY"
+            codesign --force --sign "$APPLE_SIGNING_IDENTITY" \
+              --options runtime \
+              --timestamp \
+              --entitlements "$ENTITLEMENTS" \
+              "$SHELL_BINARY"
+
+            codesign --verify --verbose "$SHELL_BINARY" || {
+              echo "Failed to verify calimero-shell signature"
+              exit 1
+            }
+            echo "Successfully signed calimero-shell"
+          else
+            echo "Error: calimero-shell not found at $SHELL_BINARY"
+            exit 1
+          fi
+
       - name: Build Tauri app for macOS (Universal) - Release
         if: steps.build-mode.outputs.mode == 'release'
         working-directory: apps/desktop
         env:
           MEROD_SKIP_IF_EXISTS: "1"
+          SHELL_SKIP_IF_EXISTS: "1"
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -280,6 +319,7 @@ jobs:
         id: build-app-validation
         env:
           MEROD_SKIP_IF_EXISTS: "1"
+          SHELL_SKIP_IF_EXISTS: "1"
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}

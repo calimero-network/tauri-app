@@ -30,16 +30,21 @@ vi.mock('../lib/token-storage', () => ({
 import { openAppFrontend } from './appUtils';
 import { BROKERED_REFRESH_TOKEN } from '../lib/token-broker';
 
+/** Args of the `create_app_window` invoke (may not be the first call — the app
+ * launcher is attempted first). */
+function createWindowArgs(): { url: string } {
+  const call = invoke.mock.calls.find((c) => c[0] === 'create_app_window');
+  expect(call, 'create_app_window was not invoked').toBeTruthy();
+  return (call as [string, { url: string }])[1];
+}
+
 /** The hash params of the URL `create_app_window` was invoked with. */
 function openedHash(): URLSearchParams {
-  expect(invoke).toHaveBeenCalledWith('create_app_window', expect.anything());
-  const [, args] = invoke.mock.calls[0] as [string, { url: string }];
-  return new URLSearchParams(new URL(args.url).hash.slice(1));
+  return new URLSearchParams(new URL(createWindowArgs().url).hash.slice(1));
 }
 
 function openedUrl(): string {
-  const [, args] = invoke.mock.calls[0] as [string, { url: string }];
-  return args.url;
+  return createWindowArgs().url;
 }
 
 beforeEach(() => {
@@ -48,7 +53,15 @@ beforeEach(() => {
   accessToken = 'the-access-token';
   refreshToken = REAL_REFRESH_TOKEN;
   getByLabel.mockResolvedValue(null);
-  invoke.mockResolvedValue(undefined);
+  // `openAppFrontend` prefers the per-app launcher (`open_app_launcher`) and
+  // only falls back to the in-process window when it's unavailable. These tests
+  // cover that fallback window path (the token-handoff safety), so make the
+  // launcher reject — as it does off-macOS or when no launcher can be built.
+  invoke.mockImplementation((cmd: string) =>
+    cmd === 'open_app_launcher'
+      ? Promise.reject(new Error('no launcher in test env'))
+      : Promise.resolve(undefined),
+  );
 });
 
 describe('openAppFrontend token handoff', () => {

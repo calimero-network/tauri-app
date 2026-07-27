@@ -5,7 +5,8 @@ import DataTable from "../components/DataTable";
 import ContextMenu from "../components/ContextMenu";
 import Skeleton from "../components/Skeleton";
 import { decodeMetadata, openAppFrontend, parseTauriError } from "../utils/appUtils";
-import { RefreshCw, MoreHorizontal, Trash2, Copy } from "lucide-react";
+import { invoke } from "@tauri-apps/api/core";
+import { RefreshCw, MoreHorizontal, Trash2, Copy, Rocket } from "lucide-react";
 import "./InstalledApps.css";
 
 interface InstalledApplication {
@@ -142,6 +143,15 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
     }, applicationId ? { applicationId } : undefined);
   };
 
+  const handleCreateLauncher = async (frontendUrl: string, appName: string, appId: string) => {
+    try {
+      await invoke<string>('create_desktop_shortcut', { appName, frontendUrl, appId });
+      toast.success(`Launcher for "${appName}" added to your Applications`);
+    } catch (err) {
+      toast.error(`Failed to create launcher: ${parseTauriError(err, "Unknown error")}`);
+    }
+  };
+
   const handleRowContextMenu = useCallback((e: React.MouseEvent, app: InstalledApplication) => {
     e.preventDefault();
     e.stopPropagation();
@@ -177,6 +187,7 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
           const items: { label: string; onClick: () => void; danger?: boolean }[] = [];
           if (frontendUrl) {
             items.push({ label: 'Open', onClick: () => handleOpenFrontend(frontendUrl, appName, contextMenu.app.id) });
+            items.push({ label: 'Create launcher', onClick: () => handleCreateLauncher(frontendUrl, appName, contextMenu.app.id) });
           }
           items.push({ label: 'Uninstall', onClick: () => handleUninstall(contextMenu.app.id, appName), danger: true });
           return (
@@ -343,6 +354,15 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
                               <Copy size={13} />
                               Copy ID
                             </button>
+                            {frontendUrl && (
+                              <button
+                                className="dropdown-item"
+                                onClick={() => { setOpenMenuAppId(null); handleCreateLauncher(frontendUrl, appName, app.id); }}
+                              >
+                                <Rocket size={13} />
+                                Create launcher
+                              </button>
+                            )}
                             <div className="dropdown-divider" />
                             <button
                               className="dropdown-item dropdown-item-danger"

@@ -8,6 +8,7 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "merod:prepare": "node scripts/prepare-merod.mjs",
+    "shell:prepare": "node scripts/prepare-shell.mjs",
     "tauri": "tauri",
     "tauri:dev": "pnpm merod:prepare && tauri dev --config src-tauri/tauri.dev.json",
     "tauri:dev:devtools": "pnpm merod:prepare && TAURI_OPEN_DEVTOOLS=true tauri dev --config src-tauri/tauri.dev.json",

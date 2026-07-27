@@ -5,7 +5,13 @@ import { MeroContext, type MeroContextValue } from "@calimero-network/mero-react
 import { LoginView } from "./components/LoginView";
 import { getAccessToken, clearAccessToken, clearRefreshToken } from "./lib/token-storage";
 import { startTokenBroker } from "./lib/token-broker";
-import { getSettings, getAuthUrl, saveSettings } from "./utils/settings";
+import {
+  getSettings,
+  getAuthUrl,
+  saveSettings,
+  DEFAULT_EMBEDDED_NODE_PORT,
+  DEFAULT_EMBEDDED_SWARM_PORT,
+} from "./utils/settings";
 import { clearOnboardingProgress } from "./utils/onboardingProgress";
 import { startMerod, detectRunningMerodNodes, type RunningMerodNode } from "./utils/merod";
 import { useToast } from "./contexts/ToastContext";
@@ -195,8 +201,11 @@ function App() {
           runningNodes.length === 0
         ) {
           const dataDir = settings.embeddedNodeDataDir || '~/.calimero';
-          const serverPort = settings.embeddedNodePort ?? 2528;
-          const swarmPort = 2428; // default swarm port
+          const serverPort = settings.embeddedNodePort ?? DEFAULT_EMBEDDED_NODE_PORT;
+          // Must come from settings: start_merod rewrites config.toml with whatever it
+          // gets, so a hardcoded default here silently reverted a node the user had
+          // created on a different swarm port.
+          const swarmPort = settings.embeddedNodeSwarmPort ?? DEFAULT_EMBEDDED_SWARM_PORT;
           try {
             await startMerod(serverPort, swarmPort, dataDir, settings.embeddedNodeName, settings.debugLogs);
             await new Promise((r) => setTimeout(r, 4000)); // give merod time to start (longer when app launches at login)
@@ -380,8 +389,9 @@ function App() {
     if (settings.embeddedNodeName) {
       try {
         const dataDir = settings.embeddedNodeDataDir || '~/.calimero';
-        const serverPort = settings.embeddedNodePort ?? 2528;
-        await startMerod(serverPort, 2428, dataDir, settings.embeddedNodeName, settings.debugLogs);
+        const serverPort = settings.embeddedNodePort ?? DEFAULT_EMBEDDED_NODE_PORT;
+        const swarmPort = settings.embeddedNodeSwarmPort ?? DEFAULT_EMBEDDED_SWARM_PORT;
+        await startMerod(serverPort, swarmPort, dataDir, settings.embeddedNodeName, settings.debugLogs);
         toast.success("Starting node...");
         await new Promise((r) => setTimeout(r, 3000));
         await checkConnection();

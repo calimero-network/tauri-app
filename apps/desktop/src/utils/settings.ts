@@ -5,7 +5,8 @@ export interface AppSettings {
   authUrl?: string; // Optional, defaults to nodeUrl if not set
   registries?: string[]; // Array of registry URLs
   useEmbeddedNode?: boolean; // Use embedded merod node
-  embeddedNodePort?: number; // Port for embedded node (default: 2528)
+  embeddedNodePort?: number; // Port for embedded node (default: DEFAULT_EMBEDDED_NODE_PORT)
+  embeddedNodeSwarmPort?: number; // libp2p swarm port for embedded node (default: DEFAULT_EMBEDDED_SWARM_PORT)
   embeddedNodeDataDir?: string; // Data directory for embedded node (default: ~/.calimero)
   embeddedNodeName?: string; // Node name for embedded node
   developerMode?: boolean; // Developer mode - shows advanced features like multiple nodes and contexts
@@ -21,6 +22,14 @@ export interface AppSettings {
 
 const SETTINGS_KEY = 'calimero-desktop-settings';
 const DEFAULT_NODE_URL = 'http://localhost:2528';
+
+/** Embedded-node ports. Both are user-configurable in onboarding and persisted here:
+ *  the swarm port used to be a hardcoded 2428 at every start site, so a node created
+ *  on a different swarm port had its config.toml rewritten back to 2428 on the next
+ *  autostart — and anything else holding 2428 made the node unstartable with no way
+ *  out from the UI. */
+export const DEFAULT_EMBEDDED_NODE_PORT = 2528;
+export const DEFAULT_EMBEDDED_SWARM_PORT = 2428;
 const DEFAULT_REGISTRY_URL = 'https://apps.calimero.network/';
 const OLD_DEFAULT_REGISTRY_URL = 'http://localhost:8080';
 
@@ -83,6 +92,7 @@ export function getSettings(): AppSettings {
         registries: migratedRegistries,
         useEmbeddedNode: rawSettings.useEmbeddedNode,
         embeddedNodePort: rawSettings.embeddedNodePort,
+        embeddedNodeSwarmPort: rawSettings.embeddedNodeSwarmPort,
         embeddedNodeDataDir: rawSettings.embeddedNodeDataDir,
         embeddedNodeName: rawSettings.embeddedNodeName,
         developerMode: rawSettings.developerMode ?? false, // Default to false

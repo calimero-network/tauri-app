@@ -4,7 +4,13 @@ import { apiClient, createClientAsync } from "../lib/mero-client";
 import { LoginView } from "../components/LoginView";
 import { initMerodNode, startMerod, listMerodNodes, detectRunningMerodNodes, waitForNodeHealthy } from "../utils/merod";
 import { invoke } from "@tauri-apps/api/core";
-import { saveSettings, getSettings, getAuthUrl } from "../utils/settings";
+import {
+  saveSettings,
+  getSettings,
+  getAuthUrl,
+  DEFAULT_EMBEDDED_NODE_PORT,
+  DEFAULT_EMBEDDED_SWARM_PORT,
+} from "../utils/settings";
 import { hardReset, wipeClientState } from "../utils/hardReset";
 import { parseTauriError } from "../utils/appUtils";
 import { setAccessToken, setRefreshToken, setTokenExpiresAt } from "../lib/token-storage";
@@ -102,8 +108,8 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
   const [nodeName, setNodeName] = useState(() => loadOnboardingProgress()?.nodeName ?? "default");
   const [adminUser, setAdminUser] = useState("");
   const [adminPassword, setAdminPassword] = useState("");
-  const [serverPort, setServerPort] = useState(() => loadOnboardingProgress()?.serverPort ?? 2528);
-  const [swarmPort, setSwarmPort] = useState(() => loadOnboardingProgress()?.swarmPort ?? 2428);
+  const [serverPort, setServerPort] = useState(() => loadOnboardingProgress()?.serverPort ?? DEFAULT_EMBEDDED_NODE_PORT);
+  const [swarmPort, setSwarmPort] = useState(() => loadOnboardingProgress()?.swarmPort ?? DEFAULT_EMBEDDED_SWARM_PORT);
       const [creatingNode, setCreatingNode] = useState(false);
       const [nodeError, setNodeError] = useState<string | null>(null);
       const [nodeCreated, setNodeCreated] = useState(false);
@@ -189,6 +195,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
                 embeddedNodeDataDir: dataDir,
                 embeddedNodeName: nodeToUse,
                 embeddedNodePort: alreadyRunning.port,
+                embeddedNodeSwarmPort: alreadyRunning.swarm_port ?? swarmPort,
               });
             } else {
               await startMerod(serverPort, swarmPort, dataDir, nodeToUse, getSettings().debugLogs);
@@ -199,6 +206,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
                 embeddedNodeDataDir: dataDir,
                 embeddedNodeName: nodeToUse,
                 embeddedNodePort: serverPort,
+                embeddedNodeSwarmPort: swarmPort,
               });
             }
             setTheme('dark');
@@ -301,6 +309,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
         embeddedNodeDataDir: dataDir,
         embeddedNodeName: targetNodeName,
         embeddedNodePort: serverPort,
+        embeddedNodeSwarmPort: swarmPort,
       });
       await waitForNodeHealthy(`${nodeUrl}/auth`, 20000);
       const loggedIn = await attemptLogin(nodeUrl, username.trim(), password);
@@ -396,6 +405,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
             embeddedNodeDataDir: dataDir,
             embeddedNodeName: useExistingNode,
             embeddedNodePort: alreadyRunning.port,
+            embeddedNodeSwarmPort: alreadyRunning.swarm_port ?? swarmPort,
           });
           // check_merod_health appends /health — use /auth so it hits /auth/health
           await waitForNodeHealthy(`${nodeUrl}/auth`, 5000);
@@ -415,6 +425,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
           embeddedNodeDataDir: dataDir,
           embeddedNodeName: useExistingNode,
           embeddedNodePort: serverPort,
+          embeddedNodeSwarmPort: swarmPort,
         });
         // check_merod_health appends /health — use /auth so it hits /auth/health
         await waitForNodeHealthy(`${nodeUrl}/auth`, 20000);
@@ -445,6 +456,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
           embeddedNodeDataDir: dataDir,
           embeddedNodeName: targetNodeName,
           embeddedNodePort: serverPort,
+          embeddedNodeSwarmPort: swarmPort,
         });
         // check_merod_health appends /health — use /auth so it hits /auth/health
         await waitForNodeHealthy(`${nodeUrl}/auth`, 20000);
@@ -719,6 +731,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
           useEmbeddedNode: undefined,
           embeddedNodeName: undefined,
           embeddedNodePort: undefined,
+          embeddedNodeSwarmPort: undefined,
           embeddedNodeDataDir: undefined,
         });
         setState(null);

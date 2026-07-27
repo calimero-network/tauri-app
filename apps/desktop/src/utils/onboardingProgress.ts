@@ -1,3 +1,5 @@
+import { DEFAULT_EMBEDDED_NODE_PORT, DEFAULT_EMBEDDED_SWARM_PORT } from './settings';
+
 const ONBOARDING_PROGRESS_KEY = 'calimero-onboarding-progress';
 
 export type OnboardingStep = 'welcome' | 'what-is' | 'node-setup' | 'cloud-connect' | 'login' | 'install-app';
@@ -19,8 +21,8 @@ const DEFAULT_PROGRESS: Omit<OnboardingProgress, 'savedAt'> = {
   currentStep: 'welcome',
   dataDir: '~/.calimero',
   nodeName: 'default',
-  serverPort: 2528,
-  swarmPort: 2428,
+  serverPort: DEFAULT_EMBEDDED_NODE_PORT,
+  swarmPort: DEFAULT_EMBEDDED_SWARM_PORT,
   nodeSetupMode: 'choose',
   useExistingNode: null,
 };

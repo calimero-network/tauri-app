@@ -1852,6 +1852,38 @@ fn collect_merod_pids(tracked: &[u32]) -> Vec<u32> {
     pids
 }
 
+/// PIDs of running per-app shell processes. Each launcher `.app` trampoline execs
+/// the shared loose shell binary, so the process shows up under the shell's own
+/// name — never as the host. Used by the total nuke: a live shell keeps an
+/// authenticated app webview (and would re-flush its localStorage after a wipe).
+#[cfg(target_os = "macos")]
+fn collect_shell_pids() -> Vec<u32> {
+    // Installed name (extract_shell's dest) plus the cargo binary name used in dev.
+    const SHELL_BINARY_NAMES: [&str; 2] = ["CalimeroShell", "calimero-shell"];
+    let mut pids: Vec<u32> = Vec::new();
+    if let Ok(output) = std::process::Command::new("ps")
+        .args(["ax", "-o", "pid,command"])
+        .output()
+    {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for line in stdout.lines() {
+            let mut parts = line.split_whitespace();
+            let (Some(pid_str), Some(exe)) = (parts.next(), parts.next()) else {
+                continue;
+            };
+            let basename = exe.split('/').last().unwrap_or(exe);
+            if SHELL_BINARY_NAMES.contains(&basename) {
+                if let Ok(pid) = pid_str.parse::<u32>() {
+                    if !pids.contains(&pid) {
+                        pids.push(pid);
+                    }
+                }
+            }
+        }
+    }
+    pids
+}
+
 /// Sends SIGTERM to all pids, waits, then force-kills any survivors.
 async fn kill_pids(pids: &[u32]) {
     if pids.is_empty() {
@@ -4078,6 +4110,157 @@ async fn delete_calimero_data_dir(data_dir: String) -> Result<String, TauriError
     Ok(format!("Deleted {}", path_canonical.display()))
 }
 
+/// True if `bundle` is a launcher `.app` we generated and may remove: it must be
+/// a `.app` directory under the user's home. `bundle_path` comes from our own
+/// `caps.json`, but that file is plain JSON on disk — a corrupted or tampered
+/// entry must not turn the nuke into an arbitrary recursive delete.
+fn launcher_bundle_is_removable(bundle: &std::path::Path, home: &std::path::Path) -> bool {
+    bundle.extension().and_then(|e| e.to_str()) == Some("app")
+        && bundle.starts_with(home)
+        && !bundle
+            .components()
+            .any(|c| c.as_os_str() == std::ffi::OsStr::new(".."))
+}
+
+/// Tear down every app session this desktop has handed out. Clearing the
+/// desktop's own `localStorage` was never enough:
+///
+/// - Each app frontend is its own web origin, so the SSO'd access token its
+///   MeroJs persists lands in the webview's shared website-data store
+///   (`~/Library/WebKit/<bundle id>`), which no `localStorage.removeItem` from
+///   the desktop's origin can reach. Reopening an app after a "reset" resumed
+///   the old authenticated session.
+/// - Open app windows and running launcher shells hold live sessions of their
+///   own, and a live webview re-flushes its `localStorage` to disk on close —
+///   so they must go first, or the wipe is undone behind us.
+///
+/// Every step is best-effort except the final website-data wipe, whose failure
+/// is reported so the caller can tell the user their sessions may persist.
+#[tauri::command]
+async fn clear_app_sessions(app_handle: tauri::AppHandle) -> Result<String, TauriError> {
+    let mut done: Vec<String> = Vec::new();
+
+    // 1. Close the in-process app windows.
+    let mut closed = 0;
+    for (label, window) in app_handle.webview_windows() {
+        if label.starts_with("app-") {
+            let _ = window.close();
+            closed += 1;
+        }
+    }
+    if closed > 0 {
+        done.push(format!("{closed} app window(s)"));
+    }
+
+    // 2. Kill the per-app launcher shells, for the same reason.
+    #[cfg(target_os = "macos")]
+    {
+        let pids = collect_shell_pids();
+        if !pids.is_empty() {
+            kill_pids(&pids).await;
+            done.push(format!("{} launcher process(es)", pids.len()));
+        }
+    }
+
+    // 3. The shells are separate processes with their own website-data store,
+    //    which step 4 cannot reach. They are dead by now, so delete it directly.
+    //    Every name is ours: the shell's bundle identifier plus the loose binary
+    //    names WebKit falls back to when the executable has no bundle.
+    #[cfg(target_os = "macos")]
+    if let Some(home) = dirs::home_dir() {
+        for name in ["network.calimero.shell", "CalimeroShell", "calimero-shell"] {
+            let _ = std::fs::remove_dir_all(home.join("Library/WebKit").join(name));
+            let _ = std::fs::remove_dir_all(home.join("Library/HTTPStorages").join(name));
+            let _ = std::fs::remove_file(
+                home.join("Library/HTTPStorages")
+                    .join(format!("{name}.binarycookies")),
+            );
+        }
+        done.push("launcher website data".to_string());
+    }
+
+    // 4. Wipe this process's website data: localStorage, cookies, IndexedDB and
+    //    caches for EVERY origin the host has loaded — which is where the app
+    //    windows' access tokens live. All windows of the process share the one
+    //    default data store, so clearing it through the main window is enough.
+    let main = app_handle.get_webview_window("main").ok_or_else(|| {
+        TauriError::new(
+            TauriErrorCode::WindowOperationFailed,
+            "Main window is gone; webview session data was not cleared",
+        )
+    })?;
+    main.clear_all_browsing_data().map_err(|e| {
+        TauriError::with_details(
+            TauriErrorCode::InternalError,
+            "Failed to clear webview session data — app sessions may persist",
+            e.to_string(),
+        )
+    })?;
+    done.push("webview session data".to_string());
+
+    let summary = format!("Cleared app sessions: {}", done.join(", "));
+    info!("[Reset] {summary}");
+    Ok(summary)
+}
+
+/// Remove the per-app launchers: the generated `.app` bundles, the capability
+/// store that keeps authorizing them (`caps.json` — a launcher built before a
+/// total nuke would otherwise still get tokens brokered over the host socket),
+/// and the extracted shell binary they exec. Total-nuke only: a launcher is a
+/// dock icon the user placed, so the softer "reset settings" leaves them alone.
+///
+/// Best-effort per launcher; a bundle we can't remove is logged, not fatal.
+/// Call `clear_app_sessions` first so no shell is still running out of a bundle.
+#[tauri::command]
+async fn remove_app_launchers(app_handle: tauri::AppHandle) -> Result<String, TauriError> {
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app_handle;
+        return Ok("No launchers on this platform".to_string());
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let store = caps_store_path();
+        let home = dirs::home_dir();
+        let mut removed = 0;
+        for app in app_registry::installed_apps(&store) {
+            let bundle = std::path::PathBuf::from(&app.bundle_path);
+            let removable = home
+                .as_deref()
+                .map_or(false, |h| launcher_bundle_is_removable(&bundle, h));
+            if !removable {
+                if !app.bundle_path.is_empty() {
+                    warn!(
+                        "[Reset] Skipping unexpected launcher path for {}: {}",
+                        app.id, app.bundle_path
+                    );
+                }
+                continue;
+            }
+            match std::fs::remove_dir_all(&bundle) {
+                Ok(()) => removed += 1,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => warn!("[Reset] Failed to remove {}: {}", bundle.display(), e),
+            }
+        }
+
+        let _ = std::fs::remove_file(&store);
+        app_handle
+            .state::<CapRegistry>()
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clear();
+        if let Some(shell_dir) = launcher::shell_install_path().parent() {
+            let _ = std::fs::remove_dir_all(shell_dir);
+        }
+
+        let summary = format!("Removed {removed} app launcher(s) and their capabilities");
+        info!("[Reset] {summary}");
+        Ok(summary)
+    }
+}
+
 /// Performs graceful shutdown:
 /// 1. Drain in-flight proxy requests up to REQUEST_DRAIN_TIMEOUT_SECS
 /// 2. SIGTERM all managed (and detected) merod processes
@@ -4462,6 +4645,8 @@ fn main() {
             download_and_replace_merod,
             set_tray_icon_connected,
             delete_calimero_data_dir,
+            clear_app_sessions,
+            remove_app_launchers,
             kill_all_merod_processes,
             autostart_enable,
             autostart_disable,
@@ -4485,10 +4670,39 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        is_textual_content_type, merod_target_triple, parse_app_deep_link, score_merod_asset,
-        validate_allowed_url,
+        is_textual_content_type, launcher_bundle_is_removable, merod_target_triple,
+        parse_app_deep_link, score_merod_asset, validate_allowed_url,
     };
     use base64::Engine as _;
+    use std::path::Path;
+
+    #[test]
+    fn launcher_bundle_removal_is_confined_to_app_bundles_under_home() {
+        let home = Path::new("/Users/x");
+        assert!(launcher_bundle_is_removable(
+            Path::new("/Users/x/Applications/MeroDrive.app"),
+            home
+        ));
+
+        // Not a .app: a tampered caps.json must not delete a data directory.
+        assert!(!launcher_bundle_is_removable(
+            Path::new("/Users/x/Documents"),
+            home
+        ));
+        // Outside home.
+        assert!(!launcher_bundle_is_removable(
+            Path::new("/Applications/Safari.app"),
+            home
+        ));
+        // Traversal back out of home.
+        assert!(!launcher_bundle_is_removable(
+            Path::new("/Users/x/../../System/Library/CoreServices/Finder.app"),
+            home
+        ));
+        // Empty / relative paths.
+        assert!(!launcher_bundle_is_removable(Path::new(""), home));
+        assert!(!launcher_bundle_is_removable(Path::new("MeroDrive.app"), home));
+    }
 
     #[test]
     fn app_deep_link_custom_scheme() {

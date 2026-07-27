@@ -5,7 +5,8 @@ export interface AppSettings {
   authUrl?: string; // Optional, defaults to nodeUrl if not set
   registries?: string[]; // Array of registry URLs
   useEmbeddedNode?: boolean; // Use embedded merod node
-  embeddedNodePort?: number; // Port for embedded node (default: 2528)
+  embeddedNodePort?: number; // Port for embedded node (default: DEFAULT_EMBEDDED_NODE_PORT)
+  embeddedNodeSwarmPort?: number; // libp2p swarm port for embedded node (default: DEFAULT_EMBEDDED_SWARM_PORT)
   embeddedNodeDataDir?: string; // Data directory for embedded node (default: ~/.calimero)
   embeddedNodeName?: string; // Node name for embedded node
   developerMode?: boolean; // Developer mode - shows advanced features like multiple nodes and contexts
@@ -21,6 +22,14 @@ export interface AppSettings {
 
 const SETTINGS_KEY = 'calimero-desktop-settings';
 const DEFAULT_NODE_URL = 'http://localhost:2528';
+
+/** Embedded-node ports. Both are user-configurable in onboarding and persisted here:
+ *  the swarm port used to be a hardcoded 2428 at every start site, so a node created
+ *  on a different swarm port had its config.toml rewritten back to 2428 on the next
+ *  autostart — and anything else holding 2428 made the node unstartable with no way
+ *  out from the UI. */
+export const DEFAULT_EMBEDDED_NODE_PORT = 2528;
+export const DEFAULT_EMBEDDED_SWARM_PORT = 2428;
 const DEFAULT_REGISTRY_URL = 'https://apps.calimero.network/';
 const OLD_DEFAULT_REGISTRY_URL = 'http://localhost:8080';
 
@@ -83,6 +92,7 @@ export function getSettings(): AppSettings {
         registries: migratedRegistries,
         useEmbeddedNode: rawSettings.useEmbeddedNode,
         embeddedNodePort: rawSettings.embeddedNodePort,
+        embeddedNodeSwarmPort: rawSettings.embeddedNodeSwarmPort,
         embeddedNodeDataDir: rawSettings.embeddedNodeDataDir,
         embeddedNodeName: rawSettings.embeddedNodeName,
         developerMode: rawSettings.developerMode ?? false, // Default to false
@@ -128,27 +138,25 @@ export function clearSettings(): void {
   localStorage.removeItem(SETTINGS_KEY);
 }
 
-const THEME_KEY = 'calimero-desktop-theme';
-
 /**
- * Clear all app data (settings + theme + onboarding progress + cache + session tokens).
+ * Clear all app data for this origin: settings, theme, onboarding progress, caches,
+ * session tokens, context keys, pending OAuth state — everything.
  * Use with stopMerod() for full reset. Caller should reload the app after this.
+ *
+ * Deliberately `clear()` rather than an allowlist of keys: the allowlist version of
+ * this function silently missed every key added after it was written (context keys,
+ * the pending OAuth nonce), so a "reset" kept state it promised to delete. Nothing
+ * in this origin's localStorage is worth preserving across a reset.
  *
  * Note: localStorage is partitioned per web origin, so this only clears the silo of the
  * origin it runs in. Loaded app UIs served from other origins (each node URL is a distinct
- * origin) keep their own tokens — wiping those requires clearing WebsiteData on disk.
+ * origin) keep their own tokens — wiping those needs the `clear_app_sessions` command,
+ * which clears the webview's on-disk website data. See utils/hardReset.ts.
  */
 export function clearAllAppData(): void {
-  localStorage.removeItem(SETTINGS_KEY);
-  localStorage.removeItem(THEME_KEY);
-  localStorage.removeItem('calimero-onboarding-progress');
-  localStorage.removeItem('calimero-autostart-default-applied');
-  localStorage.removeItem('calimero-marketplace-cache');
-  localStorage.removeItem('calimero-error-log');
-  // Session tokens were left behind on reset, so a "reset" still resumed the old
-  // authenticated session against the node. Clear them too.
-  localStorage.removeItem('calimero-auth-tokens');
   clearAllTokens();
+  localStorage.clear();
+  sessionStorage.clear();
 }
 
 

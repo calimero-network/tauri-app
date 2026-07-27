@@ -22,6 +22,11 @@
   "devDependencies": {
     "typescript": "^5.8.3"
   },
+  "pnpm": {
+    "overrides": {
+      "postcss": ">=8.5.18"
+    }
+  },
   "engines": {
     "node": ">=18.0.0",
     "pnpm": ">=8.0.0"

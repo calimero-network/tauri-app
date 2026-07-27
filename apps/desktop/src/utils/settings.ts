@@ -128,27 +128,25 @@ export function clearSettings(): void {
   localStorage.removeItem(SETTINGS_KEY);
 }
 
-const THEME_KEY = 'calimero-desktop-theme';
-
 /**
- * Clear all app data (settings + theme + onboarding progress + cache + session tokens).
+ * Clear all app data for this origin: settings, theme, onboarding progress, caches,
+ * session tokens, context keys, pending OAuth state — everything.
  * Use with stopMerod() for full reset. Caller should reload the app after this.
+ *
+ * Deliberately `clear()` rather than an allowlist of keys: the allowlist version of
+ * this function silently missed every key added after it was written (context keys,
+ * the pending OAuth nonce), so a "reset" kept state it promised to delete. Nothing
+ * in this origin's localStorage is worth preserving across a reset.
  *
  * Note: localStorage is partitioned per web origin, so this only clears the silo of the
  * origin it runs in. Loaded app UIs served from other origins (each node URL is a distinct
- * origin) keep their own tokens — wiping those requires clearing WebsiteData on disk.
+ * origin) keep their own tokens — wiping those needs the `clear_app_sessions` command,
+ * which clears the webview's on-disk website data. See utils/hardReset.ts.
  */
 export function clearAllAppData(): void {
-  localStorage.removeItem(SETTINGS_KEY);
-  localStorage.removeItem(THEME_KEY);
-  localStorage.removeItem('calimero-onboarding-progress');
-  localStorage.removeItem('calimero-autostart-default-applied');
-  localStorage.removeItem('calimero-marketplace-cache');
-  localStorage.removeItem('calimero-error-log');
-  // Session tokens were left behind on reset, so a "reset" still resumed the old
-  // authenticated session against the node. Clear them too.
-  localStorage.removeItem('calimero-auth-tokens');
   clearAllTokens();
+  localStorage.clear();
+  sessionStorage.clear();
 }
 
 

@@ -1,8 +1,9 @@
 import { useState, useEffect } from "react";
-import { getSettings, saveSettings, clearAllAppData } from "../utils/settings";
+import { getSettings, saveSettings } from "../utils/settings";
 import { parseTauriError } from "../utils/appUtils";
 import { invoke } from "@tauri-apps/api/core";
-import { killAllMerodProcesses, deleteCalimeroDataDir, stopMerod, getMerodStatus } from "../utils/merod";
+import { killAllMerodProcesses, stopMerod } from "../utils/merod";
+import { hardReset, wipeClientState } from "../utils/hardReset";
 import { startCloudLogin, disconnectCloud } from "../utils/cloudAuth";
 import { getCloudSubscription, CloudSessionExpiredError } from "../utils/cloudApi";
 import { isCloudEnabled, notifyCloudEnabledChanged } from "../utils/featureFlags";
@@ -363,7 +364,9 @@ export default function Settings({ onBack }: SettingsProps) {
                           }
                           // Brief settle so OS releases file handles before reload
                           await new Promise((r) => setTimeout(r, 500));
-                          clearAllAppData();
+                          // Wipes this origin's storage AND the webview's website data,
+                          // so app windows don't keep a session the reset just revoked.
+                          await wipeClientState();
                           window.location.reload();
                         }}
                         className="button button-danger"
@@ -421,59 +424,16 @@ export default function Settings({ onBack }: SettingsProps) {
                         onClick={async () => {
                           if (!nukeConfirmed) return;
                           setNuking(true);
-
-                          // Step 1: graceful stop of the embedded node
-                          setNukeStatus('Stopping nodes...');
                           try {
-                            await stopMerod();
-                          } catch {
-                            // not running — ok
-                          }
-
-                          // Step 2: force-kill any remaining merod processes
-                          try {
-                            await killAllMerodProcesses();
+                            await hardReset({ onStatus: setNukeStatus });
                           } catch (err: unknown) {
+                            // A data directory survived; nothing was cleared, so the
+                            // user can read the error and retry from the same state.
                             toast.error(parseTauriError(err));
                             setNuking(false);
                             setNukeStatus('');
                             return;
                           }
-
-                          // Step 3: wait until the embedded node reports stopped (max 10s)
-                          setNukeStatus('Waiting for nodes to stop...');
-                          const deadline = Date.now() + 10_000;
-                          while (Date.now() < deadline) {
-                            try {
-                              const status = await getMerodStatus();
-                              if (!status.running) break;
-                            } catch {
-                              break; // process gone — treat as stopped
-                            }
-                            await new Promise((r) => setTimeout(r, 500));
-                          }
-
-                          // Step 4: brief OS-level settle so file handles are released
-                          await new Promise((r) => setTimeout(r, 500));
-
-                          // Step 5: delete both the settings path and default ~/.calimero.
-                          // After clearAllAppData(), onboarding uses ~/.calimero, so we must remove it.
-                          setNukeStatus('Deleting...');
-                          const settingsDataDir = getSettings().embeddedNodeDataDir || "~/.calimero";
-                          const defaultDataDir = "~/.calimero";
-                          const dirsToDelete = [...new Set([settingsDataDir, defaultDataDir])];
-                          try {
-                            for (const dir of dirsToDelete) {
-                              await deleteCalimeroDataDir(dir);
-                            }
-                          } catch (err: unknown) {
-                            toast.error(parseTauriError(err));
-                            setNuking(false);
-                            setNukeStatus('');
-                            return;
-                          }
-
-                          clearAllAppData();
                           window.location.reload();
                         }}
                         className="button button-danger"

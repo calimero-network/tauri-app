@@ -2,9 +2,11 @@ import { useState, useEffect, useRef, useMemo } from "react";
 import { checkOnboardingState, getOnboardingMessage, type OnboardingState } from "../utils/onboarding";
 import { apiClient, createClientAsync } from "../lib/mero-client";
 import { LoginView } from "../components/LoginView";
-import { initMerodNode, startMerod, listMerodNodes, detectRunningMerodNodes, waitForNodeHealthy, stopMerod, killAllMerodProcesses, deleteCalimeroDataDir } from "../utils/merod";
+import { initMerodNode, startMerod, listMerodNodes, detectRunningMerodNodes, waitForNodeHealthy } from "../utils/merod";
 import { invoke } from "@tauri-apps/api/core";
-import { saveSettings, getSettings, getAuthUrl, clearAllAppData } from "../utils/settings";
+import { saveSettings, getSettings, getAuthUrl } from "../utils/settings";
+import { hardReset, wipeClientState } from "../utils/hardReset";
+import { parseTauriError } from "../utils/appUtils";
 import { setAccessToken, setRefreshToken, setTokenExpiresAt } from "../lib/token-storage";
 import { saveOnboardingProgress, loadOnboardingProgress } from "../utils/onboardingProgress";
 import { startCloudLogin } from "../utils/cloudAuth";
@@ -599,24 +601,19 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
     setCurrentStep('node-setup');
   };
 
-  // Hard reset: kill all merod processes, delete data dir, wipe all storage, reload
+  // Hard reset: kill all merod processes, delete data dirs, wipe all client state
+  // (this origin's storage, the webview's website data, launchers, cloud session).
   const handleNukeAll = async () => {
     setNuking(true);
     setShowFloatingMenu(false);
-    // 1. Graceful stop then force-kill
-    try { await stopMerod(); } catch { /* not tracked — ok */ }
-    try { await killAllMerodProcesses(); } catch { /* best-effort */ }
-    // 2. Wait for OS to release file handles
-    await new Promise((r) => setTimeout(r, 800));
-    // 3. Delete the data directory (settings path + default ~/.calimero)
-    const settingsDataDir = getSettings().embeddedNodeDataDir || '~/.calimero';
-    const dirsToDelete = [...new Set([settingsDataDir, '~/.calimero'])];
-    for (const dir of dirsToDelete) {
-      try { await deleteCalimeroDataDir(dir); } catch { /* dir may not exist */ }
+    try {
+      await hardReset();
+    } catch (err: unknown) {
+      // A data directory survived. This is the escape hatch from a broken state,
+      // so say what failed but still reset everything we can and come back fresh.
+      toast.error(parseTauriError(err));
+      await wipeClientState();
     }
-    // 4. Wipe all client-side state
-    clearAllAppData();
-    sessionStorage.clear();
     window.location.reload();
   };
 

@@ -152,6 +152,16 @@ description = "Enables the delete_calimero_data_dir command."
 commands.allow = ["delete_calimero_data_dir"]
 
 [[permission]]
+identifier = "allow-clear-app-sessions"
+description = "Enables the clear_app_sessions command."
+commands.allow = ["clear_app_sessions"]
+
+[[permission]]
+identifier = "allow-remove-app-launchers"
+description = "Enables the remove_app_launchers command."
+commands.allow = ["remove_app_launchers"]
+
+[[permission]]
 identifier = "allow-kill-all-merod-processes"
 description = "Enables the kill_all_merod_processes command."
 commands.allow = ["kill_all_merod_processes"]
@@ -260,6 +270,8 @@ permissions = [
   "allow-download-and-replace-merod",
   "allow-set-tray-icon-connected",
   "allow-delete-calimero-data-dir",
+  "allow-clear-app-sessions",
+  "allow-remove-app-launchers",
   "allow-kill-all-merod-processes",
   "allow-autostart-enable",
   "allow-autostart-disable",

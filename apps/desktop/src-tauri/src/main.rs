@@ -1201,8 +1201,7 @@ async fn fetch_png_bytes(client: &reqwest::Client, url: &str) -> Option<Vec<u8>>
 /// Best-effort: obtain a PNG app icon from the web app served at `base`. Tries the
 /// web manifest first (largest PNG), then falls back to common PWA icon paths.
 #[cfg(target_os = "macos")]
-async fn fetch_icon_png(base: &str) -> Option<Vec<u8>> {
-    let client = http_client();
+async fn fetch_icon_png(client: &reqwest::Client, base: &str) -> Option<Vec<u8>> {
     // 1. Manifest → largest PNG.
     for manifest in [
         "/manifest.webmanifest",
@@ -1290,12 +1289,61 @@ fn png_to_icns(png: &std::path::Path, icns: &std::path::Path) -> std::io::Result
 /// Best-effort produce a `.icns` for the per-app launcher, sourced from the web
 /// app served at `frontend_url`. Returns the cached `.icns` path on success, or
 /// `None` on ANY failure so launcher creation never breaks.
+/// Decode a `data:image/...;base64,<b64>` URI to raw PNG bytes, verifying the PNG
+/// magic. Returns None for anything that isn't a base64 PNG data URI.
 #[cfg(target_os = "macos")]
-fn ensure_app_launcher_icon(frontend_url: &str, app_id: &str) -> Option<std::path::PathBuf> {
+fn decode_data_uri_png(s: &str) -> Option<Vec<u8>> {
+    use base64::Engine;
+    let (_, b64) = s.strip_prefix("data:")?.split_once(";base64,")?;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(b64.trim())
+        .ok()?;
+    if bytes.len() >= 8 && &bytes[..8] == b"\x89PNG\r\n\x1a\n" {
+        Some(bytes)
+    } else {
+        None
+    }
+}
+
+/// Fetch the app's web-manifest / favicon PNG. Runs on a DEDICATED thread with its
+/// OWN runtime: this is reached from a Tauri command that may execute inside the
+/// ambient Tokio runtime, where `tauri::async_runtime::block_on` does not drive
+/// the request (the fetch came back empty and every launcher fell back to the
+/// generic exec icon). A fresh std::thread has no ambient runtime, so a
+/// current-thread runtime can block on it; a one-off client keeps its pool here.
+#[cfg(target_os = "macos")]
+fn fetch_frontend_icon_png(frontend_url: &str) -> Option<Vec<u8>> {
     let base = frontend_url.trim_end_matches('/').to_string();
-    // Sync command context (main thread, no active runtime) — block on the shared
-    // async HTTP client, mirroring the shell's build_app_url.
-    let png = tauri::async_runtime::block_on(fetch_icon_png(&base))?;
+    std::thread::spawn(move || -> Option<Vec<u8>> {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .ok()?;
+        rt.block_on(async {
+            let client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(15))
+                .build()
+                .ok()?;
+            fetch_icon_png(&client, &base).await
+        })
+    })
+    .join()
+    .ok()
+    .flatten()
+}
+
+/// The launcher icon for an app. Prefers a PNG **bundled in the app manifest**
+/// (`metadata.icon`, a `data:` URI) — deterministic, offline, travels with the
+/// app — and falls back to fetching the app's web favicon/PWA-manifest icon.
+#[cfg(target_os = "macos")]
+fn ensure_app_launcher_icon(
+    bundled_icon: Option<&str>,
+    frontend_url: &str,
+    app_id: &str,
+) -> Option<std::path::PathBuf> {
+    let png = bundled_icon
+        .and_then(decode_data_uri_png)
+        .or_else(|| fetch_frontend_icon_png(frontend_url))?;
     let tmp_png = std::env::temp_dir().join(format!("calimero-appicon-{app_id}.png"));
     std::fs::write(&tmp_png, &png).ok()?;
     let icns = app_icon_cache_path(app_id);
@@ -1337,6 +1385,7 @@ fn ensure_app_launcher(
     app_name: &str,
     frontend_url: &str,
     app_id: &str,
+    bundled_icon: Option<&str>,
     dest_dir: &std::path::Path,
 ) -> Result<std::path::PathBuf, TauriError> {
     launcher::validate_app_id(app_id)
@@ -1380,9 +1429,10 @@ fn ensure_app_launcher(
         }
     }
 
-    // Best-effort real launcher icon sourced from the app's frontend; falls back
-    // to None (generic exec icon) if the app exposes no fetchable PNG icon.
-    let icon = ensure_app_launcher_icon(frontend_url, app_id);
+    // Best-effort real launcher icon: the bundled `metadata.icon` if the app
+    // ships one, else the app's web favicon; None (generic exec icon) if neither
+    // yields a usable PNG.
+    let icon = ensure_app_launcher_icon(bundled_icon, frontend_url, app_id);
     let spec = launcher::AppSpec {
         id: app_id.to_string(),
         name: safe.to_string(),
@@ -1426,6 +1476,7 @@ fn open_app_launcher(
     app_name: String,
     frontend_url: String,
     app_id: String,
+    icon: Option<String>,
 ) -> Result<String, TauriError> {
     #[cfg(target_os = "macos")]
     {
@@ -1442,8 +1493,14 @@ fn open_app_launcher(
             Some(d) => d,
             None => launcher_dir()?,
         };
-        let bundle =
-            ensure_app_launcher(&app_handle, &app_name, &frontend_url, &app_id, &dest_dir)?;
+        let bundle = ensure_app_launcher(
+            &app_handle,
+            &app_name,
+            &frontend_url,
+            &app_id,
+            icon.as_deref(),
+            &dest_dir,
+        )?;
         std::process::Command::new("open")
             .arg(&bundle)
             .spawn()
@@ -1472,6 +1529,7 @@ fn create_desktop_shortcut(
     app_name: String,
     frontend_url: String,
     app_id: Option<String>,
+    icon: Option<String>,
 ) -> Result<String, TauriError> {
     let exe = std::env::current_exe().map_err(|e| {
         TauriError::with_details(
@@ -1558,7 +1616,14 @@ fn create_desktop_shortcut(
         let app_id = app_id
             .clone()
             .unwrap_or_else(|| shortcut_name.replace(' ', "-").to_lowercase());
-        let bundle = ensure_app_launcher(&app_handle, &app_name, &frontend_url, &app_id, &dir)?;
+        let bundle = ensure_app_launcher(
+            &app_handle,
+            &app_name,
+            &frontend_url,
+            &app_id,
+            icon.as_deref(),
+            &dir,
+        )?;
         return Ok(bundle.to_string_lossy().into_owned());
     }
 
@@ -4675,6 +4740,25 @@ mod tests {
     };
     use base64::Engine as _;
     use std::path::Path;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn decode_data_uri_png_accepts_and_rejects() {
+        use base64::Engine;
+        // Minimal valid PNG: 8-byte magic is all `decode_data_uri_png` checks.
+        let png = b"\x89PNG\r\n\x1a\n\x00\x01\x02\x03";
+        let b64 = base64::engine::general_purpose::STANDARD.encode(png);
+        let uri = format!("data:image/png;base64,{b64}");
+        assert_eq!(super::decode_data_uri_png(&uri).as_deref(), Some(&png[..]));
+
+        // Not a data URI.
+        assert!(super::decode_data_uri_png("https://example.com/icon.png").is_none());
+        // Data URI but not base64-PNG magic (a JPEG payload).
+        let jpeg_b64 = base64::engine::general_purpose::STANDARD.encode(b"\xff\xd8\xff\xe0junk");
+        assert!(super::decode_data_uri_png(&format!("data:image/jpeg;base64,{jpeg_b64}")).is_none());
+        // Garbage base64.
+        assert!(super::decode_data_uri_png("data:image/png;base64,!!!!").is_none());
+    }
 
     #[test]
     fn launcher_bundle_removal_is_confined_to_app_bundles_under_home() {

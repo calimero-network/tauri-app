@@ -404,9 +404,9 @@ function App() {
   }, [checkConnection, toast]);
 
   // Open app frontend in a new window
-  const handleOpenAppFrontend = useCallback(async (frontendUrl: string, appName?: string, applicationId?: string) => {
+  const handleOpenAppFrontend = useCallback(async (frontendUrl: string, appName?: string, applicationId?: string, iconData?: string) => {
     try {
-      await openAppFrontend(frontendUrl, appName, undefined, applicationId ? { applicationId } : undefined);
+      await openAppFrontend(frontendUrl, appName, undefined, applicationId ? { applicationId, iconData } : undefined);
     } catch (error) {
       // Fallback to navigating to installed apps page
       setCurrentPage('installed');
@@ -946,23 +946,25 @@ function App() {
               {installedApps.slice(0, 4).map((app: any, index: number) => {
                 let appName = app.id;
                 let frontendUrl: string | null = null;
+                let iconData: string | undefined;
                 try {
                   const metadata = decodeMetadata(app.metadata);
                   if (metadata) {
                     appName = metadata.name || metadata.alias || app.id;
                     frontendUrl = metadata?.links?.frontend || null;
+                    iconData = metadata?.icon;
                   }
                 } catch (e) {
                   // Use app.id as fallback
                 }
-                
+
                 return (
                   <button
                     key={`${app?.id != null && String(app.id) !== '' ? String(app.id) : 'app'}-${index}`}
                     type="button"
                     onClick={() => {
                       if (frontendUrl) {
-                        handleOpenAppFrontend(frontendUrl, appName, app.id);
+                        handleOpenAppFrontend(frontendUrl, appName, app.id, iconData);
                       } else {
                         setCurrentPage('installed');
                       }

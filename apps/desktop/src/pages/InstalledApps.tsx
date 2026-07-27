@@ -135,17 +135,17 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
     }
   };
 
-  const handleOpenFrontend = async (frontendUrl: string, appName?: string, applicationId?: string) => {
+  const handleOpenFrontend = async (frontendUrl: string, appName?: string, applicationId?: string, iconData?: string) => {
     // Warm up the token so any refresh completes before we read it from localStorage.
     try { await apiClient.node.listApplications(); } catch {}
     await openAppFrontend(frontendUrl, appName, (error) => {
       toast.error(`Failed to open frontend: ${error.message}`);
-    }, applicationId ? { applicationId } : undefined);
+    }, applicationId ? { applicationId, iconData } : undefined);
   };
 
-  const handleCreateLauncher = async (frontendUrl: string, appName: string, appId: string) => {
+  const handleCreateLauncher = async (frontendUrl: string, appName: string, appId: string, iconData?: string) => {
     try {
-      await invoke<string>('create_desktop_shortcut', { appName, frontendUrl, appId });
+      await invoke<string>('create_desktop_shortcut', { appName, frontendUrl, appId, icon: iconData ?? null });
       toast.success(`Launcher for "${appName}" added to your Applications`);
     } catch (err) {
       toast.error(`Failed to create launcher: ${parseTauriError(err, "Unknown error")}`);
@@ -186,8 +186,8 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
           const frontendUrl = metadata?.links?.frontend;
           const items: { label: string; onClick: () => void; danger?: boolean }[] = [];
           if (frontendUrl) {
-            items.push({ label: 'Open', onClick: () => handleOpenFrontend(frontendUrl, appName, contextMenu.app.id) });
-            items.push({ label: 'Create launcher', onClick: () => handleCreateLauncher(frontendUrl, appName, contextMenu.app.id) });
+            items.push({ label: 'Open', onClick: () => handleOpenFrontend(frontendUrl, appName, contextMenu.app.id, metadata?.icon) });
+            items.push({ label: 'Create launcher', onClick: () => handleCreateLauncher(frontendUrl, appName, contextMenu.app.id, metadata?.icon) });
           }
           items.push({ label: 'Uninstall', onClick: () => handleUninstall(contextMenu.app.id, appName), danger: true });
           return (
@@ -324,7 +324,7 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
                     <div className="table-cell-actions">
                       {frontendUrl && (
                         <button
-                          onClick={(e) => { e.stopPropagation(); handleOpenFrontend(frontendUrl, appName, app.id); }}
+                          onClick={(e) => { e.stopPropagation(); handleOpenFrontend(frontendUrl, appName, app.id, metadata?.icon); }}
                           className="btn-open"
                         >
                           Open
@@ -357,7 +357,7 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
                             {frontendUrl && (
                               <button
                                 className="dropdown-item"
-                                onClick={() => { setOpenMenuAppId(null); handleCreateLauncher(frontendUrl, appName, app.id); }}
+                                onClick={() => { setOpenMenuAppId(null); handleCreateLauncher(frontendUrl, appName, app.id, metadata?.icon); }}
                               >
                                 <Rocket size={13} />
                                 Create launcher

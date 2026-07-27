@@ -98,6 +98,9 @@ export interface OpenAppFrontendContext {
   applicationId?: string;
   contextId?: string;
   executorPublicKey?: string;
+  /** The app's bundled launcher icon (`metadata.icon`, a `data:image/png;base64,…`
+   * URI). The backend prefers it over fetching the app's web favicon. */
+  iconData?: string;
 }
 
 // Guards against two concurrent openAppFrontend calls racing to create the same window.
@@ -120,6 +123,7 @@ export async function openAppFrontend(
           appName: appName ?? 'Application',
           frontendUrl,
           appId: context.applicationId,
+          icon: context.iconData ?? null,
         });
         return;
       } catch (e) {

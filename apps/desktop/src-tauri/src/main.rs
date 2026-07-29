@@ -5325,4 +5325,43 @@ mod tests {
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
+
+    // Once a permission is missing, an app command fails at runtime with
+    // "<cmd> not allowed. Command not found" - see permissions/app-commands.toml's
+    // header comment. This reads both sources directly so the check can't drift.
+    #[test]
+    fn generate_handler_commands_match_acl_permissions() {
+        const MAIN_RS: &str = include_str!("main.rs");
+        const ACL_TOML: &str = include_str!("../permissions/app-commands.toml");
+
+        let handler_commands: std::collections::BTreeSet<&str> = MAIN_RS
+            .split_once("tauri::generate_handler![")
+            .expect("generate_handler! macro not found in main.rs")
+            .1
+            .split_once(']')
+            .expect("unterminated generate_handler! command list")
+            .0
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .collect();
+
+        let declared_permissions: std::collections::BTreeSet<&str> = ACL_TOML
+            .lines()
+            .filter(|line| line.trim_start().starts_with("commands.allow"))
+            .flat_map(|line| line.split('"').skip(1).step_by(2))
+            .collect();
+
+        let missing_permission: Vec<_> =
+            handler_commands.difference(&declared_permissions).collect();
+        let missing_handler: Vec<_> =
+            declared_permissions.difference(&handler_commands).collect();
+
+        assert!(
+            missing_permission.is_empty() && missing_handler.is_empty(),
+            "generate_handler! and permissions/app-commands.toml are out of sync.\n\
+             In generate_handler! but missing a permission in app-commands.toml: {missing_permission:?}\n\
+             In app-commands.toml but missing from generate_handler!: {missing_handler:?}"
+        );
+    }
 }

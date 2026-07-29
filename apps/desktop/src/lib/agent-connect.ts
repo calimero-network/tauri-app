@@ -55,25 +55,30 @@ function clientIdFromToken(accessToken: string): string | null {
  * Revoke the key an earlier connect minted. `root_key_id` comes from the list
  * response, not from our own token: the root key can be re-created, and the node
  * rejects a delete whose root key does not match the one the client is filed under.
+ *
+ * Resolves false when the node could not confirm the old key is gone, so the
+ * caller can warn that it may still be valid - the previous version of this
+ * function never checked the DELETE response and reported success regardless.
  */
 async function revokeClientKey(
   nodeUrl: string,
   accessToken: string,
   clientId: string,
-): Promise<void> {
+): Promise<boolean> {
   const headers = { Authorization: `Bearer ${accessToken}` };
   const response = await fetch(`${nodeUrl}/admin/keys/clients`, { headers });
-  if (!response.ok) return;
+  if (!response.ok) return false;
 
   const json = await response.json().catch(() => null);
   const entries: ClientKeyEntry[] = json?.data ?? json;
   const entry = Array.isArray(entries) ? entries.find((e) => e?.client_id === clientId) : undefined;
-  if (!entry?.is_valid) return;
+  if (!entry || !entry.is_valid) return true; // already gone
 
-  await fetch(`${nodeUrl}/admin/keys/${entry.root_key_id}/clients/${clientId}`, {
+  const deleteResponse = await fetch(`${nodeUrl}/admin/keys/${entry.root_key_id}/clients/${clientId}`, {
     method: 'DELETE',
     headers,
   });
+  return deleteResponse.ok;
 }
 
 /**
@@ -95,15 +100,47 @@ export const MCP_CLIENT_LOCATIONS: { client: string; location: string }[] = [
 ];
 
 /**
+ * A copy-paste prompt for any AI harness to wire itself up, as an alternative
+ * to hand-editing the MCP config JSON. Built from live values - the credential
+ * path this node actually wrote, and the node's own URL - and never the token,
+ * which the server reads from disk rather than from its config.
+ */
+export function agentSetupPrompt(credentialPath: string, nodeUrl: string): string {
+  const hints = MCP_CLIENT_LOCATIONS.map(({ client, location }) => `- ${client}: ${location}`).join('\n');
+  return `Set yourself up to use the Calimero MCP server for this node (${nodeUrl}).
+
+1. Add an MCP server entry named "calimero" that runs \`npx -y @calimero-network/mero-mcp\`.
+   Work out where your own harness keeps its MCP config - common locations:
+${hints}
+2. No environment variables are needed: the server reads its credential straight
+   from ${credentialPath}, already written for this node.
+3. Once connected, verify the setup yourself and report back: run node_status,
+   then list_applications, then list_contexts. If list_contexts comes back
+   empty, create a context before trying to use an installed app - apps
+   install without one, and that's the most common reason nothing works.`;
+}
+
+/** What a connect did, for the page to report - never includes the token itself. */
+export interface ConnectAiAgentResult {
+  /** Path the credential file was written to. */
+  path: string;
+  /** The new credential's client id (JWT `sub`) - an identifier, not a secret. */
+  clientId: string | null;
+  /** False on a first connect; true when this connect replaced an existing credential. */
+  replacedPrevious: boolean;
+  /** Set when replacedPrevious and the old key could not be confirmed revoked. */
+  revokeFailed: boolean;
+}
+
+/**
  * Mint a client key on the current node and write it where the MCP server will
- * find it, replacing the key an earlier connect left behind. Resolves to the
- * credential file's path.
+ * find it, replacing the key an earlier connect left behind.
  *
  * `permissions: ['admin']` is deliberate: the key is separate and independently
  * revocable, but not reduced - core cannot scope execute permissions yet, so a
  * narrower key could not drive the node's apps at all.
  */
-export async function connectAiAgent(): Promise<string> {
+export async function connectAiAgent(): Promise<ConnectAiAgentResult> {
   const settings = getSettings();
   const nodeUrl = (settings.nodeUrl ?? '').replace(/\/$/, '');
   const remoteOrigin = nonLoopbackOrigin(nodeUrl);
@@ -153,15 +190,38 @@ export async function connectAiAgent(): Promise<string> {
   });
   saveSettings({ ...getSettings(), mcpAgentClientId: clientId ?? undefined });
 
+  const replacedPrevious = Boolean(previousClientId && previousClientId !== clientId);
+  let revokeFailed = false;
+
   // Client keys never expire, so without this every connect leaves another
   // admin-scoped key valid on the node forever.
-  if (previousClientId && previousClientId !== clientId) {
+  if (replacedPrevious) {
     try {
-      await revokeClientKey(nodeUrl, accessToken, previousClientId);
+      revokeFailed = !(await revokeClientKey(nodeUrl, accessToken, previousClientId as string));
     } catch {
-      // The new credential is already in place; a stale key is not worth failing on.
+      // The new credential is already in place; a failed cleanup must not fail the connect.
+      revokeFailed = true;
     }
   }
 
-  return path;
+  return { path, clientId, replacedPrevious, revokeFailed };
+}
+
+/**
+ * Toast copy for a finished connect. Kept pure and separate from the page so
+ * "the token never reaches this" is a thing a test can assert without rendering.
+ */
+export function describeConnectOutcome(
+  result: ConnectAiAgentResult,
+): { message: string; revokeWarning: string | null } {
+  if (!result.replacedPrevious) {
+    return { message: 'AI agent credential created', revokeWarning: null };
+  }
+  if (result.revokeFailed) {
+    return {
+      message: 'AI agent credential replaced',
+      revokeWarning: 'Could not revoke the previous key - it may still be valid on the node',
+    };
+  }
+  return { message: 'AI agent credential replaced - previous key revoked', revokeWarning: null };
 }

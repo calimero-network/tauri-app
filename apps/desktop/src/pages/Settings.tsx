@@ -7,7 +7,14 @@ import { hardReset, wipeClientState } from "../utils/hardReset";
 import { startCloudLogin, disconnectCloud } from "../utils/cloudAuth";
 import { getCloudSubscription, CloudSessionExpiredError } from "../utils/cloudApi";
 import { isCloudEnabled, notifyCloudEnabledChanged } from "../utils/featureFlags";
-import { connectAiAgent, MCP_CONFIG_SNIPPET, MCP_CLIENT_LOCATIONS } from "../lib/agent-connect";
+import {
+  connectAiAgent,
+  describeConnectOutcome,
+  agentSetupPrompt,
+  MCP_CONFIG_SNIPPET,
+  MCP_CLIENT_LOCATIONS,
+} from "../lib/agent-connect";
+import { truncateText } from "../utils/string";
 import { useTheme } from "../contexts/ThemeContext";
 import { useToast } from "../contexts/ToastContext";
 import { ArrowLeft, RotateCcw, Trash2, Cloud, Bot, Copy } from "lucide-react";
@@ -46,6 +53,9 @@ export default function Settings({ onBack }: SettingsProps) {
   const [startAtLoginAvailable, setStartAtLoginAvailable] = useState(true);
   const [agentConnecting, setAgentConnecting] = useState(false);
   const [agentCredentialPath, setAgentCredentialPath] = useState<string | null>(null);
+  const [agentClientId, setAgentClientId] = useState<string | null>(null);
+  const [agentConnectedAt, setAgentConnectedAt] = useState<number | null>(null);
+  const [agentRevokeWarning, setAgentRevokeWarning] = useState(false);
 
   useEffect(() => {
     const settings = getSettings();
@@ -156,8 +166,14 @@ export default function Settings({ onBack }: SettingsProps) {
   const handleConnectAiAgent = async () => {
     setAgentConnecting(true);
     try {
-      setAgentCredentialPath(await connectAiAgent());
-      toast.success("AI agent credential created");
+      const result = await connectAiAgent();
+      setAgentCredentialPath(result.path);
+      setAgentClientId(result.clientId);
+      setAgentConnectedAt(Date.now());
+      setAgentRevokeWarning(result.revokeFailed);
+      const { message, revokeWarning } = describeConnectOutcome(result);
+      toast.success(message);
+      if (revokeWarning) toast.warning(revokeWarning);
     } catch (err: unknown) {
       toast.error(parseTauriError(err));
     } finally {
@@ -496,9 +512,45 @@ export default function Settings({ onBack }: SettingsProps) {
 
               <div className="agent-connected">
                 {agentCredentialPath && (
-                  <p className="field-hint" style={{ marginBottom: '20px' }}>
-                    Credential written to <code>{agentCredentialPath}</code>
-                  </p>
+                  <>
+                    <p className="field-hint" style={{ marginBottom: '8px' }}>
+                      Credential written to <code>{agentCredentialPath}</code>
+                    </p>
+                    {agentClientId && (
+                      <p className="field-hint" style={{ marginBottom: '8px' }}>
+                        Client <code>{truncateText(agentClientId, 8)}</code>
+                        {agentConnectedAt &&
+                          ` · updated ${new Date(agentConnectedAt).toLocaleTimeString()}`}
+                      </p>
+                    )}
+                    {agentRevokeWarning && (
+                      <p className="field-hint" style={{ marginBottom: '20px', color: 'var(--warning)' }}>
+                        The previous key could not be revoked. It may still be valid on the node.
+                      </p>
+                    )}
+
+                    <div className="settings-field">
+                      <div className="agent-config-header">
+                        <span className="settings-field-label">Paste this into your AI agent</span>
+                        <button
+                          type="button"
+                          className="button button-secondary agent-config-copy"
+                          onClick={() => {
+                            navigator.clipboard.writeText(
+                              agentSetupPrompt(agentCredentialPath, getSettings().nodeUrl ?? ''),
+                            );
+                            toast.success('Copied to clipboard');
+                          }}
+                        >
+                          <Copy size={13} style={{ marginRight: '6px', verticalAlign: 'middle' }} />
+                          Copy
+                        </button>
+                      </div>
+                      <pre className="agent-config">
+                        {agentSetupPrompt(agentCredentialPath, getSettings().nodeUrl ?? '')}
+                      </pre>
+                    </div>
+                  </>
                 )}
 
                 <div className="settings-field">
@@ -525,6 +577,10 @@ export default function Settings({ onBack }: SettingsProps) {
                       </li>
                     ))}
                   </ul>
+                  <p className="field-hint" style={{ marginTop: '8px', fontStyle: 'italic' }}>
+                    In local development, before the package is published, the command in both blocks
+                    above is instead <code>node /path/to/mero-mcp/dist/index.js</code>.
+                  </p>
                 </div>
 
                 <p className="field-hint">

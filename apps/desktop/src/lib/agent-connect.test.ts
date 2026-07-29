@@ -16,7 +16,7 @@ vi.mock('./token-broker', () => ({
   brokerAccessToken: () => brokerAccessToken(),
 }));
 
-import { connectAiAgent, MCP_CONFIG_SNIPPET } from './agent-connect';
+import { connectAiAgent, describeConnectOutcome, agentSetupPrompt, MCP_CONFIG_SNIPPET } from './agent-connect';
 
 interface FetchCall {
   url: string;
@@ -64,7 +64,7 @@ describe('connectAiAgent', () => {
   it('mints a client key, then hands it to the Rust writer', async () => {
     installFetch(json({ data: { access_token: 'mcp-at', refresh_token: 'mcp-rt' } }));
 
-    const path = await connectAiAgent();
+    const result = await connectAiAgent();
 
     expect(calls).toHaveLength(1);
     expect(calls[0].url).toBe('http://localhost:2528/admin/client-key');
@@ -82,7 +82,88 @@ describe('connectAiAgent', () => {
       accessToken: 'mcp-at',
       refreshToken: 'mcp-rt',
     });
-    expect(path).toBe('/home/x/.config/calimero/mcp/agent.json');
+    expect(result.path).toBe('/home/x/.config/calimero/mcp/agent.json');
+  });
+
+  it('reports a first connect as a creation, not a replacement', async () => {
+    installFetch(json({ data: { access_token: tokenFor('client-1'), refresh_token: 'mcp-rt' } }));
+
+    const result = await connectAiAgent();
+
+    expect(result.replacedPrevious).toBe(false);
+    expect(result.revokeFailed).toBe(false);
+    expect(result.clientId).toBe('client-1');
+    expect(describeConnectOutcome(result)).toEqual({
+      message: 'AI agent credential created',
+      revokeWarning: null,
+    });
+  });
+
+  it('reports a repeat connect as a replacement once the previous key is revoked', async () => {
+    settings.mcpAgentClientId = 'client-0';
+    installFetch(({ url }) => {
+      if (url.endsWith('/admin/client-key')) {
+        return json({ data: { access_token: tokenFor('client-1'), refresh_token: 'mcp-rt' } });
+      }
+      if (url.endsWith('/admin/keys/clients')) {
+        return json({ data: [{ client_id: 'client-0', root_key_id: 'root-a', is_valid: true }] });
+      }
+      return json({ data: null }); // DELETE succeeds
+    });
+
+    const result = await connectAiAgent();
+
+    expect(result.replacedPrevious).toBe(true);
+    expect(result.revokeFailed).toBe(false);
+    expect(describeConnectOutcome(result)).toEqual({
+      message: 'AI agent credential replaced - previous key revoked',
+      revokeWarning: null,
+    });
+  });
+
+  it('still reports success but surfaces a warning when the revoke fails', async () => {
+    settings.mcpAgentClientId = 'client-0';
+    installFetch(({ url }) => {
+      if (url.endsWith('/admin/client-key')) {
+        return json({ data: { access_token: tokenFor('client-1'), refresh_token: 'mcp-rt' } });
+      }
+      if (url.endsWith('/admin/keys/clients')) {
+        return json({ data: [{ client_id: 'client-0', root_key_id: 'root-a', is_valid: true }] });
+      }
+      return new Response('{}', { status: 500 }); // DELETE fails
+    });
+
+    const result = await connectAiAgent();
+
+    expect(result.path).toBe('/home/x/.config/calimero/mcp/agent.json');
+    expect(result.replacedPrevious).toBe(true);
+    expect(result.revokeFailed).toBe(true);
+    expect(describeConnectOutcome(result)).toEqual({
+      message: 'AI agent credential replaced',
+      revokeWarning: 'Could not revoke the previous key - it may still be valid on the node',
+    });
+  });
+
+  it('never surfaces a token, only the copy and the client id, even when the revoke fails', async () => {
+    settings.mcpAgentClientId = 'client-0';
+    const secretAccessToken = tokenFor('client-1');
+    installFetch(({ url }) => {
+      if (url.endsWith('/admin/client-key')) {
+        return json({ data: { access_token: secretAccessToken, refresh_token: 'super-secret-refresh' } });
+      }
+      if (url.endsWith('/admin/keys/clients')) {
+        return json({ data: [{ client_id: 'client-0', root_key_id: 'root-a', is_valid: true }] });
+      }
+      return new Response('{}', { status: 500 });
+    });
+
+    const result = await connectAiAgent();
+    const outcome = describeConnectOutcome(result);
+    const prompt = agentSetupPrompt(result.path, 'http://localhost:2528');
+
+    const rendered = JSON.stringify({ result, outcome }) + prompt;
+    expect(rendered).not.toContain(secretAccessToken);
+    expect(rendered).not.toContain('super-secret-refresh');
   });
 
   it('accepts an unwrapped response body', async () => {
@@ -186,7 +267,9 @@ describe('connectAiAgent', () => {
       throw new Error('node unreachable');
     });
 
-    await expect(connectAiAgent()).resolves.toBe('/home/x/.config/calimero/mcp/agent.json');
+    const result = await connectAiAgent();
+    expect(result.path).toBe('/home/x/.config/calimero/mcp/agent.json');
+    expect(result.revokeFailed).toBe(true);
     expect(settings.mcpAgentClientId).toBe('client-1');
   });
 
@@ -219,6 +302,20 @@ describe('connectAiAgent', () => {
       installFetch(json({ data: { access_token: 'mcp-at', refresh_token: 'mcp-rt' } }));
       await expect(connectAiAgent()).resolves.toBeTruthy();
     }
+  });
+});
+
+describe('agentSetupPrompt', () => {
+  it('is generated from the live credential path and node URL, names the verification tools, and carries no token', () => {
+    const prompt = agentSetupPrompt('/home/x/.config/calimero/mcp/agent.json', 'http://localhost:2528');
+
+    expect(prompt).toContain('/home/x/.config/calimero/mcp/agent.json');
+    expect(prompt).toContain('http://localhost:2528');
+    expect(prompt).toContain('node_status');
+    expect(prompt).toContain('list_applications');
+    expect(prompt).toContain('list_contexts');
+    expect(prompt).toMatch(/no environment variables/i);
+    expect(prompt).toMatch(/create a context/i);
   });
 });
 

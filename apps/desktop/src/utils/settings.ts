@@ -18,6 +18,7 @@ export interface AppSettings {
   cloudUserEmail?: string; // User's Google email (for display)
   cloudUserName?: string; // User's Google display name
   cloudUserPicture?: string; // User's Google profile picture URL
+  mcpAgentClientId?: string; // Client key minted by "Connect AI agent", revoked when the next connect replaces it
 }
 
 const SETTINGS_KEY = 'calimero-desktop-settings';
@@ -105,6 +106,7 @@ export function getSettings(): AppSettings {
         cloudUserEmail: rawSettings.cloudUserEmail,
         cloudUserName: rawSettings.cloudUserName,
         cloudUserPicture: rawSettings.cloudUserPicture,
+        mcpAgentClientId: rawSettings.mcpAgentClientId,
       };
     }
   } catch (error) {

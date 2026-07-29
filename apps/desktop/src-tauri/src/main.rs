@@ -4401,11 +4401,17 @@ fn mcp_agent_file(home: &std::path::Path) -> std::path::PathBuf {
         .join("agent.json")
 }
 
-/// Write `contents` so only the owner can read it. On unix the mode is set at
-/// create time - chmod-after-write would leave a credential world-readable for
-/// the width of the write - and again afterwards, since an already-existing file
-/// keeps its old mode through `open`.
+/// Write `contents` so only the owner can read it, and so a failed write cannot
+/// destroy the credential already in place: the bytes go to a sibling temp file
+/// that is renamed over the target, which is atomic on unix. On unix the mode is
+/// set at create time - chmod-after-write would leave a credential world-readable
+/// for the width of the write - and again afterwards, since an already-existing
+/// temp file keeps its old mode through `open`.
 fn write_owner_only(path: &std::path::Path, contents: &str) -> std::io::Result<()> {
+    let mut tmp = path.as_os_str().to_os_string();
+    tmp.push(".tmp");
+    let tmp = std::path::PathBuf::from(tmp);
+
     #[cfg(unix)]
     {
         use std::io::Write;
@@ -4415,14 +4421,17 @@ fn write_owner_only(path: &std::path::Path, contents: &str) -> std::io::Result<(
             .create(true)
             .truncate(true)
             .mode(0o600)
-            .open(path)?;
+            .open(&tmp)?;
         file.write_all(contents.as_bytes())?;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+        file.sync_all()?;
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))?;
     }
     #[cfg(not(unix))]
     {
-        std::fs::write(path, contents)
+        std::fs::write(&tmp, contents)?;
     }
+
+    std::fs::rename(&tmp, path)
 }
 
 /// Hand the MCP server its own node credential. Returns the path written so the
@@ -5295,6 +5304,24 @@ mod tests {
             let mode = std::fs::metadata(&path).unwrap().permissions().mode();
             assert_eq!(mode & 0o777, 0o600, "credential file must be owner-only");
         }
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn write_owner_only_leaves_no_temp_file_behind() {
+        let dir = std::env::temp_dir().join(format!("calimero-mcp-tmp-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("agent.json");
+
+        super::write_owner_only(&path, r#"{"nodeUrl":"http://localhost:2528"}"#).unwrap();
+
+        let leftovers: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| name.as_str() != "agent.json")
+            .collect();
+        assert!(leftovers.is_empty(), "write left {leftovers:?} behind");
 
         std::fs::remove_dir_all(&dir).unwrap();
     }

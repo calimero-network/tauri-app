@@ -159,7 +159,7 @@ export default function Settings({ onBack }: SettingsProps) {
       setAgentCredentialPath(await connectAiAgent());
       toast.success("AI agent credential created");
     } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : String(err));
+      toast.error(parseTauriError(err));
     } finally {
       setAgentConnecting(false);
     }
@@ -494,44 +494,45 @@ export default function Settings({ onBack }: SettingsProps) {
                     : 'Connect AI agent'}
               </button>
 
-              {agentCredentialPath && (
-                <div className="agent-connected">
+              <div className="agent-connected">
+                {agentCredentialPath && (
                   <p className="field-hint" style={{ marginBottom: '20px' }}>
                     Credential written to <code>{agentCredentialPath}</code>
                   </p>
+                )}
 
-                  <div className="settings-field">
-                    <div className="agent-config-header">
-                      <span className="settings-field-label">Add this to your agent's MCP config</span>
-                      <button
-                        type="button"
-                        className="button button-secondary agent-config-copy"
-                        onClick={() => {
-                          navigator.clipboard.writeText(MCP_CONFIG_SNIPPET);
-                          toast.success('Copied to clipboard');
-                        }}
-                      >
-                        <Copy size={13} style={{ marginRight: '6px', verticalAlign: 'middle' }} />
-                        Copy
-                      </button>
-                    </div>
-                    <pre className="agent-config">{MCP_CONFIG_SNIPPET}</pre>
-                    <ul className="agent-clients">
-                      {MCP_CLIENT_LOCATIONS.map(({ client, location }) => (
-                        <li key={client}>
-                          <span className="agent-client-name">{client}</span>
-                          <code>{location}</code>
-                        </li>
-                      ))}
-                    </ul>
+                <div className="settings-field">
+                  <div className="agent-config-header">
+                    <span className="settings-field-label">Add this to your agent's MCP config</span>
+                    <button
+                      type="button"
+                      className="button button-secondary agent-config-copy"
+                      onClick={() => {
+                        navigator.clipboard.writeText(MCP_CONFIG_SNIPPET);
+                        toast.success('Copied to clipboard');
+                      }}
+                    >
+                      <Copy size={13} style={{ marginRight: '6px', verticalAlign: 'middle' }} />
+                      Copy
+                    </button>
                   </div>
-
-                  <p className="field-hint">
-                    The agent acts with the same identity and full node access as this app; to
-                    disconnect it, revoke the <code>mero-mcp</code> key.
-                  </p>
+                  <pre className="agent-config">{MCP_CONFIG_SNIPPET}</pre>
+                  <ul className="agent-clients">
+                    {MCP_CLIENT_LOCATIONS.map(({ client, location }) => (
+                      <li key={client}>
+                        <span className="agent-client-name">{client}</span>
+                        <code>{location}</code>
+                      </li>
+                    ))}
+                  </ul>
                 </div>
-              )}
+
+                <p className="field-hint">
+                  The agent acts with the same identity and full node access as this app.
+                  Each connect replaces the previous agent credential and revokes the key
+                  behind it.
+                </p>
+              </div>
             </div>
           </div>
         )}

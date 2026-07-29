@@ -17,6 +17,81 @@ mod shell {
     // MUST match BROKERED_REFRESH_TOKEN in src/lib/token-broker.ts + proxy_script.js.
     const BROKERED_REFRESH_TOKEN: &str = "calimero-desktop-brokered-refresh-token";
 
+    /// macOS notification attribution fix.
+    ///
+    /// This shell process runs from a *loose* Mach-O binary
+    /// (`~/Library/Application Support/network.calimero.desktop/shell/CalimeroShell`)
+    /// that a per-app launcher `.app` `exec`s via a bash trampoline. Because the
+    /// running executable has no `.app` wrapper (and no embedded Info.plist),
+    /// `-[NSBundle mainBundle].bundleIdentifier` resolves to `nil`, and both
+    /// `NSUserNotification` and `UNUserNotificationCenter` refuse to deliver a
+    /// notification with no owning bundle — it silently drops.
+    ///
+    /// The launcher `.app` itself *is* LaunchServices-registered at
+    /// `~/Applications/<Name>.app` with `CFBundleIdentifier =
+    /// network.calimero.app.<id>`. So we swizzle `-[NSBundle bundleIdentifier]`
+    /// on the main bundle to claim that registered id (the standard CLI-tool
+    /// trick used by terminal-notifier / node-notifier). After this, macOS
+    /// attributes the notification to the per-app launcher — NOT the host.
+    #[cfg(target_os = "macos")]
+    mod bundle_identity {
+        use cocoa::base::{id, nil};
+        use cocoa::foundation::NSString;
+        use objc::runtime::{Class, Imp, Method, Object, Sel};
+        use objc::{class, msg_send, sel, sel_impl};
+        use std::sync::OnceLock;
+
+        static OVERRIDE_ID: OnceLock<String> = OnceLock::new();
+
+        // Replacement IMP for `-[NSBundle bundleIdentifier]`. Only overrides the
+        // *main* bundle; every other NSBundle keeps its real identifier (which,
+        // after the swizzle, is reachable under `calimeroOriginalBundleIdentifier`).
+        extern "C" fn override_bundle_identifier(this: &Object, _cmd: Sel) -> id {
+            unsafe {
+                let main: id = msg_send![class!(NSBundle), mainBundle];
+                let this_ptr = this as *const Object as id;
+                if this_ptr == main {
+                    if let Some(s) = OVERRIDE_ID.get() {
+                        return NSString::alloc(nil).init_str(s);
+                    }
+                }
+                msg_send![this, calimeroOriginalBundleIdentifier]
+            }
+        }
+
+        /// Install the override. Idempotent-ish: only the first call wins (guarded
+        /// by `OVERRIDE_ID`). Must run before the first notification is posted.
+        pub fn install(bundle_id: &str) {
+            if OVERRIDE_ID.set(bundle_id.to_string()).is_err() {
+                return; // already installed
+            }
+            unsafe {
+                let cls = class!(NSBundle);
+                let cls_mut = cls as *const Class as *mut Class;
+                let alias_sel = sel!(calimeroOriginalBundleIdentifier);
+                let imp: Imp = std::mem::transmute(
+                    override_bundle_identifier as extern "C" fn(&Object, Sel) -> id,
+                );
+                let types = b"@@:\0".as_ptr() as *const std::os::raw::c_char;
+                // Register our IMP under an alias selector, then swap it with the
+                // real `bundleIdentifier`. After the swap: `bundleIdentifier` runs
+                // our IMP; `calimeroOriginalBundleIdentifier` runs the original.
+                let added = objc::runtime::class_addMethod(cls_mut, alias_sel, imp, types);
+                if added == objc::runtime::NO {
+                    return;
+                }
+                let orig = objc::runtime::class_getInstanceMethod(cls, sel!(bundleIdentifier))
+                    as *mut Method;
+                let alias =
+                    objc::runtime::class_getInstanceMethod(cls, alias_sel) as *mut Method;
+                if orig.is_null() || alias.is_null() {
+                    return;
+                }
+                objc::runtime::method_exchangeImplementations(orig, alias);
+            }
+        }
+    }
+
     /// The shell's refresh broker: reads the managed `ShellConfig`, ensures the host
     /// is running, then relays a refresh over the Unix socket. Returns a fresh
     /// access token only — never a refresh token.
@@ -122,6 +197,12 @@ mod shell {
         let cfg = shell_config::parse_app_config_arg(&args)
             .and_then(|p| shell_config::load_shell_config(&p))
             .expect("calimero-shell requires --app-config <app.json>");
+
+        // Claim the per-app launcher's registered bundle id BEFORE any notify, so
+        // macOS attributes native notifications to the launcher `.app` (its icon +
+        // name) and not to nil/host. Mirrors `CFBundleIdentifier` in launcher.rs.
+        #[cfg(target_os = "macos")]
+        bundle_identity::install(&format!("network.calimero.app.{}", cfg.id));
 
         let cfg_for_setup = cfg.clone();
         tauri::Builder::default()

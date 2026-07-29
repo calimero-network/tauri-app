@@ -315,7 +315,9 @@ describe('agentSetupPrompt', () => {
     expect(prompt).toContain('list_applications');
     expect(prompt).toContain('list_contexts');
     expect(prompt).toMatch(/no environment variables/i);
-    expect(prompt).toMatch(/create a context/i);
+    // Setup only verifies; provisioning a context is the user's call, and
+    // select_app already says so at the point it matters.
+    expect(prompt).not.toMatch(/create a context/i);
   });
 });
 

@@ -114,10 +114,8 @@ export function agentSetupPrompt(credentialPath: string, nodeUrl: string): strin
 ${hints}
 2. No environment variables are needed: the server reads its credential straight
    from ${credentialPath}, already written for this node.
-3. Once connected, verify the setup yourself and report back: run node_status,
-   then list_applications, then list_contexts. If list_contexts comes back
-   empty, create a context before trying to use an installed app - apps
-   install without one, and that's the most common reason nothing works.`;
+3. Once connected, verify the setup yourself and report back what each returns:
+   node_status, then list_applications, then list_contexts.`;
 }
 
 /** What a connect did, for the page to report - never includes the token itself. */

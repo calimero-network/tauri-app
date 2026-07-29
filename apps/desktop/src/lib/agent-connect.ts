@@ -110,7 +110,9 @@ export function agentSetupPrompt(credentialPath: string, nodeUrl: string): strin
   return `Set yourself up to use the Calimero MCP server for this node (${nodeUrl}).
 
 1. Add an MCP server entry named "calimero" that runs \`npx -y @calimero-network/mero-mcp\`.
-   Work out where your own harness keeps its MCP config - common locations:
+   In Claude Code that is one command:
+     claude mcp add -s local calimero -- npx -y @calimero-network/mero-mcp
+   Otherwise work out where your own harness keeps its MCP config - common locations:
 ${hints}
 2. No environment variables are needed: the server reads its credential straight
    from ${credentialPath}, already written for this node.

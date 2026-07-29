@@ -7,9 +7,10 @@ import { hardReset, wipeClientState } from "../utils/hardReset";
 import { startCloudLogin, disconnectCloud } from "../utils/cloudAuth";
 import { getCloudSubscription, CloudSessionExpiredError } from "../utils/cloudApi";
 import { isCloudEnabled, notifyCloudEnabledChanged } from "../utils/featureFlags";
+import { connectAiAgent, MCP_CONFIG_SNIPPET, MCP_CLIENT_LOCATIONS } from "../lib/agent-connect";
 import { useTheme } from "../contexts/ThemeContext";
 import { useToast } from "../contexts/ToastContext";
-import { ArrowLeft, RotateCcw, Trash2, Cloud } from "lucide-react";
+import { ArrowLeft, RotateCcw, Trash2, Cloud, Bot, Copy } from "lucide-react";
 import "./Settings.css";
 
 interface SettingsProps {
@@ -23,7 +24,7 @@ export default function Settings({ onBack }: SettingsProps) {
   const [newRegistryUrl, setNewRegistryUrl] = useState("");
   
   // Node management state (removed - now in NodeManagement page)
-  const [activeTab, setActiveTab] = useState<'general' | 'registries' | 'cloud'>('general');
+  const [activeTab, setActiveTab] = useState<'general' | 'registries' | 'agent' | 'cloud'>('general');
   const [developerMode, setDeveloperMode] = useState(false);
   const [debugLogs, setDebugLogs] = useState(false);
   const [cloudEnabled, setCloudEnabled] = useState(false);
@@ -43,6 +44,8 @@ export default function Settings({ onBack }: SettingsProps) {
   const [startAtLogin, setStartAtLogin] = useState(false);
   const [startAtLoginLoading, setStartAtLoginLoading] = useState(true);
   const [startAtLoginAvailable, setStartAtLoginAvailable] = useState(true);
+  const [agentConnecting, setAgentConnecting] = useState(false);
+  const [agentCredentialPath, setAgentCredentialPath] = useState<string | null>(null);
 
   useEffect(() => {
     const settings = getSettings();
@@ -150,6 +153,18 @@ export default function Settings({ onBack }: SettingsProps) {
     }
   };
 
+  const handleConnectAiAgent = async () => {
+    setAgentConnecting(true);
+    try {
+      setAgentCredentialPath(await connectAiAgent());
+      toast.success("AI agent credential created");
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : String(err));
+    } finally {
+      setAgentConnecting(false);
+    }
+  };
+
   const handleRemoveRegistry = (index: number) => {
     const updated = registries.filter((_, i) => i !== index);
     setRegistries(updated);
@@ -187,6 +202,13 @@ export default function Settings({ onBack }: SettingsProps) {
             onClick={() => setActiveTab('registries')}
           >
             Registries
+          </button>
+          <button
+            className={`settings-tab ${activeTab === 'agent' ? 'active' : ''}`}
+            onClick={() => setActiveTab('agent')}
+          >
+            <Bot size={14} style={{ marginRight: '4px', verticalAlign: 'middle' }} />
+            AI Agent
           </button>
           {isCloudEnabled() && (
             <button
@@ -449,6 +471,70 @@ export default function Settings({ onBack }: SettingsProps) {
           </div>
         )}
 
+
+        {activeTab === 'agent' && (
+          <div className="settings-content">
+            <div className="settings-card">
+              <h2>Connect AI agent</h2>
+              <p className="field-hint" style={{ marginBottom: '16px' }}>
+                Give a coding agent - Claude Code, Cursor, Codex CLI - its own key for this node, so
+                the Calimero MCP server can drive your installed apps on its behalf.
+              </p>
+              <button
+                type="button"
+                className="button button-primary"
+                onClick={handleConnectAiAgent}
+                disabled={agentConnecting}
+              >
+                <Bot size={14} style={{ marginRight: '6px', verticalAlign: 'middle' }} />
+                {agentConnecting
+                  ? 'Connecting...'
+                  : agentCredentialPath
+                    ? 'Create a new key'
+                    : 'Connect AI agent'}
+              </button>
+
+              {agentCredentialPath && (
+                <div className="agent-connected">
+                  <p className="field-hint" style={{ marginBottom: '20px' }}>
+                    Credential written to <code>{agentCredentialPath}</code>
+                  </p>
+
+                  <div className="settings-field">
+                    <div className="agent-config-header">
+                      <span className="settings-field-label">Add this to your agent's MCP config</span>
+                      <button
+                        type="button"
+                        className="button button-secondary agent-config-copy"
+                        onClick={() => {
+                          navigator.clipboard.writeText(MCP_CONFIG_SNIPPET);
+                          toast.success('Copied to clipboard');
+                        }}
+                      >
+                        <Copy size={13} style={{ marginRight: '6px', verticalAlign: 'middle' }} />
+                        Copy
+                      </button>
+                    </div>
+                    <pre className="agent-config">{MCP_CONFIG_SNIPPET}</pre>
+                    <ul className="agent-clients">
+                      {MCP_CLIENT_LOCATIONS.map(({ client, location }) => (
+                        <li key={client}>
+                          <span className="agent-client-name">{client}</span>
+                          <code>{location}</code>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+
+                  <p className="field-hint">
+                    The agent acts with the same identity and full node access as this app; to
+                    disconnect it, revoke the <code>mero-mcp</code> key.
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         {isCloudEnabled() && activeTab === 'cloud' && (
           <div className="settings-content">

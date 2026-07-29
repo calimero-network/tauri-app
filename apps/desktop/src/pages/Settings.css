@@ -444,6 +444,68 @@
 
 
 
+.agent-connected {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-color);
+}
+
+.agent-config-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.agent-config-copy {
+  flex-shrink: 0;
+  padding: 6px 12px;
+  font-size: 12px;
+}
+
+.agent-config {
+  margin: 0;
+  padding: 14px 16px;
+  overflow-x: auto;
+  background: var(--surface-glass-soft);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.agent-clients {
+  margin: 12px 0 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 6px;
+}
+
+.agent-clients li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.agent-client-name {
+  min-width: 120px;
+  color: var(--text-secondary);
+}
+
+.agent-clients code {
+  background: var(--surface-glass-soft);
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
 .reset-confirm-form {
   margin-top: 12px;
   padding: 16px;

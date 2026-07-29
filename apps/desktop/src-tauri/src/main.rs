@@ -4387,6 +4387,96 @@ fn graceful_shutdown(merod_state: &MerodState) {
     info!("[Shutdown] Graceful shutdown complete");
 }
 
+// ─── MCP agent handoff ─────────────────────────────────────────────────────────
+// The MCP server (`@calimero-network/mero-mcp`) runs as a local subprocess of the
+// user's coding agent and reads its node credential from a file we write here.
+// It is a plain `~/.config` path on every platform, not `dirs::config_dir()`,
+// because the MCP package resolves it from `os.homedir()` and must agree with us.
+
+/// Where the MCP subprocess looks for its credential.
+fn mcp_agent_file(home: &std::path::Path) -> std::path::PathBuf {
+    home.join(".config")
+        .join("calimero")
+        .join("mcp")
+        .join("agent.json")
+}
+
+/// Write `contents` so only the owner can read it. On unix the mode is set at
+/// create time - chmod-after-write would leave a credential world-readable for
+/// the width of the write - and again afterwards, since an already-existing file
+/// keeps its old mode through `open`.
+fn write_owner_only(path: &std::path::Path, contents: &str) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?;
+        file.write_all(contents.as_bytes())?;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::write(path, contents)
+    }
+}
+
+/// Hand the MCP server its own node credential. Returns the path written so the
+/// UI can name it; the token values never travel back out.
+#[tauri::command]
+fn write_mcp_agent_credentials(
+    node_url: String,
+    access_token: String,
+    refresh_token: String,
+) -> Result<String, TauriError> {
+    let home = dirs::home_dir().ok_or_else(|| {
+        TauriError::new(TauriErrorCode::HomeDirNotFound, "Could not find home folder")
+    })?;
+    let path = mcp_agent_file(&home);
+    let dir = path.parent().expect("agent file always has a parent");
+
+    std::fs::create_dir_all(dir).map_err(|e| {
+        TauriError::with_details(
+            TauriErrorCode::DirectoryError,
+            "Could not create the MCP credential folder",
+            e.to_string(),
+        )
+    })?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).map_err(|e| {
+            TauriError::with_details(
+                TauriErrorCode::DirectoryError,
+                "Could not restrict the MCP credential folder",
+                e.to_string(),
+            )
+        })?;
+    }
+
+    let body = serde_json::json!({
+        "nodeUrl": node_url,
+        "accessToken": access_token,
+        "refreshToken": refresh_token,
+    })
+    .to_string();
+
+    write_owner_only(&path, &body).map_err(|e| {
+        TauriError::with_details(
+            TauriErrorCode::FileWriteError,
+            "Could not write the MCP credential file",
+            e.to_string(),
+        )
+    })?;
+
+    info!("[MCP] Wrote agent credential to {}", path.display());
+    Ok(path.to_string_lossy().into_owned())
+}
+
 // ─── Secure Token Storage ──────────────────────────────────────────────────────
 // Stores JWT tokens in the OS keychain (Keychain on macOS, Credential Manager
 // on Windows, libsecret on Linux) instead of plaintext localStorage.
@@ -4722,6 +4812,7 @@ fn main() {
             secure_store_token,
             secure_get_token,
             secure_delete_token,
+            write_mcp_agent_credentials,
             get_pending_cloud_auth,
             clear_pending_cloud_auth,
             get_pending_app_deep_link,
@@ -5168,5 +5259,43 @@ mod tests {
         let encoded = base64::engine::general_purpose::STANDARD.encode(&raw);
         let decoded = base64::engine::general_purpose::STANDARD.decode(encoded.as_bytes()).unwrap();
         assert_eq!(raw, decoded, "base64 round-trip must be byte-exact");
+    }
+
+    #[test]
+    fn mcp_agent_file_is_under_dot_config() {
+        assert_eq!(
+            super::mcp_agent_file(Path::new("/Users/x")),
+            Path::new("/Users/x/.config/calimero/mcp/agent.json")
+        );
+    }
+
+    #[test]
+    fn write_owner_only_is_not_readable_by_others() {
+        let dir = std::env::temp_dir().join(format!("calimero-mcp-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("agent.json");
+
+        // Pre-existing world-readable file: the write must tighten it, not inherit it.
+        std::fs::write(&path, "stale").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        }
+
+        super::write_owner_only(&path, r#"{"nodeUrl":"http://localhost:2528"}"#).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            r#"{"nodeUrl":"http://localhost:2528"}"#
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600, "credential file must be owner-only");
+        }
+
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

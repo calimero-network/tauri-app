@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { getSettings, saveSettings } from "../utils/settings";
 import { parseTauriError } from "../utils/appUtils";
 import { invoke } from "@tauri-apps/api/core";
@@ -17,7 +17,7 @@ import {
 import { truncateText } from "../utils/string";
 import { useTheme } from "../contexts/ThemeContext";
 import { useToast } from "../contexts/ToastContext";
-import { ArrowLeft, RotateCcw, Trash2, Cloud, Bot, Copy } from "lucide-react";
+import { ArrowLeft, RotateCcw, Trash2, Cloud, Bot, Copy, Check } from "lucide-react";
 import "./Settings.css";
 
 interface SettingsProps {
@@ -56,6 +56,14 @@ export default function Settings({ onBack }: SettingsProps) {
   const [agentClientId, setAgentClientId] = useState<string | null>(null);
   const [agentConnectedAt, setAgentConnectedAt] = useState<number | null>(null);
   const [agentRevokeWarning, setAgentRevokeWarning] = useState(false);
+  const [copiedBlock, setCopiedBlock] = useState<'prompt' | 'mcp' | null>(null);
+  const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     const settings = getSettings();
@@ -179,6 +187,19 @@ export default function Settings({ onBack }: SettingsProps) {
     } finally {
       setAgentConnecting(false);
     }
+  };
+
+  const copyAgentBlock = async (block: 'prompt' | 'mcp', text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      toast.error('Could not copy to clipboard');
+      return;
+    }
+    if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+    setCopiedBlock(block);
+    copyTimeoutRef.current = setTimeout(() => setCopiedBlock(null), 2000);
+    toast.success('Copied to clipboard');
   };
 
   const handleRemoveRegistry = (index: number) => {
@@ -534,16 +555,16 @@ export default function Settings({ onBack }: SettingsProps) {
                         <span className="settings-field-label">Paste this into your AI agent</span>
                         <button
                           type="button"
-                          className="button button-secondary agent-config-copy"
-                          onClick={() => {
-                            navigator.clipboard.writeText(
+                          className={`agent-config-copy${copiedBlock === 'prompt' ? ' agent-config-copy--copied' : ''}`}
+                          onClick={() =>
+                            copyAgentBlock(
+                              'prompt',
                               agentSetupPrompt(agentCredentialPath, getSettings().nodeUrl ?? ''),
-                            );
-                            toast.success('Copied to clipboard');
-                          }}
+                            )
+                          }
                         >
-                          <Copy size={13} style={{ marginRight: '6px', verticalAlign: 'middle' }} />
-                          Copy
+                          {copiedBlock === 'prompt' ? <Check size={13} /> : <Copy size={13} />}
+                          {copiedBlock === 'prompt' ? 'Copied!' : 'Copy'}
                         </button>
                       </div>
                       <pre className="agent-config">
@@ -558,14 +579,11 @@ export default function Settings({ onBack }: SettingsProps) {
                     <span className="settings-field-label">Add this to your agent's MCP config</span>
                     <button
                       type="button"
-                      className="button button-secondary agent-config-copy"
-                      onClick={() => {
-                        navigator.clipboard.writeText(MCP_CONFIG_SNIPPET);
-                        toast.success('Copied to clipboard');
-                      }}
+                      className={`agent-config-copy${copiedBlock === 'mcp' ? ' agent-config-copy--copied' : ''}`}
+                      onClick={() => copyAgentBlock('mcp', MCP_CONFIG_SNIPPET)}
                     >
-                      <Copy size={13} style={{ marginRight: '6px', verticalAlign: 'middle' }} />
-                      Copy
+                      {copiedBlock === 'mcp' ? <Check size={13} /> : <Copy size={13} />}
+                      {copiedBlock === 'mcp' ? 'Copied!' : 'Copy'}
                     </button>
                   </div>
                   <pre className="agent-config">{MCP_CONFIG_SNIPPET}</pre>

@@ -595,10 +595,6 @@ export default function Settings({ onBack }: SettingsProps) {
                       </li>
                     ))}
                   </ul>
-                  <p className="field-hint" style={{ marginTop: '8px', fontStyle: 'italic' }}>
-                    In local development, before the package is published, the command in both blocks
-                    above is instead <code>node /path/to/mero-mcp/dist/index.js</code>.
-                  </p>
                 </div>
 
                 <p className="field-hint">

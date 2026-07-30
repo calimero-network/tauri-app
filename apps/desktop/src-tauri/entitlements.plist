@@ -21,10 +21,16 @@
     <true/>
     <!-- Universal Links: associate the app with links.calimero.network so the OS
          routes https://links.calimero.network/<slug>/<action>?<params> into
-         on_open_url. Only takes effect in a Developer-ID-signed release build
-         whose Team ID matches the AASA (BTC39PAGX2.network.calimero.desktop);
-         the local ad-hoc build won't associate — the calimero:// custom scheme
-         path is unaffected and remains testable unsigned. -->
+         on_open_url.
+         IMPORTANT: this is a RESTRICTED entitlement (com.apple.developer.*). A
+         Developer-ID-signed release that carries it MUST embed a matching
+         provisioning profile at Contents/embedded.provisionprofile (App ID
+         BTC39PAGX2.network.calimero.desktop, Associated Domains capability), or
+         AMFI SIGKILLs the app at launch ("can't be opened" / launchd err 153).
+         CI supplies the profile via APPLE_PROVISIONING_PROFILE + the
+         bundle.macOS.files override in build-macos.yml. Local/ad-hoc builds do
+         not associate and don't hit this — the calimero:// custom scheme path is
+         unaffected either way. -->
     <key>com.apple.developer.associated-domains</key>
     <array>
         <string>applinks:links.calimero.network</string>

@@ -46,8 +46,6 @@ target/
 **/src-tauri/shell/calimero-shell.exe
 **/src-tauri/calimero-shell/dist
 **/src-tauri/calimero-shell/gen
-# CI-materialized from the APPLE_PROVISIONING_PROFILE secret at build time — never commit.
-**/src-tauri/embedded.provisionprofile
 
 # Environment variables
 .env

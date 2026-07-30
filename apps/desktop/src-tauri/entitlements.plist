@@ -19,21 +19,13 @@
     <true/>
     <key>com.apple.security.device.audio-input</key>
     <true/>
-    <!-- Universal Links: associate the app with links.calimero.network so the OS
-         routes https://links.calimero.network/<slug>/<action>?<params> into
-         on_open_url.
-         IMPORTANT: this is a RESTRICTED entitlement (com.apple.developer.*). A
-         Developer-ID-signed release that carries it MUST embed a matching
-         provisioning profile at Contents/embedded.provisionprofile (App ID
-         BTC39PAGX2.network.calimero.desktop, Associated Domains capability), or
-         AMFI SIGKILLs the app at launch ("can't be opened" / launchd err 153).
-         CI supplies the profile via APPLE_PROVISIONING_PROFILE + the
-         bundle.macOS.files override in build-macos.yml. Local/ad-hoc builds do
-         not associate and don't hit this — the calimero:// custom scheme path is
-         unaffected either way. -->
-    <key>com.apple.developer.associated-domains</key>
-    <array>
-        <string>applinks:links.calimero.network</string>
-    </array>
+    <!-- NOTE: do NOT add com.apple.developer.associated-domains (universal links)
+         here. On a hardened-runtime Developer-ID release it is a RESTRICTED
+         entitlement that AMFI refuses to authorize — the app is SIGKILLed at
+         launch ("can't be opened" / launchd err 153) on every machine. Embedding
+         a Developer-ID provisioning profile does NOT rescue it (verified on the
+         notarized v0.0.76 DMG). Universal-links-on-Developer-ID is unsolved;
+         deep-link invitations use the calimero:// custom scheme, which needs no
+         entitlement. See git history of #165 / v0.0.76 before retrying. -->
 </dict>
 </plist>

@@ -5288,7 +5288,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn create_owner_only_dir_is_0o700_including_parents() {
+    fn create_owner_only_dir_is_0o700_for_dirs_it_creates() {
         use std::os::unix::fs::PermissionsExt;
         let base = std::env::temp_dir().join(format!("calimero-mcp-dir-{}", std::process::id()));
         let leaf = base.join("parent").join("mcp");

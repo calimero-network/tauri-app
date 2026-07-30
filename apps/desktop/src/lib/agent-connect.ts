@@ -210,14 +210,6 @@ async function mintAndWriteCredential(): Promise<ConnectAiAgentResult> {
     );
   }
 
-  // Must run before any write: core derives the id from its own clock, so two
-  // mints near a second boundary can still collide and silently overwrite the previous key.
-  if (clientId === previousClientId) {
-    throw new Error(
-      'The node reused the previous agent key instead of creating a new one, so nothing was written - wait a moment and try again',
-    );
-  }
-
   // Write before revoking: a failed cleanup must never leave the agent with no
   // usable credential.
   let path: string;
@@ -241,6 +233,8 @@ async function mintAndWriteCredential(): Promise<ConnectAiAgentResult> {
     mcpAgentNodeUrl: nodeUrl,
   });
 
+  // False when core's clock reuses the previous id, which keeps the revoke below
+  // from deleting the key these freshly written tokens belong to.
   const replacedPrevious = Boolean(previousClientId && previousClientId !== clientId);
   let revokeFailed = false;
 

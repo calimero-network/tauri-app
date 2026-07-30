@@ -461,15 +461,20 @@ describe('connectAiAgent same-second guard', () => {
     await expect(agentConnect.connectAiAgent()).resolves.toBeTruthy();
   });
 
-  it('fails the connect when the node hands back the previous key id, writing and persisting nothing', async () => {
+  it('writes the fresh tokens and revokes nothing when the node hands back the previous key id', async () => {
     settings.mcpAgentClientId = 'client-0';
     installFetch(() => json({ data: { access_token: tokenFor('client-0'), refresh_token: 'mcp-rt' } }));
 
-    // The mint overwrote client-0 rather than adding a key, so revoking it would
-    // delete the credential just written - must be caught before anything is written.
-    await expect(agentConnect.connectAiAgent()).rejects.toThrow(/reused the previous agent key/i);
-    expect(calls).toHaveLength(1); // no listing, no DELETE
-    expect(invoke).not.toHaveBeenCalled();
+    // The mint replaced client-0 in place, so revoking it would delete the key
+    // these very tokens authenticate as.
+    const result = await agentConnect.connectAiAgent();
+
+    expect(result.replacedPrevious).toBe(false);
+    expect(invoke).toHaveBeenCalledWith(
+      'write_mcp_agent_credentials',
+      expect.objectContaining({ refreshToken: 'mcp-rt' }),
+    );
+    expect(calls).toHaveLength(1); // mint only: no listing, no DELETE
     expect(settings.mcpAgentClientId).toBe('client-0');
   });
 });

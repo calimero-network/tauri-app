@@ -69,7 +69,8 @@ afterEach(() => {
 
 describe('connectAiAgent', () => {
   it('mints a client key, then hands it to the Rust writer', async () => {
-    installFetch(json({ data: { access_token: 'mcp-at', refresh_token: 'mcp-rt' } }));
+    const accessToken = tokenFor('client-1');
+    installFetch(json({ data: { access_token: accessToken, refresh_token: 'mcp-rt' } }));
 
     const result = await agentConnect.connectAiAgent();
 
@@ -86,7 +87,7 @@ describe('connectAiAgent', () => {
     // The minted key goes to disk - never the desktop's own token.
     expect(invoke).toHaveBeenCalledWith('write_mcp_agent_credentials', {
       nodeUrl: 'http://localhost:2528',
-      accessToken: 'mcp-at',
+      accessToken,
       refreshToken: 'mcp-rt',
     });
     expect(result.path).toBe('/home/x/.config/calimero/mcp/agent.json');
@@ -174,13 +175,14 @@ describe('connectAiAgent', () => {
   });
 
   it('accepts an unwrapped response body', async () => {
-    installFetch(json({ access_token: 'mcp-at', refresh_token: 'mcp-rt' }));
+    const accessToken = tokenFor('client-1');
+    installFetch(json({ access_token: accessToken, refresh_token: 'mcp-rt' }));
 
     await agentConnect.connectAiAgent();
 
     expect(invoke).toHaveBeenCalledWith(
       'write_mcp_agent_credentials',
-      expect.objectContaining({ accessToken: 'mcp-at' }),
+      expect.objectContaining({ accessToken }),
     );
   });
 
@@ -359,6 +361,18 @@ describe('connectAiAgent', () => {
     expect(settings.mcpAgentNodeUrl).toBe('http://localhost:2528');
   });
 
+  it('rejects a minted token with no derivable client id, writing and persisting nothing', async () => {
+    // A token with no `sub` claim: the id the delete endpoint needs cannot be
+    // recovered, so the key must not be written or tracked as revocable.
+    const noSubToken = `header.${btoa(JSON.stringify({}))}.signature`;
+    installFetch(json({ data: { access_token: noSubToken, refresh_token: 'mcp-rt' } }));
+
+    await expect(agentConnect.connectAiAgent()).rejects.toThrow(/client id/i);
+
+    expect(invoke).not.toHaveBeenCalled();
+    expect(settings.mcpAgentClientId).toBeUndefined();
+  });
+
   it('mints nothing for a node that is not on this machine', async () => {
     settings.nodeUrl = 'https://node.example.com';
     installFetch(json({ data: { access_token: 'mcp-at', refresh_token: 'mcp-rt' } }));
@@ -373,7 +387,7 @@ describe('connectAiAgent', () => {
     let clock = new Date('2026-01-01T00:00:00.000Z');
     for (const nodeUrl of ['http://localhost:2528', 'http://127.0.0.1:2528', 'http://[::1]:2528']) {
       settings = { nodeUrl };
-      installFetch(() => json({ data: { access_token: 'mcp-at', refresh_token: 'mcp-rt' } }));
+      installFetch(() => json({ data: { access_token: tokenFor('client-1'), refresh_token: 'mcp-rt' } }));
       vi.setSystemTime(clock);
       await expect(agentConnect.connectAiAgent()).resolves.toBeTruthy();
       clock = new Date(clock.getTime() + 1100); // clear the same-second guard
@@ -448,15 +462,18 @@ describe('connectAiAgent same-second guard', () => {
     await expect(agentConnect.connectAiAgent()).resolves.toBeTruthy();
   });
 
-  it('fails the connect when the node hands back the previous key id', async () => {
+  it('fails the connect when the node hands back the previous key id, writing and persisting nothing', async () => {
     settings.mcpAgentClientId = 'client-0';
     installFetch(() => json({ data: { access_token: tokenFor('client-0'), refresh_token: 'mcp-rt' } }));
 
     // The mint collided: it overwrote client-0 rather than adding a key, so this is
     // neither a creation nor a replacement, and revoking client-0 would delete the
-    // credential just written.
+    // credential just written. The collision must be caught before anything is
+    // written, so a "wait and try again" error is never a lie about what happened.
     await expect(agentConnect.connectAiAgent()).rejects.toThrow(/reused the previous agent key/i);
     expect(calls).toHaveLength(1); // no listing, no DELETE
+    expect(invoke).not.toHaveBeenCalled();
+    expect(settings.mcpAgentClientId).toBe('client-0');
   });
 });
 

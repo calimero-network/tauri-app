@@ -225,6 +225,24 @@ async function mintAndWriteCredential(): Promise<ConnectAiAgentResult> {
   // before this point created one.
   lastMintSecond = unixSecond();
   const clientId = clientIdFromToken(key.access_token);
+  if (!clientId) {
+    // client_id is what the delete endpoint needs; without it this key can never
+    // be revoked by this app, so it must not be written or tracked as if it could.
+    throw new Error(
+      'The node minted an agent key but its token had no derivable client id, so the key cannot be tracked for revocation. A client key may have been left on the node - check GET /admin/keys/clients and remove it manually.',
+    );
+  }
+
+  // Checked before writing anything: our clock gates the guard above, but core
+  // derives the id from its own, so two mints either side of a second boundary
+  // can still land on the same id. Same id means this mint overwrote the previous
+  // key instead of adding one, so nothing here may be written or persisted as if
+  // a new credential existed.
+  if (clientId === previousClientId) {
+    throw new Error(
+      'The node reused the previous agent key instead of creating a new one, so nothing was written - wait a moment and try again',
+    );
+  }
 
   // Write before revoking: a failed cleanup must never leave the agent with no
   // usable credential.
@@ -237,27 +255,17 @@ async function mintAndWriteCredential(): Promise<ConnectAiAgentResult> {
     });
   } catch (error) {
     // Nothing records this key now, so no later connect could find it to revoke.
-    if (clientId) await revokeClientKey(nodeUrl, accessToken, clientId).catch(() => {});
+    await revokeClientKey(nodeUrl, accessToken, clientId).catch(() => {});
     throw error;
   }
   // The path and the node go with the id: the agent tab has no other way back to
   // the setup prompt, and the prompt must name the node this credential points at.
   saveSettings({
     ...getSettings(),
-    mcpAgentClientId: clientId ?? undefined,
+    mcpAgentClientId: clientId,
     mcpAgentCredentialPath: path,
     mcpAgentNodeUrl: nodeUrl,
   });
-
-  // The guard above keys off our clock; core derives the id from its own, so two
-  // mints either side of a second boundary can still land on the same id. Same id
-  // means this mint overwrote the previous key instead of adding one - and the
-  // revoke below would then delete the credential just written.
-  if (clientId && clientId === previousClientId) {
-    throw new Error(
-      'The node reused the previous agent key instead of creating a new one - wait a moment and try again',
-    );
-  }
 
   const replacedPrevious = Boolean(previousClientId && previousClientId !== clientId);
   let revokeFailed = false;

@@ -4444,6 +4444,27 @@ fn write_owner_only(path: &std::path::Path, contents: &str) -> std::io::Result<(
     result
 }
 
+/// Create `dir` (and any missing parents) restricted to the owner. DirBuilder
+/// applies the mode at creation time, closing the 0o755 window a plain
+/// `create_dir_all` then `chmod` would leave; the chmod still runs afterwards to
+/// retighten a leaf that already existed, world-readable, from an older version
+/// of this code.
+fn create_owner_only_dir(dir: &std::path::Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+        std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+    }
+    #[cfg(not(unix))]
+    {
+        // No ACL hardening: this inherits the profile directory's default
+        // user-and-administrators ACLs, not world-readable but not explicitly restricted either.
+        std::fs::create_dir_all(dir)?;
+    }
+    Ok(())
+}
+
 /// Hand the MCP server its own node credential. Returns the path written so the
 /// UI can name it; the token values never travel back out.
 #[tauri::command]
@@ -4458,24 +4479,13 @@ fn write_mcp_agent_credentials(
     let path = mcp_agent_file(&home);
     let dir = path.parent().expect("agent file always has a parent");
 
-    std::fs::create_dir_all(dir).map_err(|e| {
+    create_owner_only_dir(dir).map_err(|e| {
         TauriError::with_details(
             TauriErrorCode::DirectoryError,
             "Could not create the MCP credential folder",
             e.to_string(),
         )
     })?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).map_err(|e| {
-            TauriError::with_details(
-                TauriErrorCode::DirectoryError,
-                "Could not restrict the MCP credential folder",
-                e.to_string(),
-            )
-        })?;
-    }
 
     let body = serde_json::json!({
         "nodeUrl": node_url,
@@ -5286,6 +5296,39 @@ mod tests {
             super::mcp_agent_file(Path::new("/Users/x")),
             Path::new("/Users/x/.config/calimero/mcp/agent.json")
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn create_owner_only_dir_is_0o700_including_parents() {
+        use std::os::unix::fs::PermissionsExt;
+        let base = std::env::temp_dir().join(format!("calimero-mcp-dir-{}", std::process::id()));
+        let leaf = base.join("parent").join("mcp");
+
+        super::create_owner_only_dir(&leaf).unwrap();
+
+        for dir in [&leaf, leaf.parent().unwrap()] {
+            let mode = std::fs::metadata(dir).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o700, "{dir:?} must be owner-only");
+        }
+
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn create_owner_only_dir_retightens_a_leaf_left_world_readable() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("calimero-mcp-dir-existing-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        super::create_owner_only_dir(&dir).unwrap();
+
+        let mode = std::fs::metadata(&dir).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o700, "a pre-existing looser leaf must be retightened");
+
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

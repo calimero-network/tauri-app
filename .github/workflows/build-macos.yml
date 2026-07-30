@@ -17,6 +17,12 @@ on:
         required: true
       APPLE_TEAM_ID:
         required: true
+      # Developer ID provisioning profile (base64 .provisionprofile) that
+      # authorizes the managed universal-links entitlements. Its embedded
+      # certificate MUST be the same Developer ID Application cert that signs the
+      # app (C=ES, serial 3F784069…) — a mismatch AMFI-kills the release at launch.
+      APPLE_PROVISIONING_PROFILE:
+        required: false
       # Apple notarization (required for distribution)
       APPLE_ID:
         required: true
@@ -268,8 +274,9 @@ jobs:
           fi
 
           SHELL_BINARY="apps/desktop/src-tauri/shell/calimero-shell"
-          # The shell hosts webviews (Mero Meet camera/mic) — reuse the app entitlements.
-          ENTITLEMENTS="apps/desktop/src-tauri/entitlements.plist"
+          # Nested helper: sign WITHOUT the managed universal-links entitlements
+          # (see shell.entitlements.plist). Only the main app carries those.
+          ENTITLEMENTS="apps/desktop/src-tauri/shell.entitlements.plist"
 
           if [ -f "$SHELL_BINARY" ]; then
             echo "Signing calimero-shell before bundling: $SHELL_BINARY"
@@ -288,6 +295,21 @@ jobs:
             echo "Error: calimero-shell not found at $SHELL_BINARY"
             exit 1
           fi
+
+      - name: Install provisioning profile
+        if: steps.build-mode.outputs.mode == 'release'
+        env:
+          APPLE_PROVISIONING_PROFILE: ${{ secrets.APPLE_PROVISIONING_PROFILE }}
+        run: |
+          if [ -z "$APPLE_PROVISIONING_PROFILE" ]; then
+            echo "Error: APPLE_PROVISIONING_PROFILE is required — a release carrying the"
+            echo "universal-links entitlements is AMFI-killed at launch without it."
+            exit 1
+          fi
+          echo "$APPLE_PROVISIONING_PROFILE" | base64 --decode > apps/desktop/src-tauri/embedded.provisionprofile
+          BYTES=$(wc -c < apps/desktop/src-tauri/embedded.provisionprofile)
+          echo "Wrote embedded.provisionprofile ($BYTES bytes)"
+          [ "$BYTES" -gt 0 ] || { echo "Decoded profile is empty"; exit 1; }
 
       - name: Build Tauri app for macOS (Universal) - Release
         if: steps.build-mode.outputs.mode == 'release'
@@ -311,7 +333,11 @@ jobs:
             echo "is_signed=false" >> $GITHUB_OUTPUT
           fi
 
-          pnpm tauri build --target universal-apple-darwin
+          # Embed the profile at Contents/embedded.provisionprofile so Tauri's own
+          # codesign seals it and AMFI authorizes the managed universal-links
+          # entitlements. Source path is relative to src-tauri/ (tauri.conf.json dir).
+          pnpm tauri build --target universal-apple-darwin \
+            --config '{"bundle":{"macOS":{"files":{"embedded.provisionprofile":"embedded.provisionprofile"}}}}'
 
       - name: Build Tauri app for macOS (Universal) - Validation
         if: steps.build-mode.outputs.mode == 'validation'

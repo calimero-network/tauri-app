@@ -19,13 +19,25 @@
     <true/>
     <key>com.apple.security.device.audio-input</key>
     <true/>
-    <!-- NOTE: do NOT add com.apple.developer.associated-domains (universal links)
-         here. On a hardened-runtime Developer-ID release it is a RESTRICTED
-         entitlement that AMFI refuses to authorize — the app is SIGKILLed at
-         launch ("can't be opened" / launchd err 153) on every machine. Embedding
-         a Developer-ID provisioning profile does NOT rescue it (verified on the
-         notarized v0.0.76 DMG). Universal-links-on-Developer-ID is unsolved;
-         deep-link invitations use the calimero:// custom scheme, which needs no
-         entitlement. See git history of #165 / v0.0.76 before retrying. -->
+    <!-- Universal Links (https://links.calimero.network/...). These three are
+         MANAGED (com.apple.developer.*/application-identifier) restricted
+         entitlements. AMFI only authorizes them at launch if the app embeds a
+         Developer-ID provisioning profile at Contents/embedded.provisionprofile
+         whose DeveloperCertificates include the SAME cert that signs the app —
+         otherwise it's SIGKILLed at spawn ("can't be opened" / launchd err 153).
+         CI supplies that profile from APPLE_PROVISIONING_PROFILE (build-macos.yml)
+         and signs with the matching Developer ID cert. All three keys must be
+         present or the profile match fails. The account has two Developer ID
+         Application certs — the profile MUST embed the one CI signs with (C=ES,
+         serial 3F784069…). Verified end-to-end on v0.0.76. Do NOT add these to
+         the nested calimero-shell (see shell.entitlements.plist). -->
+    <key>com.apple.developer.associated-domains</key>
+    <array>
+        <string>applinks:links.calimero.network</string>
+    </array>
+    <key>com.apple.application-identifier</key>
+    <string>BTC39PAGX2.network.calimero.desktop</string>
+    <key>com.apple.developer.team-identifier</key>
+    <string>BTC39PAGX2</string>
 </dict>
 </plist>

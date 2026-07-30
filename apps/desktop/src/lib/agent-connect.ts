@@ -132,15 +132,45 @@ export interface ConnectAiAgentResult {
   revokeFailed: boolean;
 }
 
+/** The one in-flight connect; a concurrent call is rejected, not queued behind it. */
+let inflight: Promise<ConnectAiAgentResult> | null = null;
+
+/** Wall-clock second of the most recent connect attempt. */
+let lastAttemptSecond: number | null = null;
+
 /**
  * Mint a client key on the current node and write it where the MCP server will
  * find it, replacing the key an earlier connect left behind.
  *
+ * Rejects a concurrent or same-second call instead of letting it through: core#3337
+ * derives an admin-scoped client key's id from only the unix second, so a second
+ * mint in the same second collides and silently overwrites the credential this
+ * call just wrote.
+ */
+export async function connectAiAgent(): Promise<ConnectAiAgentResult> {
+  if (inflight) {
+    throw new Error('An agent connect is already in progress');
+  }
+  const second = Math.floor(Date.now() / 1000);
+  if (lastAttemptSecond === second) {
+    throw new Error('Connected less than a second ago - wait a moment and try again');
+  }
+  lastAttemptSecond = second;
+
+  inflight = mintAndWriteCredential();
+  try {
+    return await inflight;
+  } finally {
+    inflight = null;
+  }
+}
+
+/**
  * `permissions: ['admin']` is deliberate: the key is separate and independently
  * revocable, but not reduced - core cannot scope execute permissions yet, so a
  * narrower key could not drive the node's apps at all.
  */
-export async function connectAiAgent(): Promise<ConnectAiAgentResult> {
+async function mintAndWriteCredential(): Promise<ConnectAiAgentResult> {
   const settings = getSettings();
   const nodeUrl = (settings.nodeUrl ?? '').replace(/\/$/, '');
   const remoteOrigin = nonLoopbackOrigin(nodeUrl);

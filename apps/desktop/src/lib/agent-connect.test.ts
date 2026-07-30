@@ -294,6 +294,59 @@ describe('connectAiAgent', () => {
     expect(calls).toHaveLength(2);
   });
 
+  it('treats a previous key missing from the listing as already gone', async () => {
+    settings.mcpAgentClientId = 'client-0';
+    installFetch(({ url }) => {
+      if (url.endsWith('/admin/client-key')) {
+        return json({ data: { access_token: tokenFor('client-1'), refresh_token: 'mcp-rt' } });
+      }
+      return json({ data: [{ client_id: 'client-9', root_key_id: 'root-z', is_valid: true }] });
+    });
+
+    const result = await agentConnect.connectAiAgent();
+
+    expect(result.revokeFailed).toBe(false);
+    expect(calls).toHaveLength(2); // no DELETE
+  });
+
+  it('reports the revoke as failed when the listing body cannot be read', async () => {
+    settings.mcpAgentClientId = 'client-0';
+    installFetch(({ url }) => {
+      if (url.endsWith('/admin/client-key')) {
+        return json({ data: { access_token: tokenFor('client-1'), refresh_token: 'mcp-rt' } });
+      }
+      // A 200 whose body is not the listing: nothing here says the old key is gone.
+      return new Response('not json', { status: 200 });
+    });
+
+    const result = await agentConnect.connectAiAgent();
+
+    expect(result.replacedPrevious).toBe(true);
+    expect(result.revokeFailed).toBe(true);
+    expect(calls).toHaveLength(2); // no DELETE attempted either
+    expect(agentConnect.describeConnectOutcome(result).revokeWarning).toMatch(/may still be valid/);
+  });
+
+  it('revokes the key it just minted when the write fails', async () => {
+    invoke.mockRejectedValue(new Error('disk full'));
+    installFetch(({ url }) => {
+      if (url.endsWith('/admin/client-key')) {
+        return json({ data: { access_token: tokenFor('client-1'), refresh_token: 'mcp-rt' } });
+      }
+      return json({ data: [{ client_id: 'client-1', root_key_id: 'root-b', is_valid: true }] });
+    });
+
+    await expect(agentConnect.connectAiAgent()).rejects.toThrow('disk full');
+
+    // Nothing persisted the id, so this is the last chance to revoke it.
+    expect(calls.map((c) => c.url)).toEqual([
+      'http://localhost:2528/admin/client-key',
+      'http://localhost:2528/admin/keys/clients',
+      'http://localhost:2528/admin/keys/root-b/clients/client-1',
+    ]);
+    expect(settings.mcpAgentClientId).toBeUndefined();
+  });
+
   it('mints nothing for a node that is not on this machine', async () => {
     settings.nodeUrl = 'https://node.example.com';
     installFetch(json({ data: { access_token: 'mcp-at', refresh_token: 'mcp-rt' } }));
@@ -349,13 +402,49 @@ describe('connectAiAgent same-second guard', () => {
   it('proceeds normally once the guard window has elapsed', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
-    installFetch(() => json({ data: { access_token: tokenFor('client-1'), refresh_token: 'mcp-rt' } }));
+    // A distinct id per mint, as a node a second later would derive.
+    let minted = 0;
+    installFetch(({ url }) => {
+      if (url.endsWith('/admin/client-key')) {
+        minted += 1;
+        return json({ data: { access_token: tokenFor(`client-${minted}`), refresh_token: 'mcp-rt' } });
+      }
+      return json({ data: [{ client_id: 'client-1', root_key_id: 'root-a', is_valid: true }] });
+    });
 
     await agentConnect.connectAiAgent();
     vi.setSystemTime(new Date('2026-01-01T00:00:01.100Z'));
     await agentConnect.connectAiAgent();
 
-    expect(calls).toHaveLength(2);
+    expect(minted).toBe(2);
+  });
+
+  it('lets a retry through in the same second when nothing was minted', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+    let attempt = 0;
+    installFetch(() => {
+      attempt += 1;
+      return attempt === 1
+        ? new Response('{}', { status: 503 })
+        : json({ data: { access_token: tokenFor('client-1'), refresh_token: 'mcp-rt' } });
+    });
+
+    // A node that was down is not "connected less than a second ago".
+    await expect(agentConnect.connectAiAgent()).rejects.toThrow(/503/);
+    vi.setSystemTime(new Date('2026-01-01T00:00:00.400Z'));
+    await expect(agentConnect.connectAiAgent()).resolves.toBeTruthy();
+  });
+
+  it('fails the connect when the node hands back the previous key id', async () => {
+    settings.mcpAgentClientId = 'client-0';
+    installFetch(() => json({ data: { access_token: tokenFor('client-0'), refresh_token: 'mcp-rt' } }));
+
+    // The mint collided: it overwrote client-0 rather than adding a key, so this is
+    // neither a creation nor a replacement, and revoking client-0 would delete the
+    // credential just written.
+    await expect(agentConnect.connectAiAgent()).rejects.toThrow(/reused the previous agent key/i);
+    expect(calls).toHaveLength(1); // no listing, no DELETE
   });
 });
 

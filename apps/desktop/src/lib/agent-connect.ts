@@ -10,6 +10,7 @@
  */
 import { invoke } from '@tauri-apps/api/core';
 import { getSettings, saveSettings } from '../utils/settings';
+import { parseJwtPayload } from '../utils/jwt';
 import { brokerAccessToken } from './token-broker';
 
 /** The node revoked our token family; no retry can succeed. */
@@ -43,12 +44,8 @@ interface ClientKeyEntry {
 
 /** Client keys are keyed by the `sub` of the tokens they mint. */
 function clientIdFromToken(accessToken: string): string | null {
-  try {
-    const sub = JSON.parse(atob(accessToken.split('.')[1])).sub;
-    return typeof sub === 'string' ? sub : null;
-  } catch {
-    return null;
-  }
+  const sub = parseJwtPayload(accessToken)?.sub;
+  return typeof sub === 'string' ? sub : null;
 }
 
 /**
@@ -70,8 +67,13 @@ async function revokeClientKey(
   if (!response.ok) return false;
 
   const json = await response.json().catch(() => null);
-  const entries: ClientKeyEntry[] = json?.data ?? json;
-  const entry = Array.isArray(entries) ? entries.find((e) => e?.client_id === clientId) : undefined;
+  const entries: ClientKeyEntry[] | undefined = json?.data ?? json;
+  // A body we cannot read is not evidence the key is gone; only a listing that
+  // says so is. Reporting "revoked" off an unreadable body would leave an
+  // admin-scoped, never-expiring key valid while the UI claims otherwise.
+  if (!Array.isArray(entries)) return false;
+
+  const entry = entries.find((e) => e?.client_id === clientId);
   if (!entry || !entry.is_valid) return true; // already gone
 
   const deleteResponse = await fetch(`${nodeUrl}/admin/keys/${entry.root_key_id}/clients/${clientId}`, {
@@ -135,14 +137,23 @@ export interface ConnectAiAgentResult {
 /** The one in-flight connect; a concurrent call is rejected, not queued behind it. */
 let inflight: Promise<ConnectAiAgentResult> | null = null;
 
-/** Wall-clock second of the most recent connect attempt. */
-let lastAttemptSecond: number | null = null;
+/**
+ * Wall-clock second the node last minted a key in - not the second a call was
+ * attempted in. An attempt that never reached a mint must not tell the user they
+ * just connected, and the second core hashes the id from is the one the mint
+ * returned in, not the one the call started in.
+ */
+let lastMintSecond: number | null = null;
+
+function unixSecond(): number {
+  return Math.floor(Date.now() / 1000);
+}
 
 /**
  * Mint a client key on the current node and write it where the MCP server will
  * find it, replacing the key an earlier connect left behind.
  *
- * Rejects a concurrent or same-second call instead of letting it through: core#3337
+ * Rejects a concurrent call, or one in the same second as the last mint: core#3337
  * derives an admin-scoped client key's id from only the unix second, so a second
  * mint in the same second collides and silently overwrites the credential this
  * call just wrote.
@@ -151,11 +162,9 @@ export async function connectAiAgent(): Promise<ConnectAiAgentResult> {
   if (inflight) {
     throw new Error('An agent connect is already in progress');
   }
-  const second = Math.floor(Date.now() / 1000);
-  if (lastAttemptSecond === second) {
+  if (lastMintSecond === unixSecond()) {
     throw new Error('Connected less than a second ago - wait a moment and try again');
   }
-  lastAttemptSecond = second;
 
   inflight = mintAndWriteCredential();
   try {
@@ -209,16 +218,36 @@ async function mintAndWriteCredential(): Promise<ConnectAiAgentResult> {
   if (!key?.access_token || !key?.refresh_token) {
     throw new Error('Node returned no credential for the agent');
   }
+  // Armed only now: a key exists on the node from this second on, and nothing
+  // before this point created one.
+  lastMintSecond = unixSecond();
   const clientId = clientIdFromToken(key.access_token);
 
   // Write before revoking: a failed cleanup must never leave the agent with no
   // usable credential.
-  const path = await invoke<string>('write_mcp_agent_credentials', {
-    nodeUrl,
-    accessToken: key.access_token,
-    refreshToken: key.refresh_token,
-  });
+  let path: string;
+  try {
+    path = await invoke<string>('write_mcp_agent_credentials', {
+      nodeUrl,
+      accessToken: key.access_token,
+      refreshToken: key.refresh_token,
+    });
+  } catch (error) {
+    // Nothing records this key now, so no later connect could find it to revoke.
+    if (clientId) await revokeClientKey(nodeUrl, accessToken, clientId).catch(() => {});
+    throw error;
+  }
   saveSettings({ ...getSettings(), mcpAgentClientId: clientId ?? undefined });
+
+  // The guard above keys off our clock; core derives the id from its own, so two
+  // mints either side of a second boundary can still land on the same id. Same id
+  // means this mint overwrote the previous key instead of adding one - and the
+  // revoke below would then delete the credential just written.
+  if (clientId && clientId === previousClientId) {
+    throw new Error(
+      'The node reused the previous agent key instead of creating a new one - wait a moment and try again',
+    );
+  }
 
   const replacedPrevious = Boolean(previousClientId && previousClientId !== clientId);
   let revokeFailed = false;

@@ -4412,26 +4412,36 @@ fn write_owner_only(path: &std::path::Path, contents: &str) -> std::io::Result<(
     tmp.push(".tmp");
     let tmp = std::path::PathBuf::from(tmp);
 
-    #[cfg(unix)]
-    {
-        use std::io::Write;
-        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&tmp)?;
-        file.write_all(contents.as_bytes())?;
-        file.sync_all()?;
-        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))?;
-    }
-    #[cfg(not(unix))]
-    {
-        std::fs::write(&tmp, contents)?;
-    }
+    let write = || -> std::io::Result<()> {
+        #[cfg(unix)]
+        {
+            use std::io::Write;
+            use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&tmp)?;
+            file.write_all(contents.as_bytes())?;
+            file.sync_all()?;
+            std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))?;
+        }
+        #[cfg(not(unix))]
+        {
+            std::fs::write(&tmp, contents)?;
+        }
 
-    std::fs::rename(&tmp, path)
+        std::fs::rename(&tmp, path)
+    };
+
+    let result = write();
+    if result.is_err() {
+        // The temp file holds the whole access+refresh pair; a failed write must
+        // not leave it sitting next to the target.
+        std::fs::remove_file(&tmp).ok();
+    }
+    result
 }
 
 /// Hand the MCP server its own node credential. Returns the path written so the
@@ -5326,6 +5336,25 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    #[test]
+    fn write_owner_only_removes_the_temp_file_when_the_write_fails() {
+        let dir = std::env::temp_dir().join(format!("calimero-mcp-fail-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // A directory at the target makes the rename fail once the temp file - which
+        // holds the full token pair - has already been written.
+        let path = dir.join("agent.json");
+        std::fs::create_dir_all(&path).unwrap();
+
+        assert!(super::write_owner_only(&path, r#"{"refreshToken":"secret"}"#).is_err());
+        assert!(
+            !dir.join("agent.json.tmp").exists(),
+            "failed write left the temp file holding the token pair behind"
+        );
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     // Once a permission is missing, an app command fails at runtime with
     // "<cmd> not allowed. Command not found" - see permissions/app-commands.toml's
     // header comment. This reads both sources directly so the check can't drift.
@@ -5362,6 +5391,47 @@ mod tests {
             "generate_handler! and permissions/app-commands.toml are out of sync.\n\
              In generate_handler! but missing a permission in app-commands.toml: {missing_permission:?}\n\
              In app-commands.toml but missing from generate_handler!: {missing_handler:?}"
+        );
+    }
+
+    // Declaring a permission is only half the wiring: the main window is granted the
+    // aggregate `allow-app-commands` set, so a permission left out of it is never
+    // granted to anything and its command fails at runtime exactly as if it had no
+    // permission at all.
+    #[test]
+    fn acl_permissions_are_all_granted_to_the_main_window() {
+        const ACL_TOML: &str = include_str!("../permissions/app-commands.toml");
+
+        let (permission_blocks, set_block) = ACL_TOML
+            .split_once("[[set]]")
+            .expect("aggregate [[set]] not found in app-commands.toml");
+
+        let declared: std::collections::BTreeSet<&str> = permission_blocks
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix("identifier = "))
+            .map(|value| value.trim_matches('"'))
+            .collect();
+
+        let granted: std::collections::BTreeSet<&str> = set_block
+            .split_once("permissions = [")
+            .expect("the [[set]] has no permissions list")
+            .1
+            .split_once(']')
+            .expect("unterminated permissions list in the [[set]]")
+            .0
+            .split('"')
+            .skip(1)
+            .step_by(2)
+            .collect();
+
+        let ungranted: Vec<_> = declared.difference(&granted).collect();
+        let unknown: Vec<_> = granted.difference(&declared).collect();
+
+        assert!(
+            ungranted.is_empty() && unknown.is_empty(),
+            "the allow-app-commands set does not match the declared permissions.\n\
+             Declared as [[permission]] but not in the set: {ungranted:?}\n\
+             In the set but not declared as a [[permission]]: {unknown:?}"
         );
     }
 }

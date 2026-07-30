@@ -500,6 +500,9 @@
   /* Capped so the long setup prompt doesn't dominate the card; Copy takes it all. */
   max-height: 240px;
   overflow: auto;
+  /* Wrapped, not `pre`: the prompt's prose lines are long, and scrolling sideways
+     to read them is worse than a soft wrap. */
+  white-space: pre-wrap;
   background: var(--surface-glass-soft);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);

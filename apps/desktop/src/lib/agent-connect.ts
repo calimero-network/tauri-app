@@ -97,7 +97,8 @@ export const MCP_CONFIG_SNIPPET = JSON.stringify(
 export const MCP_CLIENT_LOCATIONS: { client: string; location: string }[] = [
   { client: 'Claude Code', location: '.mcp.json (project) or ~/.claude.json (global)' },
   { client: 'Claude Desktop', location: 'claude_desktop_config.json' },
-  { client: 'Cursor / Windsurf', location: '.cursor/mcp.json' },
+  { client: 'Cursor', location: '.cursor/mcp.json' },
+  { client: 'Windsurf', location: '~/.codeium/windsurf/mcp_config.json' },
   { client: 'Codex CLI', location: '~/.codex/config.toml (same fields, TOML syntax)' },
 ];
 
@@ -126,6 +127,8 @@ ${hints}
 export interface ConnectAiAgentResult {
   /** Path the credential file was written to. */
   path: string;
+  /** The node the credential was minted for, which the setting may since have moved off. */
+  nodeUrl: string;
   /** The new credential's client id (JWT `sub`) - an identifier, not a secret. */
   clientId: string | null;
   /** False on a first connect; true when this connect replaced an existing credential. */
@@ -237,7 +240,14 @@ async function mintAndWriteCredential(): Promise<ConnectAiAgentResult> {
     if (clientId) await revokeClientKey(nodeUrl, accessToken, clientId).catch(() => {});
     throw error;
   }
-  saveSettings({ ...getSettings(), mcpAgentClientId: clientId ?? undefined });
+  // The path and the node go with the id: the agent tab has no other way back to
+  // the setup prompt, and the prompt must name the node this credential points at.
+  saveSettings({
+    ...getSettings(),
+    mcpAgentClientId: clientId ?? undefined,
+    mcpAgentCredentialPath: path,
+    mcpAgentNodeUrl: nodeUrl,
+  });
 
   // The guard above keys off our clock; core derives the id from its own, so two
   // mints either side of a second boundary can still land on the same id. Same id
@@ -263,7 +273,7 @@ async function mintAndWriteCredential(): Promise<ConnectAiAgentResult> {
     }
   }
 
-  return { path, clientId, replacedPrevious, revokeFailed };
+  return { path, nodeUrl, clientId, replacedPrevious, revokeFailed };
 }
 
 /**

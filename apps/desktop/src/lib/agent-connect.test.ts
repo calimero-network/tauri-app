@@ -347,6 +347,18 @@ describe('connectAiAgent', () => {
     expect(settings.mcpAgentClientId).toBeUndefined();
   });
 
+  it('remembers the path and the node the credential was minted for', async () => {
+    installFetch(json({ data: { access_token: tokenFor('client-1'), refresh_token: 'mcp-rt' } }));
+
+    const result = await agentConnect.connectAiAgent();
+
+    // What the agent tab restores on a later visit, so seeing the setup prompt
+    // again does not mean minting another admin key.
+    expect(result.nodeUrl).toBe('http://localhost:2528');
+    expect(settings.mcpAgentCredentialPath).toBe('/home/x/.config/calimero/mcp/agent.json');
+    expect(settings.mcpAgentNodeUrl).toBe('http://localhost:2528');
+  });
+
   it('mints nothing for a node that is not on this machine', async () => {
     settings.nodeUrl = 'https://node.example.com';
     installFetch(json({ data: { access_token: 'mcp-at', refresh_token: 'mcp-rt' } }));

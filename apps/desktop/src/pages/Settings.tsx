@@ -54,6 +54,9 @@ export default function Settings({ onBack }: SettingsProps) {
   const [agentConnecting, setAgentConnecting] = useState(false);
   const [agentCredentialPath, setAgentCredentialPath] = useState<string | null>(null);
   const [agentClientId, setAgentClientId] = useState<string | null>(null);
+  // The node the credential was minted for, not the current setting: changing the
+  // node URL in General must not make the prompt name a node it does not point at.
+  const [agentNodeUrl, setAgentNodeUrl] = useState('');
   const [agentConnectedAt, setAgentConnectedAt] = useState<number | null>(null);
   const [agentRevokeWarning, setAgentRevokeWarning] = useState(false);
   const [copiedBlock, setCopiedBlock] = useState<'prompt' | 'mcp' | null>(null);
@@ -76,6 +79,14 @@ export default function Settings({ onBack }: SettingsProps) {
     setCloudEmail(settings.cloudUserEmail);
     setCloudName(settings.cloudUserName);
     setCloudPicture(settings.cloudUserPicture);
+
+    // Restore what an earlier connect left behind: without this, leaving Settings
+    // makes minting another admin key the only route back to the setup prompt.
+    if (settings.mcpAgentCredentialPath) {
+      setAgentCredentialPath(settings.mcpAgentCredentialPath);
+      setAgentClientId(settings.mcpAgentClientId ?? null);
+      setAgentNodeUrl(settings.mcpAgentNodeUrl ?? settings.nodeUrl);
+    }
 
     // Fetch cloud plan if connected
     if (settings.cloudConnected && settings.cloudIdToken) {
@@ -177,6 +188,7 @@ export default function Settings({ onBack }: SettingsProps) {
       const result = await connectAiAgent();
       setAgentCredentialPath(result.path);
       setAgentClientId(result.clientId);
+      setAgentNodeUrl(result.nodeUrl);
       setAgentConnectedAt(Date.now());
       setAgentRevokeWarning(result.revokeFailed);
       const { message, revokeWarning } = describeConnectOutcome(result);
@@ -531,78 +543,75 @@ export default function Settings({ onBack }: SettingsProps) {
                     : 'Connect AI agent'}
               </button>
 
-              <div className="agent-connected">
-                {agentCredentialPath && (
-                  <>
+              {agentCredentialPath && (
+                <div className="agent-connected">
+                  <p className="field-hint" style={{ marginBottom: '8px' }}>
+                    Credential written to <code>{agentCredentialPath}</code>
+                  </p>
+                  {agentClientId && (
                     <p className="field-hint" style={{ marginBottom: '8px' }}>
-                      Credential written to <code>{agentCredentialPath}</code>
+                      Client <code>{truncateText(agentClientId, 8)}</code>
+                      {agentConnectedAt &&
+                        ` · updated ${new Date(agentConnectedAt).toLocaleTimeString()}`}
                     </p>
-                    {agentClientId && (
-                      <p className="field-hint" style={{ marginBottom: '8px' }}>
-                        Client <code>{truncateText(agentClientId, 8)}</code>
-                        {agentConnectedAt &&
-                          ` · updated ${new Date(agentConnectedAt).toLocaleTimeString()}`}
-                      </p>
-                    )}
-                    {agentRevokeWarning && (
-                      <p className="field-hint" style={{ marginBottom: '20px', color: 'var(--warning)' }}>
-                        The previous key could not be revoked. It may still be valid on the node.
-                      </p>
-                    )}
+                  )}
+                  {agentRevokeWarning && (
+                    <p className="field-hint" style={{ marginBottom: '20px', color: 'var(--warning)' }}>
+                      The previous key could not be revoked. It may still be valid on the node.
+                    </p>
+                  )}
 
-                    <div className="settings-field">
-                      <div className="agent-config-header">
-                        <span className="settings-field-label">Paste this into your AI agent</span>
-                        <button
-                          type="button"
-                          className={`agent-config-copy${copiedBlock === 'prompt' ? ' agent-config-copy--copied' : ''}`}
-                          onClick={() =>
-                            copyAgentBlock(
-                              'prompt',
-                              agentSetupPrompt(agentCredentialPath, getSettings().nodeUrl ?? ''),
-                            )
-                          }
-                        >
-                          {copiedBlock === 'prompt' ? <Check size={13} /> : <Copy size={13} />}
-                          {copiedBlock === 'prompt' ? 'Copied!' : 'Copy'}
-                        </button>
-                      </div>
-                      <pre className="agent-config">
-                        {agentSetupPrompt(agentCredentialPath, getSettings().nodeUrl ?? '')}
-                      </pre>
+                  <div className="settings-field">
+                    <div className="agent-config-header">
+                      <span className="settings-field-label">Paste this into your AI agent</span>
+                      <button
+                        type="button"
+                        className={`agent-config-copy${copiedBlock === 'prompt' ? ' agent-config-copy--copied' : ''}`}
+                        onClick={() =>
+                          copyAgentBlock('prompt', agentSetupPrompt(agentCredentialPath, agentNodeUrl))
+                        }
+                      >
+                        {copiedBlock === 'prompt' ? <Check size={13} /> : <Copy size={13} />}
+                        {copiedBlock === 'prompt' ? 'Copied!' : 'Copy'}
+                      </button>
                     </div>
-                  </>
-                )}
-
-                <div className="settings-field">
-                  <div className="agent-config-header">
-                    <span className="settings-field-label">Add this to your agent's MCP config</span>
-                    <button
-                      type="button"
-                      className={`agent-config-copy${copiedBlock === 'mcp' ? ' agent-config-copy--copied' : ''}`}
-                      onClick={() => copyAgentBlock('mcp', MCP_CONFIG_SNIPPET)}
-                    >
-                      {copiedBlock === 'mcp' ? <Check size={13} /> : <Copy size={13} />}
-                      {copiedBlock === 'mcp' ? 'Copied!' : 'Copy'}
-                    </button>
+                    {/* tabIndex: the block scrolls, and a scroll region nothing can
+                        focus is unreachable without a pointer. */}
+                    <pre className="agent-config" tabIndex={0}>
+                      {agentSetupPrompt(agentCredentialPath, agentNodeUrl)}
+                    </pre>
                   </div>
-                  <pre className="agent-config">{MCP_CONFIG_SNIPPET}</pre>
-                  <ul className="agent-clients">
-                    {MCP_CLIENT_LOCATIONS.map(({ client, location }) => (
-                      <li key={client}>
-                        <span className="agent-client-name">{client}</span>
-                        <code>{location}</code>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
 
-                <p className="field-hint">
-                  The agent acts with the same identity and full node access as this app.
-                  Each connect replaces the previous agent credential and revokes the key
-                  behind it.
-                </p>
-              </div>
+                  <div className="settings-field">
+                    <div className="agent-config-header">
+                      <span className="settings-field-label">Add this to your agent's MCP config</span>
+                      <button
+                        type="button"
+                        className={`agent-config-copy${copiedBlock === 'mcp' ? ' agent-config-copy--copied' : ''}`}
+                        onClick={() => copyAgentBlock('mcp', MCP_CONFIG_SNIPPET)}
+                      >
+                        {copiedBlock === 'mcp' ? <Check size={13} /> : <Copy size={13} />}
+                        {copiedBlock === 'mcp' ? 'Copied!' : 'Copy'}
+                      </button>
+                    </div>
+                    <pre className="agent-config" tabIndex={0}>{MCP_CONFIG_SNIPPET}</pre>
+                    <ul className="agent-clients">
+                      {MCP_CLIENT_LOCATIONS.map(({ client, location }) => (
+                        <li key={client}>
+                          <span className="agent-client-name">{client}</span>
+                          <code>{location}</code>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+
+                  <p className="field-hint">
+                    The agent acts with the same identity and full node access as this app.
+                    Each connect replaces the previous agent credential and revokes the key
+                    behind it.
+                  </p>
+                </div>
+              )}
             </div>
           </div>
         )}

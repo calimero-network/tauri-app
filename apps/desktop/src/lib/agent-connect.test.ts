@@ -396,8 +396,7 @@ describe('connectAiAgent', () => {
 });
 
 describe('connectAiAgent same-second guard', () => {
-  // Regression coverage for calimero-network/core#3337: a client key's id
-  // hashes only the unix second, so two mints in the same second collide.
+  // A client key's id hashes only the unix second, so two mints in the same second collide.
 
   it('rejects a second connect started while one is still in flight, without minting again', async () => {
     let resolveMint!: (r: Response) => void;
@@ -466,10 +465,8 @@ describe('connectAiAgent same-second guard', () => {
     settings.mcpAgentClientId = 'client-0';
     installFetch(() => json({ data: { access_token: tokenFor('client-0'), refresh_token: 'mcp-rt' } }));
 
-    // The mint collided: it overwrote client-0 rather than adding a key, so this is
-    // neither a creation nor a replacement, and revoking client-0 would delete the
-    // credential just written. The collision must be caught before anything is
-    // written, so a "wait and try again" error is never a lie about what happened.
+    // The mint overwrote client-0 rather than adding a key, so revoking it would
+    // delete the credential just written - must be caught before anything is written.
     await expect(agentConnect.connectAiAgent()).rejects.toThrow(/reused the previous agent key/i);
     expect(calls).toHaveLength(1); // no listing, no DELETE
     expect(invoke).not.toHaveBeenCalled();

@@ -8,9 +8,8 @@ fn main() {
     }
     println!("cargo:rerun-if-changed=../dist");
 
-    // tauri-build fails on a declared resource that does not exist, and the scripts
-    // that stage these run from beforeBuildCommand - which `cargo test` never sees.
-    // A real bundle always runs them first, so these stubs cannot reach one.
+    // tauri-build fails on a declared resource that doesn't exist; these are normally
+    // staged by beforeBuildCommand, which `cargo test` never runs.
     let merod = std::path::Path::new("merod");
     if !merod.exists() {
         std::fs::create_dir_all(merod).ok();

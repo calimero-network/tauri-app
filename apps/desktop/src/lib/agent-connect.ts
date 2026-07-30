@@ -1,12 +1,6 @@
 /**
- * Provision a coding agent's MCP server with its own node credential.
- *
- * The MCP server (`@calimero-network/mero-mcp`) runs as a subprocess of the
- * agent and talks to the node over HTTP, so with `--auth-mode embedded` it needs
- * a bearer token. We mint it a SEPARATE client key rather than sharing ours:
- * refresh tokens are single-use with rotation and replay revokes the whole
- * family, so two processes on one lineage would eventually log the desktop out
- * of its own session (see lib/token-broker.ts).
+ * Provision a coding agent's MCP server with its own node credential - a separate
+ * client key, since sharing ours risks rotating away the desktop's own session (see token-broker.ts).
  */
 import { invoke } from '@tauri-apps/api/core';
 import { getSettings, saveSettings } from '../utils/settings';
@@ -19,9 +13,8 @@ const REVOKED_AUTH_ERRORS = ['token_reuse', 'token_revoked'];
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
 
 /**
- * The origin to name in a rejection, or null for a loopback node. MUST match
- * `nonLoopbackOrigin` in mero-mcp's src/config.ts: the MCP server drops a handoff
- * naming any other origin, so minting one here would be silently useless.
+ * The origin to name in a rejection, or null for a loopback node. Must match
+ * `nonLoopbackOrigin` in mero-mcp's src/config.ts, or the MCP server silently drops the handoff.
  */
 function nonLoopbackOrigin(url: string): string | null {
   let parsed: URL;
@@ -50,12 +43,7 @@ function clientIdFromToken(accessToken: string): string | null {
 
 /**
  * Revoke the key an earlier connect minted. `root_key_id` comes from the list
- * response, not from our own token: the root key can be re-created, and the node
- * rejects a delete whose root key does not match the one the client is filed under.
- *
- * Resolves false when the node could not confirm the old key is gone, so the
- * caller can warn that it may still be valid - the previous version of this
- * function never checked the DELETE response and reported success regardless.
+ * response, not our own token - the node rejects a delete whose root key doesn't match.
  */
 async function revokeClientKey(
   nodeUrl: string,
@@ -68,9 +56,8 @@ async function revokeClientKey(
 
   const json = await response.json().catch(() => null);
   const entries: ClientKeyEntry[] | undefined = json?.data ?? json;
-  // A body we cannot read is not evidence the key is gone; only a listing that
-  // says so is. Reporting "revoked" off an unreadable body would leave an
-  // admin-scoped, never-expiring key valid while the UI claims otherwise.
+  // An unreadable body is not evidence the key is gone - reporting "revoked" here
+  // would leave an admin-scoped, never-expiring key valid while the UI claims otherwise.
   if (!Array.isArray(entries)) return false;
 
   const entry = entries.find((e) => e?.client_id === clientId);
@@ -103,10 +90,8 @@ export const MCP_CLIENT_LOCATIONS: { client: string; location: string }[] = [
 ];
 
 /**
- * A copy-paste prompt for any AI harness to wire itself up, as an alternative
- * to hand-editing the MCP config JSON. Built from live values - the credential
- * path this node actually wrote, and the node's own URL - and never the token,
- * which the server reads from disk rather than from its config.
+ * A copy-paste setup prompt built from live values (credential path, node URL),
+ * never the token - the server reads that from disk, not from its config.
  */
 export function agentSetupPrompt(credentialPath: string, nodeUrl: string): string {
   const hints = MCP_CLIENT_LOCATIONS.map(({ client, location }) => `- ${client}: ${location}`).join('\n');
@@ -141,10 +126,8 @@ export interface ConnectAiAgentResult {
 let inflight: Promise<ConnectAiAgentResult> | null = null;
 
 /**
- * Wall-clock second the node last minted a key in - not the second a call was
- * attempted in. An attempt that never reached a mint must not tell the user they
- * just connected, and the second core hashes the id from is the one the mint
- * returned in, not the one the call started in.
+ * Second the node last minted a key in, not when the call started - an attempt
+ * that never reached a mint must not gate the next one.
  */
 let lastMintSecond: number | null = null;
 
@@ -155,11 +138,6 @@ function unixSecond(): number {
 /**
  * Mint a client key on the current node and write it where the MCP server will
  * find it, replacing the key an earlier connect left behind.
- *
- * Rejects a concurrent call, or one in the same second as the last mint: core#3337
- * derives an admin-scoped client key's id from only the unix second, so a second
- * mint in the same second collides and silently overwrites the credential this
- * call just wrote.
  */
 export async function connectAiAgent(): Promise<ConnectAiAgentResult> {
   if (inflight) {
@@ -178,9 +156,8 @@ export async function connectAiAgent(): Promise<ConnectAiAgentResult> {
 }
 
 /**
- * `permissions: ['admin']` is deliberate: the key is separate and independently
- * revocable, but not reduced - core cannot scope execute permissions yet, so a
- * narrower key could not drive the node's apps at all.
+ * `permissions: ['admin']` is deliberate, not an oversight: core cannot scope
+ * execute permissions yet, so anything narrower could not drive the node's apps.
  */
 async function mintAndWriteCredential(): Promise<ConnectAiAgentResult> {
   const settings = getSettings();
@@ -233,11 +210,8 @@ async function mintAndWriteCredential(): Promise<ConnectAiAgentResult> {
     );
   }
 
-  // Checked before writing anything: our clock gates the guard above, but core
-  // derives the id from its own, so two mints either side of a second boundary
-  // can still land on the same id. Same id means this mint overwrote the previous
-  // key instead of adding one, so nothing here may be written or persisted as if
-  // a new credential existed.
+  // Must run before any write: core derives the id from its own clock, so two
+  // mints near a second boundary can still collide and silently overwrite the previous key.
   if (clientId === previousClientId) {
     throw new Error(
       'The node reused the previous agent key instead of creating a new one, so nothing was written - wait a moment and try again',

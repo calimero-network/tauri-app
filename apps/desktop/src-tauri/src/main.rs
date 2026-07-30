@@ -4387,13 +4387,8 @@ fn graceful_shutdown(merod_state: &MerodState) {
     info!("[Shutdown] Graceful shutdown complete");
 }
 
-// ─── MCP agent handoff ─────────────────────────────────────────────────────────
-// The MCP server (`@calimero-network/mero-mcp`) runs as a local subprocess of the
-// user's coding agent and reads its node credential from a file we write here.
-// It is a plain `~/.config` path on every platform, not `dirs::config_dir()`,
-// because the MCP package resolves it from `os.homedir()` and must agree with us.
-
-/// Where the MCP subprocess looks for its credential.
+/// Where the MCP subprocess looks for its credential. Must be a plain `~/.config`
+/// path, not `dirs::config_dir()`: the MCP package resolves it via `os.homedir()`.
 fn mcp_agent_file(home: &std::path::Path) -> std::path::PathBuf {
     home.join(".config")
         .join("calimero")
@@ -4401,12 +4396,8 @@ fn mcp_agent_file(home: &std::path::Path) -> std::path::PathBuf {
         .join("agent.json")
 }
 
-/// Write `contents` so only the owner can read it, and so a failed write cannot
-/// destroy the credential already in place: the bytes go to a sibling temp file
-/// that is renamed over the target, which is atomic on unix. On unix the mode is
-/// set at create time - chmod-after-write would leave a credential world-readable
-/// for the width of the write - and again afterwards, since an already-existing
-/// temp file keeps its old mode through `open`.
+/// `.mode()` only takes effect when the file is newly created, so a leftover
+/// temp file from a prior failed write needs the mode reapplied explicitly.
 fn write_owner_only(path: &std::path::Path, contents: &str) -> std::io::Result<()> {
     let mut tmp = path.as_os_str().to_os_string();
     tmp.push(".tmp");
@@ -4444,11 +4435,8 @@ fn write_owner_only(path: &std::path::Path, contents: &str) -> std::io::Result<(
     result
 }
 
-/// Create `dir` (and any missing parents) restricted to the owner. DirBuilder
-/// applies the mode at creation time, closing the 0o755 window a plain
-/// `create_dir_all` then `chmod` would leave; the chmod still runs afterwards to
-/// retighten a leaf that already existed, world-readable, from an older version
-/// of this code.
+/// DirBuilder only sets the mode on directories it creates, so a leaf left
+/// over at a looser mode from an older version needs it reapplied explicitly.
 fn create_owner_only_dir(dir: &std::path::Path) -> std::io::Result<()> {
     #[cfg(unix)]
     {
@@ -5398,9 +5386,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    // Once a permission is missing, an app command fails at runtime with
-    // "<cmd> not allowed. Command not found" - see permissions/app-commands.toml's
-    // header comment. This reads both sources directly so the check can't drift.
+    // Reads both sources directly so generate_handler! and the ACL file can't drift apart.
     #[test]
     fn generate_handler_commands_match_acl_permissions() {
         const MAIN_RS: &str = include_str!("main.rs");
@@ -5437,10 +5423,8 @@ mod tests {
         );
     }
 
-    // Declaring a permission is only half the wiring: the main window is granted the
-    // aggregate `allow-app-commands` set, so a permission left out of it is never
-    // granted to anything and its command fails at runtime exactly as if it had no
-    // permission at all.
+    // A permission left out of the aggregate [[set]] is never granted, so its
+    // command fails at runtime exactly as if it had no permission at all.
     #[test]
     fn acl_permissions_are_all_granted_to_the_main_window() {
         const ACL_TOML: &str = include_str!("../permissions/app-commands.toml");

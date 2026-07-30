@@ -444,6 +444,104 @@
 
 
 
+.agent-connected {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-color);
+}
+
+.agent-config-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+/* The gap under the header belongs to the header, not the label, or the button
+   sits off-centre against it. */
+.agent-config-header .settings-field-label {
+  margin-bottom: 0;
+}
+
+/* Standalone rather than a .button variant: App.css defines .button later in the
+   bundle, so any size set on a .button modifier here silently loses the cascade. */
+.agent-config-copy {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-family: inherit;
+  font-size: 12px;
+  background: var(--button-glass);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.agent-config-copy:hover {
+  background: var(--button-glass-hover);
+  border-color: var(--border-hover);
+  color: var(--text-primary);
+}
+
+.agent-config-copy--copied,
+.agent-config-copy--copied:hover {
+  color: var(--success);
+  border-color: var(--success);
+}
+
+.agent-config {
+  margin: 0;
+  padding: 14px 16px;
+  /* Capped so the long setup prompt doesn't dominate the card; Copy takes it all. */
+  max-height: 240px;
+  overflow: auto;
+  /* Wrapped, not `pre`: the prompt's prose lines are long, and scrolling sideways
+     to read them is worse than a soft wrap. */
+  white-space: pre-wrap;
+  background: var(--surface-glass-soft);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.agent-clients {
+  margin: 12px 0 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 6px;
+}
+
+.agent-clients li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.agent-client-name {
+  min-width: 120px;
+  color: var(--text-secondary);
+}
+
+.agent-clients code {
+  background: var(--surface-glass-soft);
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
 .reset-confirm-form {
   margin-top: 12px;
   padding: 16px;

@@ -8,6 +8,18 @@ fn main() {
     }
     println!("cargo:rerun-if-changed=../dist");
 
+    // tauri-build fails on a declared resource that doesn't exist; these are normally
+    // staged by beforeBuildCommand, which `cargo test` never runs.
+    let merod = std::path::Path::new("merod");
+    if !merod.exists() {
+        std::fs::create_dir_all(merod).ok();
+    }
+    let shell = std::path::Path::new("shell/calimero-shell");
+    if !shell.exists() {
+        std::fs::create_dir_all("shell").ok();
+        std::fs::write(shell, "").ok();
+    }
+
     // Embed merod target version at compile time so the binary knows what to download at runtime.
     let config_path = std::path::Path::new("../../../merod-config.json");
     if let Ok(content) = std::fs::read_to_string(config_path) {

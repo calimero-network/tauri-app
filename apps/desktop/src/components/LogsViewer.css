@@ -72,8 +72,8 @@
 
 .logs-viewer-btn--copied,
 .logs-viewer-btn--copied:hover:not(:disabled) {
-  color: var(--color-success, #22c55e);
-  border-color: var(--color-success, #22c55e);
+  color: var(--success);
+  border-color: var(--success);
 }
 
 .logs-viewer-close {

@@ -212,6 +212,11 @@ description = "Enables the secure_delete_token command."
 commands.allow = ["secure_delete_token"]
 
 [[permission]]
+identifier = "allow-write-mcp-agent-credentials"
+description = "Enables the write_mcp_agent_credentials command."
+commands.allow = ["write_mcp_agent_credentials"]
+
+[[permission]]
 identifier = "allow-get-pending-cloud-auth"
 description = "Enables the get_pending_cloud_auth command."
 commands.allow = ["get_pending_cloud_auth"]
@@ -282,6 +287,7 @@ permissions = [
   "allow-secure-store-token",
   "allow-secure-get-token",
   "allow-secure-delete-token",
+  "allow-write-mcp-agent-credentials",
   "allow-get-pending-cloud-auth",
   "allow-clear-pending-cloud-auth",
   "allow-get-pending-app-deep-link",

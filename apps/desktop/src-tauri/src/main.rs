@@ -4387,6 +4387,113 @@ fn graceful_shutdown(merod_state: &MerodState) {
     info!("[Shutdown] Graceful shutdown complete");
 }
 
+/// Where the MCP subprocess looks for its credential. Must be a plain `~/.config`
+/// path, not `dirs::config_dir()`: the MCP package resolves it via `os.homedir()`.
+fn mcp_agent_file(home: &std::path::Path) -> std::path::PathBuf {
+    home.join(".config")
+        .join("calimero")
+        .join("mcp")
+        .join("agent.json")
+}
+
+/// `.mode()` only takes effect when the file is newly created, so a leftover
+/// temp file from a prior failed write needs the mode reapplied explicitly.
+fn write_owner_only(path: &std::path::Path, contents: &str) -> std::io::Result<()> {
+    let mut tmp = path.as_os_str().to_os_string();
+    tmp.push(".tmp");
+    let tmp = std::path::PathBuf::from(tmp);
+
+    let write = || -> std::io::Result<()> {
+        #[cfg(unix)]
+        {
+            use std::io::Write;
+            use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&tmp)?;
+            file.write_all(contents.as_bytes())?;
+            file.sync_all()?;
+            std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))?;
+        }
+        #[cfg(not(unix))]
+        {
+            std::fs::write(&tmp, contents)?;
+        }
+
+        std::fs::rename(&tmp, path)
+    };
+
+    let result = write();
+    if result.is_err() {
+        // The temp file holds the whole access+refresh pair; a failed write must
+        // not leave it sitting next to the target.
+        std::fs::remove_file(&tmp).ok();
+    }
+    result
+}
+
+/// DirBuilder only sets the mode on directories it creates, so a leaf left
+/// over at a looser mode from an older version needs it reapplied explicitly.
+fn create_owner_only_dir(dir: &std::path::Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+        std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+    }
+    #[cfg(not(unix))]
+    {
+        // No ACL hardening: this inherits the profile directory's default
+        // user-and-administrators ACLs, not world-readable but not explicitly restricted either.
+        std::fs::create_dir_all(dir)?;
+    }
+    Ok(())
+}
+
+/// Hand the MCP server its own node credential. Returns the path written so the
+/// UI can name it; the token values never travel back out.
+#[tauri::command]
+fn write_mcp_agent_credentials(
+    node_url: String,
+    access_token: String,
+    refresh_token: String,
+) -> Result<String, TauriError> {
+    let home = dirs::home_dir().ok_or_else(|| {
+        TauriError::new(TauriErrorCode::HomeDirNotFound, "Could not find home folder")
+    })?;
+    let path = mcp_agent_file(&home);
+    let dir = path.parent().expect("agent file always has a parent");
+
+    create_owner_only_dir(dir).map_err(|e| {
+        TauriError::with_details(
+            TauriErrorCode::DirectoryError,
+            "Could not create the MCP credential folder",
+            e.to_string(),
+        )
+    })?;
+
+    let body = serde_json::json!({
+        "nodeUrl": node_url,
+        "accessToken": access_token,
+        "refreshToken": refresh_token,
+    })
+    .to_string();
+
+    write_owner_only(&path, &body).map_err(|e| {
+        TauriError::with_details(
+            TauriErrorCode::FileWriteError,
+            "Could not write the MCP credential file",
+            e.to_string(),
+        )
+    })?;
+
+    info!("[MCP] Wrote agent credential to {}", path.display());
+    Ok(path.to_string_lossy().into_owned())
+}
+
 // ─── Secure Token Storage ──────────────────────────────────────────────────────
 // Stores JWT tokens in the OS keychain (Keychain on macOS, Credential Manager
 // on Windows, libsecret on Linux) instead of plaintext localStorage.
@@ -4722,6 +4829,7 @@ fn main() {
             secure_store_token,
             secure_get_token,
             secure_delete_token,
+            write_mcp_agent_credentials,
             get_pending_cloud_auth,
             clear_pending_cloud_auth,
             get_pending_app_deep_link,
@@ -5168,5 +5276,189 @@ mod tests {
         let encoded = base64::engine::general_purpose::STANDARD.encode(&raw);
         let decoded = base64::engine::general_purpose::STANDARD.decode(encoded.as_bytes()).unwrap();
         assert_eq!(raw, decoded, "base64 round-trip must be byte-exact");
+    }
+
+    #[test]
+    fn mcp_agent_file_is_under_dot_config() {
+        assert_eq!(
+            super::mcp_agent_file(Path::new("/Users/x")),
+            Path::new("/Users/x/.config/calimero/mcp/agent.json")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn create_owner_only_dir_is_0o700_for_dirs_it_creates() {
+        use std::os::unix::fs::PermissionsExt;
+        let base = std::env::temp_dir().join(format!("calimero-mcp-dir-{}", std::process::id()));
+        let leaf = base.join("parent").join("mcp");
+
+        super::create_owner_only_dir(&leaf).unwrap();
+
+        for dir in [&leaf, leaf.parent().unwrap()] {
+            let mode = std::fs::metadata(dir).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o700, "{dir:?} must be owner-only");
+        }
+
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn create_owner_only_dir_retightens_a_leaf_left_world_readable() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("calimero-mcp-dir-existing-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        super::create_owner_only_dir(&dir).unwrap();
+
+        let mode = std::fs::metadata(&dir).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o700, "a pre-existing looser leaf must be retightened");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn write_owner_only_is_not_readable_by_others() {
+        let dir = std::env::temp_dir().join(format!("calimero-mcp-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("agent.json");
+
+        // Pre-existing world-readable file: the write must tighten it, not inherit it.
+        std::fs::write(&path, "stale").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        }
+
+        super::write_owner_only(&path, r#"{"nodeUrl":"http://localhost:2528"}"#).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            r#"{"nodeUrl":"http://localhost:2528"}"#
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600, "credential file must be owner-only");
+        }
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn write_owner_only_leaves_no_temp_file_behind() {
+        let dir = std::env::temp_dir().join(format!("calimero-mcp-tmp-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("agent.json");
+
+        super::write_owner_only(&path, r#"{"nodeUrl":"http://localhost:2528"}"#).unwrap();
+
+        let leftovers: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| name.as_str() != "agent.json")
+            .collect();
+        assert!(leftovers.is_empty(), "write left {leftovers:?} behind");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn write_owner_only_removes_the_temp_file_when_the_write_fails() {
+        let dir = std::env::temp_dir().join(format!("calimero-mcp-fail-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // A directory at the target makes the rename fail once the temp file - which
+        // holds the full token pair - has already been written.
+        let path = dir.join("agent.json");
+        std::fs::create_dir_all(&path).unwrap();
+
+        assert!(super::write_owner_only(&path, r#"{"refreshToken":"secret"}"#).is_err());
+        assert!(
+            !dir.join("agent.json.tmp").exists(),
+            "failed write left the temp file holding the token pair behind"
+        );
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // Reads both sources directly so generate_handler! and the ACL file can't drift apart.
+    #[test]
+    fn generate_handler_commands_match_acl_permissions() {
+        const MAIN_RS: &str = include_str!("main.rs");
+        const ACL_TOML: &str = include_str!("../permissions/app-commands.toml");
+
+        let handler_commands: std::collections::BTreeSet<&str> = MAIN_RS
+            .split_once("tauri::generate_handler![")
+            .expect("generate_handler! macro not found in main.rs")
+            .1
+            .split_once(']')
+            .expect("unterminated generate_handler! command list")
+            .0
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .collect();
+
+        let declared_permissions: std::collections::BTreeSet<&str> = ACL_TOML
+            .lines()
+            .filter(|line| line.trim_start().starts_with("commands.allow"))
+            .flat_map(|line| line.split('"').skip(1).step_by(2))
+            .collect();
+
+        let missing_permission: Vec<_> =
+            handler_commands.difference(&declared_permissions).collect();
+        let missing_handler: Vec<_> =
+            declared_permissions.difference(&handler_commands).collect();
+
+        assert!(
+            missing_permission.is_empty() && missing_handler.is_empty(),
+            "generate_handler! and permissions/app-commands.toml are out of sync.\n\
+             In generate_handler! but missing a permission in app-commands.toml: {missing_permission:?}\n\
+             In app-commands.toml but missing from generate_handler!: {missing_handler:?}"
+        );
+    }
+
+    // A permission left out of the aggregate [[set]] is never granted, so its
+    // command fails at runtime exactly as if it had no permission at all.
+    #[test]
+    fn acl_permissions_are_all_granted_to_the_main_window() {
+        const ACL_TOML: &str = include_str!("../permissions/app-commands.toml");
+
+        let (permission_blocks, set_block) = ACL_TOML
+            .split_once("[[set]]")
+            .expect("aggregate [[set]] not found in app-commands.toml");
+
+        let declared: std::collections::BTreeSet<&str> = permission_blocks
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix("identifier = "))
+            .map(|value| value.trim_matches('"'))
+            .collect();
+
+        let granted: std::collections::BTreeSet<&str> = set_block
+            .split_once("permissions = [")
+            .expect("the [[set]] has no permissions list")
+            .1
+            .split_once(']')
+            .expect("unterminated permissions list in the [[set]]")
+            .0
+            .split('"')
+            .skip(1)
+            .step_by(2)
+            .collect();
+
+        let ungranted: Vec<_> = declared.difference(&granted).collect();
+        let unknown: Vec<_> = granted.difference(&declared).collect();
+
+        assert!(
+            ungranted.is_empty() && unknown.is_empty(),
+            "the allow-app-commands set does not match the declared permissions.\n\
+             Declared as [[permission]] but not in the set: {ungranted:?}\n\
+             In the set but not declared as a [[permission]]: {unknown:?}"
+        );
     }
 }

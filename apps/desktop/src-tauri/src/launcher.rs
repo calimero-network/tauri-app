@@ -333,6 +333,49 @@ mod tests {
         }
     }
 
+    fn shell_crash_count() -> usize {
+        std::process::Command::new("bash")
+            .arg("-c")
+            .arg("ls ~/Library/Logs/DiagnosticReports/CalimeroShell* 2>/dev/null | wc -l")
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse().ok())
+            .unwrap_or(0)
+    }
+
+    /// Real end-to-end: drive the actual `extract_shell` + `generate_launcher`
+    /// against a universal Developer-ID shell, launch the generated `.app`, and
+    /// assert it does NOT produce a codesign/Rosetta crash. The shell may still
+    /// exit cleanly (Rust panic) on the synthetic app.json — that writes no crash
+    /// report, so counting fresh CalimeroShell crash reports isolates the bug we
+    /// fixed. Manual (`--ignored`): needs a real universal shell + launches a GUI.
+    ///   CAL_TEST_UNIVERSAL_SHELL=/path/to/calimero-shell cargo test --lib \
+    ///     launcher::tests::generated_launcher_runs_without_codesign_crash -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn generated_launcher_runs_without_codesign_crash() {
+        let src = std::env::var("CAL_TEST_UNIVERSAL_SHELL")
+            .expect("set CAL_TEST_UNIVERSAL_SHELL to a real universal signed calimero-shell");
+        let dir = scratch("launch");
+        let loose = dir.join("shell/CalimeroShell");
+        extract_shell(Path::new(&src), &loose).unwrap();
+
+        let before = shell_crash_count();
+        let app = generate_launcher(&dir, &loose, &sample()).unwrap();
+        let out = std::process::Command::new("open").arg(&app).output().unwrap();
+        assert!(out.status.success(), "open failed: {}", String::from_utf8_lossy(&out.stderr));
+        std::thread::sleep(std::time::Duration::from_secs(4));
+        let after = shell_crash_count();
+        let _ = std::process::Command::new("pkill").args(["-9", "-x", "CalimeroShell"]).output();
+
+        assert_eq!(
+            after, before,
+            "the generated launcher SIGKILLed the shell (codesign/Rosetta crash) — {} new crash report(s)",
+            after - before
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn helpers_write_expected_files() {
         let dir = scratch("helpers");

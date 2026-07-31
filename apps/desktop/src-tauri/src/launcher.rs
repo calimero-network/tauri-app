@@ -68,6 +68,9 @@ pub fn extract_shell(src: &Path, dest: &Path) -> Result<(), LauncherError> {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(dest, std::fs::Permissions::from_mode(0o755))?;
     }
+    // Drop the quarantine flag the copy inherits from a downloaded .app, or
+    // Gatekeeper prompts on every launch of the loose shell.
+    dequarantine(dest);
 
     // Keep the existing (Developer-ID) signature if the copy is validly signed.
     let already_signed = std::process::Command::new("codesign")
@@ -95,6 +98,22 @@ pub fn extract_shell(src: &Path, dest: &Path) -> Result<(), LauncherError> {
         ));
     }
     Ok(())
+}
+
+/// Remove the `com.apple.quarantine` flag from `path`, if present.
+///
+/// A browser-downloaded Calimero Desktop.app carries the quarantine xattr, and
+/// `std::fs::copy` propagates it to the extracted loose shell — so Gatekeeper
+/// prompts "…is an app downloaded from the Internet. Are you sure…?" on every
+/// launch of the shared shell. The parent .app is notarized (Gatekeeper already
+/// cleared it on first open); the loose child inherits the flag without that
+/// clearance, so we drop it explicitly. No-op / ignored if absent.
+pub fn dequarantine(path: &Path) {
+    let _ = std::process::Command::new("xattr")
+        .arg("-d")
+        .arg("com.apple.quarantine")
+        .arg(path)
+        .output();
 }
 
 fn xml_escape(s: &str) -> String {
@@ -150,10 +169,20 @@ fn write_info_plist(
 
 fn write_trampoline(macos: &Path, shell_path: &Path) -> Result<PathBuf, LauncherError> {
     // $0 is this script inside <bundle>/Contents/MacOS; resolve its sibling Resources/app.json.
+    //
+    // Run the shell under the Mac's NATIVE architecture. This launcher's bundle
+    // executable is this shell SCRIPT (there's no Mach-O in Contents/MacOS), so
+    // LaunchServices can't read a build-version to tell the app supports arm64 —
+    // it defaults the whole process to x86_64/Rosetta on Apple Silicon. The loose
+    // hardened-runtime shell then fails code-signing under translation and is
+    // SIGKILLed ("Taskgated Invalid Signature" / Rosetta AOT supplement failure).
+    // `arch -<native>` forces arm64 on Apple Silicon (no Rosetta) and x86_64 on
+    // Intel — both slices exist in the universal shell.
     let script = format!(
         "#!/bin/bash\n\
 DIR=\"$(cd \"$(dirname \"$0\")/../Resources\" && pwd)\"\n\
-exec \"{shell}\" --app-config \"$DIR/app.json\"\n",
+ARCH=\"$(/usr/bin/uname -m)\"\n\
+exec /usr/bin/arch -\"$ARCH\" \"{shell}\" --app-config \"$DIR/app.json\"\n",
         shell = shell_path.display(),
     );
     let path = macos.join("launch");
@@ -357,6 +386,13 @@ mod tests {
         assert!(launch.is_file());
         let s = std::fs::read_to_string(&launch).unwrap();
         assert!(s.contains("shell/CalimeroShell") && s.contains("--app-config"));
+        // Must run the shell under the Mac's NATIVE arch, or a script-executable
+        // launcher defaults to x86_64/Rosetta and the loose hardened-runtime
+        // shell is SIGKILLed for an invalid signature under translation.
+        assert!(
+            s.contains("arch -") && s.contains("uname -m"),
+            "trampoline must exec the shell under the native arch: {s}"
+        );
         assert!(app.join("Contents/Resources/app.json").is_file());
         assert!(app.join("Contents/Info.plist").is_file());
 

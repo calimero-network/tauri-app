@@ -47,8 +47,17 @@ pub fn shell_install_path() -> PathBuf {
     dir.join("CalimeroShell")
 }
 
-/// Copy the shared shell binary to a loose `dest` and ad-hoc-sign it there.
-/// arm64 requires at least an ad-hoc signature to execute a loose binary.
+/// Copy the shared shell binary to a loose `dest`, PRESERVING its signature.
+///
+/// The bundled shell is universal (arm64+x86_64) and Developer-ID signed, and a
+/// plain file copy keeps that embedded Mach-O signature intact. We must NOT
+/// re-sign it ad-hoc: an ad-hoc-signed x86_64 binary makes Rosetta fail to
+/// attach the AOT code-signature supplement on macOS 26 ("Attachment of code
+/// signature supplement failed"), which SIGABRTs the *second* per-app launcher
+/// (the first wins the AOT, the second can't attach). Keeping the Developer-ID
+/// signature also lets the binary run arm64-native on Apple Silicon — no Rosetta
+/// at all. We only fall back to an ad-hoc signature when the copy arrives
+/// unsigned, since arm64 refuses to execute a loose *unsigned* binary.
 /// Idempotent (overwrites).
 pub fn extract_shell(src: &Path, dest: &Path) -> Result<(), LauncherError> {
     if let Some(parent) = dest.parent() {
@@ -59,6 +68,21 @@ pub fn extract_shell(src: &Path, dest: &Path) -> Result<(), LauncherError> {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(dest, std::fs::Permissions::from_mode(0o755))?;
     }
+
+    // Keep the existing (Developer-ID) signature if the copy is validly signed.
+    let already_signed = std::process::Command::new("codesign")
+        .arg("--verify")
+        .arg("--strict")
+        .arg(dest)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if already_signed {
+        return Ok(());
+    }
+
+    // Fallback: a loose unsigned binary needs at least an ad-hoc signature to
+    // execute on arm64.
     let out = std::process::Command::new("codesign")
         .arg("--force")
         .arg("-s")
@@ -211,13 +235,38 @@ mod tests {
         d
     }
 
+    /// The signing identity's CDHash, or None if unsigned / codesign missing.
+    fn cdhash(path: &Path) -> Option<String> {
+        let out = std::process::Command::new("codesign")
+            .arg("-dvv")
+            .arg(path)
+            .output()
+            .ok()?;
+        // codesign prints signing info to stderr.
+        String::from_utf8_lossy(&out.stderr)
+            .lines()
+            .find_map(|l| l.strip_prefix("CDHash=").map(str::to_owned))
+    }
+
+    fn verifies_strict(path: &Path) -> bool {
+        std::process::Command::new("codesign")
+            .arg("--verify")
+            .arg("--strict")
+            .arg(path)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+
     #[test]
-    fn extract_shell_produces_valid_adhoc_signature() {
-        let src = std::env::current_exe().unwrap(); // a real Mach-O
+    fn extract_shell_preserves_a_valid_signature() {
+        let src = std::env::current_exe().unwrap(); // a real, signed Mach-O
         let dir = scratch("extract");
         let dest = dir.join("shell/CalimeroShell");
         extract_shell(&src, &dest).unwrap();
         assert!(dest.is_file());
+
+        // The extracted shell must always end up validly signed…
         let out = std::process::Command::new("codesign")
             .arg("--verify")
             .arg("--verbose=2")
@@ -229,6 +278,18 @@ mod tests {
             "extracted shell must pass codesign --verify: {}",
             String::from_utf8_lossy(&out.stderr)
         );
+
+        // …and when the source was already strictly valid (as the bundled
+        // Developer-ID shell is), its signature must be PRESERVED, not replaced
+        // with an ad-hoc one — an ad-hoc x86_64 shell SIGABRTs the second
+        // per-app launcher under Rosetta on macOS 26.
+        if verifies_strict(&src) {
+            assert_eq!(
+                cdhash(&dest),
+                cdhash(&src),
+                "extract_shell must keep the source signature, not re-sign ad-hoc"
+            );
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 

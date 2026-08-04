@@ -42,20 +42,19 @@
         }
     }
 
-    // Is this the app's `POST /auth/refresh` call?
-    //
-    // Refresh tokens are single-use (calimero-network/core#3083): whoever calls
-    // /auth/refresh consumes the token and gets a new one, and re-presenting a
-    // consumed token revokes the entire family. App windows therefore never hold
-    // the real refresh token — the desktop does, and it is the only rotator. We
-    // intercept this request and let the desktop answer it.
-    //
-    // Matched on the node URL rather than on localhost specifically, so a
-    // remote-node setup is brokered too (and never leaks the sentinel to it).
-    function isAuthRefresh(urlStr, method) {
+    // Only windows the desktop handed the sentinel are brokered. A window with a
+    // real refresh token is the sole holder in its own isolated store and rotates
+    // directly, which is what an app does in an ordinary browser.
+    function isAuthRefresh(urlStr, method, body) {
         if ((method || 'GET').toUpperCase() !== 'POST') return false;
         try {
-            return new URL(urlStr).pathname.replace(/\/+$/, '').endsWith('/auth/refresh');
+            if (!new URL(urlStr).pathname.replace(/\/+$/, '').endsWith('/auth/refresh')) return false;
+        } catch (e) {
+            return false;
+        }
+        if (typeof body !== 'string') return false;
+        try {
+            return JSON.parse(body).refresh_token === BROKERED_REFRESH_TOKEN;
         } catch (e) {
             return false;
         }
@@ -316,7 +315,7 @@
         // /auth/refresh is answered by the desktop, never forwarded to the node.
         // Both the fetch and XHR interceptors funnel through here, so this single
         // check covers both.
-        if (isAuthRefresh(url, method)) {
+        if (isAuthRefresh(url, method, body)) {
             return brokerTokenRefresh();
         }
 
@@ -369,7 +368,7 @@
         // the network.
         const shouldProxy =
             (pageNeedsProxy() && isHttpLocalhost(urlStr)) ||
-            isAuthRefresh(urlStr, effectiveMethod);
+            isAuthRefresh(urlStr, effectiveMethod, init && init.body);
         console.log('[Tauri Proxy] Should proxy?', shouldProxy, 'for URL:', urlStr);
 
         if (shouldProxy) {
@@ -492,7 +491,7 @@
         xhr.send = function(body) {
             const shouldProxy =
                 (pageNeedsProxy() && isHttpLocalhost(xhrUrl)) ||
-                isAuthRefresh(xhrUrl, xhrMethod);
+                isAuthRefresh(xhrUrl, xhrMethod, body);
 
             if (shouldProxy) {
                 console.log('[Tauri Proxy] XHR intercepted:', xhrMethod, xhrUrl);

@@ -18,7 +18,7 @@ import { truncateText } from "../utils/string";
 import { checkForUpdates, installUpdate, getCurrentVersion } from "../utils/updater";
 import { useTheme } from "../contexts/ThemeContext";
 import { useToast } from "../contexts/ToastContext";
-import { ArrowLeft, RotateCcw, Trash2, Cloud, Bot, Copy, Check, RefreshCw } from "lucide-react";
+import { ArrowLeft, RotateCcw, Trash2, Cloud, Bot, Copy, Check, RefreshCw, Download } from "lucide-react";
 import "./Settings.css";
 
 interface SettingsProps {
@@ -364,26 +364,27 @@ export default function Settings({ onBack }: SettingsProps) {
                 </div>
 
                 <div className="update-actions">
+                  {updateState === 'available' && (
+                    <button
+                      type="button"
+                      className="button button-primary"
+                      onClick={handleInstallUpdate}
+                      disabled={installing}
+                    >
+                      <Download size={14} />
+                      {installing ? (installStatus || "Installing…") : `Update to v${availableVersion}`}
+                    </button>
+                  )}
+
                   <button
                     type="button"
-                    className="button"
+                    className={updateState === 'available' ? "button button-secondary" : "button"}
                     onClick={handleCheckForUpdates}
                     disabled={updateState === 'checking' || installing}
                   >
                     <RefreshCw size={14} />
                     {updateState === 'checking' ? "Checking…" : "Check for Updates"}
                   </button>
-
-                  {updateState === 'available' && (
-                    <button
-                      type="button"
-                      className="button"
-                      onClick={handleInstallUpdate}
-                      disabled={installing}
-                    >
-                      {installing ? (installStatus || "Installing…") : `Update to v${availableVersion}`}
-                    </button>
-                  )}
                 </div>
 
                 {updateState === 'current' && (

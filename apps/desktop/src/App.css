@@ -502,6 +502,40 @@
   transform: translateY(0) scale(0.98);
 }
 
+/* ── Primary modifier — solid fill so the main action outranks a neighbouring .button ── */
+.button.button-primary {
+  background: var(--accent-primary);
+  color: #09090b;
+  border-color: var(--accent-primary);
+}
+
+.button.button-primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+  color: #09090b;
+}
+
+/* ── Secondary modifier — recedes next to a primary action ── */
+.button.button-secondary {
+  background: transparent;
+  color: var(--text-secondary);
+  border-color: var(--border-color);
+}
+
+.button.button-secondary:hover:not(:disabled) {
+  background: var(--surface-glass-soft);
+  color: var(--text-primary);
+  border-color: var(--border-hover);
+}
+
+.button.button-primary:disabled,
+.button.button-secondary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
 /* ── Danger modifier — overrides green defaults from .button ── */
 .button.button-danger {
   background: var(--error);

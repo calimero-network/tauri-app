@@ -3,3 +3,9 @@ packages:
 
 overrides:
   postcss: '>=8.5.18'
+
+# pnpm 10 stopped running dependency build scripts by default. Both of these
+# ship native binaries and were already being built under pnpm 9.
+allowBuilds:
+  esbuild: true
+  sharp: true

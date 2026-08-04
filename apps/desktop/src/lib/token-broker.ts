@@ -59,10 +59,11 @@ import {
  * simply hard-fail on the first 401. The sentinel keeps the app on its normal
  * refresh code path, which the proxy script then brokers.
  *
- * It is not a credential: the proxy script always intercepts `/auth/refresh`
- * before it reaches the network, so this value is never sent to the node. Even
- * if it leaked it is not a valid token — and, not being a real `jti`, it cannot
- * trip reuse detection or revoke anyone's token family.
+ * It is not a credential: the proxy script recognizes this exact value in a
+ * `/auth/refresh` body and brokers that call instead of forwarding it, so it is
+ * never sent to the node. Even if it leaked it is not a valid token - and, not
+ * being a real `jti`, it cannot trip reuse detection or revoke anyone's token
+ * family.
  *
  * MUST be kept in sync with BROKERED_REFRESH_TOKEN in proxy_script.js.
  */

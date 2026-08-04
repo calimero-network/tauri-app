@@ -13,17 +13,13 @@ Monorepo for Calimero desktop applications built with Tauri.
 ├── apps/
 │   ├── desktop/          # Tauri desktop application
 │   └── download-site/    # Download landing page
-├── packages/
-│   └── mero-react/       # React bindings and components
 └── pnpm-workspace.yaml   # Workspace configuration
 ```
 
-**Note:** `mero-js` SDK package has been moved to the repository root as an independent package.
-
 ## Prerequisites
 
-- Node.js >= 18.0.0
-- pnpm >= 8.0.0
+- Node.js >= 22.13
+- pnpm >= 11 (pinned via `packageManager`; corepack installs it for you)
 - Rust (for Tauri)
 
 ## Development

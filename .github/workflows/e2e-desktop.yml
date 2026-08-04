@@ -36,9 +36,6 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build mero-react
-        run: pnpm build:mero-react
-
       - name: Install Playwright Chromium
         working-directory: apps/desktop
         run: pnpm exec playwright install chromium --with-deps

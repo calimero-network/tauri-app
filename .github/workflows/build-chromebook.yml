@@ -126,10 +126,6 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build workspace packages
-        run: |
-          pnpm build:mero-react
-
       - name: Generate icons
         working-directory: apps/desktop
         run: pnpm tauri icon src-tauri/icons/icon.png

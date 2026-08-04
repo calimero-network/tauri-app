@@ -129,7 +129,7 @@ const VERSION_RE = /^[\w.+-]+$/;
  * plus pre-release identifiers (1.0.0-alpha sorts below 1.0.0). Build metadata
  * (after '+') is ignored, per the semver spec.
  */
-function compareSemverDesc(a: string, b: string): number {
+export function compareSemverDesc(a: string, b: string): number {
   const parse = (v: string) => {
     const withoutBuild = v.replace(/^v/, '').split('+')[0];
     const dash = withoutBuild.indexOf('-');

@@ -2,6 +2,7 @@
   "name": "calimero-desktop-platforms",
   "version": "0.1.0",
   "description": "Monorepo for Calimero desktop applications",
+  "minimumAppVersion": "0.0.82",
   "private": true,
   "type": "module",
   "scripts": {

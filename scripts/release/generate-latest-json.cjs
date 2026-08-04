@@ -66,6 +66,23 @@ function loadPlatformManifests(assetsDir) {
   return manifests;
 }
 
+/**
+ * Read the hard-block floor from the repo root package.json. Absent or "0.0.0"
+ * means no install is blocked, so the field is omitted from the manifest.
+ */
+function loadMinimumVersion() {
+  const rootPkg = path.join(__dirname, "..", "..", "package.json");
+  const { minimumAppVersion } = JSON.parse(fs.readFileSync(rootPkg, "utf8"));
+  if (!minimumAppVersion || minimumAppVersion === "0.0.0") {
+    return null;
+  }
+  if (!/^\d+\.\d+\.\d+(-[\w.]+)?$/.test(minimumAppVersion)) {
+    console.error(`Error: minimumAppVersion '${minimumAppVersion}' is not a semver`);
+    process.exit(1);
+  }
+  return minimumAppVersion;
+}
+
 function findSignature(assetsDir, assetName) {
   const sigPath = path.join(assetsDir, `${assetName}.sig`);
   if (fs.existsSync(sigPath)) {
@@ -121,16 +138,21 @@ function main() {
     process.exit(1);
   }
 
+  const minimumVersion = loadMinimumVersion();
+
   const latestJson = {
     version: `v${args.version}`,
     notes: `Release v${args.version}`,
     pub_date: new Date().toISOString(),
+    // Read by the app via Update.rawJson; ignored by the Tauri updater itself.
+    ...(minimumVersion ? { minimumVersion } : {}),
     platforms,
   };
 
   fs.writeFileSync(args.output, JSON.stringify(latestJson, null, 2));
   console.log(`\nGenerated: ${args.output}`);
   console.log(`Platforms: ${Object.keys(platforms).join(", ")}`);
+  console.log(`Minimum version: ${minimumVersion ?? "none (no installs blocked)"}`);
 }
 
 main();

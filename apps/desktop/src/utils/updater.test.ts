@@ -164,10 +164,13 @@ describe('installUpdate', () => {
 });
 
 describe('checkForUpdates', () => {
-  it('returns available=false when check() resolves to null', async () => {
+  // A platform with no entry in latest.json gets null from check(). Such a user
+  // must never be blocked: there would be no update available to escape with.
+  it('never reports mandatory when no update is available', async () => {
     mockCheck.mockResolvedValue(null);
     const result = await checkForUpdates();
     expect(result.available).toBe(false);
+    expect(result.mandatory).toBeFalsy();
   });
 
   it('returns available=true with info when an update exists', async () => {

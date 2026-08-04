@@ -1386,6 +1386,7 @@ fn ensure_app_launcher(
     frontend_url: &str,
     app_id: &str,
     bundled_icon: Option<&str>,
+    node_url: &str,
     dest_dir: &std::path::Path,
 ) -> Result<std::path::PathBuf, TauriError> {
     launcher::validate_app_id(app_id)
@@ -1437,7 +1438,7 @@ fn ensure_app_launcher(
         id: app_id.to_string(),
         name: safe.to_string(),
         url: frontend_url.to_string(),
-        node_url: "http://localhost:2528".to_string(),
+        node_url: node_url.to_string(),
         cap: cap.clone(),
         icon,
     };
@@ -1450,7 +1451,7 @@ fn ensure_app_launcher(
             id: app_id.to_string(),
             name: safe.to_string(),
             url: frontend_url.to_string(),
-            node_url: "http://localhost:2528".to_string(),
+            node_url: node_url.to_string(),
             cap: cap.clone(),
             bundle_path: bundle.to_string_lossy().into_owned(),
             host_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -1477,6 +1478,7 @@ fn open_app_launcher(
     frontend_url: String,
     app_id: String,
     icon: Option<String>,
+    node_url: String,
 ) -> Result<String, TauriError> {
     #[cfg(target_os = "macos")]
     {
@@ -1499,6 +1501,7 @@ fn open_app_launcher(
             &frontend_url,
             &app_id,
             icon.as_deref(),
+            &node_url,
             &dest_dir,
         )?;
         std::process::Command::new("open")
@@ -1530,6 +1533,7 @@ fn create_desktop_shortcut(
     frontend_url: String,
     app_id: Option<String>,
     icon: Option<String>,
+    node_url: String,
 ) -> Result<String, TauriError> {
     let exe = std::env::current_exe().map_err(|e| {
         TauriError::with_details(
@@ -1622,6 +1626,7 @@ fn create_desktop_shortcut(
             &frontend_url,
             &app_id,
             icon.as_deref(),
+            &node_url,
             &dir,
         )?;
         return Ok(bundle.to_string_lossy().into_owned());

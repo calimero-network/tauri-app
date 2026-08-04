@@ -117,6 +117,8 @@ export async function openAppFrontend(
     // shell/launcher (own dock icon + Cmd-Tab + native summon; the shell injects
     // SSO itself). `open_app_launcher` errors on non-macOS (or if the launcher
     // can't be built), and we fall back to the in-process window below.
+    const settings = getSettings();
+
     if (context?.applicationId) {
       try {
         await invoke('open_app_launcher', {
@@ -124,6 +126,7 @@ export async function openAppFrontend(
           frontendUrl,
           appId: context.applicationId,
           icon: context.iconData ?? null,
+          nodeUrl: settings.nodeUrl,
         });
         return;
       } catch (e) {
@@ -131,7 +134,6 @@ export async function openAppFrontend(
       }
     }
 
-    const settings = getSettings();
     const nodeUrl = (settings.nodeUrl ?? '').replace(/\/$/, '');
 
     // Build URL hash with node_url and the access token so the app can skip the

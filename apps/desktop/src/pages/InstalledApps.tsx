@@ -5,6 +5,7 @@ import DataTable from "../components/DataTable";
 import ContextMenu from "../components/ContextMenu";
 import Skeleton from "../components/Skeleton";
 import { decodeMetadata, openAppFrontend, parseTauriError } from "../utils/appUtils";
+import { getSettings } from "../utils/settings";
 import { invoke } from "@tauri-apps/api/core";
 import { RefreshCw, MoreHorizontal, Trash2, Copy, Rocket } from "lucide-react";
 import "./InstalledApps.css";
@@ -145,7 +146,7 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
 
   const handleCreateLauncher = async (frontendUrl: string, appName: string, appId: string, iconData?: string) => {
     try {
-      await invoke<string>('create_desktop_shortcut', { appName, frontendUrl, appId, icon: iconData ?? null });
+      await invoke<string>('create_desktop_shortcut', { appName, frontendUrl, appId, icon: iconData ?? null, nodeUrl: getSettings().nodeUrl });
       toast.success(`Launcher for "${appName}" added to your Applications`);
     } catch (err) {
       toast.error(`Failed to create launcher: ${parseTauriError(err, "Unknown error")}`);

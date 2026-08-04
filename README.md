@@ -34,9 +34,6 @@ Monorepo for Calimero desktop applications built with Tauri.
 # Install dependencies
 pnpm install
 
-# Build workspace packages
-pnpm build:mero-react
-
 # Start development server
 pnpm dev:desktop
 
@@ -76,22 +73,15 @@ pnpm build
 
 ### SDK Packages
 
-```bash
-# Build mero-react package
-pnpm build:mero-react
-
-# Note: mero-js is installed from npm registry (@calimero-network/mero-js)
-# and does not need to be built locally
-```
+`@calimero-network/mero-js` and `@calimero-network/mero-react` are installed from the npm registry and do not need to be built locally.
 
 ## Workspace Scripts
 
-| Script                  | Description                                      |
-| ----------------------- | ------------------------------------------------ |
-| `pnpm dev`              | Build packages and start desktop app development |
-| `pnpm build`            | Build all packages and desktop app               |
-| `pnpm build:mero-react` | Build mero-react package                         |
-| `pnpm clean`            | Clean all build artifacts and node_modules       |
+| Script       | Description                          |
+| ------------ | ------------------------------------ |
+| `pnpm dev`   | Start desktop app development        |
+| `pnpm build` | Build the desktop app                |
+| `pnpm clean` | Clean all build artifacts and node_modules |
 
 ## Auto-Updates
 

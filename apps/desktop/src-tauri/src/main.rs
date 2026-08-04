@@ -12,6 +12,7 @@ use thiserror::Error;
 use base64::Engine as _;
 
 mod log_rotation;
+mod merod_versions;
 
 // Per-app launcher foundation (macOS only): pure, zero-Tauri-API modules shared
 // with the `calimero-shell` binary via the crate's lib target.

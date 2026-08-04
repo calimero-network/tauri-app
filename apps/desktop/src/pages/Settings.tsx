@@ -15,9 +15,10 @@ import {
   MCP_CLIENT_LOCATIONS,
 } from "../lib/agent-connect";
 import { truncateText } from "../utils/string";
+import { checkForUpdates, installUpdate, getCurrentVersion } from "../utils/updater";
 import { useTheme } from "../contexts/ThemeContext";
 import { useToast } from "../contexts/ToastContext";
-import { ArrowLeft, RotateCcw, Trash2, Cloud, Bot, Copy, Check } from "lucide-react";
+import { ArrowLeft, RotateCcw, Trash2, Cloud, Bot, Copy, Check, RefreshCw } from "lucide-react";
 import "./Settings.css";
 
 interface SettingsProps {
@@ -61,12 +62,50 @@ export default function Settings({ onBack }: SettingsProps) {
   const [agentRevokeWarning, setAgentRevokeWarning] = useState(false);
   const [copiedBlock, setCopiedBlock] = useState<'prompt' | 'mcp' | null>(null);
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [appVersion, setAppVersion] = useState("");
+  const [updateState, setUpdateState] = useState<'idle' | 'checking' | 'current' | 'available'>('idle');
+  const [availableVersion, setAvailableVersion] = useState("");
+  const [updateError, setUpdateError] = useState("");
+  const [installing, setInstalling] = useState(false);
+  const [installStatus, setInstallStatus] = useState("");
 
   useEffect(() => {
     return () => {
       if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
     };
   }, []);
+
+  useEffect(() => {
+    getCurrentVersion().then(setAppVersion);
+  }, []);
+
+  const handleCheckForUpdates = async () => {
+    setUpdateState('checking');
+    setUpdateError("");
+    const status = await checkForUpdates();
+    if (status.error) {
+      setUpdateState('idle');
+      setUpdateError(status.error);
+    } else if (status.available && status.info) {
+      setAvailableVersion(status.info.version);
+      setUpdateState('available');
+    } else {
+      setUpdateState('current');
+    }
+  };
+
+  const handleInstallUpdate = async () => {
+    setInstalling(true);
+    setUpdateError("");
+    try {
+      await installUpdate(setInstallStatus);
+      // relaunch() fires inside installUpdate — the app closes here
+    } catch (err) {
+      setUpdateError(parseTauriError(err, "Failed to install update"));
+      setInstalling(false);
+      setInstallStatus("");
+    }
+  };
 
   useEffect(() => {
     const settings = getSettings();
@@ -315,6 +354,50 @@ export default function Settings({ onBack }: SettingsProps) {
                 <p className="field-hint">Choose between light and dark theme</p>
               </div>
           </div>
+
+            <div className="settings-card">
+              <h2>Updates</h2>
+              <div className="settings-field">
+                <div className="settings-version-row">
+                  <span className="settings-field-label">Current version</span>
+                  <span className="settings-version">{appVersion ? `v${appVersion}` : "…"}</span>
+                </div>
+
+                <div className="update-actions">
+                  <button
+                    type="button"
+                    className="button"
+                    onClick={handleCheckForUpdates}
+                    disabled={updateState === 'checking' || installing}
+                  >
+                    <RefreshCw size={14} />
+                    {updateState === 'checking' ? "Checking…" : "Check for Updates"}
+                  </button>
+
+                  {updateState === 'available' && (
+                    <button
+                      type="button"
+                      className="button"
+                      onClick={handleInstallUpdate}
+                      disabled={installing}
+                    >
+                      {installing ? (installStatus || "Installing…") : `Update to v${availableVersion}`}
+                    </button>
+                  )}
+                </div>
+
+                {updateState === 'current' && (
+                  <p className="field-hint">You're up to date.</p>
+                )}
+                {updateState === 'available' && !installing && (
+                  <p className="field-hint">Version {availableVersion} is available.</p>
+                )}
+                {updateError && <p className="field-error">{updateError}</p>}
+                {!updateError && (updateState === 'idle' || updateState === 'checking') && (
+                  <p className="field-hint">Calimero checks for updates automatically. Check here to update right away.</p>
+                )}
+              </div>
+            </div>
 
             <div className="settings-card">
               <h2>Advanced</h2>

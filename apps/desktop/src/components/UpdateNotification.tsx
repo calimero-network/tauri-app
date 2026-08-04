@@ -5,6 +5,7 @@ import {
   getCurrentVersion,
   type UpdateInfo,
 } from "../utils/updater";
+import { parseTauriError } from "../utils/appUtils";
 import "./UpdateNotification.css";
 
 interface UpdateNotificationProps {
@@ -67,8 +68,7 @@ export default function UpdateNotification({
       await installUpdate((status) => setInstallStatus(status));
       // relaunch() is called inside installUpdate — app closes here
     } catch (err) {
-      const msg = err instanceof Error ? err.message : (err && typeof err === 'object' && typeof (err as any).message === 'string' ? (err as any).message : "Failed to install update");
-      setError(msg);
+      setError(parseTauriError(err, "Failed to install update"));
       setInstalling(false);
       setInstallStatus("");
     }

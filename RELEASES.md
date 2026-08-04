@@ -233,6 +233,26 @@ Checks:
 4. App downloads updater bundle, verifies signature, installs
 5. App relaunches to apply the update
 
+The updater endpoint is `releases/latest/download/latest.json`, which GitHub always resolves to the release marked **Latest**.
+Every install therefore jumps straight to the newest version in one download, regardless of how many releases it skipped.
+
+"Later" is remembered per version in `localStorage`, so deferring one release does not suppress the next.
+
+### Forcing an update
+
+Set `minimumAppVersion` in the root `package.json` to hard-block installs older than that version:
+
+```json
+"minimumAppVersion": "0.0.80"
+```
+
+The release job copies it into `latest.json` as `minimumVersion`.
+An app whose version is below it shows a full-screen blocking dialog with no "Later" option and stays unusable until the update completes.
+`0.0.0` (the default) blocks nobody.
+
+Raise it only for genuinely breaking changes, and only to a version that is already published.
+The floor takes effect on the next release, so an install can only unblock itself by updating to something at or above it.
+
 ## Download Page
 
 The download page at `apps/download-site/`:

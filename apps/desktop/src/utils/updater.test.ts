@@ -30,8 +30,10 @@ const {
 // so tests can assert on / reorder it.
 const makeUpdate = (over: Record<string, unknown> = {}) => ({
   version: '0.0.40',
+  currentVersion: '0.0.39',
   date: '2026-05-22',
   body: 'bug fixes',
+  rawJson: {},
   downloadAndInstall: mockDownloadAndInstall,
   ...over,
 });
@@ -173,6 +175,47 @@ describe('checkForUpdates', () => {
     const result = await checkForUpdates();
     expect(result.available).toBe(true);
     expect(result.info?.version).toBe('0.0.40');
+  });
+});
+
+describe('checkForUpdates mandatory flag', () => {
+  const withMinimum = (currentVersion: string, minimumVersion: unknown) =>
+    makeUpdate({ currentVersion, rawJson: { minimumVersion } });
+
+  it('is false when the manifest declares no minimumVersion', async () => {
+    mockCheck.mockResolvedValue(makeUpdate({ rawJson: {} }));
+    expect((await checkForUpdates()).mandatory).toBe(false);
+  });
+
+  it('is true when the installed version is below the minimum', async () => {
+    mockCheck.mockResolvedValue(withMinimum('0.0.39', '0.0.40'));
+    expect((await checkForUpdates()).mandatory).toBe(true);
+  });
+
+  it('is false when the installed version equals the minimum', async () => {
+    mockCheck.mockResolvedValue(withMinimum('0.0.40', '0.0.40'));
+    expect((await checkForUpdates()).mandatory).toBe(false);
+  });
+
+  it('is false when the installed version is above the minimum', async () => {
+    mockCheck.mockResolvedValue(withMinimum('0.0.41', '0.0.40'));
+    expect((await checkForUpdates()).mandatory).toBe(false);
+  });
+
+  it('treats a pre-release as below the matching stable minimum', async () => {
+    mockCheck.mockResolvedValue(withMinimum('0.0.40-rc.1', '0.0.40'));
+    expect((await checkForUpdates()).mandatory).toBe(true);
+  });
+
+  it('compares across minor and major boundaries, not lexically', async () => {
+    mockCheck.mockResolvedValue(withMinimum('0.0.9', '0.0.10'));
+    expect((await checkForUpdates()).mandatory).toBe(true);
+  });
+
+  // A malformed manifest must never lock a user out of the app.
+  it.each([undefined, '', 42, null, {}])('is false for a non-semver minimumVersion: %s', async (minimum) => {
+    mockCheck.mockResolvedValue(withMinimum('0.0.39', minimum));
+    expect((await checkForUpdates()).mandatory).toBe(false);
   });
 });
 

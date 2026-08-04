@@ -12,6 +12,10 @@ interface UpdateNotificationProps {
   checkInterval?: number; // in milliseconds, 0 to disable
 }
 
+// Stores the version the user last deferred, not a boolean — otherwise "Later"
+// either resets on every relaunch or silently swallows every future release.
+const DISMISSED_KEY = "calimero-update-dismissed-version";
+
 export default function UpdateNotification({
   checkOnMount = true,
   checkInterval = 3600000, // 1 hour default
@@ -23,6 +27,7 @@ export default function UpdateNotification({
   const [installStatus, setInstallStatus] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
   const [dismissed, setDismissed] = useState(false);
+  const [mandatory, setMandatory] = useState(false);
 
   useEffect(() => {
     // Get current version
@@ -45,7 +50,11 @@ export default function UpdateNotification({
     if (status.available && status.info) {
       setUpdateAvailable(true);
       setUpdateInfo(status.info);
-      setDismissed(false);
+      setMandatory(!!status.mandatory);
+      setDismissed(
+        !status.mandatory &&
+          localStorage.getItem(DISMISSED_KEY) === status.info.version,
+      );
     } else if (status.error) {
       console.warn("Update check failed:", status.error);
     }
@@ -66,6 +75,9 @@ export default function UpdateNotification({
   };
 
   const handleDismiss = () => {
+    if (updateInfo) {
+      localStorage.setItem(DISMISSED_KEY, updateInfo.version);
+    }
     setDismissed(true);
   };
 
@@ -75,7 +87,16 @@ export default function UpdateNotification({
   }
 
   return (
-    <div className="update-notification">
+    <div
+      className={
+        mandatory
+          ? "update-notification update-notification-blocking"
+          : "update-notification"
+      }
+      role={mandatory ? "alertdialog" : undefined}
+      aria-modal={mandatory ? true : undefined}
+      aria-label={mandatory ? "Required update" : undefined}
+    >
       <div className="update-notification-content">
         <div className="update-notification-icon">
           <svg
@@ -92,9 +113,11 @@ export default function UpdateNotification({
         </div>
 
         <div className="update-notification-text">
-          <h4>Update Available</h4>
+          <h4>{mandatory ? "Update Required" : "Update Available"}</h4>
           <p>
-            Version {updateInfo.version} is available.
+            {mandatory
+              ? `This version is no longer supported. Update to ${updateInfo.version} to keep using Calimero Desktop.`
+              : `Version ${updateInfo.version} is available.`}
             {currentVersion && ` You have ${currentVersion}.`}
           </p>
         </div>
@@ -102,13 +125,15 @@ export default function UpdateNotification({
         <div className="update-notification-actions">
           {error && <span className="update-error">{error}</span>}
 
-          <button
-            className="update-button update-button-secondary"
-            onClick={handleDismiss}
-            disabled={installing}
-          >
-            Later
-          </button>
+          {!mandatory && (
+            <button
+              className="update-button update-button-secondary"
+              onClick={handleDismiss}
+              disabled={installing}
+            >
+              Later
+            </button>
+          )}
 
           <button
             className="update-button update-button-primary"

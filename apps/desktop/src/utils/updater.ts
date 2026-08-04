@@ -5,6 +5,7 @@
 
 import type { Update } from '@tauri-apps/plugin-updater';
 import { stopMerod, killAllMerodProcesses, downloadAndReplaceMerod } from './merod';
+import { compareSemverDesc } from './registry';
 
 // The Update handle from the most recent checkForUpdates(). installUpdate()
 // reuses it instead of calling check() a second time — avoiding an extra network
@@ -27,7 +28,22 @@ export interface UpdateInfo {
 export interface UpdateStatus {
   available: boolean;
   info?: UpdateInfo;
+  /** The installed version is below the manifest's minimumVersion — the update cannot be deferred. */
+  mandatory?: boolean;
   error?: string;
+}
+
+/**
+ * True when the running version is below the `minimumVersion` declared in latest.json.
+ * The plugin hands us the whole manifest as `rawJson`, so reading our own custom
+ * field costs no extra request. A missing or malformed field never blocks anyone.
+ */
+function isBelowMinimum(update: Update): boolean {
+  const minimum = update.rawJson?.minimumVersion;
+  if (typeof minimum !== 'string' || minimum === '') {
+    return false;
+  }
+  return compareSemverDesc(update.currentVersion, minimum) > 0;
 }
 
 export async function checkForUpdates(): Promise<UpdateStatus> {
@@ -41,6 +57,7 @@ export async function checkForUpdates(): Promise<UpdateStatus> {
     if (update) {
       return {
         available: true,
+        mandatory: isBelowMinimum(update),
         info: {
           version: update.version,
           date: update.date || new Date().toISOString(),

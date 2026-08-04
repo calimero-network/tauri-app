@@ -3244,8 +3244,8 @@ pub(crate) fn merod_target_triple() -> &'static str {
 /// Lower score = better match. Returns `None` if the asset is not for this platform.
 pub(crate) fn score_merod_asset(name: &str, target_triple: &str) -> Option<u32> {
     let lower = name.to_lowercase();
-    // Releases have used both "merod-<triple>" and "merod_<triple>"; requiring a
-    // separator keeps siblings like meroctl and mero-auth out.
+    // Releases use "merod-<triple>" or "merod_<triple>"; require a separator so
+    // a name that merely starts with "merod" with no delimiter after it is rejected.
     let after_prefix = lower.strip_prefix("merod")?;
     if !after_prefix.starts_with('-') && !after_prefix.starts_with('_') {
         return None;
@@ -5248,6 +5248,15 @@ mod tests {
         assert!(score_merod_asset("meroctl_aarch64-apple-darwin.tar.gz", "aarch64-apple-darwin").is_none());
         assert!(score_merod_asset("mero-auth_aarch64-apple-darwin.tar.gz", "aarch64-apple-darwin").is_none());
         assert!(score_merod_asset("something-else.tar.gz", "x86_64-apple-darwin").is_none());
+    }
+
+    #[test]
+    fn test_score_merod_asset_requires_separator_after_prefix() {
+        // Starts with the literal "merod" but has no "-" or "_" after it.
+        assert!(
+            score_merod_asset("merodhost_aarch64-apple-darwin.tar.gz", "aarch64-apple-darwin")
+                .is_none()
+        );
     }
 
     #[test]

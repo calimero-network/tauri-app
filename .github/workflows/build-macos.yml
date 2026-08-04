@@ -169,6 +169,19 @@ jobs:
             fs.writeFileSync('tauri.conf.json', JSON.stringify(config, null, 2));
           "
 
+      - name: Skip updater artifacts for PR validation
+        # Dependabot and fork PRs receive no secrets, so the signing key arrives as an
+        # empty string, which Tauri treats as present and fails to decode.
+        if: steps.build-mode.outputs.mode == 'validation'
+        run: |
+          cd apps/desktop/src-tauri
+          node -e "
+            const fs = require('fs');
+            const config = JSON.parse(fs.readFileSync('tauri.conf.json', 'utf8'));
+            config.bundle.createUpdaterArtifacts = false;
+            fs.writeFileSync('tauri.conf.json', JSON.stringify(config, null, 2));
+          "
+
       - name: Inject updater pubkey from secret
         if: steps.build-mode.outputs.mode == 'release'
         env:
@@ -341,8 +354,6 @@ jobs:
           MEROD_SKIP_IF_EXISTS: "1"
           SHELL_SKIP_IF_EXISTS: "1"
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
         run: |
           echo "is_signed=false" >> $GITHUB_OUTPUT
           pnpm tauri build --target universal-apple-darwin
@@ -384,20 +395,15 @@ jobs:
         run: |
           echo "Checking for expected build outputs..."
 
+          # No .app.tar.gz here: that is the signed updater bundle, which this mode
+          # skips. The DMG is what validation exists to prove.
           DMG_FILE=$(find apps/desktop/src-tauri/target -name "*.dmg" 2>/dev/null | head -1)
-          TAR_FILE=$(find apps/desktop/src-tauri/target -name "*.app.tar.gz" 2>/dev/null | head -1)
 
           if [ -z "$DMG_FILE" ]; then
             echo "Error: DMG file not found"
             exit 1
           fi
           echo "DMG: $DMG_FILE"
-
-          if [ -z "$TAR_FILE" ]; then
-            echo "Error: .app.tar.gz not found"
-            exit 1
-          fi
-          echo "TAR: $TAR_FILE"
 
           echo "Build validation passed"
 

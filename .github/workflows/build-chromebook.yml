@@ -160,6 +160,19 @@ jobs:
             fs.writeFileSync('tauri.conf.json', JSON.stringify(config, null, 2));
           "
 
+      - name: Skip updater artifacts for PR validation
+        # Dependabot and fork PRs receive no secrets, so the signing key arrives as an
+        # empty string, which Tauri treats as present and fails to decode.
+        if: steps.build-mode.outputs.mode == 'validation'
+        run: |
+          cd apps/desktop/src-tauri
+          node -e "
+            const fs = require('fs');
+            const config = JSON.parse(fs.readFileSync('tauri.conf.json', 'utf8'));
+            config.bundle.createUpdaterArtifacts = false;
+            fs.writeFileSync('tauri.conf.json', JSON.stringify(config, null, 2));
+          "
+
       - name: Inject updater pubkey from secret
         if: steps.build-mode.outputs.mode == 'release'
         env:

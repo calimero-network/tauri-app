@@ -395,20 +395,15 @@ jobs:
         run: |
           echo "Checking for expected build outputs..."
 
+          # No .app.tar.gz here: that is the signed updater bundle, which this mode
+          # skips. The DMG is what validation exists to prove.
           DMG_FILE=$(find apps/desktop/src-tauri/target -name "*.dmg" 2>/dev/null | head -1)
-          TAR_FILE=$(find apps/desktop/src-tauri/target -name "*.app.tar.gz" 2>/dev/null | head -1)
 
           if [ -z "$DMG_FILE" ]; then
             echo "Error: DMG file not found"
             exit 1
           fi
           echo "DMG: $DMG_FILE"
-
-          if [ -z "$TAR_FILE" ]; then
-            echo "Error: .app.tar.gz not found"
-            exit 1
-          fi
-          echo "TAR: $TAR_FILE"
 
           echo "Build validation passed"
 

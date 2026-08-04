@@ -12,9 +12,8 @@
     "tauri:desktop": "pnpm --filter desktop tauri",
     "dev:download-site": "pnpm --filter download-site dev",
     "build:download-site": "pnpm --filter download-site build",
-    "build:mero-react": "pnpm --filter @calimero-network/mero-react build",
-    "dev": "pnpm build:mero-react && pnpm dev:desktop",
-    "build": "pnpm build:mero-react && pnpm build:desktop",
+    "dev": "pnpm dev:desktop",
+    "build": "pnpm build:desktop",
     "clean": "pnpm -r clean && rm -rf node_modules",
     "check-runners": "ps aux | grep merod",
     "test:e2e:desktop": "pnpm --filter desktop test:e2e"
@@ -22,13 +21,9 @@
   "devDependencies": {
     "typescript": "^5.8.3"
   },
-  "pnpm": {
-    "overrides": {
-      "postcss": ">=8.5.18"
-    }
-  },
+  "packageManager": "pnpm@11.20.0",
   "engines": {
-    "node": ">=18.0.0",
-    "pnpm": ">=8.0.0"
+    "node": ">=22.13",
+    "pnpm": ">=11"
   }
 }

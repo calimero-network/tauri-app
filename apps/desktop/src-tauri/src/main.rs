@@ -3244,7 +3244,10 @@ pub(crate) fn merod_target_triple() -> &'static str {
 /// Lower score = better match. Returns `None` if the asset is not for this platform.
 pub(crate) fn score_merod_asset(name: &str, target_triple: &str) -> Option<u32> {
     let lower = name.to_lowercase();
-    if !lower.starts_with("merod-") {
+    // Releases have used both "merod-<triple>" and "merod_<triple>"; requiring a
+    // separator keeps siblings like meroctl and mero-auth out.
+    let after_prefix = lower.strip_prefix("merod")?;
+    if !after_prefix.starts_with('-') && !after_prefix.starts_with('_') {
         return None;
     }
     if !lower.contains(&target_triple.to_lowercase()) {
@@ -3257,7 +3260,7 @@ pub(crate) fn score_merod_asset(name: &str, target_triple: &str) -> Option<u32> 
     } else if lower.ends_with(".exe") {
         Some(2)
     } else {
-        None // unknown extension — extract_merod_binary cannot handle it
+        None // unknown extension - extract_merod_binary cannot handle it
     }
 }
 
@@ -5201,37 +5204,49 @@ mod tests {
     // ── Merod binary update tests ─────────────────────────────────────────────
 
     #[test]
+    fn test_score_merod_asset_matches_published_underscore_names() {
+        // Real published asset names use an underscore, not a dash.
+        let triple = "aarch64-apple-darwin";
+        assert!(
+            score_merod_asset("merod_aarch64-apple-darwin.tar.gz", triple).is_some(),
+            "published underscore asset name must match"
+        );
+    }
+
+    #[test]
     fn test_score_merod_asset_prefers_tar_gz() {
         let triple = "aarch64-apple-darwin";
-        let tar = score_merod_asset("merod-aarch64-apple-darwin.tar.gz", triple);
-        let zip = score_merod_asset("merod-aarch64-apple-darwin.zip", triple);
+        let tar = score_merod_asset("merod_aarch64-apple-darwin.tar.gz", triple);
+        let zip = score_merod_asset("merod_aarch64-apple-darwin.zip", triple);
         assert!(tar.is_some(), "tar.gz should match");
         assert!(zip.is_some(), "zip should match");
-        assert!(
-            tar.unwrap() < zip.unwrap(),
-            "tar.gz should be preferred over zip"
-        );
+        assert!(tar.unwrap() < zip.unwrap(), "tar.gz should be preferred over zip");
+    }
+
+    #[test]
+    fn test_score_merod_asset_accepts_both_separators() {
+        let triple = "aarch64-apple-darwin";
+        assert!(score_merod_asset("merod-aarch64-apple-darwin.tar.gz", triple).is_some());
+        assert!(score_merod_asset("merod_aarch64-apple-darwin.tar.gz", triple).is_some());
     }
 
     #[test]
     fn test_score_merod_asset_rejects_wrong_platform() {
         assert!(
-            score_merod_asset("merod-x86_64-apple-darwin.tar.gz", "aarch64-apple-darwin").is_none()
+            score_merod_asset("merod_x86_64-apple-darwin.tar.gz", "aarch64-apple-darwin").is_none()
         );
         assert!(score_merod_asset(
-            "merod-x86_64-unknown-linux-gnu.tar.gz",
+            "merod_x86_64-unknown-linux-gnu.tar.gz",
             "aarch64-apple-darwin"
         )
         .is_none());
     }
 
     #[test]
-    fn test_score_merod_asset_rejects_non_merod() {
-        assert!(score_merod_asset(
-            "meroctl-aarch64-apple-darwin.tar.gz",
-            "aarch64-apple-darwin"
-        )
-        .is_none());
+    fn test_score_merod_asset_rejects_sibling_binaries() {
+        // meroctl / mero-auth share the prefix up to "mero" and must not match.
+        assert!(score_merod_asset("meroctl_aarch64-apple-darwin.tar.gz", "aarch64-apple-darwin").is_none());
+        assert!(score_merod_asset("mero-auth_aarch64-apple-darwin.tar.gz", "aarch64-apple-darwin").is_none());
         assert!(score_merod_asset("something-else.tar.gz", "x86_64-apple-darwin").is_none());
     }
 

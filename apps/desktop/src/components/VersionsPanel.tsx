@@ -80,8 +80,8 @@ export function VersionsPanel({ homeDir }: { homeDir: string }) {
                   <span className="versions-row-id">
                     {isLocal ? formatVersionLabel(v.id, "", v.measured_version) : v.id}
                   </span>
-                  <span className="versions-row-sub">
-                    {isLocal ? v.path : `${formatSize(v.size_bytes)} - ${v.path}`}
+                  <span className="versions-row-sub" title={v.path}>
+                    {isLocal ? v.path.split('/').slice(-3).join('/') : formatSize(v.size_bytes)}
                   </span>
                 </div>
                 <span className="versions-row-users">

@@ -513,3 +513,20 @@
   border-color: var(--warning);
   color: var(--warning);
 }
+
+/* Match the native select to the text inputs beside it. */
+.form-field select.version-select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 32px;
+  background-image: linear-gradient(45deg, transparent 50%, var(--text-tertiary) 50%),
+    linear-gradient(135deg, var(--text-tertiary) 50%, transparent 50%);
+  background-position: calc(100% - 18px) 50%, calc(100% - 13px) 50%;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+}
+
+.form-row + .field-hint {
+  margin-top: -16px;
+  margin-bottom: 24px;
+}

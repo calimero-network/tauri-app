@@ -465,11 +465,6 @@ export default function NodeManagement() {
           <h2 className="node-section-title">Local Nodes</h2>
           <p className="node-section-desc">
             Create and run merod nodes on this machine.
-            {merodBinaryVersion && (
-              <span style={{ marginLeft: '8px', opacity: 0.6, fontSize: '0.85em' }}>
-                Bundled binary: <code style={{ fontFamily: 'monospace' }}>{merodBinaryVersion}</code>
-              </span>
-            )}
           </p>
 
           <div className="node-management-card">
@@ -489,9 +484,9 @@ export default function NodeManagement() {
                 </button>
               </div>
             </div>
-            <div className="form-field">
-              <label htmlFor="new-node-name">Node Name</label>
-              <div className="input-group">
+            <div className="form-row">
+              <div className="form-field">
+                <label htmlFor="new-node-name">Node Name</label>
                 <input
                   id="new-node-name"
                   type="text"
@@ -502,9 +497,10 @@ export default function NodeManagement() {
               </div>
               {developerMode && (
                 <div className="form-field">
-                  <label htmlFor="merod-version">merod version</label>
+                  <label htmlFor="merod-version">merod Version</label>
                   <select
                     id="merod-version"
+                    className="version-select"
                     value={versionId}
                     onChange={async (e) => {
                       if (e.target.value !== "__local__") {
@@ -529,19 +525,25 @@ export default function NodeManagement() {
                     )}
                     <option value="__local__">Use a local build...</option>
                   </select>
-                  <p className="field-hint">
-                    {releasesError
-                      ? `Release list unavailable: ${releasesError}`
-                      : releases.length === 0
-                        ? "No merod releases are published for this platform. Use the bundled binary or a local build."
-                        : releasesStale
-                          ? "Showing the last list we fetched - GitHub was unreachable. Refresh in the Versions panel to retry."
-                          : "Fixed when the node is created. Create another node to try another version."}
-                  </p>
                 </div>
               )}
-              <label htmlFor="new-admin-user">Admin Username</label>
-              <div className="input-group">
+            </div>
+
+            {developerMode && (
+              <p className="field-hint">
+                {releasesError
+                  ? `Release list unavailable: ${releasesError}`
+                  : releases.length === 0
+                    ? "No merod releases are published for this platform. Use the bundled binary or a local build."
+                    : releasesStale
+                      ? "Showing the last list we fetched - GitHub was unreachable. Refresh below to retry."
+                      : "Fixed when the node is created. Create another node to try another version."}
+              </p>
+            )}
+
+            <div className="form-row">
+              <div className="form-field">
+                <label htmlFor="new-admin-user">Admin Username</label>
                 <input
                   id="new-admin-user"
                   type="text"
@@ -551,8 +553,8 @@ export default function NodeManagement() {
                   autoComplete="username"
                 />
               </div>
-              <label htmlFor="new-admin-password">Admin Password</label>
-              <div className="input-group">
+              <div className="form-field">
+                <label htmlFor="new-admin-password">Admin Password</label>
                 <input
                   id="new-admin-password"
                   type="password"
@@ -562,14 +564,17 @@ export default function NodeManagement() {
                   autoComplete="new-password"
                   onKeyPress={(e) => e.key === 'Enter' && handleCreateNode()}
                 />
-                <button
-                  onClick={handleCreateNode}
-                  className="button button-primary"
-                  disabled={!newNodeName.trim() || !newAdminUser.trim() || !newAdminPassword || loading}
-                >
-                  {loading ? 'Creating...' : 'Create'}
-                </button>
               </div>
+            </div>
+
+            <div className="node-actions">
+              <button
+                onClick={handleCreateNode}
+                className="button button-primary"
+                disabled={!newNodeName.trim() || !newAdminUser.trim() || !newAdminPassword || loading}
+              >
+                {loading ? 'Creating...' : 'Create Node'}
+              </button>
             </div>
           </div>
 
@@ -657,20 +662,7 @@ export default function NodeManagement() {
                   />
                 </div>
               </div>
-              {selectedNode && (() => {
-                const nodeInfo = getRunningNodeInfo(selectedNode);
-                return (
-                  <div className={`node-status-card ${nodeInfo.running ? 'running' : 'stopped'}`}>
-                    <div className="node-status-card-header">
-                      <span className="node-status-dot" />
-                      <span className="node-status-name">{selectedNode}</span>
-                      <span className="node-status-badge">
-                        {nodeInfo.running ? `Port ${nodeInfo.port}` : 'Stopped'}
-                      </span>
-                    </div>
-                  </div>
-                );
-              })()}
+
               <div className="node-actions">
                 <button
                   onClick={handleStartNode}

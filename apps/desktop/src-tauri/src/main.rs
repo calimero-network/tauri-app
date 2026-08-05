@@ -1533,9 +1533,12 @@ fn open_app_launcher(
             &node_url,
             &dest_dir,
         )?;
-        std::process::Command::new("open")
+        // Wait for `open` rather than spawning it: spawn only reports that the
+        // helper started, so a LaunchServices failure left the caller with no
+        // window and no error instead of falling back to an in-process one.
+        let out = std::process::Command::new("open")
             .arg(&bundle)
-            .spawn()
+            .output()
             .map_err(|e| {
                 TauriError::with_details(
                     TauriErrorCode::ShortcutCreationFailed,
@@ -1543,6 +1546,18 @@ fn open_app_launcher(
                     e.to_string(),
                 )
             })?;
+        if !out.status.success() {
+            let detail = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            return Err(TauriError::with_details(
+                TauriErrorCode::ShortcutCreationFailed,
+                format!("macOS could not open {}", bundle.display()),
+                if detail.is_empty() {
+                    format!("open exited with {}", out.status)
+                } else {
+                    detail
+                },
+            ));
+        }
         Ok(bundle.to_string_lossy().into_owned())
     }
     #[cfg(not(target_os = "macos"))]

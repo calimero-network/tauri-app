@@ -3900,6 +3900,21 @@ async fn pick_directory(
     }
 }
 
+/// Pick a locally compiled merod binary. A file picker rather than a directory
+/// one: guessing a filename inside a chosen directory breaks for anyone whose
+/// build is not named exactly `merod`.
+#[tauri::command]
+async fn pick_merod_binary(app_handle: tauri::AppHandle) -> Result<Option<String>, TauriError> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let result = app_handle.dialog().file().set_title("Select a merod binary").blocking_pick_file();
+
+    match result {
+        Some(path) => Ok(Some(path.to_string())),
+        None => Ok(None),
+    }
+}
+
 #[cfg(feature = "autostart")]
 #[tauri::command]
 async fn autostart_enable(app: tauri::AppHandle) -> Result<(), TauriError> {
@@ -4870,6 +4885,7 @@ fn main() {
             list_merod_nodes,
             check_merod_health,
             pick_directory,
+            pick_merod_binary,
             init_merod_node,
             detect_running_merod_nodes,
             get_merod_logs,

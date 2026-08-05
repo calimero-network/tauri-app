@@ -13,6 +13,13 @@ import {
   getMerodBinaryVersion,
   type RunningMerodNode,
 } from "../utils/merod";
+import {
+  listMerodReleases,
+  formatVersionLabel,
+  BUNDLED_VERSION_ID,
+  LOCAL_ID_PREFIX,
+  type ReleaseInfo,
+} from "../utils/merodVersions";
 import { invoke } from "@tauri-apps/api/core";
 import { useToast } from "../contexts/ToastContext";
 import { Play, Square, RefreshCw, Check, FileText, ChevronDown } from "lucide-react";
@@ -46,6 +53,9 @@ export default function NodeManagement() {
   const [logsContent, setLogsContent] = useState("");
   const [logsLoading, setLogsLoading] = useState(false);
   const [merodBinaryVersion, setMerodBinaryVersion] = useState<string>("");
+  const [versionId, setVersionId] = useState<string>(BUNDLED_VERSION_ID);
+  const [releases, setReleases] = useState<ReleaseInfo[]>([]);
+  const [releasesError, setReleasesError] = useState<string>("");
   const developerMode = getSettings().developerMode ?? false;
   const safeAvailableNodes = Array.isArray(availableNodes) ? availableNodes : [];
   const safeRunningNodes = Array.isArray(runningNodes) ? runningNodes : [];
@@ -59,6 +69,13 @@ export default function NodeManagement() {
       .then(setMerodBinaryVersion)
       .catch(() => setMerodBinaryVersion("unknown"));
   }, []);
+
+  useEffect(() => {
+    if (!developerMode) return;
+    listMerodReleases()
+      .then((r) => setReleases(r.filter((item) => item.has_asset)))
+      .catch((e) => setReleasesError(e?.message || "Could not reach GitHub"));
+  }, [developerMode]);
 
   useEffect(() => {
     loadNodes();
@@ -165,7 +182,7 @@ export default function NodeManagement() {
     const createdName = newNodeName.trim();
     setLoading(true);
     try {
-      await initMerodNode(createdName, homeDir, newAdminUser.trim(), newAdminPassword);
+      await initMerodNode(createdName, homeDir, newAdminUser.trim(), newAdminPassword, versionId);
       toast.success(`Node "${createdName}" created successfully`);
       setNewNodeName("");
       setNewAdminUser("");
@@ -438,6 +455,44 @@ export default function NodeManagement() {
                   placeholder="default, node1, etc."
                 />
               </div>
+              {developerMode && (
+                <div className="form-field">
+                  <label htmlFor="merod-version">merod version</label>
+                  <select
+                    id="merod-version"
+                    value={versionId}
+                    onChange={async (e) => {
+                      if (e.target.value !== "__local__") {
+                        setVersionId(e.target.value);
+                        return;
+                      }
+                      const picked = await invoke<string | null>('pick_merod_binary');
+                      if (picked) setVersionId(`${LOCAL_ID_PREFIX}${picked}`);
+                    }}
+                    disabled={loading}
+                  >
+                    <option value={BUNDLED_VERSION_ID}>
+                      {formatVersionLabel(BUNDLED_VERSION_ID, merodBinaryVersion)}
+                    </option>
+                    {releases.map((r) => (
+                      <option key={r.tag} value={r.tag}>
+                        {r.tag}{r.prerelease ? " (pre-release)" : ""}
+                      </option>
+                    ))}
+                    {versionId.startsWith(LOCAL_ID_PREFIX) && (
+                      <option value={versionId}>{versionId.slice(LOCAL_ID_PREFIX.length)}</option>
+                    )}
+                    <option value="__local__">Use a local build...</option>
+                  </select>
+                  <p className="field-hint">
+                    {releasesError
+                      ? `Release list unavailable: ${releasesError}`
+                      : releases.length === 0
+                        ? "No merod releases are published for this platform. Use the bundled binary or a local build."
+                        : "Fixed when the node is created. Create another node to try another version."}
+                  </p>
+                </div>
+              )}
               <label htmlFor="new-admin-user">Admin Username</label>
               <div className="input-group">
                 <input

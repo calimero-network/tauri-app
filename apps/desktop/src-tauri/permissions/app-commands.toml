@@ -112,6 +112,11 @@ description = "Enables the pick_directory command."
 commands.allow = ["pick_directory"]
 
 [[permission]]
+identifier = "allow-pick-merod-binary"
+description = "Enables the pick_merod_binary command."
+commands.allow = ["pick_merod_binary"]
+
+[[permission]]
 identifier = "allow-init-merod-node"
 description = "Enables the init_merod_node command."
 commands.allow = ["init_merod_node"]
@@ -287,6 +292,7 @@ permissions = [
   "allow-list-merod-nodes",
   "allow-check-merod-health",
   "allow-pick-directory",
+  "allow-pick-merod-binary",
   "allow-init-merod-node",
   "allow-detect-running-merod-nodes",
   "allow-get-merod-logs",

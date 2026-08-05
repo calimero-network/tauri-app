@@ -6,6 +6,7 @@ import ContextMenu from "../components/ContextMenu";
 import Skeleton from "../components/Skeleton";
 import { decodeMetadata, openAppFrontend, parseTauriError } from "../utils/appUtils";
 import { getSettings } from "../utils/settings";
+import { detectRunningMerodNodes, type RunningMerodNode } from "../utils/merod";
 import { invoke } from "@tauri-apps/api/core";
 import { RefreshCw, MoreHorizontal, Trash2, Copy, Rocket } from "lucide-react";
 import "./InstalledApps.css";
@@ -39,6 +40,20 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; app: InstalledApplication } | null>(null);
   const [openMenuAppId, setOpenMenuAppId] = useState<string | null>(null);
   const [menuPos, setMenuPos] = useState<{ top: number; right: number } | null>(null);
+  const developerMode = getSettings().developerMode ?? false;
+  const [runningNodes, setRunningNodes] = useState<RunningMerodNode[]>([]);
+  const [isolationOk, setIsolationOk] = useState(false);
+  const [targets, setTargets] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    if (!developerMode) return;
+    detectRunningMerodNodes()
+      .then((n) => setRunningNodes(Array.isArray(n) ? n : []))
+      .catch(() => setRunningNodes([]));
+    invoke<boolean>('webview_isolation_supported')
+      .then(setIsolationOk)
+      .catch(() => setIsolationOk(false));
+  }, [developerMode]);
   const mountedRef = useRef(true);
 
   useEffect(() => {
@@ -139,9 +154,10 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
   const handleOpenFrontend = async (frontendUrl: string, appName?: string, applicationId?: string, iconData?: string) => {
     // Warm up the token so any refresh completes before we read it from localStorage.
     try { await apiClient.node.listApplications(); } catch {}
+    const targetNodeUrl = applicationId ? targets[applicationId] : undefined;
     await openAppFrontend(frontendUrl, appName, (error) => {
       toast.error(`Failed to open frontend: ${error.message}`);
-    }, applicationId ? { applicationId, iconData } : undefined);
+    }, applicationId ? { applicationId, iconData, targetNodeUrl } : undefined);
   };
 
   const handleCreateLauncher = async (frontendUrl: string, appName: string, appId: string, iconData?: string) => {
@@ -323,6 +339,26 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
 
                   return (
                     <div className="table-cell-actions">
+                      {frontendUrl && developerMode && runningNodes.length > 1 && (
+                        <select
+                          className="app-target-select"
+                          value={targets[app.id] ?? getSettings().nodeUrl}
+                          disabled={!isolationOk}
+                          title={
+                            isolationOk
+                              ? "Which node this app runs against"
+                              : "Needs macOS 14 or newer, or Linux - without isolated webview storage two nodes would share one session"
+                          }
+                          onClick={(e) => e.stopPropagation()}
+                          onChange={(e) => setTargets((t) => ({ ...t, [app.id]: e.target.value }))}
+                        >
+                          {runningNodes.map((n) => (
+                            <option key={n.pid} value={`http://localhost:${n.port}`}>
+                              {n.node_name} - port {n.port}
+                            </option>
+                          ))}
+                        </select>
+                      )}
                       {frontendUrl && (
                         <button
                           onClick={(e) => { e.stopPropagation(); handleOpenFrontend(frontendUrl, appName, app.id, metadata?.icon); }}

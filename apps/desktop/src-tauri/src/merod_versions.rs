@@ -223,6 +223,346 @@ pub async fn list_merod_releases(refresh: Option<bool>) -> Result<Vec<ReleaseInf
     Ok(releases)
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct InstalledVersion {
+    pub id: String,
+    pub path: String,
+    pub size_bytes: u64,
+    /// Node names pinned to this id, so Remove can refuse and say what it would break.
+    pub used_by: Vec<String>,
+}
+
+/// Node names under `home_dir` whose pin matches `id`.
+pub(crate) fn nodes_using(home_dir: &Path, id: &str) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(home_dir) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = entries
+        .flatten()
+        .filter(|e| e.path().is_dir())
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().to_string();
+            let pin = read_pin_raw(home_dir, &name)?;
+            (pin.id == id).then_some(name)
+        })
+        .collect();
+    names.sort();
+    names
+}
+
+/// Download and extract `tag` into the store unless it is already there.
+/// One download in flight per tag: two nodes created on the same tag must not
+/// race for the same destination.
+pub async fn ensure_release_installed(
+    app_data_dir: &Path,
+    tag: &str,
+) -> Result<PathBuf, TauriError> {
+    use tokio::sync::Mutex as AsyncMutex;
+    static IN_FLIGHT: std::sync::OnceLock<AsyncMutex<std::collections::HashSet<String>>> =
+        std::sync::OnceLock::new();
+
+    if !is_safe_tag(tag) {
+        return Err(TauriError::new(
+            TauriErrorCode::InvalidInput,
+            format!("Unsafe release tag '{}'", tag),
+        ));
+    }
+
+    let dest = release_binary_path(app_data_dir, tag);
+    if dest.exists() {
+        return Ok(dest);
+    }
+
+    // Serialise all installs. Downloads are rare and a few seconds each, so a
+    // single gate is simpler than per-tag locks and cannot deadlock.
+    let gate = IN_FLIGHT.get_or_init(|| AsyncMutex::new(std::collections::HashSet::new()));
+    let _guard = gate.lock().await;
+    if dest.exists() {
+        return Ok(dest); // another caller finished while we waited
+    }
+
+    let target = crate::merod_target_triple();
+    let release_url = format!(
+        "https://api.github.com/repos/calimero-network/core/releases/tags/{}",
+        tag
+    );
+    let response = crate::http_client()
+        .get(&release_url)
+        .header("Accept", "application/vnd.github+json")
+        .header("User-Agent", "calimero-desktop")
+        .send()
+        .await
+        .map_err(|e| TauriError::new(TauriErrorCode::InternalError, format!("GitHub API: {}", e)))?;
+    let status = response.status();
+    let release: serde_json::Value = response.json().await.map_err(|e| {
+        TauriError::new(TauriErrorCode::InternalError, format!("Parse release JSON: {}", e))
+    })?;
+    if !status.is_success() {
+        let msg = release["message"].as_str().unwrap_or("unknown error");
+        return Err(TauriError::new(
+            TauriErrorCode::InternalError,
+            format!("GitHub API returned {}: {}", status, msg),
+        ));
+    }
+
+    let (asset_name, asset_url) = release["assets"]
+        .as_array()
+        .ok_or_else(|| {
+            TauriError::new(TauriErrorCode::InternalError, "No assets in GitHub release")
+        })?
+        .iter()
+        .filter_map(|a| {
+            let name = a["name"].as_str()?;
+            let url = a["browser_download_url"].as_str()?;
+            let score = crate::score_merod_asset(name, target)?;
+            Some((score, name.to_string(), url.to_string()))
+        })
+        .min_by_key(|(s, _, _)| *s)
+        .map(|(_, n, u)| (n, u))
+        .ok_or_else(|| {
+            TauriError::new(
+                TauriErrorCode::FileNotFound,
+                format!("Release {} ships no merod build for {}", tag, target),
+            )
+        })?;
+
+    let parsed = url::Url::parse(&asset_url)
+        .map_err(|e| TauriError::new(TauriErrorCode::InvalidUrl, format!("asset URL: {}", e)))?;
+    let host = parsed.host_str().unwrap_or("");
+    if parsed.scheme() != "https"
+        || (host != "github.com"
+            && !host.ends_with(".github.com")
+            && !host.ends_with(".githubusercontent.com"))
+    {
+        return Err(TauriError::new(
+            TauriErrorCode::UrlNotAllowed,
+            format!("Asset URL is not an https github.com URL: {}", asset_url),
+        ));
+    }
+
+    let safe_asset_name: String = Path::new(&asset_name)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("merod-asset")
+        .to_string();
+
+    let temp_dir = std::env::temp_dir().join(format!(
+        "merod-install-{}-{}",
+        tag,
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    tokio::fs::create_dir_all(&temp_dir).await.map_err(|e| {
+        TauriError::new(TauriErrorCode::DirectoryError, format!("create temp dir: {}", e))
+    })?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&temp_dir, std::fs::Permissions::from_mode(0o700)).map_err(|e| {
+            TauriError::new(TauriErrorCode::DirectoryError, format!("temp dir perms: {}", e))
+        })?;
+    }
+
+    let archive_path = temp_dir.join(&safe_asset_name);
+    let download_client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(300))
+        .build()
+        .map_err(|e| {
+            TauriError::new(TauriErrorCode::InternalError, format!("download client: {}", e))
+        })?;
+    let dl = download_client
+        .get(&asset_url)
+        .header("User-Agent", "calimero-desktop")
+        .send()
+        .await
+        .map_err(|e| TauriError::new(TauriErrorCode::InternalError, format!("download: {}", e)))?;
+    if !dl.status().is_success() {
+        let _ = tokio::fs::remove_dir_all(&temp_dir).await;
+        return Err(TauriError::new(
+            TauriErrorCode::InternalError,
+            format!("Asset download returned HTTP {}", dl.status()),
+        ));
+    }
+    let bytes = dl.bytes().await.map_err(|e| {
+        TauriError::new(TauriErrorCode::InternalError, format!("read download: {}", e))
+    })?;
+    tokio::fs::write(&archive_path, &bytes).await.map_err(|e| {
+        TauriError::new(TauriErrorCode::FileWriteError, format!("write archive: {}", e))
+    })?;
+
+    let install_result = async {
+        let extracted =
+            crate::extract_merod_binary(&archive_path, &safe_asset_name, &temp_dir).await?;
+
+        let dest_dir = dest.parent().ok_or_else(|| {
+            TauriError::new(TauriErrorCode::DirectoryError, "store path has no parent")
+        })?;
+        tokio::fs::create_dir_all(dest_dir).await.map_err(|e| {
+            TauriError::new(TauriErrorCode::DirectoryError, format!("create store dir: {}", e))
+        })?;
+
+        // Copy to a sibling then rename, so a crash mid-copy cannot leave a
+        // truncated binary at the path other nodes resolve.
+        let staged = dest.with_extension("staged");
+        tokio::fs::copy(&extracted, &staged).await.map_err(|e| {
+            TauriError::new(TauriErrorCode::InternalError, format!("stage binary: {}", e))
+        })?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755)).map_err(
+                |e| TauriError::new(TauriErrorCode::InternalError, format!("set +x: {}", e)),
+            )?;
+        }
+
+        let reported = crate::get_merod_version_at(&staged).await;
+        let expected = format!("merod {}", tag);
+        match reported {
+            Some(v) if v == expected => {}
+            other => {
+                let _ = tokio::fs::remove_file(&staged).await;
+                return Err(TauriError::new(
+                    TauriErrorCode::InternalError,
+                    format!(
+                        "Downloaded binary reports '{}', expected '{}'",
+                        other.unwrap_or_else(|| "nothing".to_string()),
+                        expected
+                    ),
+                ));
+            }
+        }
+
+        tokio::fs::rename(&staged, &dest).await.map_err(|e| {
+            TauriError::new(TauriErrorCode::InternalError, format!("install binary: {}", e))
+        })?;
+        Ok::<PathBuf, TauriError>(dest.clone())
+    }
+    .await;
+
+    let _ = tokio::fs::remove_dir_all(&temp_dir).await;
+    install_result
+}
+
+fn app_data(app_handle: &tauri::AppHandle) -> Result<PathBuf, TauriError> {
+    use tauri::Manager;
+    app_handle.path().app_data_dir().map_err(|e| {
+        TauriError::with_details(
+            TauriErrorCode::DirectoryError,
+            "Failed to resolve the app data directory",
+            e.to_string(),
+        )
+    })
+}
+
+fn file_size(path: &Path) -> u64 {
+    std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
+}
+
+#[tauri::command]
+pub async fn install_merod_version(
+    tag: String,
+    app_handle: tauri::AppHandle,
+) -> Result<InstalledVersion, TauriError> {
+    let base = app_data(&app_handle)?;
+    let path = ensure_release_installed(&base, &tag).await?;
+    Ok(InstalledVersion {
+        id: tag,
+        path: path.to_string_lossy().into_owned(),
+        size_bytes: file_size(&path),
+        used_by: Vec::new(),
+    })
+}
+
+#[tauri::command]
+pub async fn list_installed_merod_versions(
+    home_dir: Option<String>,
+    app_handle: tauri::AppHandle,
+) -> Result<Vec<InstalledVersion>, TauriError> {
+    let base = app_data(&app_handle)?;
+    let home = crate::resolve_home_dir(home_dir)?;
+
+    let mut out = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(store_dir(&base)) {
+        for entry in entries.flatten() {
+            if !entry.path().is_dir() {
+                continue;
+            }
+            let tag = entry.file_name().to_string_lossy().to_string();
+            let binary = release_binary_path(&base, &tag);
+            if !binary.exists() {
+                continue;
+            }
+            out.push(InstalledVersion {
+                used_by: nodes_using(&home, &tag),
+                size_bytes: file_size(&binary),
+                path: binary.to_string_lossy().into_owned(),
+                id: tag,
+            });
+        }
+    }
+
+    // Every distinct local build in use, so the panel can offer a repair per node.
+    let mut locals: Vec<String> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&home) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if let Some(pin) = read_pin_raw(&home, &name) {
+                if pin.id.starts_with(LOCAL_PREFIX) && !locals.contains(&pin.id) {
+                    locals.push(pin.id);
+                }
+            }
+        }
+    }
+    locals.sort();
+    for id in locals {
+        let path = PathBuf::from(id.trim_start_matches(LOCAL_PREFIX));
+        out.push(InstalledVersion {
+            used_by: nodes_using(&home, &id),
+            size_bytes: file_size(&path),
+            path: path.to_string_lossy().into_owned(),
+            id,
+        });
+    }
+
+    out.sort_by(|a, b| a.id.cmp(&b.id));
+    Ok(out)
+}
+
+#[tauri::command]
+pub async fn remove_merod_version(
+    tag: String,
+    home_dir: Option<String>,
+    app_handle: tauri::AppHandle,
+) -> Result<(), TauriError> {
+    if !is_safe_tag(&tag) {
+        return Err(TauriError::new(
+            TauriErrorCode::InvalidInput,
+            format!("Unsafe release tag '{}'", tag),
+        ));
+    }
+    let base = app_data(&app_handle)?;
+    let home = crate::resolve_home_dir(home_dir)?;
+
+    let users = nodes_using(&home, &tag);
+    if !users.is_empty() {
+        return Err(TauriError::new(
+            TauriErrorCode::InvalidInput,
+            format!("{} is still used by: {}", tag, users.join(", ")),
+        ));
+    }
+
+    let dir = store_dir(&base).join(&tag);
+    std::fs::remove_dir_all(&dir).map_err(|e| {
+        TauriError::with_details(
+            TauriErrorCode::DirectoryError,
+            format!("Failed to remove {}", tag),
+            e.to_string(),
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -343,5 +683,18 @@ mod tests {
         assert_eq!(out[1].tag, "0.10.0");
         assert!(!out[1].prerelease);
         assert!(!out[1].has_asset, "meroctl is not a merod asset");
+    }
+
+    #[test]
+    fn nodes_using_a_version_are_found_by_scanning_pins() {
+        let home = temp_home();
+        std::fs::create_dir_all(home.join("node2")).unwrap();
+        write_pin(&home, "node1", &NodePin { id: "0.11.0-rc.15".into(), version_at_init: None }).unwrap();
+        write_pin(&home, "node2", &NodePin { id: "bundled".into(), version_at_init: None }).unwrap();
+
+        let users = nodes_using(&home, "0.11.0-rc.15");
+        assert_eq!(users, vec!["node1".to_string()]);
+        assert!(nodes_using(&home, "0.11.0-rc.18").is_empty());
+        let _ = std::fs::remove_dir_all(&home);
     }
 }

@@ -142,6 +142,26 @@ description = "Enables the download_and_replace_merod command."
 commands.allow = ["download_and_replace_merod"]
 
 [[permission]]
+identifier = "allow-list-merod-releases"
+description = "Enables the list_merod_releases command."
+commands.allow = ["list_merod_releases"]
+
+[[permission]]
+identifier = "allow-install-merod-version"
+description = "Enables the install_merod_version command."
+commands.allow = ["install_merod_version"]
+
+[[permission]]
+identifier = "allow-list-installed-merod-versions"
+description = "Enables the list_installed_merod_versions command."
+commands.allow = ["list_installed_merod_versions"]
+
+[[permission]]
+identifier = "allow-remove-merod-version"
+description = "Enables the remove_merod_version command."
+commands.allow = ["remove_merod_version"]
+
+[[permission]]
 identifier = "allow-set-tray-icon-connected"
 description = "Enables the set_tray_icon_connected command."
 commands.allow = ["set_tray_icon_connected"]
@@ -273,6 +293,10 @@ permissions = [
   "allow-clear-merod-logs",
   "allow-get-merod-binary-version",
   "allow-download-and-replace-merod",
+  "allow-list-merod-releases",
+  "allow-install-merod-version",
+  "allow-list-installed-merod-versions",
+  "allow-remove-merod-version",
   "allow-set-tray-icon-connected",
   "allow-delete-calimero-data-dir",
   "allow-clear-app-sessions",

@@ -14,6 +14,12 @@ use base64::Engine as _;
 mod log_rotation;
 mod merod_versions;
 
+// Imported unqualified so generate_handler! registers them under their bare
+// command names, which is what the ACL in permissions/app-commands.toml grants.
+use merod_versions::{
+    install_merod_version, list_installed_merod_versions, list_merod_releases, remove_merod_version,
+};
+
 // Per-app launcher foundation (macOS only): pure, zero-Tauri-API modules shared
 // with the `calimero-shell` binary via the crate's lib target.
 #[cfg(target_os = "macos")]
@@ -2049,7 +2055,9 @@ pub(crate) fn resolve_home_dir(home_dir: Option<String>) -> Result<std::path::Pa
 }
 
 /// Get the path to the bundled merod binary
-fn get_merod_binary_path(app_handle: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+pub(crate) fn get_bundled_merod_path(
+    app_handle: &tauri::AppHandle,
+) -> Result<std::path::PathBuf, String> {
     let resource_candidates = if cfg!(target_os = "windows") {
         vec!["merod/merod.exe", "merod/merod"]
     } else {
@@ -2158,6 +2166,7 @@ async fn start_merod(
     data_dir: Option<String>,
     node_name: Option<String>,
     debug_logs: Option<bool>,
+    merod_version_id: Option<String>,
     app_handle: tauri::AppHandle,
     merod_state: tauri::State<'_, MerodState>,
     log_writers: tauri::State<'_, MerodLogWriters>,
@@ -2199,10 +2208,6 @@ async fn start_merod(
         state.retain(|p| p.pid != pid);
     }
 
-    // Get bundled merod binary
-    let merod_binary = get_merod_binary_path(&app_handle)
-        .map_err(|e| TauriError::new(TauriErrorCode::FileNotFound, e))?;
-
     // Prepare home directory (where .calimero folder is, e.g., ~/.calimero)
     // Same resolver as get_merod_logs/clear_merod_logs, so a node writes logs at
     // exactly the path the viewer/Clear later resolve (no ~-expansion drift).
@@ -2220,6 +2225,16 @@ async fn start_merod(
     if let Some(name) = &node_name {
         validate_node_name(name).map_err(|e| TauriError::new(TauriErrorCode::InvalidInput, e))?;
     }
+
+    // An explicit id wins; otherwise the node's own pin decides, defaulting to bundled.
+    let version_id = match &merod_version_id {
+        Some(raw) => merod_versions::parse_version_id(raw)?,
+        None => match &node_name {
+            Some(name) => merod_versions::read_pin(&home_dir_path, name),
+            None => merod_versions::VersionId::Bundled,
+        },
+    };
+    let merod_binary = merod_versions::resolve_binary(&app_handle, &version_id).await?;
 
     // Update config.toml with the specified ports if node_name is provided
     if let Some(name) = &node_name {
@@ -2892,12 +2907,10 @@ async fn init_merod_node(
     home_dir: Option<String>,
     admin_user: Option<String>,
     admin_password: Option<String>,
+    merod_version_id: Option<String>,
     app_handle: tauri::AppHandle,
 ) -> Result<String, TauriError> {
     validate_node_name(&node_name).map_err(|e| TauriError::new(TauriErrorCode::InvalidInput, e))?;
-    // Get bundled merod binary
-    let merod_binary = get_merod_binary_path(&app_handle)
-        .map_err(|e| TauriError::new(TauriErrorCode::FileNotFound, e))?;
 
     // Prepare home directory (where .calimero folder will be)
     let home_dir_path = if let Some(dir) = home_dir {
@@ -2930,6 +2943,12 @@ async fn init_merod_node(
             e.to_string(),
         )
     })?;
+
+    let version_id = match &merod_version_id {
+        Some(raw) => merod_versions::parse_version_id(raw)?,
+        None => merod_versions::VersionId::Bundled,
+    };
+    let merod_binary = merod_versions::resolve_binary(&app_handle, &version_id).await?;
 
     // Run merod init command - global options come BEFORE subcommand
     // Use --auth-mode embedded so merod creates the full embedded_auth config
@@ -2988,6 +3007,17 @@ async fn init_merod_node(
             format!("Merod init failed: {}", stderr),
         ));
     }
+
+    // Only after a successful init: a node that failed to initialise must not be
+    // left pinned to a version.
+    merod_versions::write_pin(
+        &home_dir_path,
+        &node_name,
+        &merod_versions::NodePin {
+            id: merod_versions::version_id_to_string(&version_id),
+            version_at_init: get_merod_version_at(&merod_binary).await,
+        },
+    )?;
 
     info!(
         "[Merod] Initialized node '{}' in {:?}",
@@ -3465,7 +3495,7 @@ async fn download_and_replace_merod(
         ));
     }
 
-    let binary_path = get_merod_binary_path(&app_handle)
+    let binary_path = get_bundled_merod_path(&app_handle)
         .map_err(|e| TauriError::new(TauriErrorCode::FileNotFound, e))?;
 
     let expected_version_output = format!("merod {}", expected);
@@ -3725,7 +3755,7 @@ async fn download_and_replace_merod(
 /// Return the version string reported by the bundled merod binary (`merod --version`).
 #[tauri::command]
 async fn get_merod_binary_version(app_handle: tauri::AppHandle) -> Result<String, TauriError> {
-    let merod_binary = get_merod_binary_path(&app_handle)
+    let merod_binary = get_bundled_merod_path(&app_handle)
         .map_err(|e| TauriError::new(TauriErrorCode::FileNotFound, e))?;
     Ok(get_merod_version_at(&merod_binary)
         .await
@@ -4846,6 +4876,10 @@ fn main() {
             clear_merod_logs,
             get_merod_binary_version,
             download_and_replace_merod,
+            list_merod_releases,
+            install_merod_version,
+            list_installed_merod_versions,
+            remove_merod_version,
             set_tray_icon_connected,
             delete_calimero_data_dir,
             clear_app_sessions,

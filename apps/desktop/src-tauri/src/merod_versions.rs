@@ -460,6 +460,33 @@ fn file_size(path: &Path) -> u64 {
     std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
 }
 
+/// Turn an id into a binary path, downloading a release on first use.
+pub async fn resolve_binary(
+    app_handle: &tauri::AppHandle,
+    id: &VersionId,
+) -> Result<PathBuf, TauriError> {
+    match id {
+        VersionId::Bundled => crate::get_bundled_merod_path(app_handle)
+            .map_err(|e| TauriError::new(TauriErrorCode::FileNotFound, e)),
+        VersionId::Release(tag) => {
+            let base = app_data(app_handle)?;
+            ensure_release_installed(&base, tag).await
+        }
+        VersionId::Local(path) => {
+            if !path.exists() {
+                return Err(TauriError::new(
+                    TauriErrorCode::FileNotFound,
+                    format!(
+                        "The local merod build at {} is gone. Rebuild it, or point this node at another build from the Versions panel.",
+                        path.display()
+                    ),
+                ));
+            }
+            Ok(path.clone())
+        }
+    }
+}
+
 #[tauri::command]
 pub async fn install_merod_version(
     tag: String,

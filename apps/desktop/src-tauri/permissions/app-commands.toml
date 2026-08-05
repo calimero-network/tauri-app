@@ -47,6 +47,11 @@ description = "Enables the create_app_window command."
 commands.allow = ["create_app_window"]
 
 [[permission]]
+identifier = "allow-webview-isolation-supported"
+description = "Enables the webview_isolation_supported command."
+commands.allow = ["webview_isolation_supported"]
+
+[[permission]]
 identifier = "allow-open-devtools"
 description = "Enables the open_devtools command."
 commands.allow = ["open_devtools"]
@@ -279,6 +284,7 @@ permissions = [
   "allow-create-desktop-shortcut",
   "allow-open-app-launcher",
   "allow-create-app-window",
+  "allow-webview-isolation-supported",
   "allow-open-devtools",
   "allow-proxy-http-request",
   "allow-proxy-sse-stream",

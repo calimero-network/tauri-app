@@ -168,3 +168,63 @@ describe('openAppFrontend re-opening an existing window', () => {
     expect(JSON.stringify(payload)).not.toContain('the-access-token');
   });
 });
+
+describe('openAppFrontend targeting a second node', () => {
+  /** Full args of the `create_app_window` invoke. */
+  function windowArgs(): Record<string, unknown> {
+    const call = invoke.mock.calls.find((c) => c[0] === 'create_app_window');
+    expect(call, 'create_app_window was not invoked').toBeTruthy();
+    return (call as [string, Record<string, unknown>])[1];
+  }
+
+  it('keeps the historical label and the launcher path for the active node', async () => {
+    await openAppFrontend('https://app.example.com/', 'Example', undefined, {
+      applicationId: 'app-1',
+      targetNodeUrl: 'http://localhost:2528',
+    });
+
+    // Byte-identical to a call with no targetNodeUrl at all, or every window
+    // already open under the old label would be orphaned.
+    expect(windowArgs().windowLabel).toBe('app-app-1');
+    expect(windowArgs().isolationKey).toBeNull();
+  });
+
+  it('gives a cross-node window its own label, node URL and isolation key', async () => {
+    await openAppFrontend('https://app.example.com/', 'Example', undefined, {
+      applicationId: 'app-1',
+      targetNodeUrl: 'http://localhost:2529',
+    });
+
+    const args = windowArgs();
+    expect(args.windowLabel).toBe('app-app-1-n2529');
+    expect(args.nodeUrl).toBe('http://localhost:2529');
+    expect(args.isolationKey).toBe('app-1@http://localhost:2529');
+    expect(String(args.title)).toContain('2529');
+  });
+
+  it('sends no credentials to a node our session does not belong to', async () => {
+    await openAppFrontend('https://app.example.com/', 'Example', undefined, {
+      applicationId: 'app-1',
+      targetNodeUrl: 'http://localhost:2529',
+    });
+
+    const hash = openedHash();
+    expect(hash.get('node_url')).toBe('http://localhost:2529');
+    expect(hash.get('access_token')).toBeNull();
+    expect(hash.get('refresh_token')).toBeNull();
+    expect(openedUrl()).not.toContain(REAL_REFRESH_TOKEN);
+    expect(openedUrl()).not.toContain('the-access-token');
+  });
+
+  it('keeps the label within the 64 character limit for a long application id', async () => {
+    const longId = 'a'.repeat(80);
+    await openAppFrontend('https://app.example.com/', 'Example', undefined, {
+      applicationId: longId,
+      targetNodeUrl: 'http://localhost:2529',
+    });
+
+    const label = String(windowArgs().windowLabel);
+    expect(label.length).toBeLessThanOrEqual(64);
+    expect(label.endsWith('-n2529')).toBe(true);
+  });
+});

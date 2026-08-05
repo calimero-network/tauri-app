@@ -1713,6 +1713,103 @@ fn create_desktop_shortcut(
     }
 }
 
+/// Whether this platform can give a webview its own storage. Never guess: wry
+/// silently falls back to the shared default store below macOS 14, which would
+/// let two nodes' sessions overwrite each other.
+#[tauri::command]
+fn webview_isolation_supported() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        // Matches wry's own gate for WKWebsiteDataStore::dataStoreForIdentifier.
+        std::process::Command::new("sw_vers")
+            .arg("-productVersion")
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .and_then(|v| v.trim().split('.').next()?.parse::<u32>().ok())
+            .map(|major| major >= 14)
+            .unwrap_or(false)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        true
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        false
+    }
+}
+
+fn hex_16(bytes: &[u8; 16]) -> String {
+    bytes.iter().map(|b| format!("{:02x}", b)).collect()
+}
+
+/// Stable 16-byte webview store id for an isolation key, assigned from a
+/// persisted slot map. Slots start at 1 because an all-zero identifier is not
+/// a valid WKWebsiteDataStore identifier.
+fn webview_store_id(app_handle: &tauri::AppHandle, key: &str) -> Result<[u8; 16], TauriError> {
+    let dir = app_handle.path().app_data_dir().map_err(|e| {
+        TauriError::with_details(
+            TauriErrorCode::DirectoryError,
+            "Failed to resolve app data dir for webview stores",
+            e.to_string(),
+        )
+    })?;
+    std::fs::create_dir_all(&dir).map_err(|e| {
+        TauriError::with_details(
+            TauriErrorCode::DirectoryError,
+            "Failed to create app data dir",
+            e.to_string(),
+        )
+    })?;
+    let path = dir.join("webview-stores.json");
+
+    let mut map: std::collections::BTreeMap<String, u32> = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default();
+
+    let existing = map.get(key).copied();
+    let slot = assign_slot(&mut map, key);
+    if existing.is_none() {
+        {
+            let body = serde_json::to_string_pretty(&map).map_err(|e| {
+                TauriError::with_details(
+                    TauriErrorCode::InternalError,
+                    "Failed to serialise the webview store map",
+                    e.to_string(),
+                )
+            })?;
+            std::fs::write(&path, body).map_err(|e| {
+                TauriError::with_details(
+                    TauriErrorCode::FileWriteError,
+                    "Failed to write the webview store map",
+                    e.to_string(),
+                )
+            })?;
+        }
+    }
+
+    Ok(slot_bytes(slot))
+}
+
+/// Slot assignment, split out from the file I/O so it can be tested. Slots are
+/// handed out in order and never reused, so two keys can never collide.
+fn assign_slot(map: &mut std::collections::BTreeMap<String, u32>, key: &str) -> u32 {
+    if let Some(slot) = map.get(key) {
+        return *slot;
+    }
+    let next = map.values().copied().max().unwrap_or(0) + 1;
+    map.insert(key.to_string(), next);
+    next
+}
+
+fn slot_bytes(slot: u32) -> [u8; 16] {
+    let mut out = [0u8; 16];
+    out[..4].copy_from_slice(&slot.to_le_bytes());
+    out
+}
+
 #[tauri::command]
 async fn create_app_window(
     app_handle: tauri::AppHandle,
@@ -1721,6 +1818,7 @@ async fn create_app_window(
     title: String,
     open_devtools: Option<bool>,
     node_url: Option<String>,
+    isolation_key: Option<String>,
 ) -> Result<(), TauriError> {
     use tauri::{WebviewUrl, WebviewWindowBuilder};
 
@@ -1746,7 +1844,7 @@ async fn create_app_window(
     proxy_script = proxy_script.replace("__CONFIGURED_NODE_URL__", node_url_to_use);
 
     // Create window with proxy script injected BEFORE page loads
-    let window = WebviewWindowBuilder::new(
+    let mut builder = WebviewWindowBuilder::new(
         &app_handle,
         &window_label,
         WebviewUrl::External(url.parse::<url::Url>().map_err(|e| {
@@ -1762,9 +1860,39 @@ async fn create_app_window(
     .min_inner_size(600.0, 400.0)
     .resizable(true)
     .center()
-    .initialization_script(&proxy_script) // Inject script with configured node URL
-    .build()
-    .map_err(|e| {
+    .initialization_script(&proxy_script); // Inject script with configured node URL
+
+    // A stable per-(app, node) bucket so the window keeps its own session across
+    // opens. macOS has no per-webview data directory, hence the identifier.
+    if let Some(key) = &isolation_key {
+        let digest = webview_store_id(&app_handle, key)?;
+        #[cfg(target_os = "macos")]
+        {
+            builder = builder.data_store_identifier(digest);
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let dir = app_handle
+                .path()
+                .app_data_dir()
+                .map_err(|e| {
+                    TauriError::with_details(
+                        TauriErrorCode::DirectoryError,
+                        "Failed to resolve app data dir for webview isolation",
+                        e.to_string(),
+                    )
+                })?
+                .join("webviews")
+                .join(hex_16(&digest));
+            builder = builder.data_directory(dir);
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        {
+            let _ = digest;
+        }
+    }
+
+    let window = builder.build().map_err(|e| {
         TauriError::with_details(
             TauriErrorCode::WindowCreationFailed,
             format!("Failed to create window '{}' for URL '{}'", title, url),
@@ -4870,6 +4998,7 @@ fn main() {
             create_desktop_shortcut,
             open_app_launcher,
             create_app_window,
+            webview_isolation_supported,
             open_devtools,
             proxy_http_request,
             proxy_sse_stream,
@@ -5253,6 +5382,42 @@ mod tests {
         );
         let body = received.concat();
         assert!(body.contains("data: first"), "unexpected: {body:?}");
+    }
+
+    // ── Webview store isolation tests ─────────────────────────────────────────
+
+    #[test]
+    fn webview_slots_are_stable_distinct_and_never_zero() {
+        use super::{assign_slot, slot_bytes};
+        let mut map = std::collections::BTreeMap::new();
+
+        let a = assign_slot(&mut map, "drive@http://localhost:2528");
+        let b = assign_slot(&mut map, "drive@http://localhost:2529");
+        let a_again = assign_slot(&mut map, "drive@http://localhost:2528");
+
+        assert_eq!(a, a_again, "the same key must keep its bucket across opens");
+        assert_ne!(a, b, "two keys sharing a bucket would merge their storage");
+
+        // An all-zero identifier is not a valid WKWebsiteDataStore identifier.
+        for slot in [a, b] {
+            assert_ne!(slot_bytes(slot), [0u8; 16]);
+        }
+    }
+
+    #[test]
+    fn webview_slots_survive_a_reloaded_map() {
+        use super::assign_slot;
+        let mut map = std::collections::BTreeMap::new();
+        assign_slot(&mut map, "one");
+        assign_slot(&mut map, "two");
+
+        // Simulate the map being written, read back, and extended later.
+        let mut reloaded: std::collections::BTreeMap<String, u32> = map.clone();
+        let third = assign_slot(&mut reloaded, "three");
+        assert!(
+            !map.values().any(|s| *s == third),
+            "a new key must not reuse a slot already handed out"
+        );
     }
 
     // ── Merod binary update tests ─────────────────────────────────────────────

@@ -2,14 +2,26 @@ import { describe, it, expect } from "vitest";
 import { formatVersionLabel, BUNDLED_VERSION_ID } from "./merodVersions";
 
 describe("formatVersionLabel", () => {
+  it("calls the shipped binary the default, and drops build metadata", () => {
+    expect(
+      formatVersionLabel(BUNDLED_VERSION_ID, "merod 0.11.0-rc.19 (build c2e8ec3) (rustc 1.88.0)")
+    ).toBe("default - 0.11.0-rc.19");
+  });
+
+  it("says just default when the binary could not be read", () => {
+    // get_merod_binary_version returns the literal "unknown" on failure.
+    expect(formatVersionLabel(BUNDLED_VERSION_ID, "unknown")).toBe("default");
+    expect(formatVersionLabel(BUNDLED_VERSION_ID, "")).toBe("default");
+  });
+
   it("names the bundled binary with the version it actually reports", () => {
     expect(formatVersionLabel(BUNDLED_VERSION_ID, "merod 0.11.0-rc.19")).toBe(
-      "bundled - 0.11.0-rc.19"
+      "default - 0.11.0-rc.19"
     );
   });
 
   it("falls back when the bundled version is unknown", () => {
-    expect(formatVersionLabel(BUNDLED_VERSION_ID, "")).toBe("bundled");
+    expect(formatVersionLabel(BUNDLED_VERSION_ID, "")).toBe("default");
   });
 
   it("shows a release tag as-is", () => {

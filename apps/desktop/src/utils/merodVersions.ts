@@ -53,18 +53,25 @@ export async function removeMerodVersion(tag: string, homeDir?: string): Promise
  * A local build has no stable version, so it is labelled by kind rather than
  * by path - the measured version is shown separately on running nodes.
  */
+/** merod prints `merod <tag> (build ...) (commit ...)`; keep the tag. An
+ *  unreadable binary reports the literal "unknown", which is not a version. */
+function shortVersion(raw?: string | null): string {
+  const tag = (raw ?? '').replace(/^merod\s+/, '').trim().split(/\s+/)[0] ?? '';
+  return tag === 'unknown' ? '' : tag;
+}
+
 export function formatVersionLabel(
   id: string,
   bundledVersion: string,
   measuredVersion?: string | null
 ): string {
   if (id === BUNDLED_VERSION_ID) {
-    const trimmed = bundledVersion.replace(/^merod\s+/, '').trim();
-    return trimmed ? `bundled - ${trimmed}` : 'bundled';
+    const v = shortVersion(bundledVersion);
+    return v ? `default - ${v}` : 'default';
   }
   if (id.startsWith(LOCAL_ID_PREFIX)) {
-    const trimmed = (measuredVersion ?? '').replace(/^merod\s+/, '').trim();
-    return trimmed ? `local build - ${trimmed}` : 'local build';
+    const v = shortVersion(measuredVersion);
+    return v ? `local build - ${v}` : 'local build';
   }
   return id;
 }

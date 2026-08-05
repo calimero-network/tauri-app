@@ -15,7 +15,6 @@ import {
 } from "../utils/merod";
 import {
   listMerodReleases,
-  listInstalledMerodVersions,
   formatVersionLabel,
   BUNDLED_VERSION_ID,
   LOCAL_ID_PREFIX,
@@ -27,6 +26,7 @@ import { Play, Square, RefreshCw, Check, FileText, ChevronDown } from "lucide-re
 import { LogsViewer } from "../components/LogsViewer";
 import { ScrollHint } from "../components/ScrollHint";
 import { VersionsPanel } from "../components/VersionsPanel";
+import { useNodeVersions } from "../hooks/useNodeVersions";
 import "./NodeManagement.css";
 
 export default function NodeManagement() {
@@ -59,10 +59,9 @@ export default function NodeManagement() {
   const [releases, setReleases] = useState<ReleaseInfo[]>([]);
   const [releasesError, setReleasesError] = useState<string>("");
   const [releasesStale, setReleasesStale] = useState(false);
-  const [nodeVersions, setNodeVersions] = useState<Record<string, string>>({});
-  const [versionMeasured, setVersionMeasured] = useState<Record<string, string>>({});
-  const [driftedNodes, setDriftedNodes] = useState<Set<string>>(new Set());
   const developerMode = getSettings().developerMode ?? false;
+  const { byNode: nodeVersions, measured: versionMeasured, drifted: driftedNodes } =
+    useNodeVersions(developerMode, homeDir, [availableNodes]);
   const safeAvailableNodes = Array.isArray(availableNodes) ? availableNodes : [];
   const safeRunningNodes = Array.isArray(runningNodes) ? runningNodes : [];
 
@@ -86,28 +85,6 @@ export default function NodeManagement() {
       .catch((e) => setReleasesError(e?.message || "Could not reach GitHub"));
   }, [developerMode]);
 
-  useEffect(() => {
-    if (!developerMode) return;
-    listInstalledMerodVersions(homeDir)
-      .then((installed) => {
-        const map: Record<string, string> = {};
-        const measured: Record<string, string> = {};
-        const drifted = new Set<string>();
-        for (const entry of installed) {
-          for (const node of entry.used_by) map[node] = entry.id;
-          if (entry.measured_version) measured[entry.id] = entry.measured_version;
-          for (const node of entry.drifted_nodes) drifted.add(node);
-        }
-        setNodeVersions(map);
-        setVersionMeasured(measured);
-        setDriftedNodes(drifted);
-      })
-      .catch(() => {
-        setNodeVersions({});
-        setVersionMeasured({});
-        setDriftedNodes(new Set());
-      });
-  }, [developerMode, homeDir, availableNodes]);
 
   useEffect(() => {
     loadNodes();

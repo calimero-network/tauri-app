@@ -106,6 +106,23 @@ export interface OpenAppFrontendContext {
   targetNodeUrl?: string;
 }
 
+/** Short, unique-per-target label fragment. Falls back to a hash so a hostname
+ *  with unsafe characters still yields a distinct, label-safe suffix. */
+function nodeKey(nodeUrl: string): string {
+  let raw: string;
+  try {
+    const u = new URL(nodeUrl);
+    raw = `${u.hostname}${u.port ? `-${u.port}` : ''}`;
+  } catch {
+    raw = nodeUrl;
+  }
+  const safe = raw.replace(/[^a-zA-Z0-9-]/g, '-');
+  if (safe.length <= 20) return safe;
+  let h = 0;
+  for (let i = 0; i < raw.length; i++) h = (Math.imul(31, h) + raw.charCodeAt(i)) | 0;
+  return `${safe.slice(0, 12)}${(h >>> 0).toString(36)}`;
+}
+
 // Guards against two concurrent openAppFrontend calls racing to create the same window.
 const pendingWindowCreations = new Set<string>();
 
@@ -198,13 +215,11 @@ export async function openAppFrontend(
     // slice(0, 60) limit is never hit in practice and no truncation collisions occur.
     // A cross-node window needs its own label or Tauri focuses the existing one
     // instead of opening a second. Same-node labels stay byte-identical.
+    // Derive from host AND port: URL.port is empty on a scheme's default port,
+    // so two different hosts would otherwise collapse to the same suffix.
     let nodeSuffix = '';
     if (isCrossNode) {
-      try {
-        nodeSuffix = `-n${new URL(nodeUrl).port || '2528'}`;
-      } catch {
-        nodeSuffix = '-nx';
-      }
+      nodeSuffix = `-n${nodeKey(nodeUrl)}`;
     }
     const appKey = context?.applicationId
       ? context.applicationId.replace(/[^a-zA-Z0-9-]/g, '-').slice(0, 60 - nodeSuffix.length)

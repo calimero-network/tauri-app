@@ -948,6 +948,14 @@ async fn broker_token_refresh(
 /// at a node the desktop is not signed into.
 type IsolatedWindows = std::sync::Arc<std::sync::Mutex<std::collections::HashSet<String>>>;
 
+fn forget_isolated_window(app_handle: &tauri::AppHandle, label: &str) {
+    app_handle
+        .state::<IsolatedWindows>()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .remove(label);
+}
+
 fn is_isolated_window(state: &tauri::State<'_, IsolatedWindows>, label: &str) -> bool {
     state
         .lock()
@@ -1812,22 +1820,20 @@ fn webview_store_id(app_handle: &tauri::AppHandle, key: &str) -> Result<[u8; 16]
     let existing = map.get(key).copied();
     let slot = assign_slot(&mut map, key);
     if existing.is_none() {
-        {
-            let body = serde_json::to_string_pretty(&map).map_err(|e| {
-                TauriError::with_details(
-                    TauriErrorCode::InternalError,
-                    "Failed to serialise the webview store map",
-                    e.to_string(),
-                )
-            })?;
-            std::fs::write(&path, body).map_err(|e| {
-                TauriError::with_details(
-                    TauriErrorCode::FileWriteError,
-                    "Failed to write the webview store map",
-                    e.to_string(),
-                )
-            })?;
-        }
+        let body = serde_json::to_string_pretty(&map).map_err(|e| {
+            TauriError::with_details(
+                TauriErrorCode::InternalError,
+                "Failed to serialise the webview store map",
+                e.to_string(),
+            )
+        })?;
+        std::fs::write(&path, body).map_err(|e| {
+            TauriError::with_details(
+                TauriErrorCode::FileWriteError,
+                "Failed to write the webview store map",
+                e.to_string(),
+            )
+        })?;
     }
 
     Ok(slot_bytes(slot))
@@ -1943,12 +1949,29 @@ async fn create_app_window(
     }
 
     let window = builder.build().map_err(|e| {
+        // The registration has to precede build() so a page cannot reach the
+        // broker before it lands; drop it again if no window ever existed.
+        if isolation_key.is_some() {
+            forget_isolated_window(&app_handle, &window_label);
+        }
         TauriError::with_details(
             TauriErrorCode::WindowCreationFailed,
             format!("Failed to create window '{}' for URL '{}'", title, url),
             e.to_string(),
         )
     })?;
+
+    // Stop tracking a label once its window is gone, so the set does not grow
+    // for the life of the process.
+    if isolation_key.is_some() {
+        let handle = app_handle.clone();
+        let label = window_label.clone();
+        window.on_window_event(move |event| {
+            if matches!(event, tauri::WindowEvent::Destroyed) {
+                forget_isolated_window(&handle, &label);
+            }
+        });
+    }
 
     // Remote-URL IPC access is granted statically in Tauri v2 via the
     // capabilities system (see src-tauri/capabilities/remote.json), which

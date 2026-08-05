@@ -7,7 +7,8 @@ import Skeleton from "../components/Skeleton";
 import { decodeMetadata, openAppFrontend, parseTauriError } from "../utils/appUtils";
 import { getSettings } from "../utils/settings";
 import { detectRunningMerodNodes, type RunningMerodNode } from "../utils/merod";
-import { listInstalledMerodVersions, formatVersionLabel, BUNDLED_VERSION_ID } from "../utils/merodVersions";
+import { formatVersionLabel, BUNDLED_VERSION_ID } from "../utils/merodVersions";
+import { useNodeVersions } from "../hooks/useNodeVersions";
 import { invoke } from "@tauri-apps/api/core";
 import { RefreshCw, MoreHorizontal, Trash2, Copy, Rocket } from "lucide-react";
 import "./InstalledApps.css";
@@ -45,7 +46,7 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
   const [runningNodes, setRunningNodes] = useState<RunningMerodNode[]>([]);
   const [isolationOk, setIsolationOk] = useState(false);
   const [targets, setTargets] = useState<Record<string, string>>({});
-  const [nodeVersions, setNodeVersions] = useState<Record<string, string>>({});
+  const nodeVersions = useNodeVersions(developerMode).byNode;
 
   useEffect(() => {
     if (!developerMode) return;
@@ -55,17 +56,6 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
     invoke<boolean>('webview_isolation_supported')
       .then(setIsolationOk)
       .catch(() => setIsolationOk(false));
-    // A node name alone does not say what is being tested, so label each option
-    // with the binary it runs.
-    listInstalledMerodVersions()
-      .then((installed) => {
-        const map: Record<string, string> = {};
-        for (const entry of installed) {
-          for (const node of entry.used_by) map[node] = entry.id;
-        }
-        setNodeVersions(map);
-      })
-      .catch(() => setNodeVersions({}));
   }, [developerMode]);
   const mountedRef = useRef(true);
 

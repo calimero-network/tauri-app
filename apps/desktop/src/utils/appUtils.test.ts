@@ -196,7 +196,7 @@ describe('openAppFrontend targeting a second node', () => {
     });
 
     const args = windowArgs();
-    expect(args.windowLabel).toBe('app-app-1-n2529');
+    expect(args.windowLabel).toBe('app-app-1-nlocalhost-2529');
     expect(args.nodeUrl).toBe('http://localhost:2529');
     expect(args.isolationKey).toBe('app-1@http://localhost:2529');
     expect(String(args.title)).toContain('2529');
@@ -216,6 +216,22 @@ describe('openAppFrontend targeting a second node', () => {
     expect(openedUrl()).not.toContain('the-access-token');
   });
 
+  it('gives two default-port hosts different labels', async () => {
+    await openAppFrontend('https://app.example.com/', 'Example', undefined, {
+      applicationId: 'app-1',
+      targetNodeUrl: 'https://alpha.example.com',
+    });
+    const a = String(windowArgs().windowLabel);
+    invoke.mockClear();
+    await openAppFrontend('https://app.example.com/', 'Example', undefined, {
+      applicationId: 'app-1',
+      targetNodeUrl: 'https://beta.example.com',
+    });
+    const b = String(windowArgs().windowLabel);
+    // URL.port is '' for https default 443; keying on it alone collided here.
+    expect(a).not.toBe(b);
+  });
+
   it('keeps the label within the 64 character limit for a long application id', async () => {
     const longId = 'a'.repeat(80);
     await openAppFrontend('https://app.example.com/', 'Example', undefined, {
@@ -225,6 +241,6 @@ describe('openAppFrontend targeting a second node', () => {
 
     const label = String(windowArgs().windowLabel);
     expect(label.length).toBeLessThanOrEqual(64);
-    expect(label.endsWith('-n2529')).toBe(true);
+    expect(label.endsWith('-nlocalhost-2529')).toBe(true);
   });
 });

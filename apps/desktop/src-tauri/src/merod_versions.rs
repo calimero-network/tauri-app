@@ -21,6 +21,25 @@ pub enum VersionId {
 pub const BUNDLED_ID: &str = "bundled";
 const LOCAL_PREFIX: &str = "local:";
 
+/// Check a download against the `sha256:...` digest GitHub publishes for the
+/// asset. Catches corruption and a tampered CDN, not a malicious release itself.
+pub(crate) fn verify_sha256(bytes: &[u8], expected: &str) -> Result<(), TauriError> {
+    use sha2::{Digest, Sha256};
+    let Some(want) = expected.strip_prefix("sha256:") else {
+        return Ok(()); // unknown digest algorithm - nothing to compare against
+    };
+    let got = format!("{:x}", Sha256::digest(bytes));
+    if got.eq_ignore_ascii_case(want) {
+        Ok(())
+    } else {
+        Err(TauriError::with_details(
+            TauriErrorCode::InternalError,
+            "Downloaded merod archive does not match the digest GitHub published",
+            format!("expected {}, got {}", want, got),
+        ))
+    }
+}
+
 /// merod reports `merod <tag> (build ...) (commit ...) (rustc ...)`, so match the
 /// version field rather than the whole line, which never equals the bare tag.
 pub(crate) fn version_matches_tag(reported: &str, tag: &str) -> bool {
@@ -409,7 +428,7 @@ pub async fn ensure_release_installed(
         ));
     }
 
-    let (asset_name, asset_url) = release["assets"]
+    let (asset_name, asset_url, asset_digest) = release["assets"]
         .as_array()
         .ok_or_else(|| {
             TauriError::new(TauriErrorCode::InternalError, "No assets in GitHub release")
@@ -419,10 +438,11 @@ pub async fn ensure_release_installed(
             let name = a["name"].as_str()?;
             let url = a["browser_download_url"].as_str()?;
             let score = crate::score_merod_asset(name, target)?;
-            Some((score, name.to_string(), url.to_string()))
+            let digest = a["digest"].as_str().map(str::to_string);
+            Some((score, name.to_string(), url.to_string(), digest))
         })
-        .min_by_key(|(s, _, _)| *s)
-        .map(|(_, n, u)| (n, u))
+        .min_by_key(|(s, _, _, _)| *s)
+        .map(|(_, n, u, d)| (n, u, d))
         .ok_or_else(|| {
             TauriError::new(
                 TauriErrorCode::FileNotFound,
@@ -497,6 +517,10 @@ pub async fn ensure_release_installed(
         let bytes = dl.bytes().await.map_err(|e| {
             TauriError::new(TauriErrorCode::InternalError, format!("read download: {}", e))
         })?;
+        if let Some(expected) = asset_digest.as_deref() {
+            verify_sha256(&bytes, expected)?;
+        }
+
         tokio::fs::write(&archive_path, &bytes).await.map_err(|e| {
             TauriError::new(TauriErrorCode::FileWriteError, format!("write archive: {}", e))
         })?;
@@ -668,12 +692,18 @@ pub async fn list_installed_merod_versions(
         let path = PathBuf::from(id.trim_start_matches(LOCAL_PREFIX));
         let users = nodes_using(&home, &id);
         let measured = crate::get_merod_version_at(&path).await;
-        // A node with no recorded version_at_init predates this check - nothing to compare.
+        // Drift means the binary reports something else, so both sides must be
+        // readable: an unreadable build is a missing file, reported on start.
         let drifted_nodes: Vec<String> = users
             .iter()
-            .filter(|node| match read_pin_raw(&home, node).and_then(|p| p.version_at_init) {
-                Some(v) => Some(v) != measured,
-                None => false,
+            .filter(|node| {
+                match (
+                    read_pin_raw(&home, node).and_then(|p| p.version_at_init),
+                    measured.as_ref(),
+                ) {
+                    (Some(at_init), Some(now)) => &at_init != now,
+                    _ => false,
+                }
             })
             .cloned()
             .collect();
@@ -736,6 +766,17 @@ pub async fn remove_merod_version(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn verify_sha256_matches_and_rejects() {
+        // sha256("merod") - a known-good vector so the check itself is pinned.
+        let bytes = b"merod";
+        let good = format!("sha256:{:x}", <sha2::Sha256 as sha2::Digest>::digest(bytes));
+        assert!(verify_sha256(bytes, &good).is_ok());
+        assert!(verify_sha256(b"tampered", &good).is_err());
+        // An algorithm we cannot check must not be treated as a failure.
+        assert!(verify_sha256(bytes, "sha512:whatever").is_ok());
+    }
 
     #[test]
     fn version_check_tolerates_build_metadata_but_not_a_different_tag() {

@@ -358,9 +358,18 @@
             || (typeof Request !== 'undefined' && urlArg instanceof Request ? urlArg.method : 'GET');
         // A Request's body is a one-shot stream, so read it off a clone - the
         // original must stay consumable for the originalFetch fallback below.
-        const effectiveBody = (init && init.body != null) ? init.body
-            : (typeof Request !== 'undefined' && urlArg instanceof Request && urlArg.body != null
-                ? await urlArg.clone().text() : null);
+        // Read a Request body as bytes and only decode textual content types:
+        // .text() on a Blob/ArrayBuffer payload would corrupt it before encodeBody.
+        let effectiveBody = null;
+        if (init && init.body != null) {
+            effectiveBody = init.body;
+        } else if (typeof Request !== 'undefined' && urlArg instanceof Request && urlArg.body != null) {
+            const buf = await urlArg.clone().arrayBuffer();
+            const ct = (urlArg.headers.get('content-type') || '').toLowerCase();
+            const textual = !ct || ct.includes('json') || ct.startsWith('text/')
+                || ct.includes('x-www-form-urlencoded');
+            effectiveBody = textual ? new TextDecoder().decode(buf) : new Uint8Array(buf);
+        }
 
         console.log('[Tauri Proxy] Fetch called:', urlStr);
 

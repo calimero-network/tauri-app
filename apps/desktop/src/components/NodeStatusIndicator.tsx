@@ -1,7 +1,8 @@
 import { useState, useRef, useEffect } from "react";
 import { Server, ChevronDown } from "lucide-react";
 import type { RunningMerodNode } from "../utils/merod";
-import { listInstalledMerodVersions, formatVersionLabel, BUNDLED_VERSION_ID } from "../utils/merodVersions";
+import { formatVersionLabel, BUNDLED_VERSION_ID } from "../utils/merodVersions";
+import { useNodeVersions } from "../hooks/useNodeVersions";
 import "./NodeStatusIndicator.css";
 
 interface NodeStatusIndicatorProps {
@@ -25,21 +26,7 @@ export function NodeStatusIndicator({
 }: NodeStatusIndicatorProps) {
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
-  const [nodeVersions, setNodeVersions] = useState<Record<string, string>>({});
-
-  // Which binary each node runs, so the badge says what is actually being tested.
-  useEffect(() => {
-    if (!developerMode) return;
-    listInstalledMerodVersions()
-      .then((installed) => {
-        const map: Record<string, string> = {};
-        for (const entry of installed) {
-          for (const node of entry.used_by) map[node] = entry.id;
-        }
-        setNodeVersions(map);
-      })
-      .catch(() => setNodeVersions({}));
-  }, [developerMode, runningNodes]);
+  const nodeVersions = useNodeVersions(!!developerMode, undefined, [runningNodes]).byNode;
 
   const versionOf = (node?: RunningMerodNode) =>
     formatVersionLabel(nodeVersions[node?.node_name ?? ""] ?? BUNDLED_VERSION_ID, "");

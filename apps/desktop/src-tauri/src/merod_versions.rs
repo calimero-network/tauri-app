@@ -21,10 +21,8 @@ pub enum VersionId {
 pub const BUNDLED_ID: &str = "bundled";
 const LOCAL_PREFIX: &str = "local:";
 
-/// Tags land in both a URL and a directory name, so restrict them to characters
-/// that are unambiguous in each. `.` and `..` are excluded separately: both are
-/// made only of allowed characters, and either would resolve a store path back
-/// out of its per-tag directory.
+/// Tags land in both a URL and a directory name. `.` and `..` need excluding
+/// separately: both pass the charset yet resolve out of their own directory.
 pub fn is_safe_tag(tag: &str) -> bool {
     !tag.is_empty()
         && tag != "."

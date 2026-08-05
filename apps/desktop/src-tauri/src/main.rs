@@ -926,11 +926,33 @@ async fn rotate_access_token(
 #[tauri::command]
 async fn broker_token_refresh(
     app_handle: tauri::AppHandle,
+    window: tauri::WebviewWindow,
     registry: tauri::State<'_, TokenBrokerRegistry>,
+    isolated: tauri::State<'_, IsolatedWindows>,
 ) -> Result<String, TauriError> {
+    // The desktop's session belongs to the active node, so an isolated window -
+    // which exists to hold a different node's session - must never receive it.
+    // The label comes from the window itself, never from the caller's payload.
+    if is_isolated_window(&isolated, window.label()) {
+        return Err(TauriError::new(
+            TauriErrorCode::PathNotAllowed,
+            "Token brokering is not available to a window targeting another node",
+        ));
+    }
     rotate_access_token(&app_handle, &registry)
         .await
         .map_err(|reason| TauriError::new(TauriErrorCode::InternalError, reason))
+}
+
+/// Labels of windows created with their own webview store, i.e. windows pointed
+/// at a node the desktop is not signed into.
+type IsolatedWindows = std::sync::Arc<std::sync::Mutex<std::collections::HashSet<String>>>;
+
+fn is_isolated_window(state: &tauri::State<'_, IsolatedWindows>, label: &str) -> bool {
+    state
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .contains(label)
 }
 
 /// Maps an issued capability token -> its app id. Populated when a per-app
@@ -1713,9 +1735,8 @@ fn create_desktop_shortcut(
     }
 }
 
-/// Whether this platform can give a webview its own storage. Never guess: wry
-/// silently falls back to the shared default store below macOS 14, which would
-/// let two nodes' sessions overwrite each other.
+/// Whether this platform can give a webview its own storage. Never guess: below
+/// macOS 14 wry falls back to the shared store silently, merging two sessions.
 #[tauri::command]
 fn webview_isolation_supported() -> bool {
     #[cfg(target_os = "macos")]
@@ -1744,10 +1765,14 @@ fn hex_16(bytes: &[u8; 16]) -> String {
     bytes.iter().map(|b| format!("{:02x}", b)).collect()
 }
 
-/// Stable 16-byte webview store id for an isolation key, assigned from a
-/// persisted slot map. Slots start at 1 because an all-zero identifier is not
-/// a valid WKWebsiteDataStore identifier.
+/// Stable 16-byte webview store id, assigned from a persisted slot map. Slot 0
+/// is skipped: an all-zero identifier is not a valid WKWebsiteDataStore id.
 fn webview_store_id(app_handle: &tauri::AppHandle, key: &str) -> Result<[u8; 16], TauriError> {
+    // Serialise the whole read-modify-write. Two concurrent first-time keys would
+    // otherwise both compute max+1 from the same stale map and share one store.
+    static SLOTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _guard = SLOTS.lock().unwrap_or_else(|p| p.into_inner());
+
     let dir = app_handle.path().app_data_dir().map_err(|e| {
         TauriError::with_details(
             TauriErrorCode::DirectoryError,
@@ -1861,6 +1886,16 @@ async fn create_app_window(
     .resizable(true)
     .center()
     .initialization_script(&proxy_script); // Inject script with configured node URL
+
+    // Record before the window exists, so the broker can never be raced by a page
+    // that loads and invokes it before the registration lands.
+    if isolation_key.is_some() {
+        app_handle
+            .state::<IsolatedWindows>()
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(window_label.clone());
+    }
 
     // A stable per-(app, node) bucket so the window keeps its own session across
     // opens. macOS has no per-webview data directory, hence the identifier.
@@ -4990,6 +5025,7 @@ fn main() {
         .manage(MerodLogWriters::default())
         .manage(SseCancelRegistry::new(std::sync::Mutex::new(std::collections::HashMap::new())))
         .manage(TokenBrokerRegistry::new(std::sync::Mutex::new(std::collections::HashMap::new())))
+        .manage(IsolatedWindows::new(std::sync::Mutex::new(std::collections::HashSet::new())))
         .invoke_handler(tauri::generate_handler![
             get_pending_open_app,
             clear_pending_open_app,

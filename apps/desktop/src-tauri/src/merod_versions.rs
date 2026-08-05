@@ -101,8 +101,18 @@ pub fn store_dir(app_data_dir: &Path) -> PathBuf {
     app_data_dir.join("merod")
 }
 
+/// Windows needs the extension: `Command::new` does not append `.exe` to an
+/// explicit path the way PATH lookup does.
+pub fn merod_file_name() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "merod.exe"
+    } else {
+        "merod"
+    }
+}
+
 pub fn release_binary_path(app_data_dir: &Path, tag: &str) -> PathBuf {
-    store_dir(app_data_dir).join(tag).join("merod")
+    store_dir(app_data_dir).join(tag).join(merod_file_name())
 }
 
 /// Recorded in `<homeDir>/<node>/merod-version.json` when the node is created.
@@ -688,10 +698,24 @@ pub async fn list_installed_merod_versions(
         }
     }
     locals.sort();
-    for id in locals {
+
+    // Measure concurrently: get_merod_version_at carries a 10s timeout, so one
+    // hung build must not stall the panel for every other build in turn.
+    let mut measuring = Vec::with_capacity(locals.len());
+    for id in &locals {
+        let path = PathBuf::from(id.trim_start_matches(LOCAL_PREFIX));
+        measuring.push(tokio::spawn(
+            async move { crate::get_merod_version_at(&path).await },
+        ));
+    }
+    let mut measurements = Vec::with_capacity(measuring.len());
+    for handle in measuring {
+        measurements.push(handle.await.unwrap_or(None));
+    }
+
+    for (id, measured) in locals.into_iter().zip(measurements) {
         let path = PathBuf::from(id.trim_start_matches(LOCAL_PREFIX));
         let users = nodes_using(&home, &id);
-        let measured = crate::get_merod_version_at(&path).await;
         // Drift means the binary reports something else, so both sides must be
         // readable: an unreadable build is a missing file, reported on start.
         let drifted_nodes: Vec<String> = users

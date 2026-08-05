@@ -26,10 +26,15 @@ export function NodeStatusIndicator({
 }: NodeStatusIndicatorProps) {
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
-  const nodeVersions = useNodeVersions(!!developerMode, undefined, [runningNodes]).byNode;
+  const { byNode: nodeVersions, measured: versionMeasured } =
+    useNodeVersions(!!developerMode, undefined, [runningNodes]);
 
-  const versionOf = (node?: RunningMerodNode) =>
-    formatVersionLabel(nodeVersions[node?.node_name ?? ""] ?? BUNDLED_VERSION_ID, "");
+  // Pass the measured version through, or a local build always reads as the
+  // generic "local build" and a rebuild produces no visible signal here.
+  const versionOf = (node?: RunningMerodNode) => {
+    const id = nodeVersions[node?.node_name ?? ""] ?? BUNDLED_VERSION_ID;
+    return formatVersionLabel(id, "", versionMeasured[id]);
+  };
 
   const currentNode = runningNodes?.find(
     (n) => `http://localhost:${n.port}` === currentNodeUrl,

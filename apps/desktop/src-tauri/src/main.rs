@@ -28,7 +28,7 @@ const MEROD_CONFIG_VERSION: &str = match option_env!("MEROD_CONFIG_VERSION") {
     None => "unknown",
 };
 
-fn http_client() -> &'static reqwest::Client {
+pub(crate) fn http_client() -> &'static reqwest::Client {
     HTTP_CLIENT.get_or_init(|| {
         reqwest::Client::builder()
             .danger_accept_invalid_certs(false)
@@ -2030,7 +2030,7 @@ type MerodLogWriters = Arc<Mutex<std::collections::HashMap<String, LogWriterEntr
 
 /// Resolve an optional caller-supplied home dir: expand a leading `~`, or fall
 /// back to `~/.calimero`. Single source of truth for the node commands.
-fn resolve_home_dir(home_dir: Option<String>) -> Result<std::path::PathBuf, TauriError> {
+pub(crate) fn resolve_home_dir(home_dir: Option<String>) -> Result<std::path::PathBuf, TauriError> {
     if let Some(dir) = home_dir {
         let expanded = if dir.starts_with("~") {
             match dirs::home_dir() {
@@ -3291,7 +3291,7 @@ fn find_merod_binary_in_dir(dir: &std::path::Path) -> Option<std::path::PathBuf>
 }
 
 /// Runs `<binary> --version` and returns the trimmed stdout, or `None` on failure or timeout.
-async fn get_merod_version_at(path: &std::path::Path) -> Option<String> {
+pub(crate) async fn get_merod_version_at(path: &std::path::Path) -> Option<String> {
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(10),
         Command::new(path).arg("--version").output(),
@@ -3315,7 +3315,7 @@ async fn get_merod_version_at(path: &std::path::Path) -> Option<String> {
 
 /// Extracts the merod binary from an archive (`.tar.gz` / `.zip`) into `temp_dir`.
 /// Returns the path to the extracted binary.
-async fn extract_merod_binary(
+pub(crate) async fn extract_merod_binary(
     archive_path: &std::path::Path,
     asset_name: &str,
     temp_dir: &std::path::Path,

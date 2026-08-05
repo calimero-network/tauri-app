@@ -4,6 +4,8 @@
 use crate::{TauriError, TauriErrorCode};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 /// Which merod binary a node runs.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -131,6 +133,96 @@ pub fn write_pin(home_dir: &Path, node_name: &str, pin: &NodePin) -> Result<(), 
     })
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct ReleaseInfo {
+    pub tag: String,
+    pub prerelease: bool,
+    /// Whether this release ships a merod build for the running platform.
+    pub has_asset: bool,
+}
+
+/// One hour, matching GitHub's unauthenticated rate-limit window (60 requests/hour).
+const RELEASE_CACHE_TTL: Duration = Duration::from_secs(3600);
+
+static RELEASE_CACHE: Mutex<Option<(Instant, Vec<ReleaseInfo>)>> = Mutex::new(None);
+
+pub(crate) fn releases_from_json(body: &serde_json::Value, target: &str) -> Vec<ReleaseInfo> {
+    body.as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    let tag = item["tag_name"].as_str()?;
+                    if !is_safe_tag(tag) {
+                        return None;
+                    }
+                    let has_asset = item["assets"]
+                        .as_array()
+                        .map(|assets| {
+                            assets.iter().any(|a| {
+                                a["name"]
+                                    .as_str()
+                                    .and_then(|n| crate::score_merod_asset(n, target))
+                                    .is_some()
+                            })
+                        })
+                        .unwrap_or(false);
+                    Some(ReleaseInfo {
+                        tag: tag.to_string(),
+                        prerelease: item["prerelease"].as_bool().unwrap_or(false),
+                        has_asset,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[tauri::command]
+pub async fn list_merod_releases(refresh: Option<bool>) -> Result<Vec<ReleaseInfo>, TauriError> {
+    if !refresh.unwrap_or(false) {
+        if let Ok(guard) = RELEASE_CACHE.lock() {
+            if let Some((fetched_at, cached)) = guard.as_ref() {
+                if fetched_at.elapsed() < RELEASE_CACHE_TTL {
+                    return Ok(cached.clone());
+                }
+            }
+        }
+    }
+
+    let response = crate::http_client()
+        .get("https://api.github.com/repos/calimero-network/core/releases?per_page=40")
+        .header("Accept", "application/vnd.github+json")
+        .header("User-Agent", "calimero-desktop")
+        .send()
+        .await
+        .map_err(|e| {
+            TauriError::new(TauriErrorCode::InternalError, format!("GitHub API: {}", e))
+        })?;
+
+    let status = response.status();
+    let body: serde_json::Value = response.json().await.map_err(|e| {
+        TauriError::new(
+            TauriErrorCode::InternalError,
+            format!("Parse releases JSON: {}", e),
+        )
+    })?;
+
+    if !status.is_success() {
+        let msg = body["message"].as_str().unwrap_or("unknown error");
+        return Err(TauriError::new(
+            TauriErrorCode::InternalError,
+            format!("GitHub API returned {}: {}", status, msg),
+        ));
+    }
+
+    let releases = releases_from_json(&body, crate::merod_target_triple());
+    if let Ok(mut guard) = RELEASE_CACHE.lock() {
+        *guard = Some((Instant::now(), releases.clone()));
+    }
+    Ok(releases)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -229,5 +321,27 @@ mod tests {
         std::fs::write(pin_path(&home, "node1"), "{ not json").unwrap();
         assert_eq!(read_pin(&home, "node1"), VersionId::Bundled);
         let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn maps_release_json_to_release_info() {
+        let body = serde_json::json!([
+            { "tag_name": "0.11.0-rc.19", "prerelease": true,
+              "assets": [{ "name": "merod_aarch64-apple-darwin.tar.gz" }] },
+            { "tag_name": "0.10.0", "prerelease": false,
+              "assets": [{ "name": "meroctl_aarch64-apple-darwin.tar.gz" }] },
+            { "tag_name": "bad tag", "prerelease": false, "assets": [] }
+        ]);
+
+        let out = releases_from_json(&body, "aarch64-apple-darwin");
+
+        // The unsafe tag is dropped entirely; the other two survive in order.
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].tag, "0.11.0-rc.19");
+        assert!(out[0].prerelease);
+        assert!(out[0].has_asset);
+        assert_eq!(out[1].tag, "0.10.0");
+        assert!(!out[1].prerelease);
+        assert!(!out[1].has_asset, "meroctl is not a merod asset");
     }
 }

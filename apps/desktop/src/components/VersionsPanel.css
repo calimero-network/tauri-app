@@ -1,0 +1,36 @@
+.versions-panel {
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 16px;
+  background: var(--bg-secondary);
+}
+
+.versions-panel-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.versions-total { font-size: 12px; color: var(--text-tertiary); }
+
+.versions-list { list-style: none; margin: 0; padding: 0; }
+
+.versions-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+  border-top: 1px solid var(--border-color);
+}
+
+.versions-row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.versions-row-id { font-size: 13px; color: var(--text-primary); }
+.versions-row-sub {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.versions-row-users { font-size: 11px; color: var(--text-secondary); white-space: nowrap; }

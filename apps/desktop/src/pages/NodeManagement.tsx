@@ -26,6 +26,7 @@ import { useToast } from "../contexts/ToastContext";
 import { Play, Square, RefreshCw, Check, FileText, ChevronDown } from "lucide-react";
 import { LogsViewer } from "../components/LogsViewer";
 import { ScrollHint } from "../components/ScrollHint";
+import { VersionsPanel } from "../components/VersionsPanel";
 import "./NodeManagement.css";
 
 export default function NodeManagement() {
@@ -678,6 +679,8 @@ export default function NodeManagement() {
               </div>
             </div>
           )}
+
+          {developerMode && <VersionsPanel homeDir={homeDir} />}
 
           {safeAvailableNodes.length === 0 && (
             <div className="empty-state">

@@ -931,9 +931,8 @@ async fn broker_token_refresh(
     registry: tauri::State<'_, TokenBrokerRegistry>,
     isolated: tauri::State<'_, IsolatedWindows>,
 ) -> Result<String, TauriError> {
-    // The desktop's session belongs to the active node, so an isolated window -
-    // which exists to hold a different node's session - must never receive it.
-    // The label comes from the window itself, never from the caller's payload.
+    // Our session belongs to the active node, so a window holding another node's
+    // session must never receive it. The label is Tauri's, not the caller's.
     if is_isolated_window(&isolated, window.label()) {
         return Err(TauriError::new(
             TauriErrorCode::PathNotAllowed,

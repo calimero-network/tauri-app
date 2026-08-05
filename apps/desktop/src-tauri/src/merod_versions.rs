@@ -21,6 +21,16 @@ pub enum VersionId {
 pub const BUNDLED_ID: &str = "bundled";
 const LOCAL_PREFIX: &str = "local:";
 
+/// merod reports `merod <tag> (build ...) (commit ...) (rustc ...)`, so match the
+/// version field rather than the whole line, which never equals the bare tag.
+pub(crate) fn version_matches_tag(reported: &str, tag: &str) -> bool {
+    let expected = format!("merod {}", tag);
+    match reported.strip_prefix(&expected) {
+        Some(rest) => rest.is_empty() || rest.starts_with(char::is_whitespace),
+        None => false,
+    }
+}
+
 /// Tags land in both a URL and a directory name. `.` and `..` need excluding
 /// separately: both pass the charset yet resolve out of their own directory.
 pub fn is_safe_tag(tag: &str) -> bool {
@@ -519,7 +529,7 @@ pub async fn ensure_release_installed(
             let reported = crate::get_merod_version_at(&staged).await;
             let expected = format!("merod {}", tag);
             match reported {
-                Some(v) if v == expected => {}
+                Some(ref v) if version_matches_tag(v, tag) => {}
                 other => {
                     return Err(TauriError::new(
                         TauriErrorCode::InternalError,
@@ -726,6 +736,20 @@ pub async fn remove_merod_version(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn version_check_tolerates_build_metadata_but_not_a_different_tag() {
+        // What a real binary prints - the bare tag never appears alone.
+        let real = "merod 0.11.0-rc.19 (build c2e8ec3) (commit c2e8ec3) (rustc 1.88.0)";
+        assert!(version_matches_tag(real, "0.11.0-rc.19"));
+        assert!(version_matches_tag("merod 0.11.0", "0.11.0"));
+
+        // A tag that is a prefix of the reported one must not pass.
+        assert!(!version_matches_tag(real, "0.11.0-rc.1"));
+        assert!(!version_matches_tag(real, "0.11.0"));
+        assert!(!version_matches_tag("meroctl 0.11.0-rc.19", "0.11.0-rc.19"));
+        assert!(!version_matches_tag("", "0.11.0-rc.19"));
+    }
 
     #[test]
     fn parses_the_three_id_shapes() {

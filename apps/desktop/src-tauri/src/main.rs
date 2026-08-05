@@ -3665,7 +3665,7 @@ async fn download_and_replace_merod(
 
     // Fast path: already correct
     if let Some(current) = get_merod_version_at(&binary_path).await {
-        if current == expected_version_output {
+        if merod_versions::version_matches_tag(&current, expected) {
             return Ok(serde_json::json!({
                 "replaced": false,
                 "expected_version": expected,
@@ -3891,7 +3891,7 @@ async fn download_and_replace_merod(
         .await
         .unwrap_or_else(|| "unknown".to_string());
 
-    if new_version != expected_version_output {
+    if !merod_versions::version_matches_tag(&new_version, expected) {
         // Restore backup so the app is not left with a wrong binary
         let _ = tokio::fs::rename(&bak_path, &binary_path).await;
         return Err(TauriError::new(

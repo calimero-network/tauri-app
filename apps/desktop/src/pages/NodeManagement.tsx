@@ -15,6 +15,7 @@ import {
 } from "../utils/merod";
 import {
   listMerodReleases,
+  listInstalledMerodVersions,
   formatVersionLabel,
   BUNDLED_VERSION_ID,
   LOCAL_ID_PREFIX,
@@ -56,6 +57,7 @@ export default function NodeManagement() {
   const [versionId, setVersionId] = useState<string>(BUNDLED_VERSION_ID);
   const [releases, setReleases] = useState<ReleaseInfo[]>([]);
   const [releasesError, setReleasesError] = useState<string>("");
+  const [nodeVersions, setNodeVersions] = useState<Record<string, string>>({});
   const developerMode = getSettings().developerMode ?? false;
   const safeAvailableNodes = Array.isArray(availableNodes) ? availableNodes : [];
   const safeRunningNodes = Array.isArray(runningNodes) ? runningNodes : [];
@@ -76,6 +78,19 @@ export default function NodeManagement() {
       .then((r) => setReleases(r.filter((item) => item.has_asset)))
       .catch((e) => setReleasesError(e?.message || "Could not reach GitHub"));
   }, [developerMode]);
+
+  useEffect(() => {
+    if (!developerMode) return;
+    listInstalledMerodVersions(homeDir)
+      .then((installed) => {
+        const map: Record<string, string> = {};
+        for (const entry of installed) {
+          for (const node of entry.used_by) map[node] = entry.id;
+        }
+        setNodeVersions(map);
+      })
+      .catch(() => setNodeVersions({}));
+  }, [developerMode, homeDir, availableNodes]);
 
   useEffect(() => {
     loadNodes();
@@ -546,6 +561,11 @@ export default function NodeManagement() {
                           {getRunningNodeInfo(selectedNode).running ? `Port ${getRunningNodeInfo(selectedNode).port}` : 'Stopped'}
                         </span>
                       )}
+                      {developerMode && (
+                        <span className={`node-version-badge${(nodeVersions[selectedNode] ?? BUNDLED_VERSION_ID) !== BUNDLED_VERSION_ID ? ' custom' : ''}`}>
+                          {formatVersionLabel(nodeVersions[selectedNode] ?? BUNDLED_VERSION_ID, merodBinaryVersion)}
+                        </span>
+                      )}
                     </span>
                     <ChevronDown size={15} className={`node-select-chevron${nodeDropdownOpen ? ' open' : ''}`} />
                   </button>
@@ -566,6 +586,11 @@ export default function NodeManagement() {
                             <span className="node-select-option-badge">
                               {nodeInfo.running ? `Port ${nodeInfo.port}` : 'Stopped'}
                             </span>
+                            {developerMode && (
+                              <span className={`node-version-badge${(nodeVersions[node] ?? BUNDLED_VERSION_ID) !== BUNDLED_VERSION_ID ? ' custom' : ''}`}>
+                                {formatVersionLabel(nodeVersions[node] ?? BUNDLED_VERSION_ID, merodBinaryVersion)}
+                              </span>
+                            )}
                             {isSelected && <Check size={13} className="node-select-check" />}
                           </button>
                         );

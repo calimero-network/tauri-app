@@ -494,3 +494,17 @@
   color: var(--accent-primary);
   flex-shrink: 0;
 }
+
+.node-version-badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  border: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.node-version-badge.custom {
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
+}

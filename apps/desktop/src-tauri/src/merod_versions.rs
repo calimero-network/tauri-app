@@ -251,15 +251,13 @@ pub(crate) fn nodes_using(home_dir: &Path, id: &str) -> Vec<String> {
 }
 
 /// Download and extract `tag` into the store unless it is already there.
-/// One download in flight per tag: two nodes created on the same tag must not
-/// race for the same destination.
+/// Installs of the same tag are serialised so two nodes cannot race the download.
 pub async fn ensure_release_installed(
     app_data_dir: &Path,
     tag: &str,
 ) -> Result<PathBuf, TauriError> {
     use tokio::sync::Mutex as AsyncMutex;
-    static IN_FLIGHT: std::sync::OnceLock<AsyncMutex<std::collections::HashSet<String>>> =
-        std::sync::OnceLock::new();
+    static IN_FLIGHT: std::sync::OnceLock<AsyncMutex<()>> = std::sync::OnceLock::new();
 
     if !is_safe_tag(tag) {
         return Err(TauriError::new(
@@ -275,7 +273,7 @@ pub async fn ensure_release_installed(
 
     // Serialise all installs. Downloads are rare and a few seconds each, so a
     // single gate is simpler than per-tag locks and cannot deadlock.
-    let gate = IN_FLIGHT.get_or_init(|| AsyncMutex::new(std::collections::HashSet::new()));
+    let gate = IN_FLIGHT.get_or_init(|| AsyncMutex::new(()));
     let _guard = gate.lock().await;
     if dest.exists() {
         return Ok(dest); // another caller finished while we waited
@@ -357,42 +355,46 @@ pub async fn ensure_release_installed(
     tokio::fs::create_dir_all(&temp_dir).await.map_err(|e| {
         TauriError::new(TauriErrorCode::DirectoryError, format!("create temp dir: {}", e))
     })?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&temp_dir, std::fs::Permissions::from_mode(0o700)).map_err(|e| {
-            TauriError::new(TauriErrorCode::DirectoryError, format!("temp dir perms: {}", e))
-        })?;
-    }
 
-    let archive_path = temp_dir.join(&safe_asset_name);
-    let download_client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(300))
-        .build()
-        .map_err(|e| {
-            TauriError::new(TauriErrorCode::InternalError, format!("download client: {}", e))
-        })?;
-    let dl = download_client
-        .get(&asset_url)
-        .header("User-Agent", "calimero-desktop")
-        .send()
-        .await
-        .map_err(|e| TauriError::new(TauriErrorCode::InternalError, format!("download: {}", e)))?;
-    if !dl.status().is_success() {
-        let _ = tokio::fs::remove_dir_all(&temp_dir).await;
-        return Err(TauriError::new(
-            TauriErrorCode::InternalError,
-            format!("Asset download returned HTTP {}", dl.status()),
-        ));
-    }
-    let bytes = dl.bytes().await.map_err(|e| {
-        TauriError::new(TauriErrorCode::InternalError, format!("read download: {}", e))
-    })?;
-    tokio::fs::write(&archive_path, &bytes).await.map_err(|e| {
-        TauriError::new(TauriErrorCode::FileWriteError, format!("write archive: {}", e))
-    })?;
+    // temp_dir is removed once, unconditionally, after this block - not at each
+    // `?` - so a dropped connection or a mid-flight failure never leaks it.
+    let install_result: Result<PathBuf, TauriError> = async {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&temp_dir, std::fs::Permissions::from_mode(0o700)).map_err(
+                |e| TauriError::new(TauriErrorCode::DirectoryError, format!("temp dir perms: {}", e)),
+            )?;
+        }
 
-    let install_result = async {
+        let archive_path = temp_dir.join(&safe_asset_name);
+        let download_client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(300))
+            .build()
+            .map_err(|e| {
+                TauriError::new(TauriErrorCode::InternalError, format!("download client: {}", e))
+            })?;
+        let dl = download_client
+            .get(&asset_url)
+            .header("User-Agent", "calimero-desktop")
+            .send()
+            .await
+            .map_err(|e| {
+                TauriError::new(TauriErrorCode::InternalError, format!("download: {}", e))
+            })?;
+        if !dl.status().is_success() {
+            return Err(TauriError::new(
+                TauriErrorCode::InternalError,
+                format!("Asset download returned HTTP {}", dl.status()),
+            ));
+        }
+        let bytes = dl.bytes().await.map_err(|e| {
+            TauriError::new(TauriErrorCode::InternalError, format!("read download: {}", e))
+        })?;
+        tokio::fs::write(&archive_path, &bytes).await.map_err(|e| {
+            TauriError::new(TauriErrorCode::FileWriteError, format!("write archive: {}", e))
+        })?;
+
         let extracted =
             crate::extract_merod_binary(&archive_path, &safe_asset_name, &temp_dir).await?;
 
@@ -406,38 +408,47 @@ pub async fn ensure_release_installed(
         // Copy to a sibling then rename, so a crash mid-copy cannot leave a
         // truncated binary at the path other nodes resolve.
         let staged = dest.with_extension("staged");
-        tokio::fs::copy(&extracted, &staged).await.map_err(|e| {
-            TauriError::new(TauriErrorCode::InternalError, format!("stage binary: {}", e))
-        })?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755)).map_err(
-                |e| TauriError::new(TauriErrorCode::InternalError, format!("set +x: {}", e)),
-            )?;
-        }
-
-        let reported = crate::get_merod_version_at(&staged).await;
-        let expected = format!("merod {}", tag);
-        match reported {
-            Some(v) if v == expected => {}
-            other => {
-                let _ = tokio::fs::remove_file(&staged).await;
-                return Err(TauriError::new(
-                    TauriErrorCode::InternalError,
-                    format!(
-                        "Downloaded binary reports '{}', expected '{}'",
-                        other.unwrap_or_else(|| "nothing".to_string()),
-                        expected
-                    ),
-                ));
+        let staged_result: Result<PathBuf, TauriError> = async {
+            tokio::fs::copy(&extracted, &staged).await.map_err(|e| {
+                TauriError::new(TauriErrorCode::InternalError, format!("stage binary: {}", e))
+            })?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755)).map_err(
+                    |e| TauriError::new(TauriErrorCode::InternalError, format!("set +x: {}", e)),
+                )?;
             }
-        }
 
-        tokio::fs::rename(&staged, &dest).await.map_err(|e| {
-            TauriError::new(TauriErrorCode::InternalError, format!("install binary: {}", e))
-        })?;
-        Ok::<PathBuf, TauriError>(dest.clone())
+            let reported = crate::get_merod_version_at(&staged).await;
+            let expected = format!("merod {}", tag);
+            match reported {
+                Some(v) if v == expected => {}
+                other => {
+                    return Err(TauriError::new(
+                        TauriErrorCode::InternalError,
+                        format!(
+                            "Downloaded binary reports '{}', expected '{}'",
+                            other.unwrap_or_else(|| "nothing".to_string()),
+                            expected
+                        ),
+                    ));
+                }
+            }
+
+            tokio::fs::rename(&staged, &dest).await.map_err(|e| {
+                TauriError::new(TauriErrorCode::InternalError, format!("install binary: {}", e))
+            })?;
+            Ok(dest.clone())
+        }
+        .await;
+
+        // Unconditional, same reasoning as temp_dir: any failure past the copy
+        // could otherwise leave `.staged` sitting in the persistent store.
+        if staged_result.is_err() {
+            let _ = tokio::fs::remove_file(&staged).await;
+        }
+        staged_result
     }
     .await;
 
@@ -580,7 +591,16 @@ pub async fn remove_merod_version(
         ));
     }
 
-    let dir = store_dir(&base).join(&tag);
+    let root = store_dir(&base);
+    let dir = root.join(&tag);
+    // Defence in depth behind is_safe_tag: this call deletes a tree, so confirm
+    // the resolved path is still inside the store before recursing.
+    if dir.parent() != Some(root.as_path()) {
+        return Err(TauriError::new(
+            TauriErrorCode::PathNotAllowed,
+            format!("Refusing to remove a path outside the merod store: {}", dir.display()),
+        ));
+    }
     std::fs::remove_dir_all(&dir).map_err(|e| {
         TauriError::with_details(
             TauriErrorCode::DirectoryError,

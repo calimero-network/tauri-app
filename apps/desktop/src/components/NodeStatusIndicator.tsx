@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { Server, ChevronDown } from "lucide-react";
 import type { RunningMerodNode } from "../utils/merod";
+import { listInstalledMerodVersions, formatVersionLabel, BUNDLED_VERSION_ID } from "../utils/merodVersions";
 import "./NodeStatusIndicator.css";
 
 interface NodeStatusIndicatorProps {
@@ -24,6 +25,28 @@ export function NodeStatusIndicator({
 }: NodeStatusIndicatorProps) {
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  const [nodeVersions, setNodeVersions] = useState<Record<string, string>>({});
+
+  // Which binary each node runs, so the badge says what is actually being tested.
+  useEffect(() => {
+    if (!developerMode) return;
+    listInstalledMerodVersions()
+      .then((installed) => {
+        const map: Record<string, string> = {};
+        for (const entry of installed) {
+          for (const node of entry.used_by) map[node] = entry.id;
+        }
+        setNodeVersions(map);
+      })
+      .catch(() => setNodeVersions({}));
+  }, [developerMode, runningNodes]);
+
+  const versionOf = (node?: RunningMerodNode) =>
+    formatVersionLabel(nodeVersions[node?.node_name ?? ""] ?? BUNDLED_VERSION_ID, "");
+
+  const currentNode = runningNodes?.find(
+    (n) => `http://localhost:${n.port}` === currentNodeUrl,
+  );
 
   const hasError = !connected && error;
   const isClickable = hasError && onClick;
@@ -69,6 +92,11 @@ export function NodeStatusIndicator({
       <span className="node-status-label">
         {connected ? "Connected" : "Disconnected"}
       </span>
+      {developerMode && connected && currentNode && (
+        <span className="node-status-version">
+          {currentNode.node_name} &middot; {versionOf(currentNode)}
+        </span>
+      )}
       {hasError && <span className="node-status-action">Restart Node →</span>}
       {showDropdown && <ChevronDown size={14} className="node-status-chevron" />}
     </button>
@@ -92,6 +120,7 @@ export function NodeStatusIndicator({
                 onClick={() => handleSelectNode(node)}
               >
                 {node.node_name} (port {node.port})
+                <span className="node-status-dropdown-version">{versionOf(node)}</span>
               </button>
             );
           })}

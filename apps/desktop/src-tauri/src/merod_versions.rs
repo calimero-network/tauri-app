@@ -19,9 +19,13 @@ pub const BUNDLED_ID: &str = "bundled";
 const LOCAL_PREFIX: &str = "local:";
 
 /// Tags land in both a URL and a directory name, so restrict them to characters
-/// that are unambiguous in each.
+/// that are unambiguous in each. `.` and `..` are excluded separately: both are
+/// made only of allowed characters, and either would resolve a store path back
+/// out of its per-tag directory.
 pub fn is_safe_tag(tag: &str) -> bool {
     !tag.is_empty()
+        && tag != "."
+        && tag != ".."
         && tag
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_')
@@ -117,6 +121,8 @@ mod tests {
         assert!(!is_safe_tag("0.11.0/../x"));
         assert!(!is_safe_tag(""));
         assert!(!is_safe_tag("tag with space"));
+        assert!(!is_safe_tag(".."));
+        assert!(!is_safe_tag("."));
     }
 
     #[test]

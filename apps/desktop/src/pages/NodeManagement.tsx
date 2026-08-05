@@ -59,6 +59,8 @@ export default function NodeManagement() {
   const [releases, setReleases] = useState<ReleaseInfo[]>([]);
   const [releasesError, setReleasesError] = useState<string>("");
   const [nodeVersions, setNodeVersions] = useState<Record<string, string>>({});
+  const [versionMeasured, setVersionMeasured] = useState<Record<string, string>>({});
+  const [driftedNodes, setDriftedNodes] = useState<Set<string>>(new Set());
   const developerMode = getSettings().developerMode ?? false;
   const safeAvailableNodes = Array.isArray(availableNodes) ? availableNodes : [];
   const safeRunningNodes = Array.isArray(runningNodes) ? runningNodes : [];
@@ -85,12 +87,22 @@ export default function NodeManagement() {
     listInstalledMerodVersions(homeDir)
       .then((installed) => {
         const map: Record<string, string> = {};
+        const measured: Record<string, string> = {};
+        const drifted = new Set<string>();
         for (const entry of installed) {
           for (const node of entry.used_by) map[node] = entry.id;
+          if (entry.measured_version) measured[entry.id] = entry.measured_version;
+          for (const node of entry.drifted_nodes) drifted.add(node);
         }
         setNodeVersions(map);
+        setVersionMeasured(measured);
+        setDriftedNodes(drifted);
       })
-      .catch(() => setNodeVersions({}));
+      .catch(() => {
+        setNodeVersions({});
+        setVersionMeasured({});
+        setDriftedNodes(new Set());
+      });
   }, [developerMode, homeDir, availableNodes]);
 
   useEffect(() => {
@@ -106,6 +118,19 @@ export default function NodeManagement() {
     if (!nodeName) return { running: false };
     const runningNode = safeRunningNodes.find(n => n.node_name === nodeName);
     return runningNode ? { running: true, port: runningNode.port } : { running: false };
+  };
+
+  const getVersionBadge = (nodeName: string) => {
+    const id = nodeVersions[nodeName] ?? BUNDLED_VERSION_ID;
+    const drifted = driftedNodes.has(nodeName);
+    return {
+      label: formatVersionLabel(id, merodBinaryVersion, versionMeasured[id]),
+      className: `node-version-badge${id !== BUNDLED_VERSION_ID ? ' custom' : ''}${drifted ? ' drifted' : ''}`,
+      // Expected after a rebuild; surfaced so a mismatch isn't mistaken for a bug.
+      title: drifted
+        ? "This binary now reports a different version than when the node was created - the node's data directory was created by a different build."
+        : undefined,
+    };
   };
 
   useEffect(() => {
@@ -562,11 +587,12 @@ export default function NodeManagement() {
                           {getRunningNodeInfo(selectedNode).running ? `Port ${getRunningNodeInfo(selectedNode).port}` : 'Stopped'}
                         </span>
                       )}
-                      {developerMode && (
-                        <span className={`node-version-badge${(nodeVersions[selectedNode] ?? BUNDLED_VERSION_ID) !== BUNDLED_VERSION_ID ? ' custom' : ''}`}>
-                          {formatVersionLabel(nodeVersions[selectedNode] ?? BUNDLED_VERSION_ID, merodBinaryVersion)}
-                        </span>
-                      )}
+                      {developerMode && (() => {
+                        const badge = getVersionBadge(selectedNode);
+                        return (
+                          <span className={badge.className} title={badge.title}>{badge.label}</span>
+                        );
+                      })()}
                     </span>
                     <ChevronDown size={15} className={`node-select-chevron${nodeDropdownOpen ? ' open' : ''}`} />
                   </button>
@@ -575,6 +601,7 @@ export default function NodeManagement() {
                       {safeAvailableNodes.map((node) => {
                         const nodeInfo = getRunningNodeInfo(node);
                         const isSelected = node === selectedNode;
+                        const badge = getVersionBadge(node);
                         return (
                           <button
                             key={node}
@@ -588,9 +615,7 @@ export default function NodeManagement() {
                               {nodeInfo.running ? `Port ${nodeInfo.port}` : 'Stopped'}
                             </span>
                             {developerMode && (
-                              <span className={`node-version-badge${(nodeVersions[node] ?? BUNDLED_VERSION_ID) !== BUNDLED_VERSION_ID ? ' custom' : ''}`}>
-                                {formatVersionLabel(nodeVersions[node] ?? BUNDLED_VERSION_ID, merodBinaryVersion)}
-                              </span>
+                              <span className={badge.className} title={badge.title}>{badge.label}</span>
                             )}
                             {isSelected && <Check size={13} className="node-select-check" />}
                           </button>

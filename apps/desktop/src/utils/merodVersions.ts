@@ -14,6 +14,8 @@ export interface InstalledVersion {
   path: string;
   size_bytes: number;
   used_by: string[];
+  measured_version: string | null;
+  drifted_nodes: string[];
 }
 
 export async function listMerodReleases(refresh?: boolean): Promise<ReleaseInfo[]> {
@@ -36,11 +38,18 @@ export async function removeMerodVersion(tag: string, homeDir?: string): Promise
  * A local build has no stable version, so it is labelled by kind rather than
  * by path - the measured version is shown separately on running nodes.
  */
-export function formatVersionLabel(id: string, bundledVersion: string): string {
+export function formatVersionLabel(
+  id: string,
+  bundledVersion: string,
+  measuredVersion?: string | null
+): string {
   if (id === BUNDLED_VERSION_ID) {
     const trimmed = bundledVersion.replace(/^merod\s+/, '').trim();
     return trimmed ? `bundled - ${trimmed}` : 'bundled';
   }
-  if (id.startsWith(LOCAL_ID_PREFIX)) return 'local build';
+  if (id.startsWith(LOCAL_ID_PREFIX)) {
+    const trimmed = (measuredVersion ?? '').replace(/^merod\s+/, '').trim();
+    return trimmed ? `local build - ${trimmed}` : 'local build';
+  }
   return id;
 }

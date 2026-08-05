@@ -21,4 +21,20 @@ describe("formatVersionLabel", () => {
       formatVersionLabel("local:/Users/dev/core/target/release/merod", "merod 0.11.0-rc.19")
     ).toBe("local build");
   });
+
+  it("shows a local build's measured version so a rebuild is visible", () => {
+    expect(
+      formatVersionLabel(
+        "local:/Users/dev/core/target/release/merod",
+        "merod 0.11.0-rc.19",
+        "merod 0.11.0-rc.20-dev"
+      )
+    ).toBe("local build - 0.11.0-rc.20-dev");
+  });
+
+  it("falls back to plain 'local build' when the measured version is unknown", () => {
+    expect(
+      formatVersionLabel("local:/Users/dev/core/target/release/merod", "merod 0.11.0-rc.19", null)
+    ).toBe("local build");
+  });
 });

@@ -3900,9 +3900,7 @@ async fn pick_directory(
     }
 }
 
-/// Pick a locally compiled merod binary. A file picker rather than a directory
-/// one: guessing a filename inside a chosen directory breaks for anyone whose
-/// build is not named exactly `merod`.
+/// Pick a locally compiled merod binary.
 #[tauri::command]
 async fn pick_merod_binary(app_handle: tauri::AppHandle) -> Result<Option<String>, TauriError> {
     use tauri_plugin_dialog::DialogExt;

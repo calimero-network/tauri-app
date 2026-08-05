@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import {
   listInstalledMerodVersions,
   removeMerodVersion,
+  formatVersionLabel,
   type InstalledVersion,
   LOCAL_ID_PREFIX,
 } from "../utils/merodVersions";
@@ -59,7 +60,9 @@ export function VersionsPanel({ homeDir }: { homeDir: string }) {
             return (
               <li key={v.id} className="versions-row">
                 <div className="versions-row-main">
-                  <span className="versions-row-id">{isLocal ? "local build" : v.id}</span>
+                  <span className="versions-row-id">
+                    {isLocal ? formatVersionLabel(v.id, "", v.measured_version) : v.id}
+                  </span>
                   <span className="versions-row-sub">
                     {isLocal ? v.path : `${formatSize(v.size_bytes)} - ${v.path}`}
                   </span>

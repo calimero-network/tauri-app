@@ -508,3 +508,8 @@
   border-color: var(--accent-primary);
   color: var(--accent-primary);
 }
+
+.node-version-badge.drifted {
+  border-color: var(--warning);
+  color: var(--warning);
+}

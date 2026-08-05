@@ -230,6 +230,12 @@ pub struct InstalledVersion {
     pub size_bytes: u64,
     /// Node names pinned to this id, so Remove can refuse and say what it would break.
     pub used_by: Vec<String>,
+    /// What the binary reports right now. Only measured for local builds, where it
+    /// changes on every rebuild; a release is verified against its tag at install.
+    pub measured_version: Option<String>,
+    /// Nodes whose pin recorded a different version at init than the binary now
+    /// reports. Local builds only - an app update rebases bundled nodes by design.
+    pub drifted_nodes: Vec<String>,
 }
 
 /// Node names under `home_dir` whose pin matches `id`.
@@ -510,6 +516,8 @@ pub async fn install_merod_version(
         path: path.to_string_lossy().into_owned(),
         size_bytes: file_size(&path),
         used_by: Vec::new(),
+        measured_version: None,
+        drifted_nodes: Vec::new(),
     })
 }
 
@@ -537,6 +545,8 @@ pub async fn list_installed_merod_versions(
                 size_bytes: file_size(&binary),
                 path: binary.to_string_lossy().into_owned(),
                 id: tag,
+                measured_version: None,
+                drifted_nodes: Vec::new(),
             });
         }
     }
@@ -556,11 +566,24 @@ pub async fn list_installed_merod_versions(
     locals.sort();
     for id in locals {
         let path = PathBuf::from(id.trim_start_matches(LOCAL_PREFIX));
+        let users = nodes_using(&home, &id);
+        let measured = crate::get_merod_version_at(&path).await;
+        // A node with no recorded version_at_init predates this check - nothing to compare.
+        let drifted_nodes: Vec<String> = users
+            .iter()
+            .filter(|node| match read_pin_raw(&home, node).and_then(|p| p.version_at_init) {
+                Some(v) => Some(v) != measured,
+                None => false,
+            })
+            .cloned()
+            .collect();
         out.push(InstalledVersion {
-            used_by: nodes_using(&home, &id),
+            used_by: users,
             size_bytes: file_size(&path),
             path: path.to_string_lossy().into_owned(),
             id,
+            measured_version: measured,
+            drifted_nodes,
         });
     }
 

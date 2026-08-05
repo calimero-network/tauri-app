@@ -3107,6 +3107,18 @@ async fn init_merod_node(
         )
     })?;
 
+    // merod init over an existing node reports success without minting the admin
+    // account, leaving a node nobody can sign in to. Refuse instead.
+    if home_dir_path.join(&node_name).exists() {
+        return Err(TauriError::new(
+            TauriErrorCode::InvalidInput,
+            format!(
+                "Node '{}' already exists. Pick a different name, or delete it first - re-initialising cannot change its merod version or its admin account.",
+                node_name
+            ),
+        ));
+    }
+
     let version_id = match &merod_version_id {
         Some(raw) => merod_versions::parse_version_id(raw)?,
         None => merod_versions::VersionId::Bundled,

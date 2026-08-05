@@ -176,13 +176,44 @@ pub(crate) fn releases_from_json(body: &serde_json::Value, target: &str) -> Vec<
         .unwrap_or_default()
 }
 
+/// Releases plus whether they came from an expired cache after a failed fetch,
+/// so the UI can say so rather than showing an empty list.
+#[derive(Debug, Clone, Serialize)]
+pub struct ReleaseListing {
+    pub releases: Vec<ReleaseInfo>,
+    pub stale: bool,
+}
+
+fn cached_releases() -> Option<Vec<ReleaseInfo>> {
+    RELEASE_CACHE
+        .lock()
+        .ok()?
+        .as_ref()
+        .map(|(_, cached)| cached.clone())
+}
+
+/// Serve whatever we last fetched when a refetch fails. The unauthenticated
+/// GitHub limit is 60/hour, so a rate-limited user would otherwise see nothing.
+fn stale_or_error(error: TauriError) -> Result<ReleaseListing, TauriError> {
+    match cached_releases() {
+        Some(releases) if !releases.is_empty() => Ok(ReleaseListing {
+            releases,
+            stale: true,
+        }),
+        _ => Err(error),
+    }
+}
+
 #[tauri::command]
-pub async fn list_merod_releases(refresh: Option<bool>) -> Result<Vec<ReleaseInfo>, TauriError> {
+pub async fn list_merod_releases(refresh: Option<bool>) -> Result<ReleaseListing, TauriError> {
     if !refresh.unwrap_or(false) {
         if let Ok(guard) = RELEASE_CACHE.lock() {
             if let Some((fetched_at, cached)) = guard.as_ref() {
                 if fetched_at.elapsed() < RELEASE_CACHE_TTL {
-                    return Ok(cached.clone());
+                    return Ok(ReleaseListing {
+                        releases: cached.clone(),
+                        stale: false,
+                    });
                 }
             }
         }
@@ -193,22 +224,32 @@ pub async fn list_merod_releases(refresh: Option<bool>) -> Result<Vec<ReleaseInf
         .header("Accept", "application/vnd.github+json")
         .header("User-Agent", "calimero-desktop")
         .send()
-        .await
-        .map_err(|e| {
-            TauriError::new(TauriErrorCode::InternalError, format!("GitHub API: {}", e))
-        })?;
+        .await;
+
+    let response = match response {
+        Ok(r) => r,
+        Err(e) => {
+            return stale_or_error(TauriError::new(
+                TauriErrorCode::InternalError,
+                format!("GitHub API: {}", e),
+            ))
+        }
+    };
 
     let status = response.status();
-    let body: serde_json::Value = response.json().await.map_err(|e| {
-        TauriError::new(
-            TauriErrorCode::InternalError,
-            format!("Parse releases JSON: {}", e),
-        )
-    })?;
+    let body: serde_json::Value = match response.json().await {
+        Ok(b) => b,
+        Err(e) => {
+            return stale_or_error(TauriError::new(
+                TauriErrorCode::InternalError,
+                format!("Parse releases JSON: {}", e),
+            ))
+        }
+    };
 
     if !status.is_success() {
         let msg = body["message"].as_str().unwrap_or("unknown error");
-        return Err(TauriError::new(
+        return stale_or_error(TauriError::new(
             TauriErrorCode::InternalError,
             format!("GitHub API returned {}: {}", status, msg),
         ));
@@ -218,7 +259,58 @@ pub async fn list_merod_releases(refresh: Option<bool>) -> Result<Vec<ReleaseInf
     if let Ok(mut guard) = RELEASE_CACHE.lock() {
         *guard = Some((Instant::now(), releases.clone()));
     }
-    Ok(releases)
+    Ok(ReleaseListing {
+        releases,
+        stale: false,
+    })
+}
+
+/// Repoint every node using `old_id` at a different local build. This is the
+/// repair the "build is gone" error tells the user about, not a re-pin.
+#[tauri::command]
+pub async fn repoint_local_build(
+    old_id: String,
+    new_path: String,
+    home_dir: Option<String>,
+) -> Result<u32, TauriError> {
+    if !old_id.starts_with(LOCAL_PREFIX) {
+        return Err(TauriError::new(
+            TauriErrorCode::InvalidInput,
+            "Only a local build can be repointed",
+        ));
+    }
+    let new_id = format!("{}{}", LOCAL_PREFIX, new_path);
+    let VersionId::Local(path) = parse_version_id(&new_id)? else {
+        return Err(TauriError::new(
+            TauriErrorCode::InvalidInput,
+            "Expected an absolute path to a merod binary",
+        ));
+    };
+    if !path.is_file() {
+        return Err(TauriError::new(
+            TauriErrorCode::FileNotFound,
+            format!("No file at {}", path.display()),
+        ));
+    }
+
+    let home = crate::resolve_home_dir(home_dir)?;
+    // Re-measure rather than carrying the old value over: this is a different
+    // binary, so the previous version_at_init would report drift forever.
+    let measured = crate::get_merod_version_at(&path).await;
+
+    let mut changed = 0u32;
+    for node in nodes_using(&home, &old_id) {
+        write_pin(
+            &home,
+            &node,
+            &NodePin {
+                id: new_id.clone(),
+                version_at_init: measured.clone(),
+            },
+        )?;
+        changed += 1;
+    }
+    Ok(changed)
 }
 
 #[derive(Debug, Clone, Serialize)]

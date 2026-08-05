@@ -58,6 +58,7 @@ export default function NodeManagement() {
   const [versionId, setVersionId] = useState<string>(BUNDLED_VERSION_ID);
   const [releases, setReleases] = useState<ReleaseInfo[]>([]);
   const [releasesError, setReleasesError] = useState<string>("");
+  const [releasesStale, setReleasesStale] = useState(false);
   const [nodeVersions, setNodeVersions] = useState<Record<string, string>>({});
   const [versionMeasured, setVersionMeasured] = useState<Record<string, string>>({});
   const [driftedNodes, setDriftedNodes] = useState<Set<string>>(new Set());
@@ -78,7 +79,10 @@ export default function NodeManagement() {
   useEffect(() => {
     if (!developerMode) return;
     listMerodReleases()
-      .then((r) => setReleases(r.filter((item) => item.has_asset)))
+      .then((r) => {
+        setReleases(r.releases.filter((item) => item.has_asset));
+        setReleasesStale(r.stale);
+      })
       .catch((e) => setReleasesError(e?.message || "Could not reach GitHub"));
   }, [developerMode]);
 
@@ -530,7 +534,9 @@ export default function NodeManagement() {
                       ? `Release list unavailable: ${releasesError}`
                       : releases.length === 0
                         ? "No merod releases are published for this platform. Use the bundled binary or a local build."
-                        : "Fixed when the node is created. Create another node to try another version."}
+                        : releasesStale
+                          ? "Showing the last list we fetched - GitHub was unreachable. Refresh in the Versions panel to retry."
+                          : "Fixed when the node is created. Create another node to try another version."}
                   </p>
                 </div>
               )}

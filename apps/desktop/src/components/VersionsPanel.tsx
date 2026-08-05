@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import {
   listInstalledMerodVersions,
   removeMerodVersion,
+  repointLocalBuild,
   formatVersionLabel,
   type InstalledVersion,
   LOCAL_ID_PREFIX,
@@ -26,6 +28,21 @@ export function VersionsPanel({ homeDir }: { homeDir: string }) {
   };
 
   useEffect(load, [homeDir]);
+
+  const handleRepoint = async (oldId: string) => {
+    const picked = await invoke<string | null>('pick_merod_binary');
+    if (!picked) return;
+    setBusy(true);
+    try {
+      const changed = await repointLocalBuild(oldId, picked, homeDir);
+      toast.success(`Repointed ${changed} node${changed === 1 ? '' : 's'} at ${picked}`);
+      load();
+    } catch (e: any) {
+      toast.error(e?.message || 'Failed to repoint the local build');
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const handleRemove = async (id: string) => {
     setBusy(true);
@@ -70,6 +87,16 @@ export function VersionsPanel({ homeDir }: { homeDir: string }) {
                 <span className="versions-row-users">
                   {v.used_by.length ? `used by ${v.used_by.join(", ")}` : "unused"}
                 </span>
+                {isLocal && (
+                  <button
+                    className="button button-secondary"
+                    disabled={busy}
+                    title="Point these nodes at a different merod build"
+                    onClick={() => handleRepoint(v.id)}
+                  >
+                    Change
+                  </button>
+                )}
                 {!isLocal && (
                   <button
                     className="button button-secondary"

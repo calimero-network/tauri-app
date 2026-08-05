@@ -172,6 +172,11 @@ description = "Enables the remove_merod_version command."
 commands.allow = ["remove_merod_version"]
 
 [[permission]]
+identifier = "allow-repoint-local-build"
+description = "Enables the repoint_local_build command."
+commands.allow = ["repoint_local_build"]
+
+[[permission]]
 identifier = "allow-set-tray-icon-connected"
 description = "Enables the set_tray_icon_connected command."
 commands.allow = ["set_tray_icon_connected"]
@@ -309,6 +314,7 @@ permissions = [
   "allow-install-merod-version",
   "allow-list-installed-merod-versions",
   "allow-remove-merod-version",
+  "allow-repoint-local-build",
   "allow-set-tray-icon-connected",
   "allow-delete-calimero-data-dir",
   "allow-clear-app-sessions",

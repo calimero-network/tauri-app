@@ -18,8 +18,23 @@ export interface InstalledVersion {
   drifted_nodes: string[];
 }
 
-export async function listMerodReleases(refresh?: boolean): Promise<ReleaseInfo[]> {
+export interface ReleaseListing {
+  releases: ReleaseInfo[];
+  /** True when a refetch failed and this is the last list we managed to fetch. */
+  stale: boolean;
+}
+
+export async function listMerodReleases(refresh?: boolean): Promise<ReleaseListing> {
   return await invoke('list_merod_releases', { refresh });
+}
+
+/** Repair a node whose local build moved or was deleted. Returns how many nodes changed. */
+export async function repointLocalBuild(
+  oldId: string,
+  newPath: string,
+  homeDir?: string,
+): Promise<number> {
+  return await invoke('repoint_local_build', { oldId, newPath, homeDir });
 }
 
 export async function installMerodVersion(tag: string): Promise<InstalledVersion> {

@@ -47,6 +47,16 @@ pub fn shell_install_path() -> PathBuf {
     dir.join("CalimeroShell")
 }
 
+/// True when `dest` already holds `src`'s build, so the copy + dequarantine +
+/// codesign round-trip can be skipped. The copy stamps `dest` with "now", hence
+/// `src <= dest` rather than equality. Errors read as "not current" (copy wins).
+fn shell_is_current(src: &Path, dest: &Path) -> bool {
+    let (Ok(s), Ok(d)) = (std::fs::metadata(src), std::fs::metadata(dest)) else {
+        return false;
+    };
+    s.len() == d.len() && matches!((s.modified(), d.modified()), (Ok(sm), Ok(dm)) if sm <= dm)
+}
+
 /// Copy the shared shell binary to a loose `dest`, PRESERVING its signature.
 ///
 /// The bundled shell is universal (arm64+x86_64) and Developer-ID signed, and a
@@ -58,8 +68,16 @@ pub fn shell_install_path() -> PathBuf {
 /// signature also lets the binary run arm64-native on Apple Silicon — no Rosetta
 /// at all. We only fall back to an ad-hoc signature when the copy arrives
 /// unsigned, since arm64 refuses to execute a loose *unsigned* binary.
-/// Idempotent (overwrites).
+/// Idempotent (overwrites), and a no-op when `dest` already holds this build.
 pub fn extract_shell(src: &Path, dest: &Path) -> Result<(), LauncherError> {
+    // Serializes the startup migration against a concurrent `open_app_launcher`,
+    // so neither can read a half-written copy; the loser re-checks and skips.
+    static EXTRACT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _guard = EXTRACT_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+
+    if shell_is_current(src, dest) {
+        return Ok(());
+    }
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -331,6 +349,35 @@ mod tests {
                 "extract_shell must keep the source signature, not re-sign ad-hoc"
             );
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn extract_shell_skips_when_dest_is_current() {
+        let src = std::env::current_exe().unwrap(); // a real, signed Mach-O
+        let dir = scratch("current");
+        let dest = dir.join("shell/CalimeroShell");
+
+        assert!(
+            !shell_is_current(&src, &dest),
+            "a missing dest is not current"
+        );
+        extract_shell(&src, &dest).unwrap();
+        assert!(shell_is_current(&src, &dest), "a fresh copy is current");
+
+        // The re-extract on every launch must not touch the file at all.
+        let before = std::fs::metadata(&dest).unwrap().modified().unwrap();
+        extract_shell(&src, &dest).unwrap();
+        assert_eq!(
+            std::fs::metadata(&dest).unwrap().modified().unwrap(),
+            before,
+            "extract_shell must skip the copy when dest is already current"
+        );
+
+        // A different size is stale even when the dest is newer than the source.
+        let short = dir.join("short");
+        std::fs::write(&short, b"stale").unwrap();
+        assert!(!shell_is_current(&src, &short));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

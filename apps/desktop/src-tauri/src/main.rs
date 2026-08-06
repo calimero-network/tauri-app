@@ -4590,22 +4590,29 @@ fn main() {
             // the shared shell (dequarantine + preserve signature) and rewrite each
             // launcher's trampoline to the current format. An old x86_64/Rosetta
             // trampoline SIGKILLs on Apple Silicon, and a desktop update alone does
-            // NOT refresh a launcher until its app is re-opened — so do it here.
+            // NOT refresh a launcher until its app is re-opened - so do it here.
+            // Off the main thread: setup() blocks the run loop that serves the
+            // webview's assets, and this touches disk on every launch.
             #[cfg(target_os = "macos")]
             {
                 let handle = app.handle().clone();
-                let shell_dest = launcher::shell_install_path();
-                if let Some(src) = bundled_shell_path(&handle) {
-                    let _ = launcher::extract_shell(&src, &shell_dest);
-                    for a in app_registry::installed_apps(&caps_store_path()) {
-                        let bundle = std::path::PathBuf::from(&a.bundle_path);
-                        if bundle.exists() {
-                            if let Err(e) = launcher::refresh_trampoline(&bundle, &shell_dest) {
-                                warn!("[Launcher] refresh trampoline failed for {}: {}", a.id, e);
+                tauri::async_runtime::spawn_blocking(move || {
+                    let shell_dest = launcher::shell_install_path();
+                    if let Some(src) = bundled_shell_path(&handle) {
+                        let _ = launcher::extract_shell(&src, &shell_dest);
+                        for a in app_registry::installed_apps(&caps_store_path()) {
+                            let bundle = std::path::PathBuf::from(&a.bundle_path);
+                            if bundle.exists() {
+                                if let Err(e) = launcher::refresh_trampoline(&bundle, &shell_dest) {
+                                    warn!(
+                                        "[Launcher] refresh trampoline failed for {}: {}",
+                                        a.id, e
+                                    );
+                                }
                             }
                         }
                     }
-                }
+                });
             }
 
             // System tray with context menu

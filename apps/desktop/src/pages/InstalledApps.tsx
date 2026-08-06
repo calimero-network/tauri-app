@@ -11,6 +11,7 @@ import { detectRunningMerodNodes, type RunningMerodNode } from "../utils/merod";
 import { formatVersionLabel, BUNDLED_VERSION_ID } from "../utils/merodVersions";
 import { useNodeVersions } from "../contexts/NodeVersionsContext";
 import { useMerodStatusChanged } from "../hooks/useMerodStatusChanged";
+import { useVisiblePoll } from "../hooks/useVisiblePoll";
 import { invoke } from "@tauri-apps/api/core";
 import { RefreshCw, MoreHorizontal, Trash2, Copy, Rocket } from "lucide-react";
 import "./InstalledApps.css";
@@ -66,26 +67,25 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
   })();
   const targetFor = (appId: string) => targets[appId] ?? activeTarget;
 
+  // Nodes start and stop while this page stays open, so a one-shot fetch would
+  // keep offering a dead node as a target.
   const refreshRunning = useCallback(() => {
     detectRunningMerodNodes()
       .then((n) => setRunningNodes(Array.isArray(n) ? n : []))
       .catch(() => setRunningNodes([]));
   }, []);
-  // The backend emits on every start/stop/reap it performs; the slow poll is
-  // only there to discover nodes started outside the app.
+  useVisiblePoll(refreshRunning, 30000, developerMode);
+  // The backend emits on every start/stop/reap it performs; the poll is only
+  // there to discover nodes started outside the app.
   useMerodStatusChanged(refreshRunning, developerMode);
 
   useEffect(() => {
     if (!developerMode) return;
-    // Nodes start and stop while this page stays open, so a one-shot fetch would
-    // keep offering a dead node as a target. Platform support cannot change.
-    refreshRunning();
+    // Platform support cannot change.
     invoke<boolean>('webview_isolation_supported')
       .then(setIsolationOk)
       .catch(() => setIsolationOk(false));
-    const interval = setInterval(refreshRunning, 30000);
-    return () => clearInterval(interval);
-  }, [developerMode, refreshRunning]);
+  }, [developerMode]);
   const mountedRef = useRef(true);
 
   useEffect(() => {

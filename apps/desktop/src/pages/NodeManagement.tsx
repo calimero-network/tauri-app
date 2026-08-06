@@ -27,6 +27,7 @@ import { ScrollHint } from "../components/ScrollHint";
 import { VersionsPanel } from "../components/VersionsPanel";
 import { useNodeVersions } from "../contexts/NodeVersionsContext";
 import { useMerodStatusChanged } from "../hooks/useMerodStatusChanged";
+import { useVisiblePoll } from "../hooks/useVisiblePoll";
 import "./NodeManagement.css";
 
 function NodeManagement() {
@@ -93,16 +94,13 @@ function NodeManagement() {
   }, [developerMode]);
 
 
-  // The backend emits on every start/stop/reap it performs; the slow poll is
-  // only there to discover nodes started outside the app.
+  useVisiblePoll(() => detectRunning(), 30000);
+  // The backend emits on every start/stop/reap it performs; the poll is only
+  // there to discover nodes started outside the app.
   useMerodStatusChanged(() => detectRunning());
 
   useEffect(() => {
     loadNodes();
-    detectRunning();
-
-    const interval = setInterval(detectRunning, 30000);
-    return () => clearInterval(interval);
   }, [homeDir]);
 
   // When selected node is not running and current ports conflict with running nodes, auto-assign next free ports

@@ -19,6 +19,7 @@ import { checkOnboardingState } from "./utils/onboarding";
 import { decodeMetadata, openAppFrontend, parseTauriError } from "./utils/appUtils";
 import { listInstalledApps } from "./utils/installedAppsCache";
 import { useAppDeepLink } from "./hooks/useAppDeepLink";
+import { useVisiblePoll } from "./hooks/useVisiblePoll";
 import UpdateNotification from "./components/UpdateNotification";
 import Sidebar from "./components/Sidebar";
 import { NodeStatusIndicator } from "./components/NodeStatusIndicator";
@@ -158,6 +159,19 @@ function App() {
     }
   }, [clientReady, showOnboarding]);
 
+  // Each set_tray_icon_connected decodes a PNG on the Rust side, and the health
+  // poll asks for the same value every tick. Only send changes; a failed send
+  // clears the guard so the next tick retries.
+  const trayConnected = useRef<boolean | null>(null);
+  const updateTrayIcon = useCallback((connected: boolean) => {
+    if (trayConnected.current === connected) return;
+    trayConnected.current = connected;
+    invoke("set_tray_icon_connected", { connected }).catch((err) => {
+      trayConnected.current = null;
+      console.warn("Failed to update tray icon:", err);
+    });
+  }, []);
+
   const initRan = useRef(false);
 
   useEffect(() => {
@@ -287,12 +301,12 @@ function App() {
           setNeedsNodeConfig(false);
           loadContexts().catch(() => {});
           loadInstalledApps().catch(() => {});
-          invoke("set_tray_icon_connected", { connected: false }).catch(() => {});
+          updateTrayIcon(false);
           return;
         }
 
         setConnected(true);
-        invoke("set_tray_icon_connected", { connected: true }).catch(() => {});
+        updateTrayIcon(true);
         setError(null);
         setNeedsNodeConfig(false);
 
@@ -327,7 +341,7 @@ function App() {
         setNeedsNodeConfig(false);
         loadContexts().catch(() => {});
         loadInstalledApps().catch(() => {});
-        invoke("set_tray_icon_connected", { connected: false }).catch(() => {});
+        updateTrayIcon(false);
       } finally {
         setCheckingOnboarding(false);
       }
@@ -335,12 +349,6 @@ function App() {
 
     initializeApp();
   }, [loadContexts]);
-
-  const updateTrayIcon = useCallback((connected: boolean) => {
-    invoke("set_tray_icon_connected", { connected }).catch((err) => {
-      console.warn("Failed to update tray icon:", err);
-    });
-  }, []);
 
   // Health-only check — no app loading. Keeps the status indicator up to date
   // without triggering re-renders of the app list on every tick.
@@ -538,12 +546,11 @@ function App() {
   // Health-check interval — lightweight, just updates the connected indicator.
   // Skip on login/settings/onboarding screens. Gated on clientReady: the unconfigured
   // singleton falls back to hardcoded localhost:2528 and 401s a node on any other port.
-  useEffect(() => {
-    if (showLogin || showSettings || showOnboarding || !clientReady) return;
-    checkConnection();
-    const interval = setInterval(checkConnection, 10000);
-    return () => clearInterval(interval);
-  }, [checkConnection, showLogin, showSettings, showOnboarding, clientReady]);
+  useVisiblePoll(
+    checkConnection,
+    10000,
+    clientReady && !showLogin && !showSettings && !showOnboarding
+  );
 
   // Load apps + contexts only when the user is on the home page.
   // Fires once on navigation — not on every health-check tick.

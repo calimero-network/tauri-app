@@ -9,8 +9,8 @@ import { getSettings } from "../utils/settings";
 import { detectRunningMerodNodes, type RunningMerodNode } from "../utils/merod";
 import { formatVersionLabel, BUNDLED_VERSION_ID } from "../utils/merodVersions";
 import { useNodeVersions } from "../hooks/useNodeVersions";
+import { useMerodStatusChanged } from "../hooks/useMerodStatusChanged";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { RefreshCw, MoreHorizontal, Trash2, Copy, Rocket } from "lucide-react";
 import "./InstalledApps.css";
 
@@ -65,27 +65,26 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
   })();
   const targetFor = (appId: string) => targets[appId] ?? activeTarget;
 
+  const refreshRunning = useCallback(() => {
+    detectRunningMerodNodes()
+      .then((n) => setRunningNodes(Array.isArray(n) ? n : []))
+      .catch(() => setRunningNodes([]));
+  }, []);
+  // The backend emits on every start/stop/reap it performs; the slow poll is
+  // only there to discover nodes started outside the app.
+  useMerodStatusChanged(refreshRunning, developerMode);
+
   useEffect(() => {
     if (!developerMode) return;
     // Nodes start and stop while this page stays open, so a one-shot fetch would
     // keep offering a dead node as a target. Platform support cannot change.
-    const refreshRunning = () =>
-      detectRunningMerodNodes()
-        .then((n) => setRunningNodes(Array.isArray(n) ? n : []))
-        .catch(() => setRunningNodes([]));
     refreshRunning();
     invoke<boolean>('webview_isolation_supported')
       .then(setIsolationOk)
       .catch(() => setIsolationOk(false));
-    // The backend emits on every start/stop/reap it performs; the slow poll is
-    // only there to discover nodes started outside the app.
-    const unlisten = listen('merod-status-changed', () => { refreshRunning(); }).catch(() => null);
     const interval = setInterval(refreshRunning, 30000);
-    return () => {
-      unlisten.then((off) => off && off()).catch(() => {});
-      clearInterval(interval);
-    };
-  }, [developerMode]);
+    return () => clearInterval(interval);
+  }, [developerMode, refreshRunning]);
   const mountedRef = useRef(true);
 
   useEffect(() => {

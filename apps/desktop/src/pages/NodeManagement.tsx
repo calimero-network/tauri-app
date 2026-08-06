@@ -21,13 +21,13 @@ import {
   type ReleaseInfo,
 } from "../utils/merodVersions";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { useToast } from "../contexts/ToastContext";
 import { Play, Square, RefreshCw, Check, FileText, ChevronDown } from "lucide-react";
 import { LogsViewer } from "../components/LogsViewer";
 import { ScrollHint } from "../components/ScrollHint";
 import { VersionsPanel } from "../components/VersionsPanel";
 import { useNodeVersions } from "../hooks/useNodeVersions";
+import { useMerodStatusChanged } from "../hooks/useMerodStatusChanged";
 import "./NodeManagement.css";
 
 function NodeManagement() {
@@ -87,18 +87,16 @@ function NodeManagement() {
   }, [developerMode]);
 
 
+  // The backend emits on every start/stop/reap it performs; the slow poll is
+  // only there to discover nodes started outside the app.
+  useMerodStatusChanged(() => detectRunning());
+
   useEffect(() => {
     loadNodes();
     detectRunning();
 
-    // The backend emits on every start/stop/reap it performs; the slow poll is
-    // only there to discover nodes started outside the app.
-    const unlisten = listen('merod-status-changed', () => { detectRunning(); }).catch(() => null);
     const interval = setInterval(detectRunning, 30000);
-    return () => {
-      unlisten.then((off) => off && off()).catch(() => {});
-      clearInterval(interval);
-    };
+    return () => clearInterval(interval);
   }, [homeDir]);
 
   // When selected node is not running and current ports conflict with running nodes, auto-assign next free ports

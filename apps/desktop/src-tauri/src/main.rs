@@ -3955,9 +3955,10 @@ async fn kill_all_merod_processes(
 
     kill_pids(&pids).await;
 
-    if let Ok(mut state) = merod_state.lock() {
-        state.clear();
-    }
+    merod_state
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .clear();
     emit_merod_status_changed(&app_handle);
 
     info!("[Calimero] Killed {} merod process(es)", pids.len());

@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback, memo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getSettings } from "../utils/settings";
 import { fetchAppsFromAllRegistries, fetchAppVersions, fetchAppManifest, recordDownload, type AppSummary, type VersionInfo } from "../utils/registry";
@@ -26,7 +26,7 @@ interface MarketplaceProps {
   clientReady?: boolean;
 }
 
-export default function Marketplace({ clientReady = true }: MarketplaceProps) {
+function Marketplace({ clientReady = true }: MarketplaceProps) {
   const toast = useToast();
   const [apps, setApps] = useState<MarketplaceApp[]>([]);
   const [loading, setLoading] = useState(false);
@@ -757,4 +757,6 @@ export default function Marketplace({ clientReady = true }: MarketplaceProps) {
     </div>
   );
 }
+
+export default memo(Marketplace);
 

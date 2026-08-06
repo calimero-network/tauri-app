@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, memo } from "react";
 import {
   useMero,
   useNamespaces,
@@ -174,7 +174,7 @@ function countTreeSubgroups(tree: NamespaceTree): number {
   return n;
 }
 
-export default function Namespaces() {
+function Namespaces() {
   const toast = useToast();
   const { mero } = useMero();
   const cloudEnabled = useCloudEnabled();
@@ -1835,6 +1835,8 @@ export default function Namespaces() {
 
   return null;
 }
+
+export default memo(Namespaces);
 
 // ─── Modals ───
 

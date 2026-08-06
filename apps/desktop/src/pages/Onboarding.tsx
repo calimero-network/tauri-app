@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo, memo } from "react";
 import { checkOnboardingState, getOnboardingMessage, type OnboardingState } from "../utils/onboarding";
 import { apiClient, createClientAsync } from "../lib/mero-client";
 import { LoginView } from "../components/LoginView";
@@ -32,7 +32,7 @@ interface OnboardingProps {
 
 type OnboardingStep = 'welcome' | 'what-is' | 'node-setup' | 'cloud-connect' | 'login' | 'install-app';
 
-export default function Onboarding({ onComplete, onSettings }: OnboardingProps) {
+function Onboarding({ onComplete, onSettings }: OnboardingProps) {
   const toast = useToast();
   const { setTheme } = useTheme();
 
@@ -1415,3 +1415,5 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
   // If we reach here, something went wrong - go to dashboard
   return null;
 }
+
+export default memo(Onboarding);

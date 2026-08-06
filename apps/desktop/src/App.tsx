@@ -400,7 +400,125 @@ function App() {
     }
   }, []);
 
+  // Page props are hoisted out of the JSX below: the pages are memoized, and an
+  // inline arrow would give them a new prop identity on every App render.
+  const handleOnboardingComplete = useCallback(async () => {
+    clearOnboardingProgress();
+    const settings = getSettings();
+    saveSettings({ ...settings, onboardingCompleted: true });
+    try {
+      await invoke("autostart_enable");
+      localStorage.setItem("calimero-autostart-default-applied", "1");
+    } catch {
+      // Autostart may not be available
+    }
+    // Onboarding never runs initializeApp, so nothing has marked the client
+    // ready - without this the loads below and the health interval no-op.
+    await createClientAsync({
+      baseUrl: settings.nodeUrl.replace(/\/$/, ''),
+      authBaseUrl: getAuthUrl(settings).replace(/\/$/, ''),
+      requestCredentials: 'omit',
+    });
+    setClientReady(true);
+    setShowLogin(false); // clear any stale login state from health checks during onboarding
+    setShowOnboarding(false);
+    setConnected(true);
+    setError(null);
+    loadContexts().catch(() => {});
+    loadInstalledApps().catch(() => {});
+  }, [loadContexts, loadInstalledApps]);
 
+  const handleOnboardingSettings = useCallback(() => {
+    setShowOnboarding(false);
+    setShowSettings(true);
+  }, []);
+
+  const handleSettingsBack = useCallback(async () => {
+    // Reinitialize client BEFORE hiding Settings so the checkConnection useEffect
+    // only fires after the client has tokens loaded from localStorage
+    const settings = getSettings();
+    // baseUrl should NOT include /admin-api - mero-js adds that internally
+    const nodeBaseUrl = settings.nodeUrl.replace(/\/$/, '');
+    const authUrl = getAuthUrl(settings);
+    const authBaseUrl = authUrl.replace(/\/$/, '');
+
+    // Reload client with new settings and await token loading
+    await createClientAsync({
+      baseUrl: nodeBaseUrl,
+      authBaseUrl: authBaseUrl,
+      requestCredentials: 'omit',
+    });
+    setClientReady(true);
+    setClientVersion((v) => v + 1);
+
+    // Hide settings only after client is ready - this triggers the checkConnection
+    // useEffect, which needs a properly initialized client to avoid spurious 401 -> login
+    setShowSettings(false);
+
+    if (needsNodeConfig) {
+      // After first-time settings, continue with app initialization
+      setNeedsNodeConfig(false);
+
+      // Check onboarding state
+      setCheckingOnboarding(true);
+      try {
+        const state = await checkOnboardingState();
+
+        // Determine what to show
+        if (!state.authAvailable || !state.hasConfiguredProviders) {
+          setShowOnboarding(true);
+        } else if (!getAccessToken()) {
+          setShowLogin(true);
+        } else {
+          loadContexts();
+          loadInstalledApps();
+        }
+      } catch (err) {
+        console.error('Failed to check onboarding state:', err);
+        setShowOnboarding(true);
+      } finally {
+        setCheckingOnboarding(false);
+      }
+    } else {
+      // Settings changed, reload contexts if logged in
+      if (getAccessToken()) {
+        loadContexts();
+        loadInstalledApps();
+      }
+    }
+  }, [needsNodeConfig, loadContexts, loadInstalledApps]);
+
+  const handleAuthRequired = useCallback(() => setShowLogin(true), []);
+
+  const handleConfirmUninstall = useCallback((_appId: string, appName: string, onConfirm: () => Promise<void>) => {
+    setConfirmAction({
+      title: "Uninstall Application",
+      message: "Are you sure you want to uninstall this application? This action cannot be undone.",
+      itemName: appName,
+      actionLabel: "Uninstall",
+      onConfirm: async () => {
+        await onConfirm();
+        setCurrentPage('installed');
+        setConfirmAction(null);
+      },
+      breadcrumbs: [
+        { label: "Home", onClick: () => setCurrentPage('home') },
+        { label: "Applications", onClick: () => setCurrentPage('installed') },
+        { label: "Uninstall Application" },
+      ],
+    });
+    setCurrentPage('confirm');
+  }, []);
+
+  const handleConfirmCancel = useCallback(() => {
+    // Go back to the previous page (contexts or installed)
+    if (confirmAction?.breadcrumbs[1]?.onClick) {
+      confirmAction.breadcrumbs[1].onClick();
+    } else {
+      setCurrentPage('home');
+    }
+    setConfirmAction(null);
+  }, [confirmAction]);
 
   // Route incoming app deep-links (calimero://<slug>/<action>?<params> and the
   // https://links.calimero.network/... Universal Link) to the target app.
@@ -504,35 +622,8 @@ function App() {
   if (showOnboarding) {
     return (
       <Onboarding
-        onComplete={async () => {
-          clearOnboardingProgress();
-          const settings = getSettings();
-          saveSettings({ ...settings, onboardingCompleted: true });
-          try {
-            await invoke("autostart_enable");
-            localStorage.setItem("calimero-autostart-default-applied", "1");
-          } catch {
-            // Autostart may not be available
-          }
-          // Onboarding never runs initializeApp, so nothing has marked the client
-          // ready — without this the loads below and the health interval no-op.
-          await createClientAsync({
-            baseUrl: settings.nodeUrl.replace(/\/$/, ''),
-            authBaseUrl: getAuthUrl(settings).replace(/\/$/, ''),
-            requestCredentials: 'omit',
-          });
-          setClientReady(true);
-          setShowLogin(false); // clear any stale login state from health checks during onboarding
-          setShowOnboarding(false);
-          setConnected(true);
-          setError(null);
-          loadContexts().catch(() => {});
-          loadInstalledApps().catch(() => {});
-        }}
-        onSettings={() => {
-          setShowOnboarding(false);
-          setShowSettings(true);
-        }}
+        onComplete={handleOnboardingComplete}
+        onSettings={handleOnboardingSettings}
       />
     );
   }
@@ -580,69 +671,7 @@ function App() {
   if (showSettings) {
     return (
       <ErrorBoundary componentName="Settings" onReset={() => setShowSettings(true)}>
-        <Settings
-          onBack={async () => {
-          // Reinitialize client BEFORE hiding Settings so the checkConnection useEffect
-          // only fires after the client has tokens loaded from localStorage
-          const settings = getSettings();
-          // baseUrl should NOT include /admin-api - mero-js adds that internally
-          const nodeBaseUrl = settings.nodeUrl.replace(/\/$/, '');
-          const authUrl = getAuthUrl(settings);
-          const authBaseUrl = authUrl.replace(/\/$/, '');
-
-          // Reload client with new settings and await token loading
-          await createClientAsync({
-            baseUrl: nodeBaseUrl,
-            authBaseUrl: authBaseUrl,
-            requestCredentials: 'omit',
-          });
-          setClientReady(true);
-          setClientVersion((v) => v + 1);
-
-          // Hide settings only after client is ready — this triggers the checkConnection
-          // useEffect, which needs a properly initialized client to avoid spurious 401→login
-          setShowSettings(false);
-          
-          if (needsNodeConfig) {
-            // After first-time settings, continue with app initialization
-            setNeedsNodeConfig(false);
-
-            // Check onboarding state
-            setCheckingOnboarding(true);
-            try {
-              const state = await checkOnboardingState();
-              // Onboarding state checked
-
-              // Determine what to show
-              if (!state.authAvailable) {
-                setShowOnboarding(true);
-              } else if (!state.hasConfiguredProviders) {
-                setShowOnboarding(true);
-              } else {
-                const hasToken = getAccessToken();
-                if (!hasToken) {
-                  setShowLogin(true);
-                } else {
-                  loadContexts();
-            loadInstalledApps();
-                }
-              }
-            } catch (err) {
-              console.error('Failed to check onboarding state:', err);
-              setShowOnboarding(true);
-            } finally {
-              setCheckingOnboarding(false);
-            }
-          } else {
-            // Settings changed, reload contexts if logged in
-            const hasToken = getAccessToken();
-            if (hasToken) {
-              loadContexts();
-            loadInstalledApps();
-            }
-          }
-        }}
-        />
+        <Settings onBack={handleSettingsBack} />
       </ErrorBoundary>
     );
   }
@@ -713,26 +742,8 @@ function App() {
             <main className="main">
         <InstalledApps
           clientReady={clientReady}
-          onAuthRequired={() => setShowLogin(true)}
-          onConfirmUninstall={(_appId, appName, onConfirm) => {
-            setConfirmAction({
-              title: "Uninstall Application",
-              message: "Are you sure you want to uninstall this application? This action cannot be undone.",
-              itemName: appName,
-              actionLabel: "Uninstall",
-              onConfirm: async () => {
-                await onConfirm();
-                setCurrentPage('installed');
-                setConfirmAction(null);
-              },
-              breadcrumbs: [
-                { label: "Home", onClick: () => setCurrentPage('home') },
-                { label: "Applications", onClick: () => setCurrentPage('installed') },
-                { label: "Uninstall Application" },
-              ],
-            });
-            setCurrentPage('confirm');
-          }}
+          onAuthRequired={handleAuthRequired}
+          onConfirmUninstall={handleConfirmUninstall}
         />
             </main>
           </div>
@@ -832,15 +843,7 @@ function App() {
           itemName={confirmAction.itemName}
           actionLabel={confirmAction.actionLabel}
           onConfirm={confirmAction.onConfirm}
-          onCancel={() => {
-            // Go back to the previous page (contexts or installed)
-            if (confirmAction.breadcrumbs[1]?.onClick) {
-              confirmAction.breadcrumbs[1].onClick();
-            } else {
-              setCurrentPage('home');
-            }
-            setConfirmAction(null);
-          }}
+          onCancel={handleConfirmCancel}
           breadcrumbs={confirmAction.breadcrumbs}
         />
       </div>

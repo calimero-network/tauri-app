@@ -462,4 +462,4 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
   );
 };
 
-export default InstalledApps;
+export default React.memo(InstalledApps);

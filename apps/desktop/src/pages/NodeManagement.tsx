@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, memo } from "react";
 import { getSettings, saveSettings } from "../utils/settings";
 import { clearAccessToken, clearRefreshToken } from "../lib/token-storage";
 import {
@@ -30,7 +30,7 @@ import { VersionsPanel } from "../components/VersionsPanel";
 import { useNodeVersions } from "../hooks/useNodeVersions";
 import "./NodeManagement.css";
 
-export default function NodeManagement() {
+function NodeManagement() {
   const toast = useToast();
   
   // Node management state
@@ -717,3 +717,5 @@ export default function NodeManagement() {
     </div>
   );
 }
+
+export default memo(NodeManagement);

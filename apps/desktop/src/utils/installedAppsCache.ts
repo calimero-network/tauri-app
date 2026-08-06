@@ -6,6 +6,7 @@
  * round trip. They share one here, deduped while a request is in flight.
  *
  * Anything that installs or uninstalls must call `invalidateInstalledApps()`.
+ * The list handed out is shared and frozen - copy it to sort or filter.
  */
 
 import { apiClient } from "../lib/mero-client";
@@ -29,7 +30,12 @@ export async function listInstalledApps(
     .then((response) => {
       // Failures are never cached: a 401 on a stale token or a node that is
       // still booting would otherwise pin every caller to it for the whole TTL.
-      if (!response.error) cached = { at: Date.now(), response };
+      if (!response.error) {
+        // Six callers hold this same array for the whole TTL, so an in-place
+        // sort or splice by one of them has to fail loudly, not corrupt the rest.
+        if (response.data) Object.freeze(response.data);
+        cached = { at: Date.now(), response };
+      }
       return response;
     })
     .finally(() => {

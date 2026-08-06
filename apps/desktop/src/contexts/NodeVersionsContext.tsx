@@ -15,8 +15,8 @@ export interface NodeVersionMap {
 }
 
 interface NodeVersions extends NodeVersionMap {
-  /** Re-read the map against the data dir currently in settings. */
-  refresh: () => void;
+  /** Re-read the map, against `homeDir` when the caller holds an unsaved one. */
+  refresh: (homeDir?: string) => void;
 }
 
 type NodeMaps = Omit<NodeVersionMap, "bundled">;
@@ -34,9 +34,13 @@ const NodeVersionsContext = createContext<NodeVersions | undefined>(undefined);
 export function NodeVersionsProvider({ children }: { children: ReactNode }) {
   const [maps, setMaps] = useState<NodeMaps>(EMPTY);
   const [bundled, setBundled] = useState("");
+  const [override, setOverride] = useState<string>();
   const [nonce, setNonce] = useState(0);
 
-  const refresh = useCallback(() => setNonce((n) => n + 1), []);
+  const refresh = useCallback((homeDir?: string) => {
+    setOverride(homeDir);
+    setNonce((n) => n + 1);
+  }, []);
 
   useEffect(() => {
     getMerodBinaryVersion().then(setBundled).catch(() => setBundled(""));
@@ -44,9 +48,9 @@ export function NodeVersionsProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let cancelled = false;
-    // Read the data dir per fetch: onboarding writes it after the provider is
-    // already mounted and completes without reloading the window.
-    listInstalledMerodVersions(getSettings().embeddedNodeDataDir)
+    // Settings are read per fetch, not snapshotted at mount: onboarding writes
+    // the data dir afterwards and completes without reloading the window.
+    listInstalledMerodVersions(override ?? getSettings().embeddedNodeDataDir)
       .then((installed) => {
         if (cancelled) return;
         const byNode: Record<string, string> = {};
@@ -65,7 +69,7 @@ export function NodeVersionsProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [nonce]);
+  }, [override, nonce]);
 
   const value = useMemo<NodeVersions>(
     () => ({ ...maps, bundled, refresh }),

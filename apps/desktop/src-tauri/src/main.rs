@@ -2923,6 +2923,8 @@ fn is_process_running(pid: u32) -> bool {
     {
         // Signal 0 only probes for existence. This runs per tracked node on
         // every status poll, under the state lock - too hot to fork `kill -0`.
+        // SAFETY: every pid here is a live `Child::id()`, so it is never 0 or
+        // negative and the call cannot widen into a process-group signal.
         unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
     }
     #[cfg(windows)]

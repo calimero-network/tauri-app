@@ -57,6 +57,13 @@ describe('listInstalledApps', () => {
     expect(listApplications).toHaveBeenCalledTimes(2);
   });
 
+  it('freezes the list so one caller cannot reorder it for the other five', async () => {
+    listApplications.mockResolvedValue({ data: [{ id: 'app-2' }, { id: 'app-1' }] });
+    const { data } = await listInstalledApps();
+
+    expect(() => data!.sort((a, b) => a.id.localeCompare(b.id))).toThrow(TypeError);
+  });
+
   it('clears the in-flight slot when the request rejects', async () => {
     listApplications.mockRejectedValueOnce(new Error('node down'));
 

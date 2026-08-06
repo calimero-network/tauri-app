@@ -533,9 +533,17 @@ pub async fn ensure_release_installed(
         let bytes = dl.bytes().await.map_err(|e| {
             TauriError::new(TauriErrorCode::InternalError, format!("read download: {}", e))
         })?;
-        if let Some(expected) = asset_digest.as_deref() {
-            verify_sha256(&bytes, expected)?;
-        }
+        // Require it: every merod asset GitHub currently publishes carries a
+        // digest, so a missing one means a response we should not trust rather
+        // than an old release we should accommodate.
+        let Some(expected) = asset_digest.as_deref() else {
+            return Err(TauriError::with_details(
+                TauriErrorCode::InternalError,
+                "GitHub published no digest for this merod asset",
+                format!("refusing to install {} unverified", safe_asset_name),
+            ));
+        };
+        verify_sha256(&bytes, expected)?;
 
         tokio::fs::write(&archive_path, &bytes).await.map_err(|e| {
             TauriError::new(TauriErrorCode::FileWriteError, format!("write archive: {}", e))

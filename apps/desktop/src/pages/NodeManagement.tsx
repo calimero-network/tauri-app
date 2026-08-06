@@ -10,7 +10,6 @@ import {
   detectRunningMerodNodes,
   getMerodLogs,
   clearMerodLogs,
-  getMerodBinaryVersion,
   type RunningMerodNode,
 } from "../utils/merod";
 import {
@@ -26,7 +25,7 @@ import { Play, Square, RefreshCw, Check, FileText, ChevronDown } from "lucide-re
 import { LogsViewer } from "../components/LogsViewer";
 import { ScrollHint } from "../components/ScrollHint";
 import { VersionsPanel } from "../components/VersionsPanel";
-import { useNodeVersions } from "../hooks/useNodeVersions";
+import { useNodeVersions } from "../contexts/NodeVersionsContext";
 import { useMerodStatusChanged } from "../hooks/useMerodStatusChanged";
 import "./NodeManagement.css";
 
@@ -55,25 +54,32 @@ function NodeManagement() {
   const [showLogsModal, setShowLogsModal] = useState(false);
   const [logsContent, setLogsContent] = useState("");
   const [logsLoading, setLogsLoading] = useState(false);
-  const [merodBinaryVersion, setMerodBinaryVersion] = useState<string>("");
   const [versionId, setVersionId] = useState<string>(BUNDLED_VERSION_ID);
   const [releases, setReleases] = useState<ReleaseInfo[]>([]);
   const [releasesError, setReleasesError] = useState<string>("");
   const [releasesStale, setReleasesStale] = useState(false);
   const developerMode = getSettings().developerMode ?? false;
-  const { byNode: nodeVersions, measured: versionMeasured, drifted: driftedNodes } =
-    useNodeVersions(developerMode, homeDir, [availableNodes]);
+  const {
+    byNode: nodeVersions,
+    measured: versionMeasured,
+    drifted: driftedNodes,
+    bundled: merodBinaryVersion,
+    refresh: refreshNodeVersions,
+  } = useNodeVersions();
   const safeAvailableNodes = Array.isArray(availableNodes) ? availableNodes : [];
   const safeRunningNodes = Array.isArray(runningNodes) ? runningNodes : [];
+
+  // This page is the one that creates nodes and edits the data dir, so it is
+  // the one that has to tell the shared map to re-read.
+  useEffect(() => {
+    refreshNodeVersions(homeDir);
+  }, [homeDir, availableNodes, refreshNodeVersions]);
 
   useEffect(() => {
     const settings = getSettings();
     setHomeDir(settings.embeddedNodeDataDir || "~/.calimero");
     setNodeUrl(settings.nodeUrl || "");
     setAuthUrl(settings.authUrl || "");
-    getMerodBinaryVersion()
-      .then(setMerodBinaryVersion)
-      .catch(() => setMerodBinaryVersion("unknown"));
   }, []);
 
   useEffect(() => {

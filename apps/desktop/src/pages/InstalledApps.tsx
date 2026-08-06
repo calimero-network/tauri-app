@@ -9,7 +9,7 @@ import { listInstalledApps, invalidateInstalledApps } from "../utils/installedAp
 import { getSettings } from "../utils/settings";
 import { detectRunningMerodNodes, type RunningMerodNode } from "../utils/merod";
 import { formatVersionLabel, BUNDLED_VERSION_ID } from "../utils/merodVersions";
-import { useNodeVersions } from "../hooks/useNodeVersions";
+import { useNodeVersions } from "../contexts/NodeVersionsContext";
 import { useMerodStatusChanged } from "../hooks/useMerodStatusChanged";
 import { invoke } from "@tauri-apps/api/core";
 import { RefreshCw, MoreHorizontal, Trash2, Copy, Rocket } from "lucide-react";
@@ -48,7 +48,7 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
   const [runningNodes, setRunningNodes] = useState<RunningMerodNode[]>([]);
   const [isolationOk, setIsolationOk] = useState(false);
   const [targets, setTargets] = useState<Record<string, string>>({});
-  const { byNode: nodeVersions, bundled: bundledVersion } = useNodeVersions(developerMode);
+  const { byNode: nodeVersions, bundled: bundledVersion } = useNodeVersions();
 
   // Options are keyed by running-node port, so derive the default the same way:
   // a settings URL of 127.0.0.1 or with a trailing slash matched no option, and

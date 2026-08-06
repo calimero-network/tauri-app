@@ -107,18 +107,11 @@ pub fn store_dir(app_data_dir: &Path) -> PathBuf {
     app_data_dir.join("merod")
 }
 
-/// Windows needs the extension: `Command::new` does not append `.exe` to an
-/// explicit path the way PATH lookup does.
-pub fn merod_file_name() -> &'static str {
-    if cfg!(target_os = "windows") {
-        "merod.exe"
-    } else {
-        "merod"
-    }
-}
-
 pub fn release_binary_path(app_data_dir: &Path, tag: &str) -> PathBuf {
-    store_dir(app_data_dir).join(tag).join(merod_file_name())
+    // Windows needs the extension: Command::new does not append .exe to an
+    // explicit path the way PATH lookup does.
+    let name = if cfg!(target_os = "windows") { "merod.exe" } else { "merod" };
+    store_dir(app_data_dir).join(tag).join(name)
 }
 
 /// Recorded in `<homeDir>/<node>/merod-version.json` when the node is created.
@@ -650,23 +643,6 @@ pub async fn resolve_binary(
             Ok(path.clone())
         }
     }
-}
-
-#[tauri::command]
-pub async fn install_merod_version(
-    tag: String,
-    app_handle: tauri::AppHandle,
-) -> Result<InstalledVersion, TauriError> {
-    let base = app_data(&app_handle)?;
-    let path = ensure_release_installed(&base, &tag).await?;
-    Ok(InstalledVersion {
-        id: tag,
-        path: path.to_string_lossy().into_owned(),
-        size_bytes: file_size(&path),
-        used_by: Vec::new(),
-        measured_version: None,
-        drifted_nodes: Vec::new(),
-    })
 }
 
 #[tauri::command]

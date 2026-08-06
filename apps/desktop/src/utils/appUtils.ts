@@ -119,21 +119,20 @@ export function normalizeNodeUrl(raw: string): string {
   }
 }
 
-/** Short, unique-per-target label fragment. Falls back to a hash so a hostname
- *  with unsafe characters still yields a distinct, label-safe suffix. */
+/** Label-safe fragment identifying a node target. Derived from the same
+ *  canonical form as the isolation key, so two targets that get separate
+ *  storage can never share a window label. */
 function nodeKey(nodeUrl: string): string {
-  let raw: string;
-  try {
-    const u = new URL(nodeUrl);
-    raw = `${u.hostname}${u.port ? `-${u.port}` : ''}`;
-  } catch {
-    raw = nodeUrl;
-  }
-  const safe = raw.replace(/[^a-zA-Z0-9-]/g, '-');
-  if (safe.length <= 20) return safe;
+  const canonical = normalizeNodeUrl(nodeUrl).replace(/^https?:\/\//, (m) =>
+    m.startsWith('https') ? 'https-' : 'http-',
+  );
+  const safe = canonical.replace(/[^a-zA-Z0-9-]/g, '-');
+  if (safe.length <= 24) return safe;
+  // Remote hostnames can be long; keep the label inside Tauri's 64-char limit
+  // while staying unique.
   let h = 0;
-  for (let i = 0; i < raw.length; i++) h = (Math.imul(31, h) + raw.charCodeAt(i)) | 0;
-  return `${safe.slice(0, 12)}${(h >>> 0).toString(36)}`;
+  for (let i = 0; i < canonical.length; i++) h = (Math.imul(31, h) + canonical.charCodeAt(i)) | 0;
+  return `${safe.slice(0, 16)}${(h >>> 0).toString(36)}`;
 }
 
 // Guards against two concurrent openAppFrontend calls racing to create the same window.

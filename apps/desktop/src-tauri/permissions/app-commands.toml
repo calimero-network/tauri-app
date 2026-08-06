@@ -157,11 +157,6 @@ description = "Enables the list_merod_releases command."
 commands.allow = ["list_merod_releases"]
 
 [[permission]]
-identifier = "allow-install-merod-version"
-description = "Enables the install_merod_version command."
-commands.allow = ["install_merod_version"]
-
-[[permission]]
 identifier = "allow-list-installed-merod-versions"
 description = "Enables the list_installed_merod_versions command."
 commands.allow = ["list_installed_merod_versions"]
@@ -311,7 +306,6 @@ permissions = [
   "allow-get-merod-binary-version",
   "allow-download-and-replace-merod",
   "allow-list-merod-releases",
-  "allow-install-merod-version",
   "allow-list-installed-merod-versions",
   "allow-remove-merod-version",
   "allow-repoint-local-build",

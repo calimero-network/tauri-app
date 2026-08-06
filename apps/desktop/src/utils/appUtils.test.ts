@@ -196,7 +196,7 @@ describe('openAppFrontend targeting a second node', () => {
     });
 
     const args = windowArgs();
-    expect(args.windowLabel).toBe('app-app-1-nlocalhost-2529');
+    expect(args.windowLabel).toBe('app-app-1-nhttp-localhost-2529');
     expect(args.nodeUrl).toBe('http://localhost:2529');
     expect(args.isolationKey).toBe('app-1@http://localhost:2529');
     expect(String(args.title)).toContain('2529');
@@ -241,7 +241,7 @@ describe('openAppFrontend targeting a second node', () => {
 
     const label = String(windowArgs().windowLabel);
     expect(label.length).toBeLessThanOrEqual(64);
-    expect(label.endsWith('-nlocalhost-2529')).toBe(true);
+    expect(label.endsWith('-nhttp-localhost-2529')).toBe(true);
   });
 });
 
@@ -266,5 +266,31 @@ describe('normalizeNodeUrl', () => {
     expect(normalizeNodeUrl('http://localhost:2528')).not.toBe(
       normalizeNodeUrl('http://127.0.0.1:2528'),
     );
+  });
+});
+
+describe('cross-node window labels', () => {
+  function labelFor(target: string) {
+    invoke.mockClear();
+    return openAppFrontend('https://app.example.com/', 'Example', undefined, {
+      applicationId: 'app-1',
+      targetNodeUrl: target,
+    }).then(() => {
+      const call = invoke.mock.calls.find((c) => c[0] === 'create_app_window');
+      return String((call as [string, { windowLabel: string }])[1].windowLabel);
+    });
+  }
+
+  it('separates targets that differ only by scheme', async () => {
+    // Both omit an explicit port, so hostname alone collided and the second
+    // target focused the first target's window instead of isolating.
+    const a = await labelFor('http://example.com');
+    const b = await labelFor('https://example.com');
+    expect(a).not.toBe(b);
+  });
+
+  it('keeps every label inside Tauri’s 64 character limit', async () => {
+    const long = await labelFor('https://a-very-long-node-hostname.example.internal:8443');
+    expect(long.length).toBeLessThanOrEqual(64);
   });
 });

@@ -20,8 +20,7 @@ use webview_isolation::{webview_isolation_supported, IsolatedWindows};
 // Imported unqualified so generate_handler! registers them under their bare
 // command names, which is what the ACL in permissions/app-commands.toml grants.
 use merod_versions::{
-    install_merod_version, list_installed_merod_versions, list_merod_releases, remove_merod_version,
-    repoint_local_build,
+    list_installed_merod_versions, list_merod_releases, remove_merod_version, repoint_local_build,
 };
 
 // Per-app launcher foundation (macOS only): pure, zero-Tauri-API modules shared
@@ -5023,7 +5022,6 @@ fn main() {
             get_merod_binary_version,
             download_and_replace_merod,
             list_merod_releases,
-            install_merod_version,
             list_installed_merod_versions,
             remove_merod_version,
             repoint_local_build,

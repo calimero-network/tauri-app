@@ -37,10 +37,6 @@ export async function repointLocalBuild(
   return await invoke('repoint_local_build', { oldId, newPath, homeDir });
 }
 
-export async function installMerodVersion(tag: string): Promise<InstalledVersion> {
-  return await invoke('install_merod_version', { tag });
-}
-
 export async function listInstalledMerodVersions(homeDir?: string): Promise<InstalledVersion[]> {
   return await invoke('list_installed_merod_versions', { homeDir });
 }

@@ -519,7 +519,7 @@ export default function NodeManagement() {
                   : releases.length === 0
                     ? "No merod releases are published for this platform. Use the bundled binary or a local build."
                     : releasesStale
-                      ? "Showing the last list we fetched - GitHub was unreachable. Refresh below to retry."
+                      ? "Showing the last list we fetched - GitHub was unreachable."
                       : "Fixed when the node is created. Create another node to try another version."}
               </p>
             )}

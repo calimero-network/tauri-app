@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { listInstalledMerodVersions } from "../utils/merodVersions";
+import { getMerodBinaryVersion } from "../utils/merod";
 import { getSettings } from "../utils/settings";
 
 export interface NodeVersionMap {
@@ -9,16 +10,25 @@ export interface NodeVersionMap {
   measured: Record<string, string>;
   /** nodes whose binary now reports a different version than at creation */
   drifted: Set<string>;
+  /** what the shipped binary reports, for labelling the bundled id */
+  bundled: string;
 }
 
-const EMPTY: NodeVersionMap = { byNode: {}, measured: {}, drifted: new Set() };
+type NodeMaps = Omit<NodeVersionMap, "bundled">;
+const EMPTY: NodeMaps = { byNode: {}, measured: {}, drifted: new Set() };
 
 /** Which merod build each node runs; shared by three surfaces. `deps` refetches
  *  when the caller's list changes, and `homeDir` defaults to the configured dir
  *  so an omitted argument cannot misreport every node as bundled. */
 export function useNodeVersions(enabled: boolean, homeDir?: string, deps: unknown[] = []): NodeVersionMap {
-  const [state, setState] = useState<NodeVersionMap>(EMPTY);
+  const [state, setState] = useState<NodeMaps>(EMPTY);
+  const [bundled, setBundled] = useState("");
   const dir = homeDir ?? getSettings().embeddedNodeDataDir;
+
+  useEffect(() => {
+    if (!enabled) return;
+    getMerodBinaryVersion().then(setBundled).catch(() => setBundled(""));
+  }, [enabled]);
 
   useEffect(() => {
     if (!enabled) {
@@ -48,5 +58,5 @@ export function useNodeVersions(enabled: boolean, homeDir?: string, deps: unknow
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, dir, ...deps]);
 
-  return state;
+  return { ...state, bundled };
 }

@@ -26,14 +26,14 @@ export function NodeStatusIndicator({
 }: NodeStatusIndicatorProps) {
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
-  const { byNode: nodeVersions, measured: versionMeasured } =
+  const { byNode: nodeVersions, measured: versionMeasured, bundled } =
     useNodeVersions(!!developerMode, undefined, [runningNodes]);
 
   // Pass the measured version through, or a local build always reads as the
   // generic "local build" and a rebuild produces no visible signal here.
   const versionOf = (node?: RunningMerodNode) => {
     const id = nodeVersions[node?.node_name ?? ""] ?? BUNDLED_VERSION_ID;
-    return formatVersionLabel(id, "", versionMeasured[id]);
+    return formatVersionLabel(id, bundled, versionMeasured[id]);
   };
 
   // Running nodes are known by port only, so match on port whenever the desktop

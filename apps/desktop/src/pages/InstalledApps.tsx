@@ -46,7 +46,7 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
   const [runningNodes, setRunningNodes] = useState<RunningMerodNode[]>([]);
   const [isolationOk, setIsolationOk] = useState(false);
   const [targets, setTargets] = useState<Record<string, string>>({});
-  const nodeVersions = useNodeVersions(developerMode).byNode;
+  const { byNode: nodeVersions, bundled: bundledVersion } = useNodeVersions(developerMode);
 
   // Options are keyed by running-node port, so derive the default the same way:
   // a settings URL of 127.0.0.1 or with a trailing slash matched no option, and
@@ -379,7 +379,7 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
                         >
                           {runningNodes.map((n) => (
                             <option key={n.pid} value={optionValue(n)}>
-                              {n.node_name} - {formatVersionLabel(nodeVersions[n.node_name] ?? BUNDLED_VERSION_ID, "")}
+                              {n.node_name} - {formatVersionLabel(nodeVersions[n.node_name] ?? BUNDLED_VERSION_ID, bundledVersion)}
                             </option>
                           ))}
                         </select>

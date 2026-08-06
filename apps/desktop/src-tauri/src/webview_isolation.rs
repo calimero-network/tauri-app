@@ -65,9 +65,14 @@ pub fn webview_isolation_supported() -> bool {
 }
 
 /// Find or assign this key's identifier, reporting whether the map changed so
-/// the caller only writes when it did. Slots are handed out in order and never
-/// reused: recycling one would hand a new pair another window's storage. Slot 0
-/// is skipped because an all-zero identifier is not a valid data store id.
+/// the caller only writes when it did. Slot 0 is skipped: an all-zero identifier
+/// is not a valid data store id.
+///
+/// Slots are handed out in order and deliberately never reused or reclaimed -
+/// recycling one would hand a new (app, node) pair another window's storage.
+/// The map therefore grows with distinct pairs opened, a handful in practice.
+/// Reclaiming an entry means also deleting its store via
+/// `AppHandle::remove_data_store`, which belongs with node deletion.
 fn store_id_for(map: &mut BTreeMap<String, u32>, key: &str) -> ([u8; 16], bool) {
     let (slot, changed) = match map.get(key) {
         Some(slot) => (*slot, false),

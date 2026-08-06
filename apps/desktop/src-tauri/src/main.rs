@@ -2169,6 +2169,13 @@ struct MerodProcess {
 
 type MerodState = Arc<Mutex<Vec<MerodProcess>>>;
 
+/// Announce that the set of tracked merod processes changed, so the frontend can
+/// refetch on the edge instead of polling for it. Emitted on every mutation of
+/// `MerodState`; carries no payload.
+fn emit_merod_status_changed(app_handle: &tauri::AppHandle) {
+    let _ = app_handle.emit("merod-status-changed", ());
+}
+
 /// A registered log writer plus a reference count of live processes using it.
 /// Ref-counting means a restart or a concurrent second start (which reuse the
 /// same writer) don't drop the shared registration until the *last* user exits.
@@ -2369,8 +2376,8 @@ async fn start_merod(
                 .arg("/F")
                 .output();
         }
-        let mut state = merod_state.lock().unwrap();
-        state.retain(|p| p.pid != pid);
+        merod_state.lock().unwrap().retain(|p| p.pid != pid);
+        emit_merod_status_changed(&app_handle);
     }
 
     // Prepare home directory (where .calimero folder is, e.g., ~/.calimero)
@@ -2657,12 +2664,14 @@ async fn start_merod(
             port: server_port,
         });
     }
+    emit_merod_status_changed(&app_handle);
 
     // Spawn a task to monitor the process
     let merod_state_clone = merod_state.inner().clone();
     let log_writers_clone = log_writers.inner().clone();
     let exit_log_key = log_key.clone();
     let monitored_pid = pid; // Capture PID for verification
+    let exit_app_handle = app_handle.clone();
     tokio::spawn(async move {
         let status = child.wait().await;
         {
@@ -2674,6 +2683,7 @@ async fn start_merod(
             }
             state.retain(|p| p.pid != monitored_pid);
         }
+        emit_merod_status_changed(&exit_app_handle);
         // Drop one reference to this node's writer; remove the registration only
         // when the last user exits. Ref-counting means a restart or a concurrent
         // second start (which reuse the same writer) don't unregister it out from
@@ -2693,7 +2703,10 @@ async fn start_merod(
 }
 
 #[tauri::command]
-async fn stop_merod(merod_state: tauri::State<'_, MerodState>) -> Result<String, TauriError> {
+async fn stop_merod(
+    app_handle: tauri::AppHandle,
+    merod_state: tauri::State<'_, MerodState>,
+) -> Result<String, TauriError> {
     let pids: Vec<u32> = {
         let state = merod_state.lock().unwrap();
         state.iter().map(|p| p.pid).collect()
@@ -2780,10 +2793,8 @@ async fn stop_merod(merod_state: tauri::State<'_, MerodState>) -> Result<String,
         info!("[Merod] Stopped process with PID: {}", pid);
     }
 
-    {
-        let mut state = merod_state.lock().unwrap();
-        state.clear();
-    }
+    merod_state.lock().unwrap().clear();
+    emit_merod_status_changed(&app_handle);
 
     Ok("Merod stopped successfully".to_string())
 }
@@ -2791,6 +2802,7 @@ async fn stop_merod(merod_state: tauri::State<'_, MerodState>) -> Result<String,
 #[tauri::command]
 async fn stop_merod_by_pid_command(
     pid: u32,
+    app_handle: tauri::AppHandle,
     merod_state: tauri::State<'_, MerodState>,
 ) -> Result<String, TauriError> {
     #[cfg(unix)]
@@ -2872,10 +2884,8 @@ async fn stop_merod_by_pid_command(
     }
 
     // Remove this process from state
-    {
-        let mut state = merod_state.lock().unwrap();
-        state.retain(|p| p.pid != pid);
-    }
+    merod_state.lock().unwrap().retain(|p| p.pid != pid);
+    emit_merod_status_changed(&app_handle);
 
     info!("[Merod] Stopped process with PID: {}", pid);
     Ok(format!("Merod stopped successfully (PID: {})", pid))
@@ -2906,14 +2916,20 @@ fn is_process_running(pid: u32) -> bool {
 
 #[tauri::command]
 async fn get_merod_status(
+    app_handle: tauri::AppHandle,
     merod_state: tauri::State<'_, MerodState>,
 ) -> Result<serde_json::Value, TauriError> {
     let mut state = merod_state.lock().unwrap();
     if state.is_empty() {
         return Ok(serde_json::json!({ "running": false, "nodes": [] }));
     }
-    // Filter out dead processes
+    // Filter out dead processes. Only announce when this reap actually dropped
+    // one, or a polling caller would emit on every tick.
+    let before = state.len();
     state.retain(|p| is_process_running(p.pid));
+    if state.len() != before {
+        emit_merod_status_changed(&app_handle);
+    }
     if state.is_empty() {
         return Ok(serde_json::json!({ "running": false, "nodes": [] }));
     }
@@ -3916,6 +3932,7 @@ async fn autostart_is_enabled(_app: tauri::AppHandle) -> Result<bool, TauriError
 /// has the data directory open. Clears MerodState and waits for processes to fully exit.
 #[tauri::command]
 async fn kill_all_merod_processes(
+    app_handle: tauri::AppHandle,
     merod_state: tauri::State<'_, MerodState>,
 ) -> Result<String, TauriError> {
     let tracked: Vec<u32> = merod_state
@@ -3926,11 +3943,10 @@ async fn kill_all_merod_processes(
 
     kill_pids(&pids).await;
 
-    {
-        if let Ok(mut state) = merod_state.lock() {
-            state.clear();
-        }
+    if let Ok(mut state) = merod_state.lock() {
+        state.clear();
     }
+    emit_merod_status_changed(&app_handle);
 
     info!("[Calimero] Killed {} merod process(es)", pids.len());
     Ok(format!("Stopped {} merod process(es)", pids.len()))
@@ -4330,7 +4346,7 @@ async fn remove_app_launchers(app_handle: tauri::AppHandle) -> Result<String, Ta
 /// 1. Drain in-flight proxy requests up to REQUEST_DRAIN_TIMEOUT_SECS
 /// 2. SIGTERM all managed (and detected) merod processes
 /// 3. Wait up to PROCESS_TERM_WAIT_SECS, then SIGKILL survivors
-fn graceful_shutdown(merod_state: &MerodState) {
+fn graceful_shutdown(app_handle: &tauri::AppHandle, merod_state: &MerodState) {
     info!("[Shutdown] Starting graceful shutdown...");
 
     // Drain in-flight proxy requests before killing merod so they can complete
@@ -4384,6 +4400,7 @@ fn graceful_shutdown(merod_state: &MerodState) {
     if let Ok(mut state) = merod_state.lock() {
         state.clear();
     }
+    emit_merod_status_changed(app_handle);
     info!("[Shutdown] Graceful shutdown complete");
 }
 
@@ -4649,7 +4666,7 @@ fn main() {
                     }
                     "quit" => {
                         if let Some(merod_state) = app.try_state::<MerodState>() {
-                            graceful_shutdown(&merod_state);
+                            graceful_shutdown(app, &merod_state);
                         }
                         std::process::exit(0);
                     }

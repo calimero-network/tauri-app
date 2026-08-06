@@ -13,6 +13,9 @@ use base64::Engine as _;
 
 mod log_rotation;
 mod merod_versions;
+mod webview_isolation;
+
+use webview_isolation::{webview_isolation_supported, IsolatedWindows};
 
 // Imported unqualified so generate_handler! registers them under their bare
 // command names, which is what the ACL in permissions/app-commands.toml grants.
@@ -933,7 +936,7 @@ async fn broker_token_refresh(
 ) -> Result<String, TauriError> {
     // Our session belongs to the active node, so a window holding another node's
     // session must never receive it. The label is Tauri's, not the caller's.
-    if is_isolated_window(&isolated, window.label()) {
+    if webview_isolation::is_isolated(&isolated, window.label()) {
         return Err(TauriError::new(
             TauriErrorCode::PathNotAllowed,
             "Token brokering is not available to a window targeting another node",
@@ -942,25 +945,6 @@ async fn broker_token_refresh(
     rotate_access_token(&app_handle, &registry)
         .await
         .map_err(|reason| TauriError::new(TauriErrorCode::InternalError, reason))
-}
-
-/// Labels of windows created with their own webview store, i.e. windows pointed
-/// at a node the desktop is not signed into.
-type IsolatedWindows = std::sync::Arc<std::sync::Mutex<std::collections::HashSet<String>>>;
-
-fn forget_isolated_window(app_handle: &tauri::AppHandle, label: &str) {
-    app_handle
-        .state::<IsolatedWindows>()
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
-        .remove(label);
-}
-
-fn is_isolated_window(state: &tauri::State<'_, IsolatedWindows>, label: &str) -> bool {
-    state
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
-        .contains(label)
 }
 
 /// Maps an issued capability token -> its app id. Populated when a per-app
@@ -1758,103 +1742,6 @@ fn create_desktop_shortcut(
     }
 }
 
-/// Whether this platform can give a webview its own storage. Never guess: below
-/// macOS 14 wry falls back to the shared store silently, merging two sessions.
-#[tauri::command]
-fn webview_isolation_supported() -> bool {
-    #[cfg(target_os = "macos")]
-    {
-        // Matches wry's own gate for WKWebsiteDataStore::dataStoreForIdentifier.
-        std::process::Command::new("sw_vers")
-            .arg("-productVersion")
-            .output()
-            .ok()
-            .and_then(|o| String::from_utf8(o.stdout).ok())
-            .and_then(|v| v.trim().split('.').next()?.parse::<u32>().ok())
-            .map(|major| major >= 14)
-            .unwrap_or(false)
-    }
-    #[cfg(target_os = "linux")]
-    {
-        true
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-    {
-        false
-    }
-}
-
-fn hex_16(bytes: &[u8; 16]) -> String {
-    bytes.iter().map(|b| format!("{:02x}", b)).collect()
-}
-
-/// Stable 16-byte webview store id, assigned from a persisted slot map. Slot 0
-/// is skipped: an all-zero identifier is not a valid WKWebsiteDataStore id.
-fn webview_store_id(app_handle: &tauri::AppHandle, key: &str) -> Result<[u8; 16], TauriError> {
-    // Serialise the whole read-modify-write. Two concurrent first-time keys would
-    // otherwise both compute max+1 from the same stale map and share one store.
-    static SLOTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    let _guard = SLOTS.lock().unwrap_or_else(|p| p.into_inner());
-
-    let dir = app_handle.path().app_data_dir().map_err(|e| {
-        TauriError::with_details(
-            TauriErrorCode::DirectoryError,
-            "Failed to resolve app data dir for webview stores",
-            e.to_string(),
-        )
-    })?;
-    std::fs::create_dir_all(&dir).map_err(|e| {
-        TauriError::with_details(
-            TauriErrorCode::DirectoryError,
-            "Failed to create app data dir",
-            e.to_string(),
-        )
-    })?;
-    let path = dir.join("webview-stores.json");
-
-    let mut map: std::collections::BTreeMap<String, u32> = std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|raw| serde_json::from_str(&raw).ok())
-        .unwrap_or_default();
-
-    let existing = map.get(key).copied();
-    let slot = assign_slot(&mut map, key);
-    if existing.is_none() {
-        let body = serde_json::to_string_pretty(&map).map_err(|e| {
-            TauriError::with_details(
-                TauriErrorCode::InternalError,
-                "Failed to serialise the webview store map",
-                e.to_string(),
-            )
-        })?;
-        std::fs::write(&path, body).map_err(|e| {
-            TauriError::with_details(
-                TauriErrorCode::FileWriteError,
-                "Failed to write the webview store map",
-                e.to_string(),
-            )
-        })?;
-    }
-
-    Ok(slot_bytes(slot))
-}
-
-/// Slot assignment, split out from the file I/O so it can be tested. Slots are
-/// handed out in order and never reused, so two keys can never collide.
-fn assign_slot(map: &mut std::collections::BTreeMap<String, u32>, key: &str) -> u32 {
-    if let Some(slot) = map.get(key) {
-        return *slot;
-    }
-    let next = map.values().copied().max().unwrap_or(0) + 1;
-    map.insert(key.to_string(), next);
-    next
-}
-
-fn slot_bytes(slot: u32) -> [u8; 16] {
-    let mut out = [0u8; 16];
-    out[..4].copy_from_slice(&slot.to_le_bytes());
-    out
-}
 
 #[tauri::command]
 async fn create_app_window(
@@ -1911,11 +1798,7 @@ async fn create_app_window(
     // Record before the window exists, so the broker can never be raced by a page
     // that loads and invokes it before the registration lands.
     if isolation_key.is_some() {
-        app_handle
-            .state::<IsolatedWindows>()
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .insert(window_label.clone());
+        webview_isolation::remember(&app_handle, &window_label);
     }
 
     // A stable per-(app, node) bucket so the window keeps its own session across
@@ -1926,13 +1809,13 @@ async fn create_app_window(
         // below macOS 14, so this cannot be a per-platform cfg, and it must not
         // depend on the caller having checked webview_isolation_supported.
         if !webview_isolation_supported() {
-            forget_isolated_window(&app_handle, &window_label);
+            webview_isolation::forget(&app_handle, &window_label);
             return Err(TauriError::new(
                 TauriErrorCode::PlatformNotSupported,
                 "Isolated app windows need macOS 14 or newer, or Linux",
             ));
         }
-        let digest = webview_store_id(&app_handle, key)?;
+        let digest = webview_isolation::store_id(&app_handle, key)?;
         #[cfg(target_os = "macos")]
         {
             builder = builder.data_store_identifier(digest);
@@ -1950,7 +1833,7 @@ async fn create_app_window(
                     )
                 })?
                 .join("webviews")
-                .join(hex_16(&digest));
+                .join(webview_isolation::dir_name(&digest));
             builder = builder.data_directory(dir);
         }
         #[cfg(not(any(target_os = "macos", target_os = "linux")))]
@@ -1964,7 +1847,7 @@ async fn create_app_window(
         // The registration has to precede build() so a page cannot reach the
         // broker before it lands; drop it again if no window ever existed.
         if isolation_key.is_some() {
-            forget_isolated_window(&app_handle, &window_label);
+            webview_isolation::forget(&app_handle, &window_label);
         }
         TauriError::with_details(
             TauriErrorCode::WindowCreationFailed,
@@ -1980,7 +1863,7 @@ async fn create_app_window(
         let label = window_label.clone();
         window.on_window_event(move |event| {
             if matches!(event, tauri::WindowEvent::Destroyed) {
-                forget_isolated_window(&handle, &label);
+                webview_isolation::forget(&handle, &label);
             }
         });
     }
@@ -5503,42 +5386,6 @@ mod tests {
         );
         let body = received.concat();
         assert!(body.contains("data: first"), "unexpected: {body:?}");
-    }
-
-    // ── Webview store isolation tests ─────────────────────────────────────────
-
-    #[test]
-    fn webview_slots_are_stable_distinct_and_never_zero() {
-        use super::{assign_slot, slot_bytes};
-        let mut map = std::collections::BTreeMap::new();
-
-        let a = assign_slot(&mut map, "drive@http://localhost:2528");
-        let b = assign_slot(&mut map, "drive@http://localhost:2529");
-        let a_again = assign_slot(&mut map, "drive@http://localhost:2528");
-
-        assert_eq!(a, a_again, "the same key must keep its bucket across opens");
-        assert_ne!(a, b, "two keys sharing a bucket would merge their storage");
-
-        // An all-zero identifier is not a valid WKWebsiteDataStore identifier.
-        for slot in [a, b] {
-            assert_ne!(slot_bytes(slot), [0u8; 16]);
-        }
-    }
-
-    #[test]
-    fn webview_slots_survive_a_reloaded_map() {
-        use super::assign_slot;
-        let mut map = std::collections::BTreeMap::new();
-        assign_slot(&mut map, "one");
-        assign_slot(&mut map, "two");
-
-        // Simulate the map being written, read back, and extended later.
-        let mut reloaded: std::collections::BTreeMap<String, u32> = map.clone();
-        let third = assign_slot(&mut reloaded, "three");
-        assert!(
-            !map.values().any(|s| *s == third),
-            "a new key must not reuse a slot already handed out"
-        );
     }
 
     // ── Merod binary update tests ─────────────────────────────────────────────

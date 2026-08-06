@@ -50,12 +50,18 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
 
   useEffect(() => {
     if (!developerMode) return;
-    detectRunningMerodNodes()
-      .then((n) => setRunningNodes(Array.isArray(n) ? n : []))
-      .catch(() => setRunningNodes([]));
+    // Nodes start and stop while this page stays open, so a one-shot fetch would
+    // keep offering a dead node as a target. Platform support cannot change.
+    const refreshRunning = () =>
+      detectRunningMerodNodes()
+        .then((n) => setRunningNodes(Array.isArray(n) ? n : []))
+        .catch(() => setRunningNodes([]));
+    refreshRunning();
     invoke<boolean>('webview_isolation_supported')
       .then(setIsolationOk)
       .catch(() => setIsolationOk(false));
+    const interval = setInterval(refreshRunning, 5000);
+    return () => clearInterval(interval);
   }, [developerMode]);
   const mountedRef = useRef(true);
 

@@ -21,9 +21,6 @@ on:
         required: false
       TAURI_PUBLIC_KEY:
         required: true
-      # Mero Meet WebRTC: bearer key for the ICE/TURN credential endpoint
-      CALIMERO_ICE_ENDPOINT_KEY:
-        required: false
     outputs:
       artifact-name:
         description: "Name of the uploaded artifact"
@@ -200,9 +197,6 @@ jobs:
           MEROD_SKIP_IF_EXISTS: "1"
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
-          # Baked into the binary via option_env! so installed apps reach the TURN relay
-          CALIMERO_ICE_ENDPOINT: ${{ vars.CALIMERO_ICE_ENDPOINT }}
-          CALIMERO_ICE_ENDPOINT_KEY: ${{ secrets.CALIMERO_ICE_ENDPOINT_KEY }}
         # .deb is the Crostini install path on ChromeOS; AppImage feeds the updater.
         run: pnpm exec tauri build --bundles appimage,deb
 

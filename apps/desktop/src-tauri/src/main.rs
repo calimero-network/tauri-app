@@ -1365,16 +1365,21 @@ fn ensure_app_launcher_icon(
     frontend_url: &str,
     app_id: &str,
 ) -> Option<std::path::PathBuf> {
+    // A generated .icns is reused as-is: regenerating it costs a network fetch and
+    // ~11 `sips` forks. Delete the cache file to pick up a changed app icon.
+    let cached = app_icon_cache_path(app_id);
+    if cached.exists() {
+        return Some(cached);
+    }
     let png = bundled_icon
         .and_then(decode_data_uri_png)
         .or_else(|| fetch_frontend_icon_png(frontend_url))?;
     let tmp_png = std::env::temp_dir().join(format!("calimero-appicon-{app_id}.png"));
     std::fs::write(&tmp_png, &png).ok()?;
-    let icns = app_icon_cache_path(app_id);
-    let result = png_to_icns(&tmp_png, &icns);
+    let result = png_to_icns(&tmp_png, &cached);
     let _ = std::fs::remove_file(&tmp_png);
     match result {
-        Ok(()) => Some(icns),
+        Ok(()) => Some(cached),
         Err(_) => None,
     }
 }
@@ -1494,9 +1499,33 @@ fn ensure_app_launcher(
 /// "Open" on macOS: launch the app through its per-app shell/launcher (first-class
 /// dock identity), creating a managed launcher if one doesn't exist yet. Reuses
 /// the app's existing launcher location (e.g. a Desktop one) when present.
+///
+/// The body takes seconds (shell extract, icon fetch, `sips`, waiting on `open`),
+/// so it runs on a blocking thread rather than a runtime worker.
 #[tauri::command]
+async fn open_app_launcher(
+    app_handle: tauri::AppHandle,
+    app_name: String,
+    frontend_url: String,
+    app_id: String,
+    icon: Option<String>,
+    node_url: String,
+) -> Result<String, TauriError> {
+    tokio::task::spawn_blocking(move || {
+        open_app_launcher_blocking(app_handle, app_name, frontend_url, app_id, icon, node_url)
+    })
+    .await
+    .map_err(|e| {
+        TauriError::with_details(
+            TauriErrorCode::ShortcutCreationFailed,
+            "Launcher task failed",
+            e.to_string(),
+        )
+    })?
+}
+
 #[allow(unused_variables)]
-fn open_app_launcher(
+fn open_app_launcher_blocking(
     app_handle: tauri::AppHandle,
     app_name: String,
     frontend_url: String,
@@ -1564,9 +1593,32 @@ fn open_app_launcher(
     }
 }
 
+/// Shares `ensure_app_launcher` with `open_app_launcher`, so it blocks for just as
+/// long and takes the same blocking thread.
 #[tauri::command]
+async fn create_desktop_shortcut(
+    app_handle: tauri::AppHandle,
+    app_name: String,
+    frontend_url: String,
+    app_id: Option<String>,
+    icon: Option<String>,
+    node_url: String,
+) -> Result<String, TauriError> {
+    tokio::task::spawn_blocking(move || {
+        create_desktop_shortcut_blocking(app_handle, app_name, frontend_url, app_id, icon, node_url)
+    })
+    .await
+    .map_err(|e| {
+        TauriError::with_details(
+            TauriErrorCode::ShortcutCreationFailed,
+            "Shortcut task failed",
+            e.to_string(),
+        )
+    })?
+}
+
 #[allow(unused_variables)]
-fn create_desktop_shortcut(
+fn create_desktop_shortcut_blocking(
     app_handle: tauri::AppHandle,
     app_name: String,
     frontend_url: String,

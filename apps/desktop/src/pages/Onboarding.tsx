@@ -12,6 +12,7 @@ import {
   DEFAULT_EMBEDDED_SWARM_PORT,
 } from "../utils/settings";
 import { hardReset, wipeClientState } from "../utils/hardReset";
+import { listInstalledApps, invalidateInstalledApps } from "../utils/installedAppsCache";
 import { parseTauriError } from "../utils/appUtils";
 import { setAccessToken, setRefreshToken, setTokenExpiresAt } from "../lib/token-storage";
 import { saveOnboardingProgress, loadOnboardingProgress } from "../utils/onboardingProgress";
@@ -498,7 +499,7 @@ function Onboarding({ onComplete, onSettings }: OnboardingProps) {
       
       // Load installed apps
       try {
-        const response = await apiClient.node.listApplications();
+        const response = await listInstalledApps();
         if (response.data) {
           const installed = new Set<string>(
             (Array.isArray(response.data) ? response.data : []).map((app: any) => app.id as string)
@@ -584,6 +585,7 @@ function Onboarding({ onComplete, onSettings }: OnboardingProps) {
         throw new Error(installResponse.error.message);
       }
 
+      invalidateInstalledApps();
       toast.success(`Successfully installed ${app.name}!`);
       setInstalledAppIds(new Set([...installedAppIds, app.id]));
 

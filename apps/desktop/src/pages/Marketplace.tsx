@@ -10,6 +10,7 @@ import {
   touchMarketplaceCache,
   invalidateMarketplaceCache,
 } from "../utils/marketplaceCache";
+import { listInstalledApps, invalidateInstalledApps } from "../utils/installedAppsCache";
 import { truncateText } from "../utils/string";
 import { useToast } from "../contexts/ToastContext";
 import Skeleton from "../components/Skeleton";
@@ -121,7 +122,7 @@ function Marketplace({ clientReady = true }: MarketplaceProps) {
   // -----------------------------------------------------------------------
   const loadInstalledApps = useCallback(async (): Promise<Set<string>> => {
     try {
-      const response = await apiClient.node.listApplications();
+      const response = await listInstalledApps();
       if (response.error) {
         if (response.error.code === '401') {
           console.warn("📦 Marketplace: 401 Unauthorized - token may be expired");
@@ -276,6 +277,7 @@ function Marketplace({ clientReady = true }: MarketplaceProps) {
   // -----------------------------------------------------------------------
   const handleForceRefresh = useCallback(async () => {
     invalidateMarketplaceCache();
+    invalidateInstalledApps();
     const installed = await loadInstalledApps();
     await loadMarketplaceApps(installed, true);
   }, [loadInstalledApps, loadMarketplaceApps]);
@@ -426,6 +428,7 @@ function Marketplace({ clientReady = true }: MarketplaceProps) {
         return;
       }
 
+      invalidateInstalledApps();
       toast.success(`${app.alias || app.name} installed successfully!`);
 
       // Record download with registry (fire-and-forget)

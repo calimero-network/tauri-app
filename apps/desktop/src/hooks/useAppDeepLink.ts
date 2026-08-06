@@ -7,6 +7,7 @@ import {
   decodeMetadata,
   openAppFrontend,
 } from '../utils/appUtils';
+import { listInstalledApps, invalidateInstalledApps } from '../utils/installedAppsCache';
 import { fetchAppsFromRegistry } from '../utils/registry';
 
 const DEEP_LINK_REGISTRY = 'https://apps.calimero.network';
@@ -34,6 +35,7 @@ async function installFromRegistry(pkg: string): Promise<string | null> {
       console.warn(`[deep-link] install failed for ${pkg}:`, res.error?.message ?? 'no applicationId');
       return null;
     }
+    invalidateInstalledApps();
     return res.data.applicationId;
   } catch (e) {
     console.warn(`[deep-link] install-on-demand error for ${pkg}:`, e);
@@ -75,7 +77,7 @@ type OpenOutcome = 'opened' | 'retry' | 'forget';
  * app's invite builder emits it (`calimero://<package>/join?…`).
  */
 async function resolveAndOpen(dl: AppDeepLink): Promise<OpenOutcome> {
-  const response = await apiClient.node.listApplications();
+  const response = await listInstalledApps();
   if (response.error || !Array.isArray(response.data)) {
     // Node isn't ready to list apps yet (cold boot) — transient, retry.
     return 'retry';
@@ -95,7 +97,7 @@ async function resolveAndOpen(dl: AppDeepLink): Promise<OpenOutcome> {
       console.warn(`[deep-link] could not install "${dl.slug}" — forgetting link`);
       return 'forget';
     }
-    const relist = await apiClient.node.listApplications();
+    const relist = await listInstalledApps();
     const apps = Array.isArray(relist.data) ? relist.data : [];
     match = apps.find((a: any) => a.id === installedId) ?? byPackage(apps);
     if (!match) {

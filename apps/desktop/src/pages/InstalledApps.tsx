@@ -5,6 +5,7 @@ import DataTable from "../components/DataTable";
 import ContextMenu from "../components/ContextMenu";
 import Skeleton from "../components/Skeleton";
 import { decodeMetadata, openAppFrontend, parseTauriError } from "../utils/appUtils";
+import { listInstalledApps, invalidateInstalledApps } from "../utils/installedAppsCache";
 import { getSettings } from "../utils/settings";
 import { detectRunningMerodNodes, type RunningMerodNode } from "../utils/merod";
 import { formatVersionLabel, BUNDLED_VERSION_ID } from "../utils/merodVersions";
@@ -105,13 +106,14 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
     loadInstalledApps();
   }, [clientReady]);
 
-  const loadInstalledApps = async () => {
+  const loadInstalledApps = async (force = false) => {
+    if (force) invalidateInstalledApps();
     setLoading(true);
     setError(null);
     const start = Date.now();
 
     try {
-      const response = await apiClient.node.listApplications();
+      const response = await listInstalledApps();
 
       if (response.error) {
         if (response.error.code === '401') {
@@ -162,7 +164,7 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
             return;
           }
           toast.success(`"${appName}" uninstalled`);
-          await loadInstalledApps();
+          await loadInstalledApps(true);
         } catch (err) {
           toast.error(`Failed to uninstall: ${parseTauriError(err, "Unknown error")}`);
         }
@@ -175,7 +177,7 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
           return;
         }
         toast.success(`"${appName}" uninstalled`);
-        await loadInstalledApps();
+        await loadInstalledApps(true);
       } catch (err) {
         toast.error(`Failed to uninstall: ${err instanceof Error ? err.message : "Unknown error"}`);
       }
@@ -184,6 +186,7 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
 
   const handleOpenFrontend = async (frontendUrl: string, appName?: string, applicationId?: string, iconData?: string) => {
     // Warm up the token so any refresh completes before we read it from localStorage.
+    // Wanted for the side effect, so it deliberately bypasses the list cache.
     try { await apiClient.node.listApplications(); } catch {}
     const targetNodeUrl = applicationId ? targetFor(applicationId) : undefined;
     await openAppFrontend(frontendUrl, appName, (error) => {
@@ -214,7 +217,7 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
           <p>Manage your installed applications</p>
         </div>
         <button
-          onClick={loadInstalledApps}
+          onClick={() => loadInstalledApps(true)}
           className="installed-refresh-btn"
           disabled={loading}
           title="Refresh"

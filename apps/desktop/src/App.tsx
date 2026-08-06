@@ -17,6 +17,7 @@ import { startMerod, detectRunningMerodNodes, waitForNodeHealthy, type RunningMe
 import { useToast } from "./contexts/ToastContext";
 import { checkOnboardingState } from "./utils/onboarding";
 import { decodeMetadata, openAppFrontend, parseTauriError } from "./utils/appUtils";
+import { listInstalledApps } from "./utils/installedAppsCache";
 import { useAppDeepLink } from "./hooks/useAppDeepLink";
 import UpdateNotification from "./components/UpdateNotification";
 import Sidebar from "./components/Sidebar";
@@ -105,7 +106,7 @@ function App() {
     if (!clientReady) return;
     setLoadingApps(true);
     try {
-      const response = await apiClient.node.listApplications();
+      const response = await listInstalledApps();
       if (response.error) {
         // If 401, show login (but not if we just completed onboarding)
         if (response.error.code === '401' && !showOnboarding) {

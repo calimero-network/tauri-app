@@ -83,6 +83,7 @@ export interface RunningMerodNode {
   node_name: string;
   port: number; // Server port
   swarm_port?: number; // Swarm port
+  home_dir?: string; // Data directory the node runs under, parsed from its argv
 }
 
 /**

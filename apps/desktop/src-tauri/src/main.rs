@@ -2153,6 +2153,51 @@ pub(crate) fn resolve_home_dir(home_dir: Option<String>) -> Result<std::path::Pa
     }
 }
 
+/// Serialises node creation per name without holding a lock across the download
+/// a pinned release may need. Cleared on drop so every exit path releases it.
+struct NodeInitReservation(String);
+
+static NODE_INIT_IN_FLIGHT: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashSet<String>>,
+> = std::sync::LazyLock::new(Default::default);
+
+impl NodeInitReservation {
+    fn claim(home: &std::path::Path, node_name: &str) -> Result<Self, TauriError> {
+        let key = format!("{}::{}", home.display(), node_name);
+        let mut in_flight = NODE_INIT_IN_FLIGHT
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+
+        // merod init over an existing node reports success without minting the
+        // admin account, leaving a node nobody can sign in to. Refuse instead.
+        if home.join(node_name).exists() {
+            return Err(TauriError::new(
+                TauriErrorCode::InvalidInput,
+                format!(
+                    "Node '{}' already exists. Pick a different name, or delete it first - re-initialising cannot change its merod version or its admin account.",
+                    node_name
+                ),
+            ));
+        }
+        if !in_flight.insert(key.clone()) {
+            return Err(TauriError::new(
+                TauriErrorCode::InvalidInput,
+                format!("Node '{}' is already being created", node_name),
+            ));
+        }
+        Ok(Self(key))
+    }
+}
+
+impl Drop for NodeInitReservation {
+    fn drop(&mut self) {
+        NODE_INIT_IN_FLIGHT
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(&self.0);
+    }
+}
+
 /// Get the app data directory for storing merod data
 fn get_app_data_dir(app_handle: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
     let app_data_dir = app_handle
@@ -3013,23 +3058,10 @@ async fn init_merod_node(
         )
     })?;
 
-    // Serialise the check and the init: two concurrent calls for one name would
-    // otherwise both see no directory and both run merod init over it. Node
-    // creation is user-driven and rare, so one gate for all names is enough.
-    static INIT_GATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-    let _init_guard = INIT_GATE.lock().await;
-
-    // merod init over an existing node reports success without minting the admin
-    // account, leaving a node nobody can sign in to. Refuse instead.
-    if home_dir_path.join(&node_name).exists() {
-        return Err(TauriError::new(
-            TauriErrorCode::InvalidInput,
-            format!(
-                "Node '{}' already exists. Pick a different name, or delete it first - re-initialising cannot change its merod version or its admin account.",
-                node_name
-            ),
-        ));
-    }
+    // Reserve the name, then release the lock: holding it across resolve_binary
+    // would block every other creation for the length of a release download.
+    // The guard clears the reservation on every exit, including the early ones.
+    let reservation = NodeInitReservation::claim(&home_dir_path, &node_name)?;
 
     let version_id = match &merod_version_id {
         Some(raw) => merod_versions::parse_version_id(raw)?,
@@ -3128,6 +3160,7 @@ async fn init_merod_node(
         return Err(e);
     }
 
+    drop(reservation);
     info!(
         "[Merod] Initialized node '{}' in {:?}",
         node_name, home_dir_path

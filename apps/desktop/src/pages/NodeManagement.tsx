@@ -21,6 +21,7 @@ import {
   type ReleaseInfo,
 } from "../utils/merodVersions";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { useToast } from "../contexts/ToastContext";
 import { Play, Square, RefreshCw, Check, FileText, ChevronDown } from "lucide-react";
 import { LogsViewer } from "../components/LogsViewer";
@@ -90,8 +91,14 @@ export default function NodeManagement() {
     loadNodes();
     detectRunning();
 
-    const interval = setInterval(detectRunning, 3000);
-    return () => clearInterval(interval);
+    // The backend emits on every start/stop/reap it performs; the slow poll is
+    // only there to discover nodes started outside the app.
+    const unlisten = listen('merod-status-changed', () => { detectRunning(); }).catch(() => null);
+    const interval = setInterval(detectRunning, 30000);
+    return () => {
+      unlisten.then((off) => off && off()).catch(() => {});
+      clearInterval(interval);
+    };
   }, [homeDir]);
 
   // When selected node is not running and current ports conflict with running nodes, auto-assign next free ports

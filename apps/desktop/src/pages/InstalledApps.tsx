@@ -10,6 +10,7 @@ import { detectRunningMerodNodes, type RunningMerodNode } from "../utils/merod";
 import { formatVersionLabel, BUNDLED_VERSION_ID } from "../utils/merodVersions";
 import { useNodeVersions } from "../hooks/useNodeVersions";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { RefreshCw, MoreHorizontal, Trash2, Copy, Rocket } from "lucide-react";
 import "./InstalledApps.css";
 
@@ -76,8 +77,14 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
     invoke<boolean>('webview_isolation_supported')
       .then(setIsolationOk)
       .catch(() => setIsolationOk(false));
-    const interval = setInterval(refreshRunning, 5000);
-    return () => clearInterval(interval);
+    // The backend emits on every start/stop/reap it performs; the slow poll is
+    // only there to discover nodes started outside the app.
+    const unlisten = listen('merod-status-changed', () => { refreshRunning(); }).catch(() => null);
+    const interval = setInterval(refreshRunning, 30000);
+    return () => {
+      unlisten.then((off) => off && off()).catch(() => {});
+      clearInterval(interval);
+    };
   }, [developerMode]);
   const mountedRef = useRef(true);
 

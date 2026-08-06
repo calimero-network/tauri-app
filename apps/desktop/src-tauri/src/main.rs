@@ -2261,7 +2261,6 @@ async fn start_merod(
     data_dir: Option<String>,
     node_name: Option<String>,
     debug_logs: Option<bool>,
-    merod_version_id: Option<String>,
     app_handle: tauri::AppHandle,
     merod_state: tauri::State<'_, MerodState>,
     log_writers: tauri::State<'_, MerodLogWriters>,
@@ -2321,13 +2320,11 @@ async fn start_merod(
         validate_node_name(name).map_err(|e| TauriError::new(TauriErrorCode::InvalidInput, e))?;
     }
 
-    // An explicit id wins; otherwise the node's own pin decides, defaulting to bundled.
-    let version_id = match &merod_version_id {
-        Some(raw) => merod_versions::parse_version_id(raw)?,
-        None => match &node_name {
-            Some(name) => merod_versions::read_pin(&home_dir_path, name),
-            None => merod_versions::VersionId::Bundled,
-        },
+    // The node's pin is the only source of truth: an override here could start a
+    // node on a binary that every "used by" listing still attributes elsewhere.
+    let version_id = match &node_name {
+        Some(name) => merod_versions::read_pin(&home_dir_path, name),
+        None => merod_versions::VersionId::Bundled,
     };
     let merod_binary = merod_versions::resolve_binary(&app_handle, &version_id).await?;
 

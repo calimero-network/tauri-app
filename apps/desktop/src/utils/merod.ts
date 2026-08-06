@@ -28,8 +28,8 @@ export async function listMerodNodes(homeDir?: string): Promise<string[]> {
 /**
  * Start the embedded merod node
  */
-export async function startMerod(serverPort?: number, swarmPort?: number, dataDir?: string, nodeName?: string, debugLogs?: boolean, merodVersionId?: string): Promise<string> {
-  return await invoke('start_merod', { serverPort, swarmPort, dataDir, nodeName, debugLogs, merodVersionId });
+export async function startMerod(serverPort?: number, swarmPort?: number, dataDir?: string, nodeName?: string, debugLogs?: boolean): Promise<string> {
+  return await invoke('start_merod', { serverPort, swarmPort, dataDir, nodeName, debugLogs });
 }
 
 /**

@@ -48,6 +48,22 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
   const [targets, setTargets] = useState<Record<string, string>>({});
   const nodeVersions = useNodeVersions(developerMode).byNode;
 
+  // Options are keyed by running-node port, so derive the default the same way:
+  // a settings URL of 127.0.0.1 or with a trailing slash matched no option, and
+  // the select then displayed a node it would not actually open against.
+  const optionValue = (n: RunningMerodNode) => `http://localhost:${n.port}`;
+  const activeTarget = (() => {
+    let port = '';
+    try {
+      port = new URL(getSettings().nodeUrl).port;
+    } catch {
+      return undefined;
+    }
+    const match = runningNodes.find((n) => String(n.port) === port);
+    return match ? optionValue(match) : undefined;
+  })();
+  const targetFor = (appId: string) => targets[appId] ?? activeTarget;
+
   useEffect(() => {
     if (!developerMode) return;
     // Nodes start and stop while this page stays open, so a one-shot fetch would
@@ -163,7 +179,7 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
   const handleOpenFrontend = async (frontendUrl: string, appName?: string, applicationId?: string, iconData?: string) => {
     // Warm up the token so any refresh completes before we read it from localStorage.
     try { await apiClient.node.listApplications(); } catch {}
-    const targetNodeUrl = applicationId ? targets[applicationId] : undefined;
+    const targetNodeUrl = applicationId ? targetFor(applicationId) : undefined;
     await openAppFrontend(frontendUrl, appName, (error) => {
       toast.error(`Failed to open frontend: ${error.message}`);
     }, applicationId ? { applicationId, iconData, targetNodeUrl } : undefined);
@@ -351,7 +367,7 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
                       {frontendUrl && developerMode && runningNodes.length > 1 && (
                         <select
                           className="app-target-select"
-                          value={targets[app.id] ?? getSettings().nodeUrl}
+                          value={targetFor(app.id) ?? ''}
                           disabled={!isolationOk}
                           title={
                             isolationOk
@@ -362,7 +378,7 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
                           onChange={(e) => setTargets((t) => ({ ...t, [app.id]: e.target.value }))}
                         >
                           {runningNodes.map((n) => (
-                            <option key={n.pid} value={`http://localhost:${n.port}`}>
+                            <option key={n.pid} value={optionValue(n)}>
                               {n.node_name} - {formatVersionLabel(nodeVersions[n.node_name] ?? BUNDLED_VERSION_ID, "")}
                             </option>
                           ))}

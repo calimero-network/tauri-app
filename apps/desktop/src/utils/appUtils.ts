@@ -233,9 +233,12 @@ export async function openAppFrontend(
     if (isCrossNode) {
       nodeSuffix = `-n${nodeKey(nodeUrl)}`;
     }
-    const appKey = context?.applicationId
-      ? context.applicationId.replace(/[^a-zA-Z0-9-]/g, '-').slice(0, 60 - nodeSuffix.length)
-      : domain;
+    // Both branches must leave room for the suffix: truncating it away would let
+    // two node targets share a label, and the label is what reuses a window.
+    const budget = 60 - nodeSuffix.length;
+    const appKey = (context?.applicationId ?? domain)
+      .replace(/[^a-zA-Z0-9-]/g, '-')
+      .slice(0, budget);
     const windowLabel = `app-${appKey}${nodeSuffix}`.slice(0, 64);
 
     // If the window is already open, restore + focus it and signal a token refresh.

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { listInstalledMerodVersions } from "../utils/merodVersions";
+import { getSettings } from "../utils/settings";
 
 export interface NodeVersionMap {
   /** node name -> version id it is pinned to */
@@ -15,9 +16,14 @@ const EMPTY: NodeVersionMap = { byNode: {}, measured: {}, drifted: new Set() };
 /**
  * Which merod build each node runs. Three surfaces need this, so it lives in one
  * place; `deps` lets a caller refetch when its own node list changes.
+ *
+ * `homeDir` defaults to the configured data directory rather than to the
+ * backend's `~/.calimero`, so a caller that omits it cannot silently read the
+ * wrong directory and report every node as running the shipped binary.
  */
 export function useNodeVersions(enabled: boolean, homeDir?: string, deps: unknown[] = []): NodeVersionMap {
   const [state, setState] = useState<NodeVersionMap>(EMPTY);
+  const dir = homeDir ?? getSettings().embeddedNodeDataDir;
 
   useEffect(() => {
     if (!enabled) {
@@ -25,7 +31,7 @@ export function useNodeVersions(enabled: boolean, homeDir?: string, deps: unknow
       return;
     }
     let cancelled = false;
-    listInstalledMerodVersions(homeDir)
+    listInstalledMerodVersions(dir)
       .then((installed) => {
         if (cancelled) return;
         const byNode: Record<string, string> = {};
@@ -45,7 +51,7 @@ export function useNodeVersions(enabled: boolean, homeDir?: string, deps: unknow
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, homeDir, ...deps]);
+  }, [enabled, dir, ...deps]);
 
   return state;
 }

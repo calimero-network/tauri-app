@@ -1421,6 +1421,12 @@ fn ensure_app_launcher(
     launcher::validate_app_id(app_id)
         .map_err(|e| TauriError::new(TauriErrorCode::ShortcutCreationFailed, e.to_string()))?;
 
+    // Both callers now run this on a blocking thread, so two builds can overlap and
+    // interleave the caps.json read-modify-write below. Global, not per app id: the
+    // cap must also match the bundle it was baked into when one app is opened twice.
+    static BUILD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _serialised = BUILD.lock().unwrap_or_else(|p| p.into_inner());
+
     // sanitize the name for the .app filename
     let safe: String = app_name
         .chars()

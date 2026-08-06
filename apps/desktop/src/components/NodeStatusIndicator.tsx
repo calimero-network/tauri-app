@@ -49,7 +49,8 @@ export function NodeStatusIndicator({
     } catch {
       return undefined;
     }
-    if (!['localhost', '127.0.0.1', '::1', '[::1]'].includes(host)) return undefined;
+    // URL.hostname strips the brackets from an IPv6 literal, so '::1' is the form seen here.
+    if (!['localhost', '127.0.0.1', '::1'].includes(host)) return undefined;
     return runningNodes?.find((n) => String(n.port) === port);
   })();
 

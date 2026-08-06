@@ -1818,23 +1818,30 @@ async fn create_app_window(
                 "Isolated app windows need macOS 14 or newer, or Linux",
             ));
         }
-        let digest = webview_isolation::store_id(&app_handle, key)?;
+        let digest = match webview_isolation::store_id(&app_handle, key) {
+            Ok(d) => d,
+            Err(e) => {
+                webview_isolation::forget(&app_handle, &window_label);
+                return Err(e);
+            }
+        };
         #[cfg(target_os = "macos")]
         {
             builder = builder.data_store_identifier(digest);
         }
         #[cfg(target_os = "linux")]
         {
-            let dir = app_handle
-                .path()
-                .app_data_dir()
-                .map_err(|e| {
-                    TauriError::with_details(
+            let dir = match app_handle.path().app_data_dir() {
+                Ok(d) => d,
+                Err(e) => {
+                    webview_isolation::forget(&app_handle, &window_label);
+                    return Err(TauriError::with_details(
                         TauriErrorCode::DirectoryError,
                         "Failed to resolve app data dir for webview isolation",
                         e.to_string(),
-                    )
-                })?
+                    ));
+                }
+            }
                 .join("webviews")
                 .join(webview_isolation::dir_name(&digest));
             builder = builder.data_directory(dir);

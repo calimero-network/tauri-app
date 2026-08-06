@@ -346,17 +346,26 @@ pub async fn repoint_local_build(
     // binary, so the previous version_at_init would report drift forever.
     let measured = get_merod_version_at(&path).await;
 
+    // Keep going on a failure rather than stopping half way: aborting mid-loop
+    // leaves some nodes repointed and some not, with no way to tell which.
     let mut changed = 0u32;
+    let mut failed: Vec<String> = Vec::new();
     for node in nodes_using(&home, &old_id) {
-        write_pin(
-            &home,
-            &node,
-            &NodePin {
-                id: new_id.clone(),
-                version_at_init: measured.clone(),
-            },
-        )?;
-        changed += 1;
+        let pin = NodePin {
+            id: new_id.clone(),
+            version_at_init: measured.clone(),
+        };
+        match write_pin(&home, &node, &pin) {
+            Ok(()) => changed += 1,
+            Err(_) => failed.push(node),
+        }
+    }
+    if !failed.is_empty() {
+        return Err(TauriError::with_details(
+            TauriErrorCode::FileWriteError,
+            format!("Repointed {} node(s); {} could not be updated", changed, failed.len()),
+            failed.join(", "),
+        ));
     }
     Ok(changed)
 }
@@ -401,7 +410,11 @@ pub async fn ensure_release_installed(
     tag: &str,
 ) -> Result<PathBuf, TauriError> {
     use tokio::sync::Mutex as AsyncMutex;
-    static IN_FLIGHT: std::sync::OnceLock<AsyncMutex<()>> = std::sync::OnceLock::new();
+    // Per tag, not global: two nodes pinned to different releases can now be
+    // created concurrently, and one slow download must not stall the other.
+    static IN_FLIGHT: std::sync::LazyLock<
+        std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<AsyncMutex<()>>>>,
+    > = std::sync::LazyLock::new(Default::default);
 
     if !is_safe_tag(tag) {
         return Err(TauriError::new(
@@ -417,7 +430,10 @@ pub async fn ensure_release_installed(
 
     // Serialise all installs. Downloads are rare and a few seconds each, so a
     // single gate is simpler than per-tag locks and cannot deadlock.
-    let gate = IN_FLIGHT.get_or_init(|| AsyncMutex::new(()));
+    let gate = {
+        let mut gates = IN_FLIGHT.lock().unwrap_or_else(|p| p.into_inner());
+        gates.entry(tag.to_string()).or_default().clone()
+    };
     let _guard = gate.lock().await;
     if dest.exists() {
         return Ok(dest); // another caller finished while we waited

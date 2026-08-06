@@ -1921,6 +1921,17 @@ async fn create_app_window(
     // A stable per-(app, node) bucket so the window keeps its own session across
     // opens. macOS has no per-webview data directory, hence the identifier.
     if let Some(key) = &isolation_key {
+        // Refuse rather than open a window that quietly shares one store with
+        // another node's session. wry falls back to the default store silently
+        // below macOS 14, so this cannot be a per-platform cfg, and it must not
+        // depend on the caller having checked webview_isolation_supported.
+        if !webview_isolation_supported() {
+            forget_isolated_window(&app_handle, &window_label);
+            return Err(TauriError::new(
+                TauriErrorCode::PlatformNotSupported,
+                "Isolated app windows need macOS 14 or newer, or Linux",
+            ));
+        }
         let digest = webview_store_id(&app_handle, key)?;
         #[cfg(target_os = "macos")]
         {
@@ -1944,6 +1955,7 @@ async fn create_app_window(
         }
         #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         {
+            // Unreachable: webview_isolation_supported() is false here.
             let _ = digest;
         }
     }

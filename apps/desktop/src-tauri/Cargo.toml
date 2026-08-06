@@ -52,6 +52,7 @@ strip = "symbols"
 lto = true
 opt-level = "s"
 codegen-units = 1
+panic = "abort"
 
 [features]
 default = ["custom-protocol", "autostart"]

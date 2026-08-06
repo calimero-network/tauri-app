@@ -70,10 +70,10 @@ function NodeManagement() {
   const safeAvailableNodes = Array.isArray(availableNodes) ? availableNodes : [];
   const safeRunningNodes = Array.isArray(runningNodes) ? runningNodes : [];
 
-  // This page is the one that creates nodes and edits the data dir, so it is
-  // the one that has to tell the shared map to re-read.
+  // This page creates nodes and edits the data dir, so it has to tell the
+  // shared map to re-read.
   useEffect(() => {
-    refreshNodeVersions(homeDir);
+    refreshNodeVersions();
   }, [homeDir, availableNodes, refreshNodeVersions]);
 
   useEffect(() => {

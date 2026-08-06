@@ -8,17 +8,19 @@
  * Anything that installs or uninstalls must call `invalidateInstalledApps()`.
  */
 
-import { apiClient, type ApiResponse } from "../lib/mero-client";
+import { apiClient } from "../lib/mero-client";
 
 /** Default time-to-live: 5 minutes */
 const DEFAULT_TTL_MS = 5 * 60 * 1000;
 
-let cached: { at: number; response: ApiResponse<any[]> } | null = null;
-let inFlight: Promise<ApiResponse<any[]>> | null = null;
+type InstalledAppsResponse = Awaited<ReturnType<typeof apiClient.node.listApplications>>;
+
+let cached: { at: number; response: InstalledAppsResponse } | null = null;
+let inFlight: Promise<InstalledAppsResponse> | null = null;
 
 export async function listInstalledApps(
   ttlMs: number = DEFAULT_TTL_MS
-): Promise<ApiResponse<any[]>> {
+): Promise<InstalledAppsResponse> {
   if (cached && Date.now() - cached.at < ttlMs) return cached.response;
   if (inFlight) return inFlight;
 

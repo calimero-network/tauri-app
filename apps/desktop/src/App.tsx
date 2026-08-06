@@ -28,6 +28,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Settings as SettingsIcon, ArrowRight, Package, ShoppingCart } from "lucide-react";
 import calimeroLogo from "./assets/calimero-logo.svg";
 import { useTheme } from "./contexts/ThemeContext";
+import { useNodeVersions } from "./contexts/NodeVersionsContext";
 import "./App.css";
 
 // Only one page renders at a time, so keep them out of the initial bundle.
@@ -42,6 +43,7 @@ const ConfirmAction = lazy(() => import("./pages/ConfirmAction"));
 function App() {
   const toast = useToast();
   const { theme } = useTheme();
+  const { refresh: refreshNodeVersions } = useNodeVersions();
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
@@ -432,9 +434,11 @@ function App() {
     setShowOnboarding(false);
     setConnected(true);
     setError(null);
+    // Onboarding may have pointed the node at a custom data dir.
+    refreshNodeVersions();
     loadContexts().catch(() => {});
     loadInstalledApps().catch(() => {});
-  }, [loadContexts, loadInstalledApps]);
+  }, [loadContexts, loadInstalledApps, refreshNodeVersions]);
 
   const handleOnboardingSettings = useCallback(() => {
     setShowOnboarding(false);

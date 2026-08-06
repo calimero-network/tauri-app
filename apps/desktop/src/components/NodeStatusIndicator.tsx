@@ -36,9 +36,22 @@ export function NodeStatusIndicator({
     return formatVersionLabel(id, "", versionMeasured[id]);
   };
 
-  const currentNode = runningNodes?.find(
-    (n) => `http://localhost:${n.port}` === currentNodeUrl,
-  );
+  // Running nodes are known by port only, so match on port whenever the desktop
+  // is pointed at this machine - a literal localhost string missed 127.0.0.1.
+  const currentNode = (() => {
+    if (!currentNodeUrl) return undefined;
+    let host: string;
+    let port: string;
+    try {
+      const u = new URL(currentNodeUrl);
+      host = u.hostname;
+      port = u.port;
+    } catch {
+      return undefined;
+    }
+    if (!['localhost', '127.0.0.1', '::1', '[::1]'].includes(host)) return undefined;
+    return runningNodes?.find((n) => String(n.port) === port);
+  })();
 
   const hasError = !connected && error;
   const isClickable = hasError && onClick;

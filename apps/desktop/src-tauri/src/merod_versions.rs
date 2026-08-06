@@ -78,6 +78,9 @@ pub fn is_safe_tag(tag: &str) -> bool {
     !tag.is_empty()
         && tag != "."
         && tag != ".."
+        // A release tagged "bundled" would round-trip through the pin file as
+        // the shipped binary, silently running the wrong merod.
+        && tag != BUNDLED_ID
         && tag
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_')
@@ -858,6 +861,7 @@ mod tests {
         assert!(!is_safe_tag(""));
         assert!(!is_safe_tag("tag with space"));
         assert!(!is_safe_tag(".."));
+        assert!(!is_safe_tag(BUNDLED_ID), "must not collide with the shipped id");
         assert!(!is_safe_tag("."));
     }
 

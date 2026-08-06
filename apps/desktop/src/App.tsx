@@ -19,7 +19,6 @@ import { checkOnboardingState } from "./utils/onboarding";
 import { decodeMetadata, openAppFrontend, parseTauriError } from "./utils/appUtils";
 import { listInstalledApps } from "./utils/installedAppsCache";
 import { useAppDeepLink } from "./hooks/useAppDeepLink";
-import { useVisiblePoll } from "./hooks/useVisiblePoll";
 import UpdateNotification from "./components/UpdateNotification";
 import Sidebar from "./components/Sidebar";
 import { NodeStatusIndicator } from "./components/NodeStatusIndicator";
@@ -543,14 +542,17 @@ function App() {
     return () => { unlisten.then((off) => off()).catch(() => {}); };
   }, []);
 
-  // Health-check interval — lightweight, just updates the connected indicator.
+  // Health-check interval - lightweight, just updates the connected indicator.
   // Skip on login/settings/onboarding screens. Gated on clientReady: the unconfigured
   // singleton falls back to hardcoded localhost:2528 and 401s a node on any other port.
-  useVisiblePoll(
-    checkConnection,
-    10000,
-    clientReady && !showLogin && !showSettings && !showOnboarding
-  );
+  // Deliberately NOT visibility-gated: the tray dot is the only UI while the window
+  // is hidden, and it must keep tracking node liveness.
+  useEffect(() => {
+    if (!clientReady || showLogin || showSettings || showOnboarding) return;
+    checkConnection();
+    const interval = setInterval(checkConnection, 10000);
+    return () => clearInterval(interval);
+  }, [checkConnection, clientReady, showLogin, showSettings, showOnboarding]);
 
   // Load apps + contexts only when the user is on the home page.
   // Fires once on navigation — not on every health-check tick.

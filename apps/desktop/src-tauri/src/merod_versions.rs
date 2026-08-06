@@ -25,8 +25,14 @@ const LOCAL_PREFIX: &str = "local:";
 /// asset. Catches corruption and a tampered CDN, not a malicious release itself.
 pub(crate) fn verify_sha256(bytes: &[u8], expected: &str) -> Result<(), TauriError> {
     use sha2::{Digest, Sha256};
+    // Refuse an algorithm we cannot compute: a digest we are unable to check is
+    // not a digest that passed. An absent digest is handled by the caller.
     let Some(want) = expected.strip_prefix("sha256:") else {
-        return Ok(()); // unknown digest algorithm - nothing to compare against
+        return Err(TauriError::with_details(
+            TauriErrorCode::InternalError,
+            "GitHub published a digest this build cannot verify",
+            format!("expected a sha256: digest, got '{}'", expected),
+        ));
     };
     let got = format!("{:x}", Sha256::digest(bytes));
     if got.eq_ignore_ascii_case(want) {
@@ -798,8 +804,9 @@ mod tests {
         let good = format!("sha256:{:x}", <sha2::Sha256 as sha2::Digest>::digest(bytes));
         assert!(verify_sha256(bytes, &good).is_ok());
         assert!(verify_sha256(b"tampered", &good).is_err());
-        // An algorithm we cannot check must not be treated as a failure.
-        assert!(verify_sha256(bytes, "sha512:whatever").is_ok());
+        // A digest we cannot compute must fail closed, not pass silently.
+        assert!(verify_sha256(bytes, "sha512:whatever").is_err());
+        assert!(verify_sha256(bytes, "not-a-digest").is_err());
     }
 
     #[test]

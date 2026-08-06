@@ -3208,25 +3208,42 @@ async fn init_merod_node(
     cmd.stderr(Stdio::piped());
     cmd.stdin(Stdio::null());
 
+    // The guard above proved this directory did not exist, so anything merod
+    // leaves behind on a failed init is ours to remove - otherwise the guard
+    // would reject every retry of the same name.
+    let node_dir = home_dir_path.join(&node_name);
+    let discard_partial_node = || {
+        if node_dir.exists() {
+            if let Err(e) = std::fs::remove_dir_all(&node_dir) {
+                warn!("[Merod] could not clean up after a failed init: {}", e);
+            }
+        }
+    };
+
     // Add timeout to prevent hanging (30 seconds should be enough for init)
-    let output = tokio::time::timeout(tokio::time::Duration::from_secs(30), cmd.output())
-        .await
-        .map_err(|_| {
-            TauriError::new(
+    let output = match tokio::time::timeout(tokio::time::Duration::from_secs(30), cmd.output()).await
+    {
+        Err(_) => {
+            discard_partial_node();
+            return Err(TauriError::new(
                 TauriErrorCode::Timeout,
                 "Merod init command timed out after 30 seconds",
-            )
-        })?
-        .map_err(|e| {
-            TauriError::with_details(
+            ));
+        }
+        Ok(Err(e)) => {
+            discard_partial_node();
+            return Err(TauriError::with_details(
                 TauriErrorCode::MerodInitFailed,
                 "Failed to execute merod init",
                 e.to_string(),
-            )
-        })?;
+            ));
+        }
+        Ok(Ok(output)) => output,
+    };
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
+        discard_partial_node();
         return Err(TauriError::new(
             TauriErrorCode::MerodInitFailed,
             format!("Merod init failed: {}", stderr),
@@ -3235,14 +3252,19 @@ async fn init_merod_node(
 
     // Only after a successful init: a node that failed to initialise must not be
     // left pinned to a version.
-    merod_versions::write_pin(
+    // A node without its pin would silently start on a different binary, so treat
+    // a failed write as a failed creation rather than leaving that behind.
+    if let Err(e) = merod_versions::write_pin(
         &home_dir_path,
         &node_name,
         &merod_versions::NodePin {
             id: merod_versions::version_id_to_string(&version_id),
             version_at_init: get_merod_version_at(&merod_binary).await,
         },
-    )?;
+    ) {
+        discard_partial_node();
+        return Err(e);
+    }
 
     info!(
         "[Merod] Initialized node '{}' in {:?}",

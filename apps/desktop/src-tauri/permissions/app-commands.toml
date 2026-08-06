@@ -222,11 +222,6 @@ description = "Enables the open_url_in_browser command."
 commands.allow = ["open_url_in_browser"]
 
 [[permission]]
-identifier = "allow-get-ice-servers"
-description = "Enables the get_ice_servers command."
-commands.allow = ["get_ice_servers"]
-
-[[permission]]
 identifier = "allow-secure-store-token"
 description = "Enables the secure_store_token command."
 commands.allow = ["secure_store_token"]
@@ -319,7 +314,6 @@ permissions = [
   "allow-autostart-is-enabled",
   "allow-close-current-window",
   "allow-open-url-in-browser",
-  "allow-get-ice-servers",
   "allow-secure-store-token",
   "allow-secure-get-token",
   "allow-secure-delete-token",

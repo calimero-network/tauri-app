@@ -55,6 +55,42 @@ describe('embedded node ports', () => {
   });
 });
 
+describe('getSettings memoisation', () => {
+  it('reuses the parsed object until the stored value changes', () => {
+    saveSettings({ nodeUrl: 'http://localhost:2528' });
+
+    const first = getSettings();
+    expect(getSettings()).toBe(first);
+
+    saveSettings({ nodeUrl: 'http://localhost:2529' });
+
+    const second = getSettings();
+    expect(second).not.toBe(first);
+    expect(second.nodeUrl).toBe('http://localhost:2529');
+  });
+
+  it('picks up a write that did not go through saveSettings', () => {
+    saveSettings({ nodeUrl: 'http://localhost:2528' });
+    getSettings();
+
+    localStorage.setItem(
+      'calimero-desktop-settings',
+      JSON.stringify({ nodeUrl: 'http://localhost:2530' })
+    );
+
+    expect(getSettings().nodeUrl).toBe('http://localhost:2530');
+  });
+
+  it('hands back a frozen object so a caller cannot poison the cache', () => {
+    saveSettings({ nodeUrl: 'http://localhost:2528' });
+
+    expect(() => {
+      (getSettings() as { nodeUrl: string }).nodeUrl = 'http://evil';
+    }).toThrow();
+    expect(getSettings().nodeUrl).toBe('http://localhost:2528');
+  });
+});
+
 describe('clearAllAppData', () => {
   it('clears the whole silo, not a fixed list of keys', () => {
     localStorage.setItem('calimero-desktop-settings', '{}');

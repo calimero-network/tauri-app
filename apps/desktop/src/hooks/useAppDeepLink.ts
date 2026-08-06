@@ -12,6 +12,10 @@ import { fetchAppsFromRegistry } from '../utils/registry';
 
 const DEEP_LINK_REGISTRY = 'https://apps.calimero.network';
 
+/** Waits between cold-launch drain attempts. The launch URL lands within a
+ *  second or two in practice; the long tail only covers a node still booting. */
+const DRAIN_BACKOFF_MS = [250, 500, 1000, 2000, 4000, 8000, 15000];
+
 /**
  * Install-on-demand: fetch the latest published bundle for `pkg` (the deep-link
  * slug is the registry package) and install it on the node. Returns the new
@@ -137,8 +141,10 @@ async function resolveAndOpen(dl: AppDeepLink): Promise<OpenOutcome> {
  *
  * The drain must poll, not read once: on macOS the launch URL arrives via an
  * Apple Event that can land after this effect mounts, and the node may take a
- * few seconds to be ready to list apps. It clears the pending link only on a
- * terminal outcome (opened or forgotten), so a transient failure never drops it.
+ * few seconds to be ready to list apps. It backs off over roughly the same 30s
+ * window a flat second-by-second poll covered, for a quarter of the calls. It
+ * clears the pending link only on a terminal outcome (opened or forgotten), so
+ * a transient failure never drops it.
  *
  * `enabled` gates activation until the app is past onboarding and the mero
  * client is ready — resolving requires listing installed apps.
@@ -171,7 +177,7 @@ export function useAppDeepLink(enabled: boolean): void {
     }).catch(() => null);
 
     (async () => {
-      for (let attempt = 0; attempt < 30 && !cancelled; attempt++) {
+      for (let attempt = 0; !cancelled; attempt++) {
         try {
           // Two sources: `pending` (set via our on_open_url listener, which can
           // race and miss on macOS) and `current` (the plugin's own launch-URL
@@ -188,8 +194,9 @@ export function useAppDeepLink(enabled: boolean): void {
         } catch (e) {
           console.warn('[deep-link] cold-start drain error:', e);
         }
-        if (cancelled) return;
-        await new Promise((r) => setTimeout(r, 1000));
+        const wait = DRAIN_BACKOFF_MS[attempt];
+        if (cancelled || wait === undefined) return;
+        await new Promise((r) => setTimeout(r, wait));
       }
     })();
 

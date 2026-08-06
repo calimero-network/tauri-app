@@ -27,7 +27,7 @@ vi.mock('../lib/token-storage', () => ({
   getTokenExpiresAt: () => 1_700_000_000_000,
 }));
 
-import { openAppFrontend } from './appUtils';
+import { openAppFrontend, normalizeNodeUrl } from './appUtils';
 import { BROKERED_REFRESH_TOKEN } from '../lib/token-broker';
 
 /** Args of the `create_app_window` invoke (may not be the first call — the app
@@ -166,5 +166,154 @@ describe('openAppFrontend re-opening an existing window', () => {
     expect(eventName).toBe('calimero:auth-refresh');
     expect(JSON.stringify(payload)).not.toContain(REAL_REFRESH_TOKEN);
     expect(JSON.stringify(payload)).not.toContain('the-access-token');
+  });
+});
+
+describe('openAppFrontend targeting a second node', () => {
+  /** Full args of the `create_app_window` invoke. */
+  function windowArgs(): Record<string, unknown> {
+    const call = invoke.mock.calls.find((c) => c[0] === 'create_app_window');
+    expect(call, 'create_app_window was not invoked').toBeTruthy();
+    return (call as [string, Record<string, unknown>])[1];
+  }
+
+  it('keeps the historical label and the launcher path for the active node', async () => {
+    await openAppFrontend('https://app.example.com/', 'Example', undefined, {
+      applicationId: 'app-1',
+      targetNodeUrl: 'http://localhost:2528',
+    });
+
+    // Byte-identical to a call with no targetNodeUrl at all, or every window
+    // already open under the old label would be orphaned.
+    expect(windowArgs().windowLabel).toBe('app-app-1');
+    expect(windowArgs().isolationKey).toBeNull();
+  });
+
+  it('gives a cross-node window its own label, node URL and isolation key', async () => {
+    await openAppFrontend('https://app.example.com/', 'Example', undefined, {
+      applicationId: 'app-1',
+      targetNodeUrl: 'http://localhost:2529',
+    });
+
+    const args = windowArgs();
+    expect(String(args.windowLabel)).toMatch(/^app-app-1-nhttp-localhost-2529-[a-z0-9]+$/);
+    expect(args.nodeUrl).toBe('http://localhost:2529');
+    expect(args.isolationKey).toBe('app-1@http://localhost:2529');
+    expect(String(args.title)).toContain('2529');
+  });
+
+  it('sends no credentials to a node our session does not belong to', async () => {
+    await openAppFrontend('https://app.example.com/', 'Example', undefined, {
+      applicationId: 'app-1',
+      targetNodeUrl: 'http://localhost:2529',
+    });
+
+    const hash = openedHash();
+    expect(hash.get('node_url')).toBe('http://localhost:2529');
+    expect(hash.get('access_token')).toBeNull();
+    expect(hash.get('refresh_token')).toBeNull();
+    expect(openedUrl()).not.toContain(REAL_REFRESH_TOKEN);
+    expect(openedUrl()).not.toContain('the-access-token');
+  });
+
+  it('gives two default-port hosts different labels', async () => {
+    await openAppFrontend('https://app.example.com/', 'Example', undefined, {
+      applicationId: 'app-1',
+      targetNodeUrl: 'https://alpha.example.com',
+    });
+    const a = String(windowArgs().windowLabel);
+    invoke.mockClear();
+    await openAppFrontend('https://app.example.com/', 'Example', undefined, {
+      applicationId: 'app-1',
+      targetNodeUrl: 'https://beta.example.com',
+    });
+    const b = String(windowArgs().windowLabel);
+    // URL.port is '' for https default 443; keying on it alone collided here.
+    expect(a).not.toBe(b);
+  });
+
+  it('keeps the label within the 64 character limit for a long application id', async () => {
+    const longId = 'a'.repeat(80);
+    await openAppFrontend('https://app.example.com/', 'Example', undefined, {
+      applicationId: longId,
+      targetNodeUrl: 'http://localhost:2529',
+    });
+
+    const label = String(windowArgs().windowLabel);
+    expect(label.length).toBeLessThanOrEqual(64);
+    expect(label).toContain('-nhttp-localhost-2529-');
+  });
+});
+
+describe('normalizeNodeUrl', () => {
+  it('treats cosmetic differences as the same node', () => {
+    const base = normalizeNodeUrl('http://localhost:2528');
+    expect(normalizeNodeUrl('http://localhost:2528/')).toBe(base);
+    expect(normalizeNodeUrl('http://localhost:2528//')).toBe(base);
+    expect(normalizeNodeUrl('http://LOCALHOST:2528')).toBe(base);
+    expect(normalizeNodeUrl('http://localhost')).toBe(normalizeNodeUrl('http://localhost:80'));
+    expect(normalizeNodeUrl('https://n.example.com')).toBe(
+      normalizeNodeUrl('https://n.example.com:443'),
+    );
+  });
+
+  it('keeps genuinely different targets apart', () => {
+    expect(normalizeNodeUrl('http://localhost:2528')).not.toBe(
+      normalizeNodeUrl('http://localhost:2529'),
+    );
+    // Separate web origins, so separate localStorage and separate sessions:
+    // collapsing these would hand one origin's window another origin's state.
+    expect(normalizeNodeUrl('http://localhost:2528')).not.toBe(
+      normalizeNodeUrl('http://127.0.0.1:2528'),
+    );
+  });
+});
+
+describe('cross-node window labels', () => {
+  function labelFor(target: string) {
+    invoke.mockClear();
+    return openAppFrontend('https://app.example.com/', 'Example', undefined, {
+      applicationId: 'app-1',
+      targetNodeUrl: target,
+    }).then(() => {
+      const call = invoke.mock.calls.find((c) => c[0] === 'create_app_window');
+      return String((call as [string, { windowLabel: string }])[1].windowLabel);
+    });
+  }
+
+  it('separates targets that differ only by scheme', async () => {
+    // Both omit an explicit port, so hostname alone collided and the second
+    // target focused the first target's window instead of isolating.
+    const a = await labelFor('http://example.com');
+    const b = await labelFor('https://example.com');
+    expect(a).not.toBe(b);
+  });
+
+  it('keeps every label inside Tauri’s 64 character limit', async () => {
+    const long = await labelFor('https://a-very-long-node-hostname.example.internal:8443');
+    expect(long.length).toBeLessThanOrEqual(64);
+  });
+});
+
+describe('nodeKey collisions', () => {
+  it('separates hosts that sanitise to the same string', async () => {
+    // '.' and ':' both become '-', so these two were indistinguishable.
+    const a = await (async () => {
+      invoke.mockClear();
+      await openAppFrontend('https://app.example.com/', 'E', undefined, {
+        applicationId: 'app-1', targetNodeUrl: 'http://a.b:1',
+      });
+      const c = invoke.mock.calls.find((x) => x[0] === 'create_app_window');
+      return String((c as [string, { windowLabel: string }])[1].windowLabel);
+    })();
+    const b = await (async () => {
+      invoke.mockClear();
+      await openAppFrontend('https://app.example.com/', 'E', undefined, {
+        applicationId: 'app-1', targetNodeUrl: 'http://a-b:1',
+      });
+      const c = invoke.mock.calls.find((x) => x[0] === 'create_app_window');
+      return String((c as [string, { windowLabel: string }])[1].windowLabel);
+    })();
+    expect(a).not.toBe(b);
   });
 });

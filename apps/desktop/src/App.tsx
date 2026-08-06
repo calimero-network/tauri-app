@@ -98,6 +98,9 @@ function App() {
 
   // Load installed apps for main page
   const loadInstalledApps = useCallback(async () => {
+    // Until the client is configured, the singleton falls back to its hardcoded
+    // localhost:2528, so a node on any other port answers 401 and forces login.
+    if (!clientReady) return;
     setLoadingApps(true);
     try {
       const response = await apiClient.node.listApplications();
@@ -118,7 +121,7 @@ function App() {
     } finally {
       setLoadingApps(false);
     }
-  }, [showOnboarding]);
+  }, [showOnboarding, clientReady]);
 
   // Load contexts for main page (only if developer mode)
   const loadContexts = useCallback(async () => {
@@ -442,10 +445,10 @@ function App() {
   // Fires once on navigation — not on every health-check tick.
   useEffect(() => {
     if (showLogin || showSettings || showOnboarding) return;
-    if (currentPage !== 'home') return;
+    if (currentPage !== 'home' || !clientReady) return;
     loadContexts().catch(() => {});
     loadInstalledApps().catch(() => {});
-  }, [currentPage, showLogin, showSettings, showOnboarding, loadContexts, loadInstalledApps]);
+  }, [currentPage, clientReady, showLogin, showSettings, showOnboarding, loadContexts, loadInstalledApps]);
 
   // When launched from a desktop shortcut (--open-app-url / --open-app-name): open app, focus it, then hide main window
   useEffect(() => {

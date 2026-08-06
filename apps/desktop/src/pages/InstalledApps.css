@@ -216,3 +216,18 @@
   background: var(--border-color);
   margin: 4px 0;
 }
+
+.app-target-select {
+  font-size: 12px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  max-width: 220px;
+}
+
+.app-target-select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

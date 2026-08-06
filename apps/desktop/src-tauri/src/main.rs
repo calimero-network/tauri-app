@@ -12,6 +12,20 @@ use thiserror::Error;
 use base64::Engine as _;
 
 mod log_rotation;
+mod merod_versions;
+mod webview_isolation;
+
+use webview_isolation::{webview_isolation_supported, IsolatedWindows};
+use merod_versions::{
+    extract_merod_binary, get_bundled_merod_path, get_merod_version_at, merod_target_triple,
+    score_merod_asset,
+};
+
+// Imported unqualified so generate_handler! registers them under their bare
+// command names, which is what the ACL in permissions/app-commands.toml grants.
+use merod_versions::{
+    list_installed_merod_versions, list_merod_releases, remove_merod_version, repoint_local_build,
+};
 
 // Per-app launcher foundation (macOS only): pure, zero-Tauri-API modules shared
 // with the `calimero-shell` binary via the crate's lib target.
@@ -27,7 +41,7 @@ const MEROD_CONFIG_VERSION: &str = match option_env!("MEROD_CONFIG_VERSION") {
     None => "unknown",
 };
 
-fn http_client() -> &'static reqwest::Client {
+pub(crate) fn http_client() -> &'static reqwest::Client {
     HTTP_CLIENT.get_or_init(|| {
         reqwest::Client::builder()
             .danger_accept_invalid_certs(false)
@@ -919,8 +933,18 @@ async fn rotate_access_token(
 #[tauri::command]
 async fn broker_token_refresh(
     app_handle: tauri::AppHandle,
+    window: tauri::WebviewWindow,
     registry: tauri::State<'_, TokenBrokerRegistry>,
+    isolated: tauri::State<'_, IsolatedWindows>,
 ) -> Result<String, TauriError> {
+    // Our session belongs to the active node, so a window holding another node's
+    // session must never receive it. The label is Tauri's, not the caller's.
+    if webview_isolation::is_isolated(&isolated, window.label()) {
+        return Err(TauriError::new(
+            TauriErrorCode::PathNotAllowed,
+            "Token brokering is not available to a window targeting another node",
+        ));
+    }
     rotate_access_token(&app_handle, &registry)
         .await
         .map_err(|reason| TauriError::new(TauriErrorCode::InternalError, reason))
@@ -1386,6 +1410,7 @@ fn ensure_app_launcher(
     frontend_url: &str,
     app_id: &str,
     bundled_icon: Option<&str>,
+    node_url: &str,
     dest_dir: &std::path::Path,
 ) -> Result<std::path::PathBuf, TauriError> {
     launcher::validate_app_id(app_id)
@@ -1437,7 +1462,7 @@ fn ensure_app_launcher(
         id: app_id.to_string(),
         name: safe.to_string(),
         url: frontend_url.to_string(),
-        node_url: "http://localhost:2528".to_string(),
+        node_url: node_url.to_string(),
         cap: cap.clone(),
         icon,
     };
@@ -1450,7 +1475,7 @@ fn ensure_app_launcher(
             id: app_id.to_string(),
             name: safe.to_string(),
             url: frontend_url.to_string(),
-            node_url: "http://localhost:2528".to_string(),
+            node_url: node_url.to_string(),
             cap: cap.clone(),
             bundle_path: bundle.to_string_lossy().into_owned(),
             host_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -1477,6 +1502,7 @@ fn open_app_launcher(
     frontend_url: String,
     app_id: String,
     icon: Option<String>,
+    node_url: String,
 ) -> Result<String, TauriError> {
     #[cfg(target_os = "macos")]
     {
@@ -1499,11 +1525,15 @@ fn open_app_launcher(
             &frontend_url,
             &app_id,
             icon.as_deref(),
+            &node_url,
             &dest_dir,
         )?;
-        std::process::Command::new("open")
+        // Wait for `open` rather than spawning it: spawn only reports that the
+        // helper started, so a LaunchServices failure left the caller with no
+        // window and no error instead of falling back to an in-process one.
+        let out = std::process::Command::new("open")
             .arg(&bundle)
-            .spawn()
+            .output()
             .map_err(|e| {
                 TauriError::with_details(
                     TauriErrorCode::ShortcutCreationFailed,
@@ -1511,6 +1541,18 @@ fn open_app_launcher(
                     e.to_string(),
                 )
             })?;
+        if !out.status.success() {
+            let detail = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            return Err(TauriError::with_details(
+                TauriErrorCode::ShortcutCreationFailed,
+                format!("macOS could not open {}", bundle.display()),
+                if detail.is_empty() {
+                    format!("open exited with {}", out.status)
+                } else {
+                    detail
+                },
+            ));
+        }
         Ok(bundle.to_string_lossy().into_owned())
     }
     #[cfg(not(target_os = "macos"))]
@@ -1530,6 +1572,7 @@ fn create_desktop_shortcut(
     frontend_url: String,
     app_id: Option<String>,
     icon: Option<String>,
+    node_url: String,
 ) -> Result<String, TauriError> {
     let exe = std::env::current_exe().map_err(|e| {
         TauriError::with_details(
@@ -1622,6 +1665,7 @@ fn create_desktop_shortcut(
             &frontend_url,
             &app_id,
             icon.as_deref(),
+            &node_url,
             &dir,
         )?;
         return Ok(bundle.to_string_lossy().into_owned());
@@ -1701,6 +1745,7 @@ fn create_desktop_shortcut(
     }
 }
 
+
 #[tauri::command]
 async fn create_app_window(
     app_handle: tauri::AppHandle,
@@ -1709,6 +1754,7 @@ async fn create_app_window(
     title: String,
     open_devtools: Option<bool>,
     node_url: Option<String>,
+    isolation_key: Option<String>,
 ) -> Result<(), TauriError> {
     use tauri::{WebviewUrl, WebviewWindowBuilder};
 
@@ -1734,7 +1780,7 @@ async fn create_app_window(
     proxy_script = proxy_script.replace("__CONFIGURED_NODE_URL__", node_url_to_use);
 
     // Create window with proxy script injected BEFORE page loads
-    let window = WebviewWindowBuilder::new(
+    let mut builder = WebviewWindowBuilder::new(
         &app_handle,
         &window_label,
         WebviewUrl::External(url.parse::<url::Url>().map_err(|e| {
@@ -1750,15 +1796,77 @@ async fn create_app_window(
     .min_inner_size(600.0, 400.0)
     .resizable(true)
     .center()
-    .initialization_script(&proxy_script) // Inject script with configured node URL
-    .build()
-    .map_err(|e| {
+    .initialization_script(&proxy_script); // Inject script with configured node URL
+
+    // A stable per-(app, node) bucket so the window keeps its own session across
+    // opens. macOS has no per-webview data directory, hence the identifier.
+    if let Some(key) = &isolation_key {
+        // Refuse rather than open a window that quietly shares one store with
+        // another node's session. wry falls back to the default store silently
+        // below macOS 14, so this cannot be a per-platform cfg, and it must not
+        // depend on the caller having checked webview_isolation_supported.
+        if !webview_isolation_supported() {
+            return Err(TauriError::new(
+                TauriErrorCode::PlatformNotSupported,
+                "Isolated app windows need macOS 14 or newer, or Linux",
+            ));
+        }
+        let digest = webview_isolation::store_id(&app_handle, key)?;
+        #[cfg(target_os = "macos")]
+        {
+            builder = builder.data_store_identifier(digest);
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let dir = app_handle
+                .path()
+                .app_data_dir()
+                .map_err(|e| {
+                    TauriError::with_details(
+                        TauriErrorCode::DirectoryError,
+                        "Failed to resolve app data dir for webview isolation",
+                        e.to_string(),
+                    )
+                })?
+                .join("webviews")
+                .join(webview_isolation::dir_name(&digest));
+            builder = builder.data_directory(dir);
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        {
+            // Unreachable: webview_isolation_supported() is false here.
+            let _ = digest;
+        }
+
+        // Register last: setup above can fail, and no page exists until build()
+        // below, so nothing can reach the broker before this lands.
+        webview_isolation::remember(&app_handle, &window_label);
+    }
+
+    let window = builder.build().map_err(|e| {
+        // The registration has to precede build() so a page cannot reach the
+        // broker before it lands; drop it again if no window ever existed.
+        if isolation_key.is_some() {
+            webview_isolation::forget(&app_handle, &window_label);
+        }
         TauriError::with_details(
             TauriErrorCode::WindowCreationFailed,
             format!("Failed to create window '{}' for URL '{}'", title, url),
             e.to_string(),
         )
     })?;
+
+    // Stop tracking a label once its window is gone, so the set does not grow
+    // for the life of the process.
+    if isolation_key.is_some() {
+        let handle = app_handle.clone();
+        let label = window_label.clone();
+        window.on_window_event(move |event| {
+            if matches!(event, tauri::WindowEvent::Destroyed) {
+                webview_isolation::forget(&handle, &label);
+            }
+        });
+    }
 
     // Remote-URL IPC access is granted statically in Tauri v2 via the
     // capabilities system (see src-tauri/capabilities/remote.json), which
@@ -2024,7 +2132,7 @@ type MerodLogWriters = Arc<Mutex<std::collections::HashMap<String, LogWriterEntr
 
 /// Resolve an optional caller-supplied home dir: expand a leading `~`, or fall
 /// back to `~/.calimero`. Single source of truth for the node commands.
-fn resolve_home_dir(home_dir: Option<String>) -> Result<std::path::PathBuf, TauriError> {
+pub(crate) fn resolve_home_dir(home_dir: Option<String>) -> Result<std::path::PathBuf, TauriError> {
     if let Some(dir) = home_dir {
         let expanded = if dir.starts_with("~") {
             match dirs::home_dir() {
@@ -2042,29 +2150,49 @@ fn resolve_home_dir(home_dir: Option<String>) -> Result<std::path::PathBuf, Taur
     }
 }
 
-/// Get the path to the bundled merod binary
-fn get_merod_binary_path(app_handle: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
-    let resource_candidates = if cfg!(target_os = "windows") {
-        vec!["merod/merod.exe", "merod/merod"]
-    } else {
-        vec!["merod/merod", "merod/merod.exe"]
-    };
+/// Serialises node creation per name without holding a lock across the download
+/// a pinned release may need. Cleared on drop so every exit path releases it.
+struct NodeInitReservation(String);
 
-    for candidate in &resource_candidates {
-        if let Ok(resource_path) = app_handle
-            .path()
-            .resolve(candidate, tauri::path::BaseDirectory::Resource)
-        {
-            if resource_path.exists() {
-                return Ok(resource_path);
-            }
+static NODE_INIT_IN_FLIGHT: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashSet<String>>,
+> = std::sync::LazyLock::new(Default::default);
+
+impl NodeInitReservation {
+    fn claim(home: &std::path::Path, node_name: &str) -> Result<Self, TauriError> {
+        let key = format!("{}::{}", home.display(), node_name);
+        let mut in_flight = NODE_INIT_IN_FLIGHT
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+
+        // merod init over an existing node reports success without minting the
+        // admin account, leaving a node nobody can sign in to. Refuse instead.
+        if home.join(node_name).exists() {
+            return Err(TauriError::new(
+                TauriErrorCode::InvalidInput,
+                format!(
+                    "Node '{}' already exists. Pick a different name, or delete it first - re-initialising cannot change its merod version or its admin account.",
+                    node_name
+                ),
+            ));
         }
+        if !in_flight.insert(key.clone()) {
+            return Err(TauriError::new(
+                TauriErrorCode::InvalidInput,
+                format!("Node '{}' is already being created", node_name),
+            ));
+        }
+        Ok(Self(key))
     }
+}
 
-    Err(format!(
-        "Merod resource not found. Checked: {:?}",
-        resource_candidates
-    ))
+impl Drop for NodeInitReservation {
+    fn drop(&mut self) {
+        NODE_INIT_IN_FLIGHT
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(&self.0);
+    }
 }
 
 /// Get the app data directory for storing merod data
@@ -2193,10 +2321,6 @@ async fn start_merod(
         state.retain(|p| p.pid != pid);
     }
 
-    // Get bundled merod binary
-    let merod_binary = get_merod_binary_path(&app_handle)
-        .map_err(|e| TauriError::new(TauriErrorCode::FileNotFound, e))?;
-
     // Prepare home directory (where .calimero folder is, e.g., ~/.calimero)
     // Same resolver as get_merod_logs/clear_merod_logs, so a node writes logs at
     // exactly the path the viewer/Clear later resolve (no ~-expansion drift).
@@ -2214,6 +2338,14 @@ async fn start_merod(
     if let Some(name) = &node_name {
         validate_node_name(name).map_err(|e| TauriError::new(TauriErrorCode::InvalidInput, e))?;
     }
+
+    // The node's pin is the only source of truth: an override here could start a
+    // node on a binary that every "used by" listing still attributes elsewhere.
+    let version_id = match &node_name {
+        Some(name) => merod_versions::read_pin(&home_dir_path, name)?,
+        None => merod_versions::VersionId::Bundled,
+    };
+    let merod_binary = merod_versions::resolve_binary(&app_handle, &version_id).await?;
 
     // Update config.toml with the specified ports if node_name is provided
     if let Some(name) = &node_name {
@@ -2886,12 +3018,10 @@ async fn init_merod_node(
     home_dir: Option<String>,
     admin_user: Option<String>,
     admin_password: Option<String>,
+    merod_version_id: Option<String>,
     app_handle: tauri::AppHandle,
 ) -> Result<String, TauriError> {
     validate_node_name(&node_name).map_err(|e| TauriError::new(TauriErrorCode::InvalidInput, e))?;
-    // Get bundled merod binary
-    let merod_binary = get_merod_binary_path(&app_handle)
-        .map_err(|e| TauriError::new(TauriErrorCode::FileNotFound, e))?;
 
     // Prepare home directory (where .calimero folder will be)
     let home_dir_path = if let Some(dir) = home_dir {
@@ -2924,6 +3054,17 @@ async fn init_merod_node(
             e.to_string(),
         )
     })?;
+
+    // Reserve the name, then release the lock: holding it across resolve_binary
+    // would block every other creation for the length of a release download.
+    // The guard clears the reservation on every exit, including the early ones.
+    let reservation = NodeInitReservation::claim(&home_dir_path, &node_name)?;
+
+    let version_id = match &merod_version_id {
+        Some(raw) => merod_versions::parse_version_id(raw)?,
+        None => merod_versions::VersionId::Bundled,
+    };
+    let merod_binary = merod_versions::resolve_binary(&app_handle, &version_id).await?;
 
     // Run merod init command - global options come BEFORE subcommand
     // Use --auth-mode embedded so merod creates the full embedded_auth config
@@ -2958,31 +3099,65 @@ async fn init_merod_node(
     cmd.stderr(Stdio::piped());
     cmd.stdin(Stdio::null());
 
+    // The guard above proved this directory did not exist, so anything merod
+    // leaves behind on a failed init is ours to remove - otherwise the guard
+    // would reject every retry of the same name.
+    let node_dir = home_dir_path.join(&node_name);
+    let discard_partial_node = || {
+        if node_dir.exists() {
+            if let Err(e) = std::fs::remove_dir_all(&node_dir) {
+                warn!("[Merod] could not clean up after a failed init: {}", e);
+            }
+        }
+    };
+
     // Add timeout to prevent hanging (30 seconds should be enough for init)
-    let output = tokio::time::timeout(tokio::time::Duration::from_secs(30), cmd.output())
-        .await
-        .map_err(|_| {
-            TauriError::new(
+    let output = match tokio::time::timeout(tokio::time::Duration::from_secs(30), cmd.output()).await
+    {
+        Err(_) => {
+            discard_partial_node();
+            return Err(TauriError::new(
                 TauriErrorCode::Timeout,
                 "Merod init command timed out after 30 seconds",
-            )
-        })?
-        .map_err(|e| {
-            TauriError::with_details(
+            ));
+        }
+        Ok(Err(e)) => {
+            discard_partial_node();
+            return Err(TauriError::with_details(
                 TauriErrorCode::MerodInitFailed,
                 "Failed to execute merod init",
                 e.to_string(),
-            )
-        })?;
+            ));
+        }
+        Ok(Ok(output)) => output,
+    };
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
+        discard_partial_node();
         return Err(TauriError::new(
             TauriErrorCode::MerodInitFailed,
             format!("Merod init failed: {}", stderr),
         ));
     }
 
+    // Only after a successful init: a node that failed to initialise must not be
+    // left pinned to a version.
+    // A node without its pin would silently start on a different binary, so treat
+    // a failed write as a failed creation rather than leaving that behind.
+    if let Err(e) = merod_versions::write_pin(
+        &home_dir_path,
+        &node_name,
+        &merod_versions::NodePin {
+            id: merod_versions::version_id_to_string(&version_id),
+            version_at_init: get_merod_version_at(&merod_binary).await,
+        },
+    ) {
+        discard_partial_node();
+        return Err(e);
+    }
+
+    drop(reservation);
     info!(
         "[Merod] Initialized node '{}' in {:?}",
         node_name, home_dir_path
@@ -3222,209 +3397,6 @@ async fn detect_running_merod_nodes() -> Result<Vec<serde_json::Value>, TauriErr
 
 // ── Merod binary self-update helpers ─────────────────────────────────────────
 
-/// Returns the Rust target triple for the running platform, used to pick the
-/// right GitHub release asset.
-pub(crate) fn merod_target_triple() -> &'static str {
-    if cfg!(target_os = "macos") && cfg!(target_arch = "aarch64") {
-        "aarch64-apple-darwin"
-    } else if cfg!(target_os = "macos") && cfg!(target_arch = "x86_64") {
-        "x86_64-apple-darwin"
-    } else if cfg!(target_os = "linux") && cfg!(target_arch = "x86_64") {
-        "x86_64-unknown-linux-gnu"
-    } else if cfg!(target_os = "linux") && cfg!(target_arch = "aarch64") {
-        "aarch64-unknown-linux-gnu"
-    } else if cfg!(target_os = "windows") && cfg!(target_arch = "x86_64") {
-        "x86_64-pc-windows-msvc"
-    } else {
-        "unknown"
-    }
-}
-
-/// Scores a GitHub release asset name for the given target triple.
-/// Lower score = better match. Returns `None` if the asset is not for this platform.
-pub(crate) fn score_merod_asset(name: &str, target_triple: &str) -> Option<u32> {
-    let lower = name.to_lowercase();
-    if !lower.starts_with("merod-") {
-        return None;
-    }
-    if !lower.contains(&target_triple.to_lowercase()) {
-        return None;
-    }
-    if lower.ends_with(".tar.gz") || lower.ends_with(".tgz") {
-        Some(0u32)
-    } else if lower.ends_with(".zip") {
-        Some(1)
-    } else if lower.ends_with(".exe") {
-        Some(2)
-    } else {
-        None // unknown extension — extract_merod_binary cannot handle it
-    }
-}
-
-/// Recursively finds a `merod` / `merod.exe` binary inside a directory tree.
-fn find_merod_binary_in_dir(dir: &std::path::Path) -> Option<std::path::PathBuf> {
-    let entries = std::fs::read_dir(dir).ok()?;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let Some(fname) = path.file_name() else {
-            continue;
-        };
-        let name = fname.to_string_lossy().to_lowercase();
-        if path.is_dir() && !path.is_symlink() {
-            if let Some(found) = find_merod_binary_in_dir(&path) {
-                return Some(found);
-            }
-        } else if (name == "merod" || name == "merod.exe") && !path.is_symlink() {
-            return Some(path);
-        }
-    }
-    None
-}
-
-/// Runs `<binary> --version` and returns the trimmed stdout, or `None` on failure or timeout.
-async fn get_merod_version_at(path: &std::path::Path) -> Option<String> {
-    let output = tokio::time::timeout(
-        std::time::Duration::from_secs(10),
-        Command::new(path).arg("--version").output(),
-    )
-    .await
-    .ok()?
-    .ok()?;
-    let raw = String::from_utf8_lossy(if output.stdout.is_empty() {
-        &output.stderr
-    } else {
-        &output.stdout
-    })
-    .trim()
-    .to_string();
-    if raw.is_empty() {
-        None
-    } else {
-        Some(raw)
-    }
-}
-
-/// Extracts the merod binary from an archive (`.tar.gz` / `.zip`) into `temp_dir`.
-/// Returns the path to the extracted binary.
-async fn extract_merod_binary(
-    archive_path: &std::path::Path,
-    asset_name: &str,
-    temp_dir: &std::path::Path,
-) -> Result<std::path::PathBuf, TauriError> {
-    let lower = asset_name.to_lowercase();
-    let extract_dir = temp_dir.join("extracted");
-    tokio::fs::create_dir_all(&extract_dir).await.map_err(|e| {
-        TauriError::new(
-            TauriErrorCode::DirectoryError,
-            format!("create extract dir: {}", e),
-        )
-    })?;
-
-    if lower.ends_with(".tar.gz") || lower.ends_with(".tgz") {
-        let status = Command::new("tar")
-            .args([
-                "--no-same-owner",
-                "--no-same-permissions",
-                "-xzf",
-                &archive_path.to_string_lossy(),
-                "-C",
-                &extract_dir.to_string_lossy(),
-            ])
-            .status()
-            .await
-            .map_err(|e| {
-                TauriError::new(TauriErrorCode::InternalError, format!("tar failed: {}", e))
-            })?;
-        if !status.success() {
-            return Err(TauriError::new(
-                TauriErrorCode::InternalError,
-                "tar extraction failed".to_string(),
-            ));
-        }
-    } else if lower.ends_with(".zip") {
-        #[cfg(windows)]
-        {
-            // Pass paths via env vars — avoids any string interpolation / injection in the command
-            let status = Command::new("powershell")
-                .args(["-NoProfile", "-NonInteractive", "-Command",
-                       "Expand-Archive -LiteralPath $env:MEROD_ARCHIVE -DestinationPath $env:MEROD_DEST -Force"])
-                .env("MEROD_ARCHIVE", archive_path.as_os_str())
-                .env("MEROD_DEST", extract_dir.as_os_str())
-                .status().await
-                .map_err(|e| TauriError::new(TauriErrorCode::InternalError, format!("powershell failed: {}", e)))?;
-            if !status.success() {
-                return Err(TauriError::new(
-                    TauriErrorCode::InternalError,
-                    "zip extraction failed".to_string(),
-                ));
-            }
-        }
-        #[cfg(not(windows))]
-        {
-            let status = Command::new("unzip")
-                .args([
-                    "-o",
-                    &archive_path.to_string_lossy(),
-                    "-d",
-                    &extract_dir.to_string_lossy(),
-                ])
-                .status()
-                .await
-                .map_err(|e| {
-                    TauriError::new(
-                        TauriErrorCode::InternalError,
-                        format!("unzip failed: {}", e),
-                    )
-                })?;
-            if !status.success() {
-                return Err(TauriError::new(
-                    TauriErrorCode::InternalError,
-                    "unzip extraction failed".to_string(),
-                ));
-            }
-        }
-    } else if lower.ends_with(".exe") {
-        // Windows bare executable — already a binary, no extraction needed
-        return Ok(archive_path.to_path_buf());
-    } else {
-        return Err(TauriError::new(
-            TauriErrorCode::InternalError,
-            format!(
-                "Unknown archive format '{}': expected .tar.gz, .tgz, .zip, or .exe",
-                asset_name
-            ),
-        ));
-    }
-
-    let found = find_merod_binary_in_dir(&extract_dir).ok_or_else(|| {
-        TauriError::new(
-            TauriErrorCode::FileNotFound,
-            "merod binary not found in extracted archive",
-        )
-    })?;
-
-    // Guard against symlinks that escape the extraction directory (zip slip / symlink attack)
-    let canonical_dir = extract_dir.canonicalize().map_err(|e| {
-        TauriError::new(
-            TauriErrorCode::DirectoryError,
-            format!("canonicalize extract dir: {}", e),
-        )
-    })?;
-    let canonical_bin = found.canonicalize().map_err(|e| {
-        TauriError::new(
-            TauriErrorCode::FileNotFound,
-            format!("canonicalize binary path: {}", e),
-        )
-    })?;
-    if !canonical_bin.starts_with(&canonical_dir) {
-        return Err(TauriError::new(
-            TauriErrorCode::PathNotAllowed,
-            "Extracted binary path escapes extraction directory",
-        ));
-    }
-    Ok(canonical_bin)
-}
-
 /// Downloads the merod binary matching `MEROD_CONFIG_VERSION` from GitHub,
 /// replaces the bundled binary, and verifies the version.
 ///
@@ -3456,14 +3428,14 @@ async fn download_and_replace_merod(
         ));
     }
 
-    let binary_path = get_merod_binary_path(&app_handle)
+    let binary_path = get_bundled_merod_path(&app_handle)
         .map_err(|e| TauriError::new(TauriErrorCode::FileNotFound, e))?;
 
     let expected_version_output = format!("merod {}", expected);
 
     // Fast path: already correct
     if let Some(current) = get_merod_version_at(&binary_path).await {
-        if current == expected_version_output {
+        if merod_versions::version_matches_tag(&current, expected) {
             return Ok(serde_json::json!({
                 "replaced": false,
                 "expected_version": expected,
@@ -3689,7 +3661,7 @@ async fn download_and_replace_merod(
         .await
         .unwrap_or_else(|| "unknown".to_string());
 
-    if new_version != expected_version_output {
+    if !merod_versions::version_matches_tag(&new_version, expected) {
         // Restore backup so the app is not left with a wrong binary
         let _ = tokio::fs::rename(&bak_path, &binary_path).await;
         return Err(TauriError::new(
@@ -3716,7 +3688,7 @@ async fn download_and_replace_merod(
 /// Return the version string reported by the bundled merod binary (`merod --version`).
 #[tauri::command]
 async fn get_merod_binary_version(app_handle: tauri::AppHandle) -> Result<String, TauriError> {
-    let merod_binary = get_merod_binary_path(&app_handle)
+    let merod_binary = get_bundled_merod_path(&app_handle)
         .map_err(|e| TauriError::new(TauriErrorCode::FileNotFound, e))?;
     Ok(get_merod_version_at(&merod_binary)
         .await
@@ -3854,6 +3826,19 @@ async fn pick_directory(
     }
 
     let result = dialog.blocking_pick_folder();
+
+    match result {
+        Some(path) => Ok(Some(path.to_string())),
+        None => Ok(None),
+    }
+}
+
+/// Pick a locally compiled merod binary.
+#[tauri::command]
+async fn pick_merod_binary(app_handle: tauri::AppHandle) -> Result<Option<String>, TauriError> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let result = app_handle.dialog().file().set_title("Select a merod binary").blocking_pick_file();
 
     match result {
         Some(path) => Ok(Some(path.to_string())),
@@ -4810,6 +4795,7 @@ fn main() {
         .manage(MerodLogWriters::default())
         .manage(SseCancelRegistry::new(std::sync::Mutex::new(std::collections::HashMap::new())))
         .manage(TokenBrokerRegistry::new(std::sync::Mutex::new(std::collections::HashMap::new())))
+        .manage(IsolatedWindows::new(std::sync::Mutex::new(std::collections::HashSet::new())))
         .invoke_handler(tauri::generate_handler![
             get_pending_open_app,
             clear_pending_open_app,
@@ -4818,6 +4804,7 @@ fn main() {
             create_desktop_shortcut,
             open_app_launcher,
             create_app_window,
+            webview_isolation_supported,
             open_devtools,
             proxy_http_request,
             proxy_sse_stream,
@@ -4831,12 +4818,17 @@ fn main() {
             list_merod_nodes,
             check_merod_health,
             pick_directory,
+            pick_merod_binary,
             init_merod_node,
             detect_running_merod_nodes,
             get_merod_logs,
             clear_merod_logs,
             get_merod_binary_version,
             download_and_replace_merod,
+            list_merod_releases,
+            list_installed_merod_versions,
+            remove_merod_version,
+            repoint_local_build,
             set_tray_icon_connected,
             delete_calimero_data_dir,
             clear_app_sessions,
@@ -5198,42 +5190,6 @@ mod tests {
         assert!(body.contains("data: first"), "unexpected: {body:?}");
     }
 
-    // ── Merod binary update tests ─────────────────────────────────────────────
-
-    #[test]
-    fn test_score_merod_asset_prefers_tar_gz() {
-        let triple = "aarch64-apple-darwin";
-        let tar = score_merod_asset("merod-aarch64-apple-darwin.tar.gz", triple);
-        let zip = score_merod_asset("merod-aarch64-apple-darwin.zip", triple);
-        assert!(tar.is_some(), "tar.gz should match");
-        assert!(zip.is_some(), "zip should match");
-        assert!(
-            tar.unwrap() < zip.unwrap(),
-            "tar.gz should be preferred over zip"
-        );
-    }
-
-    #[test]
-    fn test_score_merod_asset_rejects_wrong_platform() {
-        assert!(
-            score_merod_asset("merod-x86_64-apple-darwin.tar.gz", "aarch64-apple-darwin").is_none()
-        );
-        assert!(score_merod_asset(
-            "merod-x86_64-unknown-linux-gnu.tar.gz",
-            "aarch64-apple-darwin"
-        )
-        .is_none());
-    }
-
-    #[test]
-    fn test_score_merod_asset_rejects_non_merod() {
-        assert!(score_merod_asset(
-            "meroctl-aarch64-apple-darwin.tar.gz",
-            "aarch64-apple-darwin"
-        )
-        .is_none());
-        assert!(score_merod_asset("something-else.tar.gz", "x86_64-apple-darwin").is_none());
-    }
 
     #[test]
     fn test_score_merod_asset_windows() {

@@ -13,11 +13,20 @@ import {
   getMerodBinaryVersion,
   type RunningMerodNode,
 } from "../utils/merod";
+import {
+  listMerodReleases,
+  formatVersionLabel,
+  BUNDLED_VERSION_ID,
+  LOCAL_ID_PREFIX,
+  type ReleaseInfo,
+} from "../utils/merodVersions";
 import { invoke } from "@tauri-apps/api/core";
 import { useToast } from "../contexts/ToastContext";
 import { Play, Square, RefreshCw, Check, FileText, ChevronDown } from "lucide-react";
 import { LogsViewer } from "../components/LogsViewer";
 import { ScrollHint } from "../components/ScrollHint";
+import { VersionsPanel } from "../components/VersionsPanel";
+import { useNodeVersions } from "../hooks/useNodeVersions";
 import "./NodeManagement.css";
 
 export default function NodeManagement() {
@@ -46,7 +55,13 @@ export default function NodeManagement() {
   const [logsContent, setLogsContent] = useState("");
   const [logsLoading, setLogsLoading] = useState(false);
   const [merodBinaryVersion, setMerodBinaryVersion] = useState<string>("");
+  const [versionId, setVersionId] = useState<string>(BUNDLED_VERSION_ID);
+  const [releases, setReleases] = useState<ReleaseInfo[]>([]);
+  const [releasesError, setReleasesError] = useState<string>("");
+  const [releasesStale, setReleasesStale] = useState(false);
   const developerMode = getSettings().developerMode ?? false;
+  const { byNode: nodeVersions, measured: versionMeasured, drifted: driftedNodes } =
+    useNodeVersions(developerMode, homeDir, [availableNodes]);
   const safeAvailableNodes = Array.isArray(availableNodes) ? availableNodes : [];
   const safeRunningNodes = Array.isArray(runningNodes) ? runningNodes : [];
 
@@ -61,6 +76,17 @@ export default function NodeManagement() {
   }, []);
 
   useEffect(() => {
+    if (!developerMode) return;
+    listMerodReleases()
+      .then((r) => {
+        setReleases(r.releases.filter((item) => item.has_asset));
+        setReleasesStale(r.stale);
+      })
+      .catch((e) => setReleasesError(e?.message || "Could not reach GitHub"));
+  }, [developerMode]);
+
+
+  useEffect(() => {
     loadNodes();
     detectRunning();
 
@@ -73,6 +99,19 @@ export default function NodeManagement() {
     if (!nodeName) return { running: false };
     const runningNode = safeRunningNodes.find(n => n.node_name === nodeName);
     return runningNode ? { running: true, port: runningNode.port } : { running: false };
+  };
+
+  const getVersionBadge = (nodeName: string) => {
+    const id = nodeVersions[nodeName] ?? BUNDLED_VERSION_ID;
+    const drifted = driftedNodes.has(nodeName);
+    return {
+      label: formatVersionLabel(id, merodBinaryVersion, versionMeasured[id]),
+      className: `node-version-badge${id !== BUNDLED_VERSION_ID ? ' custom' : ''}${drifted ? ' drifted' : ''}`,
+      // Expected after a rebuild; surfaced so a mismatch isn't mistaken for a bug.
+      title: drifted
+        ? "This binary now reports a different version than when the node was created - the node's data directory was created by a different build."
+        : undefined,
+    };
   };
 
   useEffect(() => {
@@ -165,7 +204,7 @@ export default function NodeManagement() {
     const createdName = newNodeName.trim();
     setLoading(true);
     try {
-      await initMerodNode(createdName, homeDir, newAdminUser.trim(), newAdminPassword);
+      await initMerodNode(createdName, homeDir, newAdminUser.trim(), newAdminPassword, versionId);
       toast.success(`Node "${createdName}" created successfully`);
       setNewNodeName("");
       setNewAdminUser("");
@@ -403,11 +442,6 @@ export default function NodeManagement() {
           <h2 className="node-section-title">Local Nodes</h2>
           <p className="node-section-desc">
             Create and run merod nodes on this machine.
-            {merodBinaryVersion && (
-              <span style={{ marginLeft: '8px', opacity: 0.6, fontSize: '0.85em' }}>
-                Bundled binary: <code style={{ fontFamily: 'monospace' }}>{merodBinaryVersion}</code>
-              </span>
-            )}
           </p>
 
           <div className="node-management-card">
@@ -427,9 +461,9 @@ export default function NodeManagement() {
                 </button>
               </div>
             </div>
-            <div className="form-field">
-              <label htmlFor="new-node-name">Node Name</label>
-              <div className="input-group">
+            <div className="form-row">
+              <div className="form-field">
+                <label htmlFor="new-node-name">Node Name</label>
                 <input
                   id="new-node-name"
                   type="text"
@@ -438,8 +472,61 @@ export default function NodeManagement() {
                   placeholder="default, node1, etc."
                 />
               </div>
-              <label htmlFor="new-admin-user">Admin Username</label>
-              <div className="input-group">
+              {developerMode && (
+                <div className="form-field">
+                  <label htmlFor="merod-version">merod Version</label>
+                  <select
+                    id="merod-version"
+                    className="version-select"
+                    value={versionId}
+                    onChange={async (e) => {
+                      if (e.target.value !== "__local__") {
+                        setVersionId(e.target.value);
+                        return;
+                      }
+                      const picked = await invoke<string | null>('pick_merod_binary');
+                      if (picked) {
+                        setVersionId(`${LOCAL_ID_PREFIX}${picked}`);
+                        return;
+                      }
+                      // Cancelled: no state changed, so React will not re-render
+                      // and the select would keep showing "Use a local build...".
+                      e.target.value = versionId;
+                    }}
+                    disabled={loading}
+                  >
+                    <option value={BUNDLED_VERSION_ID}>
+                      {formatVersionLabel(BUNDLED_VERSION_ID, merodBinaryVersion)}
+                    </option>
+                    {releases.map((r) => (
+                      <option key={r.tag} value={r.tag}>
+                        {r.tag}{r.prerelease ? " (pre-release)" : ""}
+                      </option>
+                    ))}
+                    {versionId.startsWith(LOCAL_ID_PREFIX) && (
+                      <option value={versionId}>{versionId.slice(LOCAL_ID_PREFIX.length)}</option>
+                    )}
+                    <option value="__local__">Use a local build...</option>
+                  </select>
+                </div>
+              )}
+            </div>
+
+            {developerMode && (
+              <p className="field-hint">
+                {releasesError
+                  ? `Release list unavailable: ${releasesError}`
+                  : releases.length === 0
+                    ? "No merod releases are published for this platform. Use the bundled binary or a local build."
+                    : releasesStale
+                      ? "Showing the last list we fetched - GitHub was unreachable."
+                      : "Fixed when the node is created. Create another node to try another version."}
+              </p>
+            )}
+
+            <div className="form-row">
+              <div className="form-field">
+                <label htmlFor="new-admin-user">Admin Username</label>
                 <input
                   id="new-admin-user"
                   type="text"
@@ -449,8 +536,8 @@ export default function NodeManagement() {
                   autoComplete="username"
                 />
               </div>
-              <label htmlFor="new-admin-password">Admin Password</label>
-              <div className="input-group">
+              <div className="form-field">
+                <label htmlFor="new-admin-password">Admin Password</label>
                 <input
                   id="new-admin-password"
                   type="password"
@@ -460,14 +547,17 @@ export default function NodeManagement() {
                   autoComplete="new-password"
                   onKeyPress={(e) => e.key === 'Enter' && handleCreateNode()}
                 />
-                <button
-                  onClick={handleCreateNode}
-                  className="button button-primary"
-                  disabled={!newNodeName.trim() || !newAdminUser.trim() || !newAdminPassword || loading}
-                >
-                  {loading ? 'Creating...' : 'Create'}
-                </button>
               </div>
+            </div>
+
+            <div className="node-actions">
+              <button
+                onClick={handleCreateNode}
+                className="button button-primary"
+                disabled={!newNodeName.trim() || !newAdminUser.trim() || !newAdminPassword || loading}
+              >
+                {loading ? 'Creating...' : 'Create Node'}
+              </button>
             </div>
           </div>
 
@@ -491,6 +581,12 @@ export default function NodeManagement() {
                           {getRunningNodeInfo(selectedNode).running ? `Port ${getRunningNodeInfo(selectedNode).port}` : 'Stopped'}
                         </span>
                       )}
+                      {developerMode && (() => {
+                        const badge = getVersionBadge(selectedNode);
+                        return (
+                          <span className={badge.className} title={badge.title}>{badge.label}</span>
+                        );
+                      })()}
                     </span>
                     <ChevronDown size={15} className={`node-select-chevron${nodeDropdownOpen ? ' open' : ''}`} />
                   </button>
@@ -499,6 +595,7 @@ export default function NodeManagement() {
                       {safeAvailableNodes.map((node) => {
                         const nodeInfo = getRunningNodeInfo(node);
                         const isSelected = node === selectedNode;
+                        const badge = getVersionBadge(node);
                         return (
                           <button
                             key={node}
@@ -511,6 +608,9 @@ export default function NodeManagement() {
                             <span className="node-select-option-badge">
                               {nodeInfo.running ? `Port ${nodeInfo.port}` : 'Stopped'}
                             </span>
+                            {developerMode && (
+                              <span className={badge.className} title={badge.title}>{badge.label}</span>
+                            )}
                             {isSelected && <Check size={13} className="node-select-check" />}
                           </button>
                         );
@@ -545,20 +645,7 @@ export default function NodeManagement() {
                   />
                 </div>
               </div>
-              {selectedNode && (() => {
-                const nodeInfo = getRunningNodeInfo(selectedNode);
-                return (
-                  <div className={`node-status-card ${nodeInfo.running ? 'running' : 'stopped'}`}>
-                    <div className="node-status-card-header">
-                      <span className="node-status-dot" />
-                      <span className="node-status-name">{selectedNode}</span>
-                      <span className="node-status-badge">
-                        {nodeInfo.running ? `Port ${nodeInfo.port}` : 'Stopped'}
-                      </span>
-                    </div>
-                  </div>
-                );
-              })()}
+
               <div className="node-actions">
                 <button
                   onClick={handleStartNode}
@@ -598,6 +685,8 @@ export default function NodeManagement() {
               </div>
             </div>
           )}
+
+          {developerMode && <VersionsPanel homeDir={homeDir} />}
 
           {safeAvailableNodes.length === 0 && (
             <div className="empty-state">

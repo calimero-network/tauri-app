@@ -42,20 +42,19 @@
         }
     }
 
-    // Is this the app's `POST /auth/refresh` call?
-    //
-    // Refresh tokens are single-use (calimero-network/core#3083): whoever calls
-    // /auth/refresh consumes the token and gets a new one, and re-presenting a
-    // consumed token revokes the entire family. App windows therefore never hold
-    // the real refresh token — the desktop does, and it is the only rotator. We
-    // intercept this request and let the desktop answer it.
-    //
-    // Matched on the node URL rather than on localhost specifically, so a
-    // remote-node setup is brokered too (and never leaks the sentinel to it).
-    function isAuthRefresh(urlStr, method) {
+    // Only windows the desktop handed the sentinel are brokered. A window with a
+    // real refresh token is the sole holder in its own isolated store and rotates
+    // directly, which is what an app does in an ordinary browser.
+    function isAuthRefresh(urlStr, method, body) {
         if ((method || 'GET').toUpperCase() !== 'POST') return false;
         try {
-            return new URL(urlStr).pathname.replace(/\/+$/, '').endsWith('/auth/refresh');
+            if (!new URL(urlStr).pathname.replace(/\/+$/, '').endsWith('/auth/refresh')) return false;
+        } catch (e) {
+            return false;
+        }
+        if (typeof body !== 'string') return false;
+        try {
+            return JSON.parse(body).refresh_token === BROKERED_REFRESH_TOKEN;
         } catch (e) {
             return false;
         }
@@ -313,10 +312,10 @@
 
     // Helper function to proxy regular HTTP requests through Tauri
     async function proxyRequest(url, method, headers, body, bodyBase64) {
-        // /auth/refresh is answered by the desktop, never forwarded to the node.
-        // Both the fetch and XHR interceptors funnel through here, so this single
-        // check covers both.
-        if (isAuthRefresh(url, method)) {
+        // A sentinel-bearing /auth/refresh is answered by the desktop instead of
+        // being forwarded to the node. Both the fetch and XHR interceptors funnel
+        // through here, so this single check covers both.
+        if (isAuthRefresh(url, method, body)) {
             return brokerTokenRefresh();
         }
 
@@ -357,6 +356,20 @@
             || (typeof Request !== 'undefined' && urlArg instanceof Request ? urlArg.signal : null);
         const effectiveMethod = (init && init.method)
             || (typeof Request !== 'undefined' && urlArg instanceof Request ? urlArg.method : 'GET');
+        // A Request's body is a one-shot stream, so read it off a clone - the
+        // original must stay consumable for the originalFetch fallback below.
+        // Read a Request body as bytes and only decode textual content types:
+        // .text() on a Blob/ArrayBuffer payload would corrupt it before encodeBody.
+        let effectiveBody = null;
+        if (init && init.body != null) {
+            effectiveBody = init.body;
+        } else if (typeof Request !== 'undefined' && urlArg instanceof Request && urlArg.body != null) {
+            const buf = await urlArg.clone().arrayBuffer();
+            const ct = (urlArg.headers.get('content-type') || '').toLowerCase();
+            const textual = !ct || ct.includes('json') || ct.startsWith('text/')
+                || ct.includes('x-www-form-urlencoded');
+            effectiveBody = textual ? new TextDecoder().decode(buf) : new Uint8Array(buf);
+        }
 
         console.log('[Tauri Proxy] Fetch called:', urlStr);
 
@@ -364,12 +377,12 @@
         // The Rust backend validates the URL before proxying.
         // Mixed-content proxying only applies to an HTTPS-hosted page (finding
         // #145: proxying from a plain-HTTP localhost page fails the Tauri IPC
-        // scope check). But /auth/refresh is ALWAYS routed through here — even
-        // for a non-localhost node — so the brokered sentinel can never reach
-        // the network.
+        // scope check). A sentinel-bearing /auth/refresh is also routed through
+        // here regardless of host, so the sentinel is brokered rather than sent
+        // out over the network - a real refresh token is not routed specially.
         const shouldProxy =
             (pageNeedsProxy() && isHttpLocalhost(urlStr)) ||
-            isAuthRefresh(urlStr, effectiveMethod);
+            isAuthRefresh(urlStr, effectiveMethod, effectiveBody);
         console.log('[Tauri Proxy] Should proxy?', shouldProxy, 'for URL:', urlStr);
 
         if (shouldProxy) {
@@ -416,7 +429,7 @@
                 // (Blob/ArrayBuffer/typed array) becomes base64 so image uploads
                 // survive the IPC hop intact.
                 const { body: reqBody, bodyBase64: reqBodyBase64 } =
-                    init && init.body ? await encodeBody(init.body) : { body: null, bodyBase64: null };
+                    effectiveBody != null ? await encodeBody(effectiveBody) : { body: null, bodyBase64: null };
 
                 console.log('[Tauri Proxy] Intercepting fetch:', urlStr, 'method:', init?.method || 'GET');
                 console.log('[Tauri Proxy] Headers being sent:', JSON.stringify(headers, null, 2));
@@ -492,7 +505,7 @@
         xhr.send = function(body) {
             const shouldProxy =
                 (pageNeedsProxy() && isHttpLocalhost(xhrUrl)) ||
-                isAuthRefresh(xhrUrl, xhrMethod);
+                isAuthRefresh(xhrUrl, xhrMethod, body);
 
             if (shouldProxy) {
                 console.log('[Tauri Proxy] XHR intercepted:', xhrMethod, xhrUrl);

@@ -47,6 +47,11 @@ description = "Enables the create_app_window command."
 commands.allow = ["create_app_window"]
 
 [[permission]]
+identifier = "allow-webview-isolation-supported"
+description = "Enables the webview_isolation_supported command."
+commands.allow = ["webview_isolation_supported"]
+
+[[permission]]
 identifier = "allow-open-devtools"
 description = "Enables the open_devtools command."
 commands.allow = ["open_devtools"]
@@ -112,6 +117,11 @@ description = "Enables the pick_directory command."
 commands.allow = ["pick_directory"]
 
 [[permission]]
+identifier = "allow-pick-merod-binary"
+description = "Enables the pick_merod_binary command."
+commands.allow = ["pick_merod_binary"]
+
+[[permission]]
 identifier = "allow-init-merod-node"
 description = "Enables the init_merod_node command."
 commands.allow = ["init_merod_node"]
@@ -140,6 +150,26 @@ commands.allow = ["get_merod_binary_version"]
 identifier = "allow-download-and-replace-merod"
 description = "Enables the download_and_replace_merod command."
 commands.allow = ["download_and_replace_merod"]
+
+[[permission]]
+identifier = "allow-list-merod-releases"
+description = "Enables the list_merod_releases command."
+commands.allow = ["list_merod_releases"]
+
+[[permission]]
+identifier = "allow-list-installed-merod-versions"
+description = "Enables the list_installed_merod_versions command."
+commands.allow = ["list_installed_merod_versions"]
+
+[[permission]]
+identifier = "allow-remove-merod-version"
+description = "Enables the remove_merod_version command."
+commands.allow = ["remove_merod_version"]
+
+[[permission]]
+identifier = "allow-repoint-local-build"
+description = "Enables the repoint_local_build command."
+commands.allow = ["repoint_local_build"]
 
 [[permission]]
 identifier = "allow-set-tray-icon-connected"
@@ -254,6 +284,7 @@ permissions = [
   "allow-create-desktop-shortcut",
   "allow-open-app-launcher",
   "allow-create-app-window",
+  "allow-webview-isolation-supported",
   "allow-open-devtools",
   "allow-proxy-http-request",
   "allow-proxy-sse-stream",
@@ -267,12 +298,17 @@ permissions = [
   "allow-list-merod-nodes",
   "allow-check-merod-health",
   "allow-pick-directory",
+  "allow-pick-merod-binary",
   "allow-init-merod-node",
   "allow-detect-running-merod-nodes",
   "allow-get-merod-logs",
   "allow-clear-merod-logs",
   "allow-get-merod-binary-version",
   "allow-download-and-replace-merod",
+  "allow-list-merod-releases",
+  "allow-list-installed-merod-versions",
+  "allow-remove-merod-version",
+  "allow-repoint-local-build",
   "allow-set-tray-icon-connected",
   "allow-delete-calimero-data-dir",
   "allow-clear-app-sessions",

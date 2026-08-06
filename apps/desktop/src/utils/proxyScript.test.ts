@@ -268,7 +268,7 @@ describe("proxy_script /auth/refresh brokering", () => {
 
     const response = await mockWindow.fetch("https://node.example.com/auth/refresh", {
       method: "POST",
-      body: "{}",
+      body: JSON.stringify({ refresh_token: BROKERED_REFRESH_TOKEN }),
     });
 
     expect(mockWindow.__TAURI_INVOKE__).toHaveBeenCalledWith("broker_token_refresh");
@@ -316,7 +316,7 @@ describe("proxy_script /auth/refresh brokering", () => {
 
     const response = await mockWindow.fetch("http://localhost:2428/auth/refresh", {
       method: "POST",
-      body: "{}",
+      body: JSON.stringify({ refresh_token: BROKERED_REFRESH_TOKEN }),
     });
 
     expect(response.status).toBe(401);
@@ -436,5 +436,58 @@ describe("proxy_script binary bodies", () => {
     const call = calls.find((c) => c.cmd === "proxy_http_request")!;
     expect(call.args.request.body).toBe(payload);
     expect(call.args.request.body_base64).toBeNull();
+  });
+});
+
+describe("refresh brokering", () => {
+  it("brokers a refresh that presents the sentinel", async () => {
+    const win = makeMockWindow();
+    injectProxy(win, "http://localhost:2528");
+    win.__TAURI_INVOKE__ = vi.fn().mockResolvedValue("fresh-access-token");
+
+    const res = await win.fetch("http://localhost:2528/auth/refresh", {
+      method: "POST",
+      body: JSON.stringify({
+        access_token: "a",
+        refresh_token: "calimero-desktop-brokered-refresh-token",
+      }),
+    });
+
+    expect(win.__TAURI_INVOKE__).toHaveBeenCalledWith("broker_token_refresh");
+    expect((await res.json()).data.access_token).toBe("fresh-access-token");
+  });
+
+  it("lets a window holding a real refresh token rotate it itself", async () => {
+    const win = makeMockWindow();
+    injectProxy(win, "http://localhost:2529");
+    win.__TAURI_INVOKE__ = vi.fn().mockResolvedValue("should-not-be-used");
+
+    await win.fetch("http://localhost:2529/auth/refresh", {
+      method: "POST",
+      body: JSON.stringify({ access_token: "a", refresh_token: "a-real-token" }),
+    });
+
+    expect(win.__TAURI_INVOKE__).not.toHaveBeenCalledWith("broker_token_refresh");
+  });
+
+  it("brokers a refresh made via a Request object, even against a remote node", async () => {
+    // A bare fetch(url, init) form always has the body on init - only a
+    // fetch(new Request(...)) call needs the body read off the Request itself.
+    const win = makeMockWindow();
+    const originalFetch = win.fetch;
+    injectProxy(win, "https://node.example.com");
+    win.__TAURI_INVOKE__ = vi.fn().mockResolvedValue("fresh-access-token");
+
+    const request = new Request("https://node.example.com/auth/refresh", {
+      method: "POST",
+      body: JSON.stringify({ refresh_token: "calimero-desktop-brokered-refresh-token" }),
+    });
+    const res = await win.fetch(request);
+
+    expect(win.__TAURI_INVOKE__).toHaveBeenCalledWith("broker_token_refresh");
+    // A remote node bypasses the localhost mixed-content proxy path entirely,
+    // so this is the only thing standing between the sentinel and the network.
+    expect(originalFetch).not.toHaveBeenCalled();
+    expect((await res.json()).data.access_token).toBe("fresh-access-token");
   });
 });

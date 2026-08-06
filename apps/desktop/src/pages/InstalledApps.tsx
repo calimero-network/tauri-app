@@ -5,6 +5,10 @@ import DataTable from "../components/DataTable";
 import ContextMenu from "../components/ContextMenu";
 import Skeleton from "../components/Skeleton";
 import { decodeMetadata, openAppFrontend, parseTauriError } from "../utils/appUtils";
+import { getSettings } from "../utils/settings";
+import { detectRunningMerodNodes, type RunningMerodNode } from "../utils/merod";
+import { formatVersionLabel, BUNDLED_VERSION_ID } from "../utils/merodVersions";
+import { useNodeVersions } from "../hooks/useNodeVersions";
 import { invoke } from "@tauri-apps/api/core";
 import { RefreshCw, MoreHorizontal, Trash2, Copy, Rocket } from "lucide-react";
 import "./InstalledApps.css";
@@ -38,6 +42,43 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; app: InstalledApplication } | null>(null);
   const [openMenuAppId, setOpenMenuAppId] = useState<string | null>(null);
   const [menuPos, setMenuPos] = useState<{ top: number; right: number } | null>(null);
+  const developerMode = getSettings().developerMode ?? false;
+  const [runningNodes, setRunningNodes] = useState<RunningMerodNode[]>([]);
+  const [isolationOk, setIsolationOk] = useState(false);
+  const [targets, setTargets] = useState<Record<string, string>>({});
+  const { byNode: nodeVersions, bundled: bundledVersion } = useNodeVersions(developerMode);
+
+  // Options are keyed by running-node port, so derive the default the same way:
+  // a settings URL of 127.0.0.1 or with a trailing slash matched no option, and
+  // the select then displayed a node it would not actually open against.
+  const optionValue = (n: RunningMerodNode) => `http://localhost:${n.port}`;
+  const activeTarget = (() => {
+    let port = '';
+    try {
+      port = new URL(getSettings().nodeUrl).port;
+    } catch {
+      return undefined;
+    }
+    const match = runningNodes.find((n) => String(n.port) === port);
+    return match ? optionValue(match) : undefined;
+  })();
+  const targetFor = (appId: string) => targets[appId] ?? activeTarget;
+
+  useEffect(() => {
+    if (!developerMode) return;
+    // Nodes start and stop while this page stays open, so a one-shot fetch would
+    // keep offering a dead node as a target. Platform support cannot change.
+    const refreshRunning = () =>
+      detectRunningMerodNodes()
+        .then((n) => setRunningNodes(Array.isArray(n) ? n : []))
+        .catch(() => setRunningNodes([]));
+    refreshRunning();
+    invoke<boolean>('webview_isolation_supported')
+      .then(setIsolationOk)
+      .catch(() => setIsolationOk(false));
+    const interval = setInterval(refreshRunning, 5000);
+    return () => clearInterval(interval);
+  }, [developerMode]);
   const mountedRef = useRef(true);
 
   useEffect(() => {
@@ -138,14 +179,15 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
   const handleOpenFrontend = async (frontendUrl: string, appName?: string, applicationId?: string, iconData?: string) => {
     // Warm up the token so any refresh completes before we read it from localStorage.
     try { await apiClient.node.listApplications(); } catch {}
+    const targetNodeUrl = applicationId ? targetFor(applicationId) : undefined;
     await openAppFrontend(frontendUrl, appName, (error) => {
       toast.error(`Failed to open frontend: ${error.message}`);
-    }, applicationId ? { applicationId, iconData } : undefined);
+    }, applicationId ? { applicationId, iconData, targetNodeUrl } : undefined);
   };
 
   const handleCreateLauncher = async (frontendUrl: string, appName: string, appId: string, iconData?: string) => {
     try {
-      await invoke<string>('create_desktop_shortcut', { appName, frontendUrl, appId, icon: iconData ?? null });
+      await invoke<string>('create_desktop_shortcut', { appName, frontendUrl, appId, icon: iconData ?? null, nodeUrl: getSettings().nodeUrl });
       toast.success(`Launcher for "${appName}" added to your Applications`);
     } catch (err) {
       toast.error(`Failed to create launcher: ${parseTauriError(err, "Unknown error")}`);
@@ -322,6 +364,26 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
 
                   return (
                     <div className="table-cell-actions">
+                      {frontendUrl && developerMode && runningNodes.length > 1 && (
+                        <select
+                          className="app-target-select"
+                          value={targetFor(app.id) ?? ''}
+                          disabled={!isolationOk}
+                          title={
+                            isolationOk
+                              ? "Which node this app runs against"
+                              : "Needs macOS 14 or newer, or Linux - without isolated webview storage two nodes would share one session"
+                          }
+                          onClick={(e) => e.stopPropagation()}
+                          onChange={(e) => setTargets((t) => ({ ...t, [app.id]: e.target.value }))}
+                        >
+                          {runningNodes.map((n) => (
+                            <option key={n.pid} value={optionValue(n)}>
+                              {n.node_name} - {formatVersionLabel(nodeVersions[n.node_name] ?? BUNDLED_VERSION_ID, bundledVersion)}
+                            </option>
+                          ))}
+                        </select>
+                      )}
                       {frontendUrl && (
                         <button
                           onClick={(e) => { e.stopPropagation(); handleOpenFrontend(frontendUrl, appName, app.id, metadata?.icon); }}

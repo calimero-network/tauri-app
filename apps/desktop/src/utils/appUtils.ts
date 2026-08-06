@@ -101,6 +101,37 @@ export interface OpenAppFrontendContext {
   /** The app's bundled launcher icon (`metadata.icon`, a `data:image/png;base64,…`
    * URI). The backend prefers it over fetching the app's web favicon. */
   iconData?: string;
+  /** Node this app should run against. Defaults to the one the desktop is on;
+   * anything else opens an isolated window that logs in for itself. */
+  targetNodeUrl?: string;
+}
+
+/** Canonical form for comparing two node URLs: scheme, host case, port and
+ *  trailing slashes are cosmetic. Deliberately does NOT equate localhost with
+ *  127.0.0.1 - they are separate web origins, so they hold separate sessions. */
+export function normalizeNodeUrl(raw: string): string {
+  try {
+    const u = new URL(raw);
+    const port = u.port || (u.protocol === 'https:' ? '443' : '80');
+    return `${u.protocol}//${u.hostname.toLowerCase()}:${port}`;
+  } catch {
+    return raw.replace(/\/+$/, '').toLowerCase();
+  }
+}
+
+/** Label-safe fragment identifying a node target. Derived from the same
+ *  canonical form as the isolation key, so two targets that get separate
+ *  storage can never share a window label. */
+function nodeKey(nodeUrl: string): string {
+  const canonical = normalizeNodeUrl(nodeUrl).replace(/^https?:\/\//, (m) =>
+    m.startsWith('https') ? 'https-' : 'http-',
+  );
+  // Always hash: sanitising maps '.' and ':' both to '-', so a.b and a-b would
+  // otherwise share a label - and the label is what decides window reuse.
+  let h = 0;
+  for (let i = 0; i < canonical.length; i++) h = (Math.imul(31, h) + canonical.charCodeAt(i)) | 0;
+  const safe = canonical.replace(/[^a-zA-Z0-9-]/g, '-').slice(0, 20);
+  return `${safe}-${(h >>> 0).toString(36)}`;
 }
 
 // Guards against two concurrent openAppFrontend calls racing to create the same window.
@@ -117,22 +148,27 @@ export async function openAppFrontend(
     // shell/launcher (own dock icon + Cmd-Tab + native summon; the shell injects
     // SSO itself). `open_app_launcher` errors on non-macOS (or if the launcher
     // can't be built), and we fall back to the in-process window below.
-    if (context?.applicationId) {
+    const settings = getSettings();
+    const activeNodeUrl = (settings.nodeUrl ?? '').replace(/\/+$/, '');
+    const nodeUrl = (context?.targetNodeUrl ?? settings.nodeUrl ?? '').replace(/\/+$/, '');
+    // The launcher keeps one bundle per app with its node URL baked in, so it
+    // cannot serve a second node; cross-node opens take the in-process path.
+    const isCrossNode = normalizeNodeUrl(nodeUrl) !== normalizeNodeUrl(activeNodeUrl);
+
+    if (context?.applicationId && !isCrossNode) {
       try {
         await invoke('open_app_launcher', {
           appName: appName ?? 'Application',
           frontendUrl,
           appId: context.applicationId,
           icon: context.iconData ?? null,
+          nodeUrl: settings.nodeUrl,
         });
         return;
       } catch (e) {
         console.warn('[open] launcher path failed, falling back to in-process window:', e);
       }
     }
-
-    const settings = getSettings();
-    const nodeUrl = (settings.nodeUrl ?? '').replace(/\/$/, '');
 
     // Build URL hash with node_url and the access token so the app can skip the
     // auth flow.
@@ -151,7 +187,9 @@ export async function openAppFrontend(
     hashParams.set('node_url', nodeUrl);
     const accessToken = getAccessToken();
     const refreshToken = getRefreshToken();
-    if (accessToken && refreshToken) {
+    // Our session belongs to the active node, so a cross-node window gets no
+    // credentials: it logs in for itself inside its own isolated store.
+    if (!isCrossNode && accessToken && refreshToken) {
       hashParams.set('access_token', accessToken);
       hashParams.set('refresh_token', BROKERED_REFRESH_TOKEN);
       hashParams.set('expires_at', String(getTokenExpiresAt() ?? Date.now() + 3600_000));
@@ -186,10 +224,21 @@ export async function openAppFrontend(
     // Restrict to [a-zA-Z0-9-] to prevent label crafting via slash/colon/underscore.
     // Calimero applicationIds are base58-encoded 32-byte keys (~43 chars), so the
     // slice(0, 60) limit is never hit in practice and no truncation collisions occur.
-    const appKey = context?.applicationId
-      ? context.applicationId.replace(/[^a-zA-Z0-9-]/g, '-').slice(0, 60)
-      : domain;
-    const windowLabel = `app-${appKey}`.slice(0, 64);
+    // A cross-node window needs its own label or Tauri focuses the existing one
+    // instead of opening a second. Same-node labels stay byte-identical.
+    // Derive from host AND port: URL.port is empty on a scheme's default port,
+    // so two different hosts would otherwise collapse to the same suffix.
+    let nodeSuffix = '';
+    if (isCrossNode) {
+      nodeSuffix = `-n${nodeKey(nodeUrl)}`;
+    }
+    // Both branches must leave room for the suffix: truncating it away would let
+    // two node targets share a label, and the label is what reuses a window.
+    const budget = 60 - nodeSuffix.length;
+    const appKey = (context?.applicationId ?? domain)
+      .replace(/[^a-zA-Z0-9-]/g, '-')
+      .slice(0, budget);
+    const windowLabel = `app-${appKey}${nodeSuffix}`.slice(0, 64);
 
     // If the window is already open, restore + focus it and signal a token refresh.
     // A window minimized to the macOS dock does NOT come back on setFocus alone —
@@ -229,9 +278,10 @@ export async function openAppFrontend(
       await invoke('create_app_window', {
         windowLabel,
         url: urlToOpen,
-        title: appName || 'Application',
+        title: isCrossNode ? `${appName || 'Application'} - ${nodeUrl}` : appName || 'Application',
         openDevtools: false,
-        nodeUrl: settings.nodeUrl,
+        nodeUrl,
+        isolationKey: isCrossNode ? `${context?.applicationId ?? domain}@${nodeUrl}` : null,
       });
     } finally {
       pendingWindowCreations.delete(windowLabel);

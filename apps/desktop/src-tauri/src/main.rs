@@ -3047,18 +3047,13 @@ async fn check_merod_health(node_url: String) -> Result<serde_json::Value, Tauri
 
     info!("[Merod] Checking health at: {}", health_url);
 
-    let client = reqwest::Client::builder()
+    // Onboarding polls this twice a second, so it shares the pooled client rather
+    // than building one (and reloading the trust store) per call.
+    let response = http_client()
+        .get(&health_url)
         .timeout(std::time::Duration::from_secs(5))
-        .build()
-        .map_err(|e| {
-            TauriError::with_details(
-                TauriErrorCode::HttpClientError,
-                "Failed to create HTTP client",
-                e.to_string(),
-            )
-        })?;
-
-    let response = client.get(&health_url).send().await;
+        .send()
+        .await;
 
     match response {
         Ok(resp) => {
@@ -3707,6 +3702,7 @@ async fn download_and_replace_merod(
     // Verification passed — safe to discard backup
     let _ = tokio::fs::remove_file(&bak_path).await;
 
+    *bundled_merod_version() = Some(new_version.clone());
     info!("[Updater] merod updated to {}", new_version);
     Ok(serde_json::json!({
         "replaced": true,
@@ -3716,14 +3712,30 @@ async fn download_and_replace_merod(
     }))
 }
 
+/// `merod --version` for the bundled binary. Cached: three UI surfaces re-invoke
+/// this on mount, and only `download_and_replace_merod` can change the answer.
+static BUNDLED_MEROD_VERSION: Mutex<Option<String>> = Mutex::new(None);
+
+fn bundled_merod_version() -> std::sync::MutexGuard<'static, Option<String>> {
+    BUNDLED_MEROD_VERSION
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+}
+
 /// Return the version string reported by the bundled merod binary (`merod --version`).
 #[tauri::command]
 async fn get_merod_binary_version(app_handle: tauri::AppHandle) -> Result<String, TauriError> {
+    if let Some(version) = bundled_merod_version().clone() {
+        return Ok(version);
+    }
     let merod_binary = get_bundled_merod_path(&app_handle)
         .map_err(|e| TauriError::new(TauriErrorCode::FileNotFound, e))?;
-    Ok(get_merod_version_at(&merod_binary)
-        .await
-        .unwrap_or_else(|| "unknown".to_string()))
+    // A failed probe is not cached: the binary may simply be mid-replacement.
+    let Some(version) = get_merod_version_at(&merod_binary).await else {
+        return Ok("unknown".to_string());
+    };
+    *bundled_merod_version() = Some(version.clone());
+    Ok(version)
 }
 
 /// Read merod logs for a node. Logs are only available for nodes started by the app.

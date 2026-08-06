@@ -40,28 +40,34 @@ pub fn is_isolated(state: &tauri::State<'_, IsolatedWindows>, label: &str) -> bo
 
 /// Whether this platform can give a webview its own storage. Never guess: below
 /// macOS 14 wry falls back to the shared store silently, merging two sessions.
+///
+/// Answered once: this is a sync command (so it runs on the main thread) and the
+/// OS version cannot change under a running process.
 #[tauri::command]
 pub fn webview_isolation_supported() -> bool {
-    #[cfg(target_os = "macos")]
-    {
-        // Matches wry's own gate for WKWebsiteDataStore::dataStoreForIdentifier.
-        std::process::Command::new("sw_vers")
-            .arg("-productVersion")
-            .output()
-            .ok()
-            .and_then(|o| String::from_utf8(o.stdout).ok())
-            .and_then(|v| v.trim().split('.').next()?.parse::<u32>().ok())
-            .map(|major| major >= 14)
-            .unwrap_or(false)
-    }
-    #[cfg(target_os = "linux")]
-    {
-        true
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-    {
-        false
-    }
+    static SUPPORTED: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| {
+        #[cfg(target_os = "macos")]
+        {
+            // Matches wry's own gate for WKWebsiteDataStore::dataStoreForIdentifier.
+            std::process::Command::new("sw_vers")
+                .arg("-productVersion")
+                .output()
+                .ok()
+                .and_then(|o| String::from_utf8(o.stdout).ok())
+                .and_then(|v| v.trim().split('.').next()?.parse::<u32>().ok())
+                .map(|major| major >= 14)
+                .unwrap_or(false)
+        }
+        #[cfg(target_os = "linux")]
+        {
+            true
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        {
+            false
+        }
+    });
+    *SUPPORTED
 }
 
 /// Find or assign this key's identifier, reporting whether the map changed so

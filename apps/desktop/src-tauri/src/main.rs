@@ -3217,18 +3217,72 @@ async fn init_merod_node(
     Ok(format!("Node '{}' initialized successfully", node_name))
 }
 
+/// `(server, swarm)` ports a node uses when its config says nothing usable.
+const DEFAULT_NODE_PORTS: (u16, u16) = (2528, 2428);
+
+/// The port out of a multiaddr like `/ip4/127.0.0.1/tcp/2528` or
+/// `/ip4/0.0.0.0/udp/2428/quic-v1`.
+fn multiaddr_port(addr: &str, proto: &str) -> Option<u16> {
+    addr[addr.find(proto)? + proto.len()..]
+        .split('/')
+        .next()?
+        .parse()
+        .ok()
+}
+
+/// `(server, swarm)` ports declared by a node's `config.toml` body.
+fn parse_node_ports(body: &str) -> (u16, u16) {
+    let Ok(config) = body.parse::<toml::Value>() else {
+        return DEFAULT_NODE_PORTS;
+    };
+    let port_of = |section: &str, protos: &[&str]| -> Option<u16> {
+        config
+            .get(section)?
+            .get("listen")?
+            .as_array()?
+            .iter()
+            .filter_map(|v| v.as_str())
+            .find_map(|addr| protos.iter().find_map(|p| multiaddr_port(addr, p)))
+    };
+    (
+        port_of("server", &["/tcp/"]).unwrap_or(DEFAULT_NODE_PORTS.0),
+        port_of("swarm", &["/tcp/", "/udp/"]).unwrap_or(DEFAULT_NODE_PORTS.1),
+    )
+}
+
+/// Same, memoized on (path, mtime): node detection runs on a UI timer while a
+/// node's config effectively never changes, so re-parsing it is pure waste.
+fn node_ports(config_path: &std::path::Path) -> (u16, u16) {
+    type Cache = std::collections::HashMap<std::path::PathBuf, (std::time::SystemTime, (u16, u16))>;
+    static CACHE: std::sync::LazyLock<Mutex<Cache>> = std::sync::LazyLock::new(Default::default);
+
+    let Ok(mtime) = std::fs::metadata(config_path).and_then(|m| m.modified()) else {
+        return DEFAULT_NODE_PORTS;
+    };
+    let mut cache = CACHE.lock().unwrap_or_else(|p| p.into_inner());
+    if let Some(&(seen, ports)) = cache.get(config_path) {
+        if seen == mtime {
+            return ports;
+        }
+    }
+    let ports = std::fs::read_to_string(config_path)
+        .map(|body| parse_node_ports(&body))
+        .unwrap_or(DEFAULT_NODE_PORTS);
+    cache.insert(config_path.to_path_buf(), (mtime, ports));
+    ports
+}
+
 #[tauri::command]
 async fn detect_running_merod_nodes() -> Result<Vec<serde_json::Value>, TauriError> {
     #[cfg(unix)]
     {
-        use std::process::Command;
-
         // Use ps to find merod processes
-        let output = Command::new("ps")
+        let output = tokio::process::Command::new("ps")
             .arg("ax")
             .arg("-o")
             .arg("pid,command")
             .output()
+            .await
             .map_err(|e| {
                 TauriError::with_details(
                     TauriErrorCode::InternalError,
@@ -3244,7 +3298,7 @@ async fn detect_running_merod_nodes() -> Result<Vec<serde_json::Value>, TauriErr
             if line.contains("merod") && line.contains("run") {
                 // Parse PID and extract node name and home directory from command
                 let parts: Vec<&str> = line.split_whitespace().collect();
-                if let Some(pid_str) = parts.get(0) {
+                if let Some(pid_str) = parts.first() {
                     if let Ok(pid) = pid_str.parse::<u32>() {
                         // Try to extract node name and home directory from arguments
                         let mut node_name = None;
@@ -3259,107 +3313,14 @@ async fn detect_running_merod_nodes() -> Result<Vec<serde_json::Value>, TauriErr
                             }
                         }
 
-                        // Try to read ports from config.toml
-                        let mut server_port = 2528; // Default
-                        let mut swarm_port = 2428; // Default
-                        if let (Some(name), Some(home)) = (&node_name, &home_dir) {
-                            let config_path = std::path::PathBuf::from(home)
-                                .join(name)
-                                .join("config.toml");
-                            if config_path.exists() {
-                                if let Ok(config_content) = std::fs::read_to_string(&config_path) {
-                                    if let Ok(config) = config_content.parse::<toml::Value>() {
-                                        // Try to extract server port from server.listen
-                                        if let Some(server) = config.get("server") {
-                                            if let Some(listen) = server.get("listen") {
-                                                if let Some(listen_array) = listen.as_array() {
-                                                    for listen_str in listen_array {
-                                                        if let Some(addr) = listen_str.as_str() {
-                                                            // Extract port from /ip4/127.0.0.1/tcp/2528
-                                                            if let Some(tcp_pos) =
-                                                                addr.find("/tcp/")
-                                                            {
-                                                                let port_str = &addr[tcp_pos + 5..];
-                                                                if let Some(slash_pos) =
-                                                                    port_str.find('/')
-                                                                {
-                                                                    if let Ok(p) = port_str
-                                                                        [..slash_pos]
-                                                                        .parse::<u16>()
-                                                                    {
-                                                                        server_port = p;
-                                                                        break;
-                                                                    }
-                                                                } else if let Ok(p) =
-                                                                    port_str.parse::<u16>()
-                                                                {
-                                                                    server_port = p;
-                                                                    break;
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-
-                                        // Try to extract swarm port from swarm.listen
-                                        if let Some(swarm) = config.get("swarm") {
-                                            if let Some(listen) = swarm.get("listen") {
-                                                if let Some(listen_array) = listen.as_array() {
-                                                    for listen_str in listen_array {
-                                                        if let Some(addr) = listen_str.as_str() {
-                                                            // Extract port from /ip4/0.0.0.0/tcp/2428 or /ip4/0.0.0.0/udp/2428/quic-v1
-                                                            if let Some(tcp_pos) =
-                                                                addr.find("/tcp/")
-                                                            {
-                                                                let port_str = &addr[tcp_pos + 5..];
-                                                                if let Some(slash_pos) =
-                                                                    port_str.find('/')
-                                                                {
-                                                                    if let Ok(p) = port_str
-                                                                        [..slash_pos]
-                                                                        .parse::<u16>()
-                                                                    {
-                                                                        swarm_port = p;
-                                                                        break;
-                                                                    }
-                                                                } else if let Ok(p) =
-                                                                    port_str.parse::<u16>()
-                                                                {
-                                                                    swarm_port = p;
-                                                                    break;
-                                                                }
-                                                            } else if let Some(udp_pos) =
-                                                                addr.find("/udp/")
-                                                            {
-                                                                let port_str = &addr[udp_pos + 5..];
-                                                                if let Some(slash_pos) =
-                                                                    port_str.find('/')
-                                                                {
-                                                                    if let Ok(p) = port_str
-                                                                        [..slash_pos]
-                                                                        .parse::<u16>()
-                                                                    {
-                                                                        swarm_port = p;
-                                                                        break;
-                                                                    }
-                                                                } else if let Ok(p) =
-                                                                    port_str.parse::<u16>()
-                                                                {
-                                                                    swarm_port = p;
-                                                                    break;
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                        let (server_port, swarm_port) = match (&node_name, &home_dir) {
+                            (Some(name), Some(home)) => node_ports(
+                                &std::path::PathBuf::from(home)
+                                    .join(name)
+                                    .join("config.toml"),
+                            ),
+                            _ => DEFAULT_NODE_PORTS,
+                        };
 
                         running_nodes.push(serde_json::json!({
                             "pid": pid,
@@ -3378,13 +3339,14 @@ async fn detect_running_merod_nodes() -> Result<Vec<serde_json::Value>, TauriErr
 
     #[cfg(windows)]
     {
-        use std::process::Command;
+        use tokio::process::Command;
 
         // Use tasklist and wmic on Windows
         let output = Command::new("tasklist")
             .arg("/FO")
             .arg("CSV")
             .output()
+            .await
             .map_err(|e| {
                 TauriError::with_details(
                     TauriErrorCode::InternalError,
@@ -3410,7 +3372,8 @@ async fn detect_running_merod_nodes() -> Result<Vec<serde_json::Value>, TauriErr
                             .arg(format!("ProcessId={}", pid))
                             .arg("get")
                             .arg("CommandLine")
-                            .output();
+                            .output()
+                            .await;
 
                         if let Ok(cmd_out) = cmd_output {
                             let cmd_line = String::from_utf8_lossy(&cmd_out.stdout);
@@ -4917,10 +4880,26 @@ fn main() {
 mod tests {
     use super::{
         is_textual_content_type, launcher_bundle_is_removable, merod_target_triple,
-        parse_app_deep_link, score_merod_asset, validate_allowed_url,
+        parse_app_deep_link, parse_node_ports, score_merod_asset, validate_allowed_url,
+        DEFAULT_NODE_PORTS,
     };
     use base64::Engine as _;
     use std::path::Path;
+
+    #[test]
+    fn node_ports_are_read_from_listen_multiaddrs() {
+        let config = r#"
+[server]
+listen = ["/ip4/127.0.0.1/tcp/3001"]
+[swarm]
+listen = ["/ip4/0.0.0.0/udp/4001/quic-v1", "/ip4/0.0.0.0/tcp/4002"]
+"#;
+        assert_eq!(parse_node_ports(config), (3001, 4001));
+
+        // Anything unusable falls back rather than reporting a wrong port.
+        assert_eq!(parse_node_ports("[server]\n"), DEFAULT_NODE_PORTS);
+        assert_eq!(parse_node_ports("not toml ["), DEFAULT_NODE_PORTS);
+    }
 
     #[cfg(target_os = "macos")]
     #[test]

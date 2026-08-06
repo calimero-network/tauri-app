@@ -1,9 +1,10 @@
-import { useToast } from '../contexts/ToastContext';
+import { useToast, useToastState } from '../contexts/ToastContext';
 import { Check, X, AlertTriangle, Info } from 'lucide-react';
 import './ToastContainer.css';
 
 export default function ToastContainer() {
-  const { toasts, removeToast } = useToast();
+  const toasts = useToastState();
+  const { removeToast } = useToast();
 
   if (toasts.length === 0) {
     return null;

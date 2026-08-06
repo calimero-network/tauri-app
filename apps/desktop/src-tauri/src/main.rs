@@ -620,15 +620,16 @@ async fn proxy_http_request_inner(
             if is_sensitive {
                 debug!("[Tauri Proxy] Adding header: '{}' = '[REDACTED]'", key);
             } else {
-                let value_preview = if value.len() > 50 {
-                    let preview: String = value.chars().take(50).collect();
-                    format!("{}...", preview)
-                } else {
-                    value.clone()
-                };
+                // Built inside the macro so the truncation/clone only runs when
+                // debug logging is actually enabled.
                 debug!(
                     "[Tauri Proxy] Adding header: '{}' = '{}'",
-                    key, value_preview
+                    key,
+                    if value.len() > 50 {
+                        format!("{}...", value.chars().take(50).collect::<String>())
+                    } else {
+                        value.clone()
+                    }
                 );
             }
             // Add header directly - reqwest will handle validation
@@ -2352,6 +2353,21 @@ fn spawn_log_drain<R>(
     });
 }
 
+/// Repoint the port of the first `/<proto>/<digits>` component of a multiaddr,
+/// leaving any trailing components (e.g. `/quic-v1`) intact.
+fn replace_multiaddr_port(addr: &str, proto: &str, port: u16) -> String {
+    let needle = format!("/{}/", proto);
+    let Some(start) = addr.find(&needle) else {
+        return addr.to_string();
+    };
+    let rest = &addr[start + needle.len()..];
+    let tail = rest.trim_start_matches(|c: char| c.is_ascii_digit());
+    if tail.len() == rest.len() {
+        return addr.to_string();
+    }
+    format!("{}{}{}{}", &addr[..start], needle, port, tail)
+}
+
 #[tauri::command]
 async fn start_merod(
     server_port: Option<u16>,
@@ -2468,19 +2484,14 @@ async fn start_merod(
                         for listen_str in listen_array.iter_mut() {
                             if let Some(addr) = listen_str.as_str() {
                                 // Replace port in IPv4 server addresses (e.g., /ip4/127.0.0.1/tcp/2528)
-                                if addr.contains("/ip4/127.0.0.1/tcp/") {
-                                    let new_addr = regex::Regex::new(r"/tcp/\d+")
-                                        .unwrap()
-                                        .replace(addr, &format!("/tcp/{}", server_port))
-                                        .to_string();
-                                    *listen_str = toml::Value::String(new_addr);
-                                } else if addr.contains("/ip6/::1/tcp/") {
-                                    // Replace port in IPv6 server addresses
-                                    let new_addr = regex::Regex::new(r"/tcp/\d+")
-                                        .unwrap()
-                                        .replace(addr, &format!("/tcp/{}", server_port))
-                                        .to_string();
-                                    *listen_str = toml::Value::String(new_addr);
+                                if addr.contains("/ip4/127.0.0.1/tcp/")
+                                    || addr.contains("/ip6/::1/tcp/")
+                                {
+                                    *listen_str = toml::Value::String(replace_multiaddr_port(
+                                        addr,
+                                        "tcp",
+                                        server_port,
+                                    ));
                                 }
                             }
                         }
@@ -2497,18 +2508,14 @@ async fn start_merod(
                                 // Replace port in swarm addresses - handle both TCP and UDP
                                 if addr.contains("/tcp/") && !addr.contains("/udp/") {
                                     // Replace TCP port (e.g., /ip4/0.0.0.0/tcp/2428)
-                                    let new_addr = regex::Regex::new(r"/tcp/\d+")
-                                        .unwrap()
-                                        .replace(addr, &format!("/tcp/{}", swarm_port))
-                                        .to_string();
-                                    *listen_str = toml::Value::String(new_addr);
+                                    *listen_str = toml::Value::String(replace_multiaddr_port(
+                                        addr, "tcp", swarm_port,
+                                    ));
                                 } else if addr.contains("/udp/") {
                                     // Replace UDP port (e.g., /ip4/0.0.0.0/udp/2428/quic-v1)
-                                    let new_addr = regex::Regex::new(r"/udp/\d+")
-                                        .unwrap()
-                                        .replace(addr, &format!("/udp/{}", swarm_port))
-                                        .to_string();
-                                    *listen_str = toml::Value::String(new_addr);
+                                    *listen_str = toml::Value::String(replace_multiaddr_port(
+                                        addr, "udp", swarm_port,
+                                    ));
                                 }
                             }
                         }
@@ -2914,9 +2921,9 @@ async fn stop_merod_by_pid_command(
 fn is_process_running(pid: u32) -> bool {
     #[cfg(unix)]
     {
-        use std::process::Command;
-        let output = Command::new("kill").arg("-0").arg(pid.to_string()).output();
-        output.is_ok() && output.unwrap().status.success()
+        // Signal 0 only probes for existence. This runs per tracked node on
+        // every status poll, under the state lock - too hot to fork `kill -0`.
+        unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
     }
     #[cfg(windows)]
     {
@@ -4771,11 +4778,37 @@ fn main() {
 mod tests {
     use super::{
         is_textual_content_type, launcher_bundle_is_removable, merod_target_triple,
-        parse_app_deep_link, parse_node_ports, score_merod_asset, validate_allowed_url,
-        DEFAULT_NODE_PORTS,
+        parse_app_deep_link, parse_node_ports, replace_multiaddr_port, score_merod_asset,
+        validate_allowed_url, DEFAULT_NODE_PORTS,
     };
     use base64::Engine as _;
     use std::path::Path;
+
+    #[test]
+    fn multiaddr_port_is_replaced_in_place() {
+        assert_eq!(
+            replace_multiaddr_port("/ip4/127.0.0.1/tcp/2528", "tcp", 3001),
+            "/ip4/127.0.0.1/tcp/3001"
+        );
+        assert_eq!(
+            replace_multiaddr_port("/ip6/::1/tcp/2528", "tcp", 3001),
+            "/ip6/::1/tcp/3001"
+        );
+        // Trailing components survive.
+        assert_eq!(
+            replace_multiaddr_port("/ip4/0.0.0.0/udp/2428/quic-v1", "udp", 4001),
+            "/ip4/0.0.0.0/udp/4001/quic-v1"
+        );
+        // No matching component, or no port digits: left untouched.
+        assert_eq!(
+            replace_multiaddr_port("/ip4/0.0.0.0/udp/2428", "tcp", 4001),
+            "/ip4/0.0.0.0/udp/2428"
+        );
+        assert_eq!(
+            replace_multiaddr_port("/ip4/0.0.0.0/tcp/", "tcp", 4001),
+            "/ip4/0.0.0.0/tcp/"
+        );
+    }
 
     #[test]
     fn node_ports_are_read_from_listen_multiaddrs() {

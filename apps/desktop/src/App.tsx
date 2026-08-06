@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef, lazy, Suspense } from "react";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { createClientAsync, apiClient } from "./lib/mero-client";
 import { MeroContext, type MeroContextValue } from "@calimero-network/mero-react";
@@ -18,13 +18,6 @@ import { useToast } from "./contexts/ToastContext";
 import { checkOnboardingState } from "./utils/onboarding";
 import { decodeMetadata, openAppFrontend, parseTauriError } from "./utils/appUtils";
 import { useAppDeepLink } from "./hooks/useAppDeepLink";
-import Settings from "./pages/Settings";
-import Onboarding from "./pages/Onboarding";
-import Marketplace from "./pages/Marketplace";
-import InstalledApps from "./pages/InstalledApps";
-import Namespaces from "./pages/Namespaces";
-import NodeManagement from "./pages/NodeManagement";
-import ConfirmAction from "./pages/ConfirmAction";
 import UpdateNotification from "./components/UpdateNotification";
 import Sidebar from "./components/Sidebar";
 import { NodeStatusIndicator } from "./components/NodeStatusIndicator";
@@ -35,6 +28,15 @@ import { Settings as SettingsIcon, ArrowRight, Package, ShoppingCart } from "luc
 import calimeroLogo from "./assets/calimero-logo.svg";
 import { useTheme } from "./contexts/ThemeContext";
 import "./App.css";
+
+// Only one page renders at a time, so keep them out of the initial bundle.
+const Settings = lazy(() => import("./pages/Settings"));
+const Onboarding = lazy(() => import("./pages/Onboarding"));
+const Marketplace = lazy(() => import("./pages/Marketplace"));
+const InstalledApps = lazy(() => import("./pages/InstalledApps"));
+const Namespaces = lazy(() => import("./pages/Namespaces"));
+const NodeManagement = lazy(() => import("./pages/NodeManagement"));
+const ConfirmAction = lazy(() => import("./pages/ConfirmAction"));
 
 function App() {
   const toast = useToast();
@@ -501,6 +503,7 @@ function App() {
 
   if (showOnboarding) {
     return (
+      <Suspense fallback={null}>
       <Onboarding
         onComplete={async () => {
           clearOnboardingProgress();
@@ -532,6 +535,7 @@ function App() {
           setShowSettings(true);
         }}
       />
+      </Suspense>
     );
   }
 
@@ -578,6 +582,7 @@ function App() {
   if (showSettings) {
     return (
       <ErrorBoundary componentName="Settings" onReset={() => setShowSettings(true)}>
+        <Suspense fallback={null}>
         <Settings
           onBack={async () => {
           // Reinitialize client BEFORE hiding Settings so the checkConnection useEffect
@@ -641,6 +646,7 @@ function App() {
           }
         }}
         />
+        </Suspense>
       </ErrorBoundary>
     );
   }
@@ -673,7 +679,9 @@ function App() {
               />
             </header>
             <main className="main">
-              <Marketplace clientReady={clientReady} />
+              <Suspense fallback={null}>
+                <Marketplace clientReady={clientReady} />
+              </Suspense>
             </main>
           </div>
         </div>
@@ -709,7 +717,8 @@ function App() {
               />
             </header>
             <main className="main">
-        <InstalledApps 
+        <Suspense fallback={null}>
+        <InstalledApps
           clientReady={clientReady}
           onAuthRequired={() => setShowLogin(true)}
           onConfirmUninstall={(_appId, appName, onConfirm) => {
@@ -732,6 +741,7 @@ function App() {
             setCurrentPage('confirm');
           }}
         />
+        </Suspense>
             </main>
           </div>
         </div>
@@ -773,7 +783,9 @@ function App() {
               />
             </header>
             <main className="main">
-              <NodeManagement />
+              <Suspense fallback={null}>
+                <NodeManagement />
+              </Suspense>
             </main>
           </div>
         </div>
@@ -810,7 +822,9 @@ function App() {
             </header>
             <main className="main">
               <MeroContext.Provider value={meroContextValue}>
-                <Namespaces />
+                <Suspense fallback={null}>
+                  <Namespaces />
+                </Suspense>
               </MeroContext.Provider>
             </main>
           </div>
@@ -824,6 +838,7 @@ function App() {
     return (
       <div className="app">
         <ToastContainer />
+        <Suspense fallback={null}>
         <ConfirmAction
           title={confirmAction.title}
           message={confirmAction.message}
@@ -841,6 +856,7 @@ function App() {
           }}
           breadcrumbs={confirmAction.breadcrumbs}
         />
+        </Suspense>
       </div>
     );
   }

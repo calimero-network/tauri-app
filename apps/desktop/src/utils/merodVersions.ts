@@ -45,10 +45,6 @@ export async function removeMerodVersion(tag: string, homeDir?: string): Promise
   return await invoke('remove_merod_version', { tag, homeDir });
 }
 
-/**
- * A local build has no stable version, so it is labelled by kind rather than
- * by path - the measured version is shown separately on running nodes.
- */
 /** merod prints `merod <tag> (build ...) (commit ...)`; keep the tag. An
  *  unreadable binary reports the literal "unknown", which is not a version. */
 function shortVersion(raw?: string | null): string {

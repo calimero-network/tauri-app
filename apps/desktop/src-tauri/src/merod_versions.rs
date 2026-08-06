@@ -46,6 +46,22 @@ pub(crate) fn verify_sha256(bytes: &[u8], expected: &str) -> Result<(), TauriErr
     }
 }
 
+fn github_get(url: &str) -> reqwest::RequestBuilder {
+    crate::http_client()
+        .get(url)
+        .header("Accept", "application/vnd.github+json")
+        .header("User-Agent", "calimero-desktop")
+}
+
+/// Asset downloads must stay on GitHub, on every redirect hop, not just the first.
+fn is_allowed_asset_url(url: &url::Url) -> bool {
+    let host = url.host_str().unwrap_or("");
+    url.scheme() == "https"
+        && (host == "github.com"
+            || host.ends_with(".github.com")
+            || host.ends_with(".githubusercontent.com"))
+}
+
 /// merod reports `merod <tag> (build ...) (commit ...) (rustc ...)`, so match the
 /// version field rather than the whole line, which never equals the bare tag.
 pub(crate) fn version_matches_tag(reported: &str, tag: &str) -> bool {
@@ -222,18 +238,11 @@ pub struct ReleaseListing {
     pub stale: bool,
 }
 
-fn cached_releases() -> Option<Vec<ReleaseInfo>> {
-    RELEASE_CACHE
-        .lock()
-        .ok()?
-        .as_ref()
-        .map(|(_, cached)| cached.clone())
-}
-
 /// Serve whatever we last fetched when a refetch fails. The unauthenticated
 /// GitHub limit is 60/hour, so a rate-limited user would otherwise see nothing.
 fn stale_or_error(error: TauriError) -> Result<ReleaseListing, TauriError> {
-    match cached_releases() {
+    let cached = RELEASE_CACHE.lock().ok().and_then(|g| g.as_ref().map(|(_, c)| c.clone()));
+    match cached {
         Some(releases) if !releases.is_empty() => Ok(ReleaseListing {
             releases,
             stale: true,
@@ -257,10 +266,7 @@ pub async fn list_merod_releases(refresh: Option<bool>) -> Result<ReleaseListing
         }
     }
 
-    let response = crate::http_client()
-        .get("https://api.github.com/repos/calimero-network/core/releases?per_page=40")
-        .header("Accept", "application/vnd.github+json")
-        .header("User-Agent", "calimero-desktop")
+    let response = github_get("https://api.github.com/repos/calimero-network/core/releases?per_page=40")
         .send()
         .await;
 
@@ -318,11 +324,10 @@ pub async fn repoint_local_build(
         ));
     }
     let new_id = format!("{}{}", LOCAL_PREFIX, new_path);
+    // new_id always carries LOCAL_PREFIX, so parse_version_id either errors on a
+    // relative path or yields Local.
     let VersionId::Local(path) = parse_version_id(&new_id)? else {
-        return Err(TauriError::new(
-            TauriErrorCode::InvalidInput,
-            "Expected an absolute path to a merod binary",
-        ));
+        unreachable!("a local: id cannot parse to another variant")
     };
     if !path.is_file() {
         return Err(TauriError::new(
@@ -418,10 +423,7 @@ pub async fn ensure_release_installed(
         "https://api.github.com/repos/calimero-network/core/releases/tags/{}",
         tag
     );
-    let response = crate::http_client()
-        .get(&release_url)
-        .header("Accept", "application/vnd.github+json")
-        .header("User-Agent", "calimero-desktop")
+    let response = github_get(&release_url)
         .send()
         .await
         .map_err(|e| TauriError::new(TauriErrorCode::InternalError, format!("GitHub API: {}", e)))?;
@@ -461,12 +463,7 @@ pub async fn ensure_release_installed(
 
     let parsed = url::Url::parse(&asset_url)
         .map_err(|e| TauriError::new(TauriErrorCode::InvalidUrl, format!("asset URL: {}", e)))?;
-    let host = parsed.host_str().unwrap_or("");
-    if parsed.scheme() != "https"
-        || (host != "github.com"
-            && !host.ends_with(".github.com")
-            && !host.ends_with(".githubusercontent.com"))
-    {
+    if !is_allowed_asset_url(&parsed) {
         return Err(TauriError::new(
             TauriErrorCode::UrlNotAllowed,
             format!("Asset URL is not an https github.com URL: {}", asset_url),
@@ -503,8 +500,19 @@ pub async fn ensure_release_installed(
         }
 
         let archive_path = temp_dir.join(&safe_asset_name);
+        // Re-check every hop: GitHub redirects assets to its CDN, and without a
+        // custom policy only the first URL would be validated.
         let download_client = reqwest::Client::builder()
             .timeout(Duration::from_secs(300))
+            .redirect(reqwest::redirect::Policy::custom(|attempt| {
+                if attempt.previous().len() >= 10 {
+                    attempt.error("too many redirects")
+                } else if is_allowed_asset_url(attempt.url()) {
+                    attempt.follow()
+                } else {
+                    attempt.stop()
+                }
+            }))
             .build()
             .map_err(|e| {
                 TauriError::new(TauriErrorCode::InternalError, format!("download client: {}", e))

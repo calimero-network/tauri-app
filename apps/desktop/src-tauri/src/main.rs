@@ -3039,6 +3039,12 @@ async fn init_merod_node(
         )
     })?;
 
+    // Serialise the check and the init: two concurrent calls for one name would
+    // otherwise both see no directory and both run merod init over it. Node
+    // creation is user-driven and rare, so one gate for all names is enough.
+    static INIT_GATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let _init_guard = INIT_GATE.lock().await;
+
     // merod init over an existing node reports success without minting the admin
     // account, leaving a node nobody can sign in to. Refuse instead.
     if home_dir_path.join(&node_name).exists() {

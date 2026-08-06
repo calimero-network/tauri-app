@@ -13,14 +13,9 @@ export interface NodeVersionMap {
 
 const EMPTY: NodeVersionMap = { byNode: {}, measured: {}, drifted: new Set() };
 
-/**
- * Which merod build each node runs. Three surfaces need this, so it lives in one
- * place; `deps` lets a caller refetch when its own node list changes.
- *
- * `homeDir` defaults to the configured data directory rather than to the
- * backend's `~/.calimero`, so a caller that omits it cannot silently read the
- * wrong directory and report every node as running the shipped binary.
- */
+/** Which merod build each node runs; shared by three surfaces. `deps` refetches
+ *  when the caller's list changes, and `homeDir` defaults to the configured dir
+ *  so an omitted argument cannot misreport every node as bundled. */
 export function useNodeVersions(enabled: boolean, homeDir?: string, deps: unknown[] = []): NodeVersionMap {
   const [state, setState] = useState<NodeVersionMap>(EMPTY);
   const dir = homeDir ?? getSettings().embeddedNodeDataDir;

@@ -27,7 +27,7 @@ vi.mock('../lib/token-storage', () => ({
   getTokenExpiresAt: () => 1_700_000_000_000,
 }));
 
-import { openAppFrontend } from './appUtils';
+import { openAppFrontend, normalizeNodeUrl } from './appUtils';
 import { BROKERED_REFRESH_TOKEN } from '../lib/token-broker';
 
 /** Args of the `create_app_window` invoke (may not be the first call — the app
@@ -242,5 +242,29 @@ describe('openAppFrontend targeting a second node', () => {
     const label = String(windowArgs().windowLabel);
     expect(label.length).toBeLessThanOrEqual(64);
     expect(label.endsWith('-nlocalhost-2529')).toBe(true);
+  });
+});
+
+describe('normalizeNodeUrl', () => {
+  it('treats cosmetic differences as the same node', () => {
+    const base = normalizeNodeUrl('http://localhost:2528');
+    expect(normalizeNodeUrl('http://localhost:2528/')).toBe(base);
+    expect(normalizeNodeUrl('http://localhost:2528//')).toBe(base);
+    expect(normalizeNodeUrl('http://LOCALHOST:2528')).toBe(base);
+    expect(normalizeNodeUrl('http://localhost')).toBe(normalizeNodeUrl('http://localhost:80'));
+    expect(normalizeNodeUrl('https://n.example.com')).toBe(
+      normalizeNodeUrl('https://n.example.com:443'),
+    );
+  });
+
+  it('keeps genuinely different targets apart', () => {
+    expect(normalizeNodeUrl('http://localhost:2528')).not.toBe(
+      normalizeNodeUrl('http://localhost:2529'),
+    );
+    // Separate web origins, so separate localStorage and separate sessions:
+    // collapsing these would hand one origin's window another origin's state.
+    expect(normalizeNodeUrl('http://localhost:2528')).not.toBe(
+      normalizeNodeUrl('http://127.0.0.1:2528'),
+    );
   });
 });

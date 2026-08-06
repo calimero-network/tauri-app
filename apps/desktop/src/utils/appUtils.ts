@@ -106,6 +106,19 @@ export interface OpenAppFrontendContext {
   targetNodeUrl?: string;
 }
 
+/** Canonical form for comparing two node URLs: scheme, host case, port and
+ *  trailing slashes are cosmetic. Deliberately does NOT equate localhost with
+ *  127.0.0.1 - they are separate web origins, so they hold separate sessions. */
+export function normalizeNodeUrl(raw: string): string {
+  try {
+    const u = new URL(raw);
+    const port = u.port || (u.protocol === 'https:' ? '443' : '80');
+    return `${u.protocol}//${u.hostname.toLowerCase()}:${port}`;
+  } catch {
+    return raw.replace(/\/+$/, '').toLowerCase();
+  }
+}
+
 /** Short, unique-per-target label fragment. Falls back to a hash so a hostname
  *  with unsafe characters still yields a distinct, label-safe suffix. */
 function nodeKey(nodeUrl: string): string {
@@ -138,11 +151,11 @@ export async function openAppFrontend(
     // SSO itself). `open_app_launcher` errors on non-macOS (or if the launcher
     // can't be built), and we fall back to the in-process window below.
     const settings = getSettings();
-    const activeNodeUrl = (settings.nodeUrl ?? '').replace(/\/$/, '');
-    const nodeUrl = (context?.targetNodeUrl ?? settings.nodeUrl ?? '').replace(/\/$/, '');
+    const activeNodeUrl = (settings.nodeUrl ?? '').replace(/\/+$/, '');
+    const nodeUrl = (context?.targetNodeUrl ?? settings.nodeUrl ?? '').replace(/\/+$/, '');
     // The launcher keeps one bundle per app with its node URL baked in, so it
     // cannot serve a second node; cross-node opens take the in-process path.
-    const isCrossNode = nodeUrl !== activeNodeUrl;
+    const isCrossNode = normalizeNodeUrl(nodeUrl) !== normalizeNodeUrl(activeNodeUrl);
 
     if (context?.applicationId && !isCrossNode) {
       try {

@@ -485,7 +485,13 @@ export default function NodeManagement() {
                         return;
                       }
                       const picked = await invoke<string | null>('pick_merod_binary');
-                      if (picked) setVersionId(`${LOCAL_ID_PREFIX}${picked}`);
+                      if (picked) {
+                        setVersionId(`${LOCAL_ID_PREFIX}${picked}`);
+                        return;
+                      }
+                      // Cancelled: no state changed, so React will not re-render
+                      // and the select would keep showing "Use a local build...".
+                      e.target.value = versionId;
                     }}
                     disabled={loading}
                   >

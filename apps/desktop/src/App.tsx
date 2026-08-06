@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { createClientAsync, apiClient } from "./lib/mero-client";
 import { MeroContext, type MeroContextValue } from "@calimero-network/mero-react";
@@ -13,9 +13,9 @@ import {
   DEFAULT_EMBEDDED_SWARM_PORT,
 } from "./utils/settings";
 import { clearOnboardingProgress } from "./utils/onboardingProgress";
-import { startMerod, detectRunningMerodNodes, type RunningMerodNode } from "./utils/merod";
+import { startMerod, detectRunningMerodNodes, waitForNodeHealthy, type RunningMerodNode } from "./utils/merod";
 import { useToast } from "./contexts/ToastContext";
-import { checkOnboardingState, type OnboardingState } from "./utils/onboarding";
+import { checkOnboardingState } from "./utils/onboarding";
 import { decodeMetadata, openAppFrontend, parseTauriError } from "./utils/appUtils";
 import { useAppDeepLink } from "./hooks/useAppDeepLink";
 import Settings from "./pages/Settings";
@@ -155,7 +155,14 @@ function App() {
     }
   }, [clientReady, showOnboarding]);
 
+  const initRan = useRef(false);
+
   useEffect(() => {
+    // initializeApp sets clientReady, which rebuilds loadContexts and re-fires this
+    // effect; without the guard the whole init chain runs twice per launch.
+    if (initRan.current) return;
+    initRan.current = true;
+
     async function initializeApp() {
       const hasCustomSettings = localStorage.getItem('calimero-desktop-settings') !== null;
       const settings = getSettings();
@@ -191,7 +198,6 @@ function App() {
       }
 
       try {
-        const { startMerod } = await import('./utils/merod');
         const normalizeRunningNodes = (n: unknown): RunningMerodNode[] =>
           Array.isArray(n) ? n : [];
         let runningNodes = normalizeRunningNodes(await detectRunningMerodNodes());
@@ -211,7 +217,8 @@ function App() {
           const swarmPort = settings.embeddedNodeSwarmPort ?? DEFAULT_EMBEDDED_SWARM_PORT;
           try {
             await startMerod(serverPort, swarmPort, dataDir, settings.embeddedNodeName, settings.debugLogs);
-            await new Promise((r) => setTimeout(r, 4000)); // give merod time to start (longer when app launches at login)
+            // Non-fatal on timeout: the health check below is what decides connected state.
+            await waitForNodeHealthy(`http://localhost:${serverPort}/auth`, 15000).catch(() => {});
             runningNodes = normalizeRunningNodes(await detectRunningMerodNodes());
             setRunningNodes(runningNodes);
           } catch (startErr) {
@@ -285,31 +292,6 @@ function App() {
         invoke("set_tray_icon_connected", { connected: true }).catch(() => {});
         setError(null);
         setNeedsNodeConfig(false);
-
-        const onboardingState = await Promise.race([
-          checkOnboardingState(),
-          new Promise<OnboardingState>((resolve) =>
-            setTimeout(() => {
-              resolve({
-                isFirstTime: false,
-                authAvailable: false,
-                providersAvailable: false,
-                providersConfigured: false,
-                hasConfiguredProviders: false,
-                error: 'Connection timeout.',
-              });
-            }, 10000)
-          ),
-        ]);
-
-        // Debug logging
-        console.log('🔍 Onboarding State:', {
-          isFirstTime: onboardingState.isFirstTime,
-          authAvailable: onboardingState.authAvailable,
-          providersAvailable: onboardingState.providersAvailable,
-          hasConfiguredProviders: onboardingState.hasConfiguredProviders,
-          error: onboardingState.error,
-        });
 
         // Flow logic:
         // 1. FIRST: Check if user has existing tokens (already logged in)
@@ -433,13 +415,14 @@ function App() {
   }, []);
 
   // Health-check interval — lightweight, just updates the connected indicator.
-  // Skip on login/settings/onboarding screens.
+  // Skip on login/settings/onboarding screens. Gated on clientReady: the unconfigured
+  // singleton falls back to hardcoded localhost:2528 and 401s a node on any other port.
   useEffect(() => {
-    if (showLogin || showSettings || showOnboarding) return;
+    if (showLogin || showSettings || showOnboarding || !clientReady) return;
     checkConnection();
     const interval = setInterval(checkConnection, 10000);
     return () => clearInterval(interval);
-  }, [checkConnection, showLogin, showSettings, showOnboarding]);
+  }, [checkConnection, showLogin, showSettings, showOnboarding, clientReady]);
 
   // Load apps + contexts only when the user is on the home page.
   // Fires once on navigation — not on every health-check tick.
@@ -529,6 +512,14 @@ function App() {
           } catch {
             // Autostart may not be available
           }
+          // Onboarding never runs initializeApp, so nothing has marked the client
+          // ready — without this the loads below and the health interval no-op.
+          await createClientAsync({
+            baseUrl: settings.nodeUrl.replace(/\/$/, ''),
+            authBaseUrl: getAuthUrl(settings).replace(/\/$/, ''),
+            requestCredentials: 'omit',
+          });
+          setClientReady(true);
           setShowLogin(false); // clear any stale login state from health checks during onboarding
           setShowOnboarding(false);
           setConnected(true);

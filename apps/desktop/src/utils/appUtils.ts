@@ -126,13 +126,12 @@ function nodeKey(nodeUrl: string): string {
   const canonical = normalizeNodeUrl(nodeUrl).replace(/^https?:\/\//, (m) =>
     m.startsWith('https') ? 'https-' : 'http-',
   );
-  const safe = canonical.replace(/[^a-zA-Z0-9-]/g, '-');
-  if (safe.length <= 24) return safe;
-  // Remote hostnames can be long; keep the label inside Tauri's 64-char limit
-  // while staying unique.
+  // Always hash: sanitising maps '.' and ':' both to '-', so a.b and a-b would
+  // otherwise share a label - and the label is what decides window reuse.
   let h = 0;
   for (let i = 0; i < canonical.length; i++) h = (Math.imul(31, h) + canonical.charCodeAt(i)) | 0;
-  return `${safe.slice(0, 16)}${(h >>> 0).toString(36)}`;
+  const safe = canonical.replace(/[^a-zA-Z0-9-]/g, '-').slice(0, 20);
+  return `${safe}-${(h >>> 0).toString(36)}`;
 }
 
 // Guards against two concurrent openAppFrontend calls racing to create the same window.

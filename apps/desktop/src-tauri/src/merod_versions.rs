@@ -155,12 +155,21 @@ pub fn read_pin_raw(home_dir: &Path, node_name: &str) -> Option<NodePin> {
     serde_json::from_str(&raw).ok()
 }
 
-/// A missing or unreadable pin means the bundled binary. A node created before
-/// this feature existed has no pin file and must keep starting normally.
-pub fn read_pin(home_dir: &Path, node_name: &str) -> VersionId {
-    read_pin_raw(home_dir, node_name)
-        .and_then(|pin| parse_version_id(&pin.id).ok())
-        .unwrap_or(VersionId::Bundled)
+/// A missing or unreadable pin means the bundled binary: a node created before
+/// this feature existed has none and must keep starting normally. A pin that
+/// reads but names an id we cannot parse is different - it was written
+/// deliberately, so refuse rather than silently start the wrong binary.
+pub fn read_pin(home_dir: &Path, node_name: &str) -> Result<VersionId, TauriError> {
+    match read_pin_raw(home_dir, node_name) {
+        None => Ok(VersionId::Bundled),
+        Some(pin) => parse_version_id(&pin.id).map_err(|_| {
+            TauriError::with_details(
+                TauriErrorCode::ConfigParseError,
+                format!("Node '{}' is pinned to a merod version this app does not understand", node_name),
+                format!("merod-version.json names '{}'", pin.id),
+            )
+        }),
+    }
 }
 
 pub fn write_pin(home_dir: &Path, node_name: &str, pin: &NodePin) -> Result<(), TauriError> {
@@ -633,7 +642,6 @@ pub async fn ensure_release_installed(
 }
 
 fn app_data(app_handle: &tauri::AppHandle) -> Result<PathBuf, TauriError> {
-    use tauri::Manager;
     app_handle.path().app_data_dir().map_err(|e| {
         TauriError::with_details(
             TauriErrorCode::DirectoryError,
@@ -1206,7 +1214,7 @@ mod tests {
     #[test]
     fn missing_pin_falls_back_to_bundled() {
         let home = temp_home();
-        assert_eq!(read_pin(&home, "node1"), VersionId::Bundled);
+        assert_eq!(read_pin(&home, "node1").unwrap(), VersionId::Bundled);
         let _ = std::fs::remove_dir_all(&home);
     }
 
@@ -1219,7 +1227,7 @@ mod tests {
         };
         write_pin(&home, "node1", &pin).unwrap();
 
-        assert_eq!(read_pin(&home, "node1"), VersionId::Release("0.11.0-rc.15".into()));
+        assert_eq!(read_pin(&home, "node1").unwrap(), VersionId::Release("0.11.0-rc.15".into()));
         let raw = read_pin_raw(&home, "node1").unwrap();
         assert_eq!(raw.version_at_init.as_deref(), Some("merod 0.11.0-rc.15"));
         let _ = std::fs::remove_dir_all(&home);
@@ -1229,7 +1237,7 @@ mod tests {
     fn a_corrupt_pin_falls_back_to_bundled_instead_of_failing_the_start() {
         let home = temp_home();
         std::fs::write(pin_path(&home, "node1"), "{ not json").unwrap();
-        assert_eq!(read_pin(&home, "node1"), VersionId::Bundled);
+        assert_eq!(read_pin(&home, "node1").unwrap(), VersionId::Bundled);
         let _ = std::fs::remove_dir_all(&home);
     }
 

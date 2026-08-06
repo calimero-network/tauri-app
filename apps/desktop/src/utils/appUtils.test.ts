@@ -196,7 +196,7 @@ describe('openAppFrontend targeting a second node', () => {
     });
 
     const args = windowArgs();
-    expect(args.windowLabel).toBe('app-app-1-nhttp-localhost-2529');
+    expect(String(args.windowLabel)).toMatch(/^app-app-1-nhttp-localhost-2529-[a-z0-9]+$/);
     expect(args.nodeUrl).toBe('http://localhost:2529');
     expect(args.isolationKey).toBe('app-1@http://localhost:2529');
     expect(String(args.title)).toContain('2529');
@@ -241,7 +241,7 @@ describe('openAppFrontend targeting a second node', () => {
 
     const label = String(windowArgs().windowLabel);
     expect(label.length).toBeLessThanOrEqual(64);
-    expect(label.endsWith('-nhttp-localhost-2529')).toBe(true);
+    expect(label).toContain('-nhttp-localhost-2529-');
   });
 });
 
@@ -292,5 +292,28 @@ describe('cross-node window labels', () => {
   it('keeps every label inside Tauri’s 64 character limit', async () => {
     const long = await labelFor('https://a-very-long-node-hostname.example.internal:8443');
     expect(long.length).toBeLessThanOrEqual(64);
+  });
+});
+
+describe('nodeKey collisions', () => {
+  it('separates hosts that sanitise to the same string', async () => {
+    // '.' and ':' both become '-', so these two were indistinguishable.
+    const a = await (async () => {
+      invoke.mockClear();
+      await openAppFrontend('https://app.example.com/', 'E', undefined, {
+        applicationId: 'app-1', targetNodeUrl: 'http://a.b:1',
+      });
+      const c = invoke.mock.calls.find((x) => x[0] === 'create_app_window');
+      return String((c as [string, { windowLabel: string }])[1].windowLabel);
+    })();
+    const b = await (async () => {
+      invoke.mockClear();
+      await openAppFrontend('https://app.example.com/', 'E', undefined, {
+        applicationId: 'app-1', targetNodeUrl: 'http://a-b:1',
+      });
+      const c = invoke.mock.calls.find((x) => x[0] === 'create_app_window');
+      return String((c as [string, { windowLabel: string }])[1].windowLabel);
+    })();
+    expect(a).not.toBe(b);
   });
 });

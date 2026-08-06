@@ -1798,12 +1798,6 @@ async fn create_app_window(
     .center()
     .initialization_script(&proxy_script); // Inject script with configured node URL
 
-    // Record before the window exists, so the broker can never be raced by a page
-    // that loads and invokes it before the registration lands.
-    if isolation_key.is_some() {
-        webview_isolation::remember(&app_handle, &window_label);
-    }
-
     // A stable per-(app, node) bucket so the window keeps its own session across
     // opens. macOS has no per-webview data directory, hence the identifier.
     if let Some(key) = &isolation_key {
@@ -1812,36 +1806,28 @@ async fn create_app_window(
         // below macOS 14, so this cannot be a per-platform cfg, and it must not
         // depend on the caller having checked webview_isolation_supported.
         if !webview_isolation_supported() {
-            webview_isolation::forget(&app_handle, &window_label);
             return Err(TauriError::new(
                 TauriErrorCode::PlatformNotSupported,
                 "Isolated app windows need macOS 14 or newer, or Linux",
             ));
         }
-        let digest = match webview_isolation::store_id(&app_handle, key) {
-            Ok(d) => d,
-            Err(e) => {
-                webview_isolation::forget(&app_handle, &window_label);
-                return Err(e);
-            }
-        };
+        let digest = webview_isolation::store_id(&app_handle, key)?;
         #[cfg(target_os = "macos")]
         {
             builder = builder.data_store_identifier(digest);
         }
         #[cfg(target_os = "linux")]
         {
-            let dir = match app_handle.path().app_data_dir() {
-                Ok(d) => d,
-                Err(e) => {
-                    webview_isolation::forget(&app_handle, &window_label);
-                    return Err(TauriError::with_details(
+            let dir = app_handle
+                .path()
+                .app_data_dir()
+                .map_err(|e| {
+                    TauriError::with_details(
                         TauriErrorCode::DirectoryError,
                         "Failed to resolve app data dir for webview isolation",
                         e.to_string(),
-                    ));
-                }
-            }
+                    )
+                })?
                 .join("webviews")
                 .join(webview_isolation::dir_name(&digest));
             builder = builder.data_directory(dir);
@@ -1851,6 +1837,10 @@ async fn create_app_window(
             // Unreachable: webview_isolation_supported() is false here.
             let _ = digest;
         }
+
+        // Register last: setup above can fail, and no page exists until build()
+        // below, so nothing can reach the broker before this lands.
+        webview_isolation::remember(&app_handle, &window_label);
     }
 
     let window = builder.build().map_err(|e| {
@@ -2352,7 +2342,7 @@ async fn start_merod(
     // The node's pin is the only source of truth: an override here could start a
     // node on a binary that every "used by" listing still attributes elsewhere.
     let version_id = match &node_name {
-        Some(name) => merod_versions::read_pin(&home_dir_path, name),
+        Some(name) => merod_versions::read_pin(&home_dir_path, name)?,
         None => merod_versions::VersionId::Bundled,
     };
     let merod_binary = merod_versions::resolve_binary(&app_handle, &version_id).await?;

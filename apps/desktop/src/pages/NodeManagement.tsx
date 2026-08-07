@@ -76,6 +76,10 @@ function NodeManagement() {
     refreshNodeVersions(homeDir);
   }, [homeDir, availableNodes, refreshNodeVersions]);
 
+  // The override is page-local state in a shared provider; leaving the page
+  // must hand the map back to the saved settings dir.
+  useEffect(() => () => refreshNodeVersions(), [refreshNodeVersions]);
+
   useEffect(() => {
     const settings = getSettings();
     setHomeDir(settings.embeddedNodeDataDir || "~/.calimero");

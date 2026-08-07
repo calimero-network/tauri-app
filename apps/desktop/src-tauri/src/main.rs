@@ -3979,9 +3979,10 @@ async fn kill_all_merod_processes(
     merod_state: tauri::State<'_, MerodState>,
 ) -> Result<String, TauriError> {
     let tracked: Vec<u32> = merod_state
-        .lock()
-        .map(|s| s.iter().map(|p| p.pid).collect())
-        .unwrap_or_default();
+        .lock_unpoisoned()
+        .iter()
+        .map(|p| p.pid)
+        .collect();
     let pids = collect_merod_pids(&tracked);
 
     kill_pids(&pids).await;
@@ -4263,9 +4264,10 @@ fn graceful_shutdown(app_handle: &tauri::AppHandle, merod_state: &MerodState) {
     }
 
     let tracked: Vec<u32> = merod_state
-        .lock()
-        .map(|s| s.iter().map(|p| p.pid).collect())
-        .unwrap_or_default();
+        .lock_unpoisoned()
+        .iter()
+        .map(|p| p.pid)
+        .collect();
     let pids = collect_merod_pids(&tracked);
 
     if !pids.is_empty() {

@@ -33,7 +33,8 @@ export function NodeVersionsProvider({ children }: { children: ReactNode }) {
   const [nonce, setNonce] = useState(0);
 
   const refresh = useCallback((homeDir?: string) => {
-    setOverride(homeDir);
+    // An empty or blank field is "no override", not a real directory.
+    setOverride(homeDir?.trim() ? homeDir : undefined);
     setNonce((n) => n + 1);
   }, []);
 

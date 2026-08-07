@@ -78,10 +78,15 @@ function migrateRegistries(registries: string[] | undefined, rawSettings: AppSet
   // If we made changes, save them back
   const hasChanges = migrated.some((url, index) => url !== registries[index]);
   if (hasChanges && rawSettings) {
-    saveSettings({
-      ...rawSettings,
-      registries: migrated,
-    });
+    try {
+      saveSettings({
+        ...rawSettings,
+        registries: migrated,
+      });
+    } catch {
+      // A failed write must not cost the caller its settings. The memo still keys
+      // on the unchanged raw string, so a later successful write re-derives.
+    }
   }
 
   return migrated;

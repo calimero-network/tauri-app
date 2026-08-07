@@ -91,6 +91,33 @@ describe('getSettings memoisation', () => {
   });
 });
 
+describe('registry migration', () => {
+  it('keeps the parsed settings when the migration write fails', () => {
+    localStorage.setItem(
+      'calimero-desktop-settings',
+      JSON.stringify({
+        nodeUrl: 'http://localhost:2529',
+        registries: ['http://localhost:8080'],
+        onboardingCompleted: true,
+      })
+    );
+    const setItem = localStorage.setItem.bind(localStorage);
+    localStorage.setItem = () => {
+      throw new Error('QuotaExceededError');
+    };
+
+    // The migration write throws, but everything else parsed must survive it.
+    const settings = getSettings();
+    expect(settings.registries).toEqual(['https://apps.calimero.network/']);
+    expect(settings.nodeUrl).toBe('http://localhost:2529');
+    expect(settings.onboardingCompleted).toBe(true);
+
+    localStorage.setItem = setItem;
+    saveSettings({ nodeUrl: 'http://localhost:2530', onboardingCompleted: true });
+    expect(getSettings().nodeUrl).toBe('http://localhost:2530');
+  });
+});
+
 describe('clearAllAppData', () => {
   it('clears the whole silo, not a fixed list of keys', () => {
     localStorage.setItem('calimero-desktop-settings', '{}');

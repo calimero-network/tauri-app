@@ -12,7 +12,6 @@ tauri-build = { version = "2", features = [] }
 # broker code from it. Its default features pull tauri/custom-protocol.
 calimero-tauri-app = { path = ".." }
 tauri = { version = "2", features = [] }
-tauri-plugin-single-instance = "2"
 url = "2.5"
 tokio = { version = "1", features = ["time"] }
 

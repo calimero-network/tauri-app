@@ -547,7 +547,6 @@ dependencies = [
  "objc",
  "tauri",
  "tauri-build",
- "tauri-plugin-single-instance",
  "tokio",
  "url",
 ]

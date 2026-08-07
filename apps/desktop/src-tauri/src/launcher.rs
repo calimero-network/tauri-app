@@ -90,14 +90,24 @@ pub fn extract_shell(src: &Path, dest: &Path) -> Result<(), LauncherError> {
     // Gatekeeper prompts on every launch of the loose shell.
     dequarantine(dest);
 
-    // Keep the existing (Developer-ID) signature if the copy is validly signed.
-    let already_signed = std::process::Command::new("codesign")
-        .arg("--verify")
-        .arg("--strict")
+    // Keep the existing (Developer-ID) signature if the copy is validly signed -
+    // but not a linker-signed one: macOS 26 Taskgated SIGKILLs a LaunchServices-
+    // spawned process that execs a merely linker-signed binary, so those get the
+    // full ad-hoc treatment below like unsigned copies.
+    let linker_signed = std::process::Command::new("codesign")
+        .args(["-d", "-v"])
         .arg(dest)
         .output()
-        .map(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stderr).contains("linker-signed"))
         .unwrap_or(false);
+    let already_signed = !linker_signed
+        && std::process::Command::new("codesign")
+            .arg("--verify")
+            .arg("--strict")
+            .arg(dest)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
     if already_signed {
         return Ok(());
     }

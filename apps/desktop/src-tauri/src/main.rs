@@ -1371,8 +1371,17 @@ fn ensure_app_launcher_icon(
     app_id: &str,
 ) -> Option<std::path::PathBuf> {
     // A generated .icns is reused as-is: regenerating it costs a network fetch and
-    // ~11 `sips` forks. Delete the cache file to pick up a changed app icon.
-    let cached = app_icon_cache_path(app_id);
+    // ~11 `sips` forks. Manifest icons are content-keyed so a changed icon
+    // regenerates itself; fetched favicons (content unknown until fetched) key by
+    // app id and refresh via Remove Launchers, which clears this cache.
+    let cache_key = match bundled_icon {
+        Some(data) => {
+            use sha2::{Digest, Sha256};
+            format!("{app_id}-{}", &format!("{:x}", Sha256::digest(data.as_bytes()))[..12])
+        }
+        None => app_id.to_string(),
+    };
+    let cached = app_icon_cache_path(&cache_key);
     if cached.exists() {
         return Some(cached);
     }

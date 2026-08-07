@@ -2933,8 +2933,6 @@ fn is_process_running(pid: u32) -> bool {
             Ok(pid) if pid > 0 => pid,
             _ => return false,
         };
-        // Signal 0 only probes for existence. This runs per tracked node on
-        // every status poll, under the state lock - too hot to fork `kill -0`.
         // SAFETY: plain FFI call, no pointers; the guard above keeps pid a single
         // positive process and signal 0 delivers nothing.
         unsafe { libc::kill(pid, 0) == 0 }
@@ -3740,7 +3738,7 @@ async fn download_and_replace_merod(
     // Verification passed — safe to discard backup
     let _ = tokio::fs::remove_file(&bak_path).await;
 
-    *bundled_merod_version() = Some(new_version.clone());
+    *BUNDLED_MEROD_VERSION.lock_unpoisoned() = Some(new_version.clone());
     info!("[Updater] merod updated to {}", new_version);
     Ok(serde_json::json!({
         "replaced": true,
@@ -3754,15 +3752,11 @@ async fn download_and_replace_merod(
 /// this on mount, and only `download_and_replace_merod` can change the answer.
 static BUNDLED_MEROD_VERSION: Mutex<Option<String>> = Mutex::new(None);
 
-fn bundled_merod_version() -> std::sync::MutexGuard<'static, Option<String>> {
-    BUNDLED_MEROD_VERSION
-        .lock_unpoisoned()
-}
 
 /// Return the version string reported by the bundled merod binary (`merod --version`).
 #[tauri::command]
 async fn get_merod_binary_version(app_handle: tauri::AppHandle) -> Result<String, TauriError> {
-    if let Some(version) = bundled_merod_version().clone() {
+    if let Some(version) = BUNDLED_MEROD_VERSION.lock_unpoisoned().clone() {
         return Ok(version);
     }
     let merod_binary = get_bundled_merod_path(&app_handle)
@@ -3771,7 +3765,7 @@ async fn get_merod_binary_version(app_handle: tauri::AppHandle) -> Result<String
     let Some(version) = get_merod_version_at(&merod_binary).await else {
         return Ok("unknown".to_string());
     };
-    *bundled_merod_version() = Some(version.clone());
+    *BUNDLED_MEROD_VERSION.lock_unpoisoned() = Some(version.clone());
     Ok(version)
 }
 

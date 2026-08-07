@@ -95,8 +95,6 @@ function NodeManagement() {
 
 
   useVisiblePoll(() => detectRunning(), 30000);
-  // The backend emits on every start/stop/reap it performs; the poll is only
-  // there to discover nodes started outside the app.
   useMerodStatusChanged(() => detectRunning());
 
   useEffect(() => {

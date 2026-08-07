@@ -25,13 +25,7 @@ const EMPTY: NodeMaps = { byNode: {}, measured: {}, drifted: new Set() };
 
 const NodeVersionsContext = createContext<NodeVersions | undefined>(undefined);
 
-/**
- * Which merod build each node runs, read once for the whole app: the header,
- * the Applications table and the Nodes page each used to invoke the same two
- * commands for identical data. Not gated on developer mode - it is two invokes
- * per launch either way, and gating left every label stale until a reload when
- * the toggle flipped.
- */
+/** One read of the merod version map for the whole app. */
 export function NodeVersionsProvider({ children }: { children: ReactNode }) {
   const [maps, setMaps] = useState<NodeMaps>(EMPTY);
   const [bundled, setBundled] = useState("");

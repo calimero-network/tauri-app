@@ -546,11 +546,8 @@ function App() {
     return () => { unlisten.then((off) => off()).catch(() => {}); };
   }, []);
 
-  // Health-check interval - lightweight, just updates the connected indicator.
-  // Skip on login/settings/onboarding screens. Gated on clientReady: the unconfigured
-  // singleton falls back to hardcoded localhost:2528 and 401s a node on any other port.
-  // Deliberately NOT visibility-gated: the tray dot is the only UI while the window
-  // is hidden, and it must keep tracking node liveness.
+  // Gated on clientReady - the unconfigured singleton 401s on non-default ports.
+  // Not visibility-gated: the tray dot is the only UI while the window is hidden.
   useEffect(() => {
     if (!clientReady || showLogin || showSettings || showOnboarding) return;
     checkConnection();

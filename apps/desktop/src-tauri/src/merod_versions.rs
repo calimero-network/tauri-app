@@ -258,16 +258,19 @@ pub struct ReleaseListing {
 /// Re-stamps the cache so a failure backs off for the TTL too - otherwise every
 /// later call refires the request, retrying hardest while GitHub rate-limits.
 fn stale_or_error(error: TauriError) -> Result<ReleaseListing, TauriError> {
-    let cached = RELEASE_CACHE.lock().ok().and_then(|mut g| {
-        let (fetched_at, listing) = g.as_mut()?;
-        if listing.releases.is_empty() {
-            return None;
-        }
-        listing.stale = true;
-        *fetched_at = Instant::now();
-        Some(listing.clone())
-    });
-    cached.ok_or(error)
+    RELEASE_CACHE
+        .lock()
+        .ok()
+        .and_then(|mut g| {
+            let (fetched_at, listing) = g.as_mut()?;
+            if listing.releases.is_empty() {
+                return None;
+            }
+            listing.stale = true;
+            *fetched_at = Instant::now();
+            Some(listing.clone())
+        })
+        .ok_or(error)
 }
 
 #[tauri::command]

@@ -75,8 +75,6 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
       .catch(() => setRunningNodes([]));
   }, []);
   useVisiblePoll(refreshRunning, 30000, developerMode);
-  // The backend emits on every start/stop/reap it performs; the poll is only
-  // there to discover nodes started outside the app.
   useMerodStatusChanged(refreshRunning, developerMode);
 
   useEffect(() => {

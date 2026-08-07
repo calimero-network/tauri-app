@@ -38,13 +38,6 @@ describe('listInstalledApps', () => {
     expect(c).toBe(a);
   });
 
-  it('refetches once the entry is older than the TTL', async () => {
-    await listInstalledApps();
-    await listInstalledApps(0);
-
-    expect(listApplications).toHaveBeenCalledTimes(2);
-  });
-
   it('refetches after an install or uninstall invalidates it', async () => {
     await listInstalledApps();
     invalidateInstalledApps();

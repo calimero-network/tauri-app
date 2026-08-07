@@ -259,10 +259,9 @@ pub struct ReleaseListing {
 /// later call refires the request, retrying hardest while GitHub rate-limits.
 fn stale_or_error(error: TauriError) -> Result<ReleaseListing, TauriError> {
     RELEASE_CACHE
-        .lock()
-        .ok()
-        .and_then(|mut g| {
-            let (fetched_at, listing) = g.as_mut()?;
+        .lock_unpoisoned()
+        .as_mut()
+        .and_then(|(fetched_at, listing)| {
             if listing.releases.is_empty() {
                 return None;
             }

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef, lazy, Suspense } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef, lazy } from "react";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { createClientAsync, apiClient } from "./lib/mero-client";
 import { MeroContext, type MeroContextValue } from "@calimero-network/mero-react";
@@ -503,7 +503,6 @@ function App() {
 
   if (showOnboarding) {
     return (
-      <Suspense fallback={null}>
       <Onboarding
         onComplete={async () => {
           clearOnboardingProgress();
@@ -535,7 +534,6 @@ function App() {
           setShowSettings(true);
         }}
       />
-      </Suspense>
     );
   }
 
@@ -582,7 +580,6 @@ function App() {
   if (showSettings) {
     return (
       <ErrorBoundary componentName="Settings" onReset={() => setShowSettings(true)}>
-        <Suspense fallback={null}>
         <Settings
           onBack={async () => {
           // Reinitialize client BEFORE hiding Settings so the checkConnection useEffect
@@ -646,7 +643,6 @@ function App() {
           }
         }}
         />
-        </Suspense>
       </ErrorBoundary>
     );
   }
@@ -679,9 +675,7 @@ function App() {
               />
             </header>
             <main className="main">
-              <Suspense fallback={null}>
                 <Marketplace clientReady={clientReady} />
-              </Suspense>
             </main>
           </div>
         </div>
@@ -717,7 +711,6 @@ function App() {
               />
             </header>
             <main className="main">
-        <Suspense fallback={null}>
         <InstalledApps
           clientReady={clientReady}
           onAuthRequired={() => setShowLogin(true)}
@@ -741,7 +734,6 @@ function App() {
             setCurrentPage('confirm');
           }}
         />
-        </Suspense>
             </main>
           </div>
         </div>
@@ -783,9 +775,7 @@ function App() {
               />
             </header>
             <main className="main">
-              <Suspense fallback={null}>
                 <NodeManagement />
-              </Suspense>
             </main>
           </div>
         </div>
@@ -822,9 +812,7 @@ function App() {
             </header>
             <main className="main">
               <MeroContext.Provider value={meroContextValue}>
-                <Suspense fallback={null}>
                   <Namespaces />
-                </Suspense>
               </MeroContext.Provider>
             </main>
           </div>
@@ -838,7 +826,6 @@ function App() {
     return (
       <div className="app">
         <ToastContainer />
-        <Suspense fallback={null}>
         <ConfirmAction
           title={confirmAction.title}
           message={confirmAction.message}
@@ -856,7 +843,6 @@ function App() {
           }}
           breadcrumbs={confirmAction.breadcrumbs}
         />
-        </Suspense>
       </div>
     );
   }

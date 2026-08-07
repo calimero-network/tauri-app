@@ -232,17 +232,6 @@
   text-decoration: underline;
 }
 
-.apps-grid {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 20px;
-  max-width: 1400px;
-  margin: 0 auto;
-  width: 100%;
-  box-sizing: border-box;
-  animation: fadeUp 0.5s ease-out 0.2s both;
-}
-
 .app-card {
   background: var(--gradient-surface), var(--surface-glass);
   border: 1px solid var(--border-color);
@@ -507,18 +496,6 @@
   animation: spin 1s linear infinite;
 }
 
-@media (max-width: 1400px) {
-  .apps-grid {
-    grid-template-columns: repeat(3, minmax(280px, 1fr)) !important;
-  }
-}
-
-@media (max-width: 1000px) {
-  .apps-grid {
-    grid-template-columns: repeat(2, minmax(280px, 1fr)) !important;
-  }
-}
-
 @media (max-width: 768px) {
   .marketplace-controls {
     gap: 12px;
@@ -531,11 +508,6 @@
 
   .filter-pills {
     flex-wrap: wrap;
-  }
-
-  .apps-grid {
-    grid-template-columns: 1fr !important;
-    max-width: 100%;
   }
 }
 

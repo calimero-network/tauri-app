@@ -710,8 +710,7 @@
   animation: fadeUp 0.5s ease-out 0.25s both;
 }
 
-/* Home renders this grid too; the Marketplace.css copy only loads with that
-   lazy page, so the rule must live in an eagerly-loaded sheet. */
+/* Owned here: home renders this grid too, and page CSS loads lazily. */
 .apps-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
@@ -725,19 +724,19 @@
 
 @media (max-width: 1400px) {
   .apps-grid {
-    grid-template-columns: repeat(3, minmax(280px, 1fr)) !important;
+    grid-template-columns: repeat(3, minmax(280px, 1fr));
   }
 }
 
 @media (max-width: 1000px) {
   .apps-grid {
-    grid-template-columns: repeat(2, minmax(280px, 1fr)) !important;
+    grid-template-columns: repeat(2, minmax(280px, 1fr));
   }
 }
 
 @media (max-width: 768px) {
   .apps-grid {
-    grid-template-columns: 1fr !important;
+    grid-template-columns: 1fr;
     max-width: 100%;
   }
 }

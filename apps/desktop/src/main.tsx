@@ -1,4 +1,4 @@
-import React from "react";
+import React, { Suspense } from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
 import { ThemeProvider } from "./contexts/ThemeContext";
@@ -20,7 +20,9 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
     <ThemeProvider>
       <ToastProvider>
         <ErrorBoundary componentName="Calimero Desktop">
-          <App />
+          <Suspense fallback={null}>
+            <App />
+          </Suspense>
         </ErrorBoundary>
       </ToastProvider>
     </ThemeProvider>

@@ -1,6 +1,5 @@
-//! macOS-only: per-app dock identity with NO per-app signing.
-//! Per-app `.app` = an unsigned bash trampoline that execs a shared, loose,
-//! ad-hoc-signed shell binary. Wired into the app in Plan 3.
+//! macOS-only per-app launcher bundles: an ad-hoc-signed `.app` whose Mach-O
+//! trampoline execs the shared, loose shell binary.
 #![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
@@ -48,13 +47,30 @@ pub fn shell_install_path() -> PathBuf {
 }
 
 /// True when `dest` already holds `src`'s build, so the copy + dequarantine +
-/// codesign round-trip can be skipped. The copy stamps `dest` with "now", hence
-/// `src <= dest` rather than equality. Errors read as "not current" (copy wins).
+/// codesign round-trip can be skipped. Compared via the stamp recorded at
+/// extraction: re-signing changes dest's size, so dest's own metadata cannot
+/// testify to which build it came from. Errors read as "not current".
 fn shell_is_current(src: &Path, dest: &Path) -> bool {
-    let (Ok(s), Ok(d)) = (std::fs::metadata(src), std::fs::metadata(dest)) else {
+    let Ok(s) = std::fs::metadata(src) else {
         return false;
     };
-    s.len() == d.len() && matches!((s.modified(), d.modified()), (Ok(sm), Ok(dm)) if sm <= dm)
+    dest.exists()
+        && std::fs::read_to_string(stamp_path(dest)).is_ok_and(|rec| rec == src_stamp(&s))
+}
+
+/// Sidecar recording which source build `dest` was extracted from.
+fn stamp_path(dest: &Path) -> PathBuf {
+    dest.with_extension("src-stamp")
+}
+
+fn src_stamp(src_meta: &std::fs::Metadata) -> String {
+    let mtime = src_meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("{}:{}", src_meta.len(), mtime)
 }
 
 /// Copy the shared shell binary to a loose `dest`, PRESERVING its signature.
@@ -81,6 +97,8 @@ pub fn extract_shell(src: &Path, dest: &Path) -> Result<(), LauncherError> {
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent)?;
     }
+    // A failed extraction must not leave a stale claim of currency behind.
+    let _ = std::fs::remove_file(stamp_path(dest));
     std::fs::copy(src, dest)?;
     {
         use std::os::unix::fs::PermissionsExt;
@@ -90,15 +108,25 @@ pub fn extract_shell(src: &Path, dest: &Path) -> Result<(), LauncherError> {
     // Gatekeeper prompts on every launch of the loose shell.
     dequarantine(dest);
 
-    // Keep the existing (Developer-ID) signature if the copy is validly signed.
-    let already_signed = std::process::Command::new("codesign")
-        .arg("--verify")
-        .arg("--strict")
+    // Keep the existing (Developer-ID) signature if the copy is validly signed -
+    // but not a linker-signed one: macOS 26 Taskgated SIGKILLs a LaunchServices-
+    // spawned process that execs a merely linker-signed binary.
+    let linker_signed = std::process::Command::new("codesign")
+        .args(["-d", "-v"])
         .arg(dest)
         .output()
-        .map(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stderr).contains("linker-signed"))
         .unwrap_or(false);
+    let already_signed = !linker_signed
+        && std::process::Command::new("codesign")
+            .arg("--verify")
+            .arg("--strict")
+            .arg(dest)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
     if already_signed {
+        record_stamp(src, dest);
         return Ok(());
     }
 
@@ -115,7 +143,14 @@ pub fn extract_shell(src: &Path, dest: &Path) -> Result<(), LauncherError> {
             String::from_utf8_lossy(&out.stderr).into_owned(),
         ));
     }
+    record_stamp(src, dest);
     Ok(())
+}
+
+fn record_stamp(src: &Path, dest: &Path) {
+    if let Ok(s) = std::fs::metadata(src) {
+        let _ = std::fs::write(stamp_path(dest), src_stamp(&s));
+    }
 }
 
 /// Remove the `com.apple.quarantine` flag from `path`, if present.
@@ -185,26 +220,11 @@ fn write_info_plist(
     Ok(path)
 }
 
-fn write_trampoline(macos: &Path, shell_path: &Path) -> Result<PathBuf, LauncherError> {
-    // $0 is this script inside <bundle>/Contents/MacOS; resolve its sibling Resources/app.json.
-    //
-    // Run the shell under the Mac's NATIVE architecture. This launcher's bundle
-    // executable is this shell SCRIPT (there's no Mach-O in Contents/MacOS), so
-    // LaunchServices can't read a build-version to tell the app supports arm64 —
-    // it defaults the whole process to x86_64/Rosetta on Apple Silicon. The loose
-    // hardened-runtime shell then fails code-signing under translation and is
-    // SIGKILLed ("Taskgated Invalid Signature" / Rosetta AOT supplement failure).
-    // `arch -<native>` forces arm64 on Apple Silicon (no Rosetta) and x86_64 on
-    // Intel — both slices exist in the universal shell.
-    let script = format!(
-        "#!/bin/bash\n\
-DIR=\"$(cd \"$(dirname \"$0\")/../Resources\" && pwd)\"\n\
-ARCH=\"$(/usr/bin/uname -m)\"\n\
-exec /usr/bin/arch -\"$ARCH\" \"{shell}\" --app-config \"$DIR/app.json\"\n",
-        shell = shell_path.display(),
-    );
+fn write_trampoline(macos: &Path, trampoline_src: &Path) -> Result<PathBuf, LauncherError> {
+    // macOS 26 LaunchServices silently refuses to spawn a bundle whose
+    // executable is a script, so this must be a real Mach-O.
     let path = macos.join("launch");
-    std::fs::write(&path, script)?;
+    std::fs::copy(trampoline_src, &path)?;
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))?;
@@ -212,24 +232,41 @@ exec /usr/bin/arch -\"$ARCH\" \"{shell}\" --app-config \"$DIR/app.json\"\n",
     Ok(path)
 }
 
-/// Rewrite an existing launcher's trampoline with the CURRENT format (e.g. the
-/// native-arch exec). A cheap migration for launcher `.app`s generated by an
-/// older desktop version — no icon/app-config churn, just the launch script.
-/// `bundle` is the `.app`; no-op if it has no trampoline. Idempotent.
-pub fn refresh_trampoline(bundle: &Path, shell_path: &Path) -> Result<(), LauncherError> {
+/// Ad-hoc sign the assembled bundle; macOS 26 LaunchServices refuses unsigned
+/// bundles. Best-effort: a signing failure warns rather than failing creation.
+fn sign_bundle(bundle: &Path) {
+    let out = std::process::Command::new("codesign")
+        .args(["--force", "-s", "-"])
+        .arg(bundle)
+        .output();
+    match out {
+        Ok(o) if !o.status.success() => log::warn!(
+            "[Launcher] codesign failed for {}: {}",
+            bundle.display(),
+            String::from_utf8_lossy(&o.stderr)
+        ),
+        Err(e) => log::warn!("[Launcher] codesign spawn failed: {e}"),
+        _ => {}
+    }
+}
+
+/// Migrate an older launcher's executable in place. Re-signs: replacing the
+/// Mach-O invalidates the bundle signature. Idempotent.
+pub fn refresh_trampoline(bundle: &Path, trampoline_src: &Path) -> Result<(), LauncherError> {
     let macos = bundle.join("Contents/MacOS");
     if macos.join("launch").exists() {
-        write_trampoline(&macos, shell_path)?;
+        write_trampoline(&macos, trampoline_src)?;
+        sign_bundle(bundle);
     }
     Ok(())
 }
 
-/// Build `<dest_dir>/<name>.app`: an UNSIGNED bash-trampoline launcher that execs
-/// `shell_path` with `--app-config <this-bundle>/Contents/Resources/app.json`.
-/// Never signs the bundle — there is no Mach-O in it to sign.
+/// Build `<dest_dir>/<name>.app`: a launcher whose Mach-O trampoline execs
+/// the installed shell with `--app-config <this-bundle>/Contents/Resources/app.json`.
+/// Ad-hoc signed: macOS 26 LaunchServices refuses unsigned bundles.
 pub fn generate_launcher(
     dest_dir: &Path,
-    shell_path: &Path,
+    trampoline_src: &Path,
     spec: &AppSpec,
 ) -> Result<PathBuf, LauncherError> {
     validate_app_id(&spec.id)?;
@@ -252,7 +289,8 @@ pub fn generate_launcher(
     };
     write_app_json(&resources, spec)?;
     write_info_plist(&contents, spec, has_icon)?;
-    write_trampoline(&macos, shell_path)?;
+    write_trampoline(&macos, trampoline_src)?;
+    sign_bundle(&app_dir);
     Ok(app_dir)
 }
 
@@ -460,16 +498,14 @@ mod tests {
         assert!(t.contains("network.calimero.app.mero-drive"));
         assert!(!t.contains("CFBundleIconFile"));
 
-        let l = write_trampoline(
-            &macos,
-            Path::new("/Users/x/Library/Application Support/network.calimero.desktop/shell/CalimeroShell"),
-        )
-        .unwrap();
-        let s = std::fs::read_to_string(&l).unwrap();
-        assert!(s.starts_with("#!/bin/bash"));
-        assert!(s.contains("shell/CalimeroShell"));
-        assert!(s.contains("--app-config"));
-        assert!(s.contains("Resources") && s.contains("app.json"));
+        let tramp_src = dir.join("launcher-trampoline");
+        std::fs::write(&tramp_src, b"\xcf\xfa\xed\xfefake mach-o").unwrap();
+        let l = write_trampoline(&macos, &tramp_src).unwrap();
+        assert_eq!(
+            std::fs::read(&l).unwrap(),
+            std::fs::read(&tramp_src).unwrap(),
+            "launch must be a byte copy of the bundled trampoline"
+        );
         assert_eq!(
             std::fs::metadata(&l).unwrap().permissions().mode() & 0o777,
             0o755
@@ -478,34 +514,36 @@ mod tests {
     }
 
     #[test]
-    fn generated_launcher_is_unsigned_and_wired() {
+    fn generated_launcher_is_wired() {
         let dir = scratch("gen");
-        let shell = Path::new("/tmp/does-not-matter/shell/CalimeroShell");
-        let app = generate_launcher(&dir, shell, &sample()).unwrap();
+        // A real Mach-O (this test binary) so the ad-hoc bundle signing succeeds.
+        let tramp = std::env::current_exe().unwrap();
+        let app = generate_launcher(&dir, &tramp, &sample()).unwrap();
 
         assert!(app.ends_with("MeroDrive.app") && app.is_dir());
         let launch = app.join("Contents/MacOS/launch");
         assert!(launch.is_file());
-        let s = std::fs::read_to_string(&launch).unwrap();
-        assert!(s.contains("shell/CalimeroShell") && s.contains("--app-config"));
-        // Must run the shell under the Mac's NATIVE arch, or a script-executable
-        // launcher defaults to x86_64/Rosetta and the loose hardened-runtime
-        // shell is SIGKILLed for an invalid signature under translation.
+        // macOS 26 LaunchServices refuses script executables, so launch must be
+        // a Mach-O (byte-identity does not survive the ad-hoc re-sign).
+        let magic = &std::fs::read(&launch).unwrap()[..4];
         assert!(
-            s.contains("arch -") && s.contains("uname -m"),
-            "trampoline must exec the shell under the native arch: {s}"
+            magic == b"\xcf\xfa\xed\xfe" || magic == b"\xca\xfe\xba\xbe",
+            "launch must be a Mach-O, got {magic:02x?}"
         );
         assert!(app.join("Contents/Resources/app.json").is_file());
         assert!(app.join("Contents/Info.plist").is_file());
 
-        // The whole point: the bundle is NOT signed.
+        // macOS 26 LaunchServices refuses unsigned bundles: must verify signed.
         let out = std::process::Command::new("codesign")
             .arg("--verify")
             .arg(&app)
             .output()
             .unwrap();
-        assert!(!out.status.success(), "per-app launcher must be UNSIGNED");
-        assert!(String::from_utf8_lossy(&out.stderr).contains("not signed"));
+        assert!(
+            out.status.success(),
+            "launcher bundle must be ad-hoc signed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

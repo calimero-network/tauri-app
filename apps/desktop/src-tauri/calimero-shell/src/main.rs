@@ -8,7 +8,8 @@
 #[cfg(target_os = "macos")]
 mod shell {
     use calimero_tauri_app::{
-        ensure_host_running, host_socket_path, proxy, shell_config, token_broker_ipc, webview,
+        ensure_host_running, host_socket_path, proxy, shell_config, shell_instance_socket_path,
+        token_broker_ipc, webview,
     };
     use tauri::Manager;
 
@@ -204,19 +205,35 @@ mod shell {
         #[cfg(target_os = "macos")]
         bundle_identity::install(&format!("network.calimero.app.{}", cfg.id));
 
+        // Per-app single instance keyed by app id, so different apps coexist.
+        // The connection itself is the "show yourself" signal; a stale socket
+        // from a dead instance refuses the probe and is replaced.
+        let instance_sock = shell_instance_socket_path(&cfg.id);
+        if std::os::unix::net::UnixStream::connect(&instance_sock).is_ok() {
+            return; // this app is already open - it now has focus
+        }
+        let _ = std::fs::remove_file(&instance_sock);
+        let listener = std::os::unix::net::UnixListener::bind(&instance_sock)
+            .expect("calimero-shell could not bind its instance socket");
+
         let cfg_for_setup = cfg.clone();
         tauri::Builder::default()
-            .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-                if let Some(w) = app.get_webview_window("app") {
-                    let _ = w.show();
-                    let _ = w.set_focus();
-                }
-            }))
             .manage(cfg)
             .manage(proxy::SseCancelRegistry::new(std::sync::Mutex::new(
                 std::collections::HashMap::new(),
             )))
             .setup(move |app| {
+                // A relaunch of this app connects here; show the existing window.
+                let handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    for _conn in listener.incoming().flatten() {
+                        if let Some(w) = handle.get_webview_window("app") {
+                            let _ = w.show();
+                            let _ = w.set_focus();
+                        }
+                    }
+                });
+
                 ensure_host_running(&host_socket_path());
                 // Inject SSO (node_url + brokered token) like the desktop's "Open".
                 let url = build_app_url(&cfg_for_setup);

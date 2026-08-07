@@ -1142,12 +1142,12 @@ fn new_cap(app_id: &str) -> String {
     format!("cap-{app_id}-{nanos:x}-{}", std::process::id())
 }
 
-/// The `calimero-shell` binary bundled inside this app's Resources.
+/// A binary bundled inside this app's Resources, if present.
 #[cfg(target_os = "macos")]
-fn bundled_shell_path(app_handle: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+fn bundled_resource(app_handle: &tauri::AppHandle, rel: &str) -> Option<std::path::PathBuf> {
     app_handle
         .path()
-        .resolve("shell/calimero-shell", tauri::path::BaseDirectory::Resource)
+        .resolve(rel, tauri::path::BaseDirectory::Resource)
         .ok()
         .filter(|p| p.exists())
 }
@@ -1461,7 +1461,7 @@ fn ensure_app_launcher(
 
     // ensure the shared shell is extracted to its loose path (idempotent).
     let shell_dest = launcher::shell_install_path();
-    let src = bundled_shell_path(app_handle).ok_or_else(|| {
+    let src = bundled_resource(app_handle, "shell/calimero-shell").ok_or_else(|| {
         TauriError::new(TauriErrorCode::ShortcutCreationFailed, "bundled shell missing")
     })?;
     launcher::extract_shell(&src, &shell_dest)
@@ -1495,7 +1495,13 @@ fn ensure_app_launcher(
         cap: cap.clone(),
         icon,
     };
-    let bundle = launcher::generate_launcher(dest_dir, &shell_dest, &spec)
+    let trampoline = bundled_resource(app_handle, "shell/launcher-trampoline").ok_or_else(|| {
+        TauriError::new(
+            TauriErrorCode::ShortcutCreationFailed,
+            "bundled launcher trampoline missing",
+        )
+    })?;
+    let bundle = launcher::generate_launcher(dest_dir, &trampoline, &spec)
         .map_err(|e| TauriError::new(TauriErrorCode::ShortcutCreationFailed, e.to_string()))?;
 
     app_registry::persist_app(
@@ -4509,9 +4515,9 @@ fn main() {
         .setup(|app| {
             // Migrate per-app launchers made by an OLDER desktop version: re-extract
             // the shared shell (dequarantine + preserve signature) and rewrite each
-            // launcher's trampoline to the current format. An old x86_64/Rosetta
-            // trampoline SIGKILLs on Apple Silicon, and a desktop update alone does
-            // NOT refresh a launcher until its app is re-opened - so do it here.
+            // launcher's trampoline to the current format - old script-based
+            // launchers are refused outright by macOS 26, and a desktop update
+            // alone does NOT refresh a launcher until its app is re-opened.
             // Off the main thread: setup() blocks the run loop that serves the
             // webview's assets, and this touches disk on every launch.
             #[cfg(target_os = "macos")]
@@ -4519,12 +4525,15 @@ fn main() {
                 let handle = app.handle().clone();
                 tauri::async_runtime::spawn_blocking(move || {
                     let shell_dest = launcher::shell_install_path();
-                    if let Some(src) = bundled_shell_path(&handle) {
+                    if let (Some(src), Some(trampoline)) = (
+                        bundled_resource(&handle, "shell/calimero-shell"),
+                        bundled_resource(&handle, "shell/launcher-trampoline"),
+                    ) {
                         let _ = launcher::extract_shell(&src, &shell_dest);
                         for a in app_registry::installed_apps(&caps_store_path()) {
                             let bundle = std::path::PathBuf::from(&a.bundle_path);
                             if bundle.exists() {
-                                if let Err(e) = launcher::refresh_trampoline(&bundle, &shell_dest) {
+                                if let Err(e) = launcher::refresh_trampoline(&bundle, &trampoline) {
                                     warn!(
                                         "[Launcher] refresh trampoline failed for {}: {}",
                                         a.id, e

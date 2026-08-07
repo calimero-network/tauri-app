@@ -19,6 +19,11 @@ fn main() {
         std::fs::create_dir_all("shell").ok();
         std::fs::write(shell, "").ok();
     }
+    let trampoline = std::path::Path::new("shell/launcher-trampoline");
+    if !trampoline.exists() {
+        std::fs::create_dir_all("shell").ok();
+        std::fs::write(trampoline, "").ok();
+    }
 
     // Embed merod target version at compile time so the binary knows what to download at runtime.
     let config_path = std::path::Path::new("../../../merod-config.json");

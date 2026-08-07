@@ -44,6 +44,8 @@ target/
 # ACL schemas are build artifacts.
 **/src-tauri/shell/calimero-shell
 **/src-tauri/shell/calimero-shell.exe
+**/src-tauri/shell/launcher-trampoline
+**/src-tauri/shell/launcher-trampoline.exe
 **/src-tauri/calimero-shell/dist
 **/src-tauri/calimero-shell/gen
 # CI-materialized from the APPLE_PROVISIONING_PROFILE secret at build time — never commit.

@@ -16,7 +16,7 @@ pub(crate) trait LockUnpoisoned<T> {
 }
 impl<T> LockUnpoisoned<T> for std::sync::Mutex<T> {
     fn lock_unpoisoned(&self) -> std::sync::MutexGuard<'_, T> {
-        self.lock_unpoisoned()
+        self.lock().unwrap_or_else(|p| p.into_inner())
     }
 }
 // Brings `.encode()` / `.decode()` onto the base64 engine used by the HTTP proxy.
@@ -4781,6 +4781,20 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
+    use super::LockUnpoisoned;
+
+    #[test]
+    fn lock_unpoisoned_locks_and_recovers() {
+        let m = std::sync::Mutex::new(1);
+        *m.lock_unpoisoned() = 2;
+        // Poison it, then confirm recovery instead of panic.
+        let _ = std::panic::catch_unwind(|| {
+            let _g = m.lock().unwrap();
+            panic!("poison");
+        });
+        assert_eq!(*m.lock_unpoisoned(), 2);
+    }
+
     use super::{
         is_textual_content_type, launcher_bundle_is_removable, merod_target_triple,
         parse_app_deep_link, parse_node_ports, replace_multiaddr_port, score_merod_asset,

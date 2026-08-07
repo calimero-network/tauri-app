@@ -143,7 +143,11 @@ export function getSettings(): AppSettings {
   const stored = readStored();
   if (cachedSettings && stored === cachedStored) return cachedSettings;
 
-  const settings = Object.freeze(buildSettings(parseStored(stored)));
+  const built = buildSettings(parseStored(stored));
+  // Freeze one level down too: the shared registries array is the mutation
+  // callers would otherwise reach for.
+  Object.freeze(built.registries);
+  const settings = Object.freeze(built);
   // Re-read: the registry migration writes back while we build.
   cachedStored = readStored();
   cachedSettings = settings;

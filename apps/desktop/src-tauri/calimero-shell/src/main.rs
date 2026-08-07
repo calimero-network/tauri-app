@@ -205,26 +205,16 @@ mod shell {
         #[cfg(target_os = "macos")]
         bundle_identity::install(&format!("network.calimero.app.{}", cfg.id));
 
-        // Per-app single instance. The plugin keyed on the binary's identifier,
-        // which every app's shell shares - so any second launcher, even for a
-        // DIFFERENT app, forwarded to the first and exited. Bind a socket named
-        // by app id instead: same app relaunched -> show the running window and
-        // exit; different apps -> different sockets, they coexist.
+        // Per-app single instance keyed by app id, so different apps coexist.
+        // The connection itself is the "show yourself" signal; a stale socket
+        // from a dead instance refuses the probe and is replaced.
         let instance_sock = shell_instance_socket_path(&cfg.id);
-        let listener = match std::os::unix::net::UnixListener::bind(&instance_sock) {
-            Ok(l) => l,
-            Err(_) => {
-                use std::io::Write;
-                if let Ok(mut peer) = std::os::unix::net::UnixStream::connect(&instance_sock) {
-                    let _ = peer.write_all(b"show");
-                    return; // this app is already open - it now has focus
-                }
-                // Stale socket from a dead instance: replace it.
-                let _ = std::fs::remove_file(&instance_sock);
-                std::os::unix::net::UnixListener::bind(&instance_sock)
-                    .expect("calimero-shell could not bind its instance socket")
-            }
-        };
+        if std::os::unix::net::UnixStream::connect(&instance_sock).is_ok() {
+            return; // this app is already open - it now has focus
+        }
+        let _ = std::fs::remove_file(&instance_sock);
+        let listener = std::os::unix::net::UnixListener::bind(&instance_sock)
+            .expect("calimero-shell could not bind its instance socket");
 
         let cfg_for_setup = cfg.clone();
         tauri::Builder::default()
@@ -236,11 +226,7 @@ mod shell {
                 // A relaunch of this app connects here; show the existing window.
                 let handle = app.handle().clone();
                 std::thread::spawn(move || {
-                    use std::io::Read;
-                    for conn in listener.incoming() {
-                        let Ok(mut conn) = conn else { continue };
-                        let mut buf = [0u8; 8];
-                        let _ = conn.read(&mut buf);
+                    for _conn in listener.incoming().flatten() {
                         if let Some(w) = handle.get_webview_window("app") {
                             let _ = w.show();
                             let _ = w.set_focus();

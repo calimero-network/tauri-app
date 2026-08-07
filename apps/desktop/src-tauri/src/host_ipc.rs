@@ -16,14 +16,11 @@ pub fn host_socket_path() -> PathBuf {
     base.join("host.sock")
 }
 
-/// Per-app single-instance socket for shell processes. One socket per app id, so
-/// a relaunch of the SAME app forwards to the running instance while different
-/// apps coexist - a process-global lock here is what made every second launcher
-/// exit silently. Ids are hashed short: raw 44-char ids overflow SUN_LEN (~104).
+/// Per-app single-instance socket, one per app id. Ids are hashed short: a raw
+/// 44-char id overflows sockaddr_un's ~104-byte sun_path.
 pub fn shell_instance_socket_path(app_id: &str) -> PathBuf {
     use sha2::{Digest, Sha256};
-    let digest = Sha256::digest(app_id.as_bytes());
-    let short: String = digest[..6].iter().map(|b| format!("{b:02x}")).collect();
+    let short = &format!("{:x}", Sha256::digest(app_id.as_bytes()))[..12];
     host_socket_path().with_file_name(format!("shell-{short}.sock"))
 }
 

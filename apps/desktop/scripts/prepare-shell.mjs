@@ -65,65 +65,34 @@ mkdirSync(shellDir, { recursive: true });
 if (!existsSync(dest)) writeFileSync(dest, "");
 if (!existsSync(trampolineDest)) writeFileSync(trampolineDest, "");
 
-// 2) Real release build, then stage the optimized binary over the placeholder.
-//    `universal-apple-darwin` is not a real rustc target — build both arches
-//    and `lipo` them, matching what Tauri does for the main binary.
-let built;
-if (target === "universal-apple-darwin") {
-  const arches = ["aarch64-apple-darwin", "x86_64-apple-darwin"];
-  const slices = [];
-  for (const arch of arches) {
-    cargo(["build", "--release", "-p", "calimero-shell", "--target", arch]);
-    slices.push(path.join(tauriDir, "target", arch, "release", binName));
+// 2) Real release builds, staged over the placeholders. `universal-apple-darwin`
+//    is not a real rustc target - build both arches and `lipo` them, matching
+//    what Tauri does for the main binary.
+function buildBin(pkgArgs, name) {
+  if (target === "universal-apple-darwin") {
+    const slices = ["aarch64-apple-darwin", "x86_64-apple-darwin"].map((arch) => {
+      cargo(["build", "--release", ...pkgArgs, "--target", arch]);
+      return path.join(tauriDir, "target", arch, "release", name);
+    });
+    const out = path.join(tauriDir, "target", target, "release", name);
+    mkdirSync(path.dirname(out), { recursive: true });
+    console.log(`[prepare-shell] lipo -create -> ${out}`);
+    execFileSync("lipo", ["-create", "-output", out, ...slices], { stdio: "inherit" });
+    return out;
   }
-  const uniDir = path.join(tauriDir, "target", "universal-apple-darwin", "release");
-  mkdirSync(uniDir, { recursive: true });
-  built = path.join(uniDir, binName);
-  console.log(`[prepare-shell] lipo -create -> ${built}`);
-  execFileSync("lipo", ["-create", "-output", built, ...slices], { stdio: "inherit" });
-} else {
-  const releaseArgs = ["build", "--release", "-p", "calimero-shell"];
-  if (target) releaseArgs.push("--target", target);
-  cargo(releaseArgs);
-  const releaseDir = target
-    ? path.join(tauriDir, "target", target, "release")
-    : path.join(tauriDir, "target", "release");
-  built = path.join(releaseDir, binName);
+  cargo(["build", "--release", ...pkgArgs, ...(target ? ["--target", target] : [])]);
+  return path.join(tauriDir, "target", ...(target ? [target] : []), "release", name);
 }
 
-if (!existsSync(built)) {
-  throw new Error(`[prepare-shell] built binary not found at ${built}`);
-}
-mkdirSync(shellDir, { recursive: true });
-copyFileSync(built, dest);
-console.log(`[prepare-shell] staged ${built} -> ${dest}`);
-
-// 3) The launcher trampoline: the per-app bundle's Mach-O executable (macOS 26
-//    LaunchServices refuses script executables). Same target/lipo handling.
-let builtTrampoline;
-if (target === "universal-apple-darwin") {
-  const arches = ["aarch64-apple-darwin", "x86_64-apple-darwin"];
-  const slices = [];
-  for (const arch of arches) {
-    cargo(["build", "--release", "-p", "calimero-tauri-app", "--bin", "launcher-trampoline", "--target", arch]);
-    slices.push(path.join(tauriDir, "target", arch, "release", trampolineName));
+for (const [pkgArgs, name, out] of [
+  [["-p", "calimero-shell"], binName, dest],
+  // The per-app bundle's Mach-O executable: macOS 26 refuses script executables.
+  [["-p", "calimero-tauri-app", "--bin", "launcher-trampoline"], trampolineName, trampolineDest],
+]) {
+  const built = buildBin(pkgArgs, name);
+  if (!existsSync(built)) {
+    throw new Error(`[prepare-shell] built binary not found at ${built}`);
   }
-  const uniDir = path.join(tauriDir, "target", "universal-apple-darwin", "release");
-  mkdirSync(uniDir, { recursive: true });
-  builtTrampoline = path.join(uniDir, trampolineName);
-  console.log(`[prepare-shell] lipo -create -> ${builtTrampoline}`);
-  execFileSync("lipo", ["-create", "-output", builtTrampoline, ...slices], { stdio: "inherit" });
-} else {
-  const releaseArgs = ["build", "--release", "-p", "calimero-tauri-app", "--bin", "launcher-trampoline"];
-  if (target) releaseArgs.push("--target", target);
-  cargo(releaseArgs);
-  const releaseDir = target
-    ? path.join(tauriDir, "target", target, "release")
-    : path.join(tauriDir, "target", "release");
-  builtTrampoline = path.join(releaseDir, trampolineName);
+  copyFileSync(built, out);
+  console.log(`[prepare-shell] staged ${built} -> ${out}`);
 }
-if (!existsSync(builtTrampoline)) {
-  throw new Error(`[prepare-shell] built trampoline not found at ${builtTrampoline}`);
-}
-copyFileSync(builtTrampoline, trampolineDest);
-console.log(`[prepare-shell] staged ${builtTrampoline} -> ${trampolineDest}`);

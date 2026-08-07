@@ -1142,22 +1142,12 @@ fn new_cap(app_id: &str) -> String {
     format!("cap-{app_id}-{nanos:x}-{}", std::process::id())
 }
 
-/// The `calimero-shell` binary bundled inside this app's Resources.
+/// A binary bundled inside this app's Resources, if present.
 #[cfg(target_os = "macos")]
-fn bundled_shell_path(app_handle: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+fn bundled_resource(app_handle: &tauri::AppHandle, rel: &str) -> Option<std::path::PathBuf> {
     app_handle
         .path()
-        .resolve("shell/calimero-shell", tauri::path::BaseDirectory::Resource)
-        .ok()
-        .filter(|p| p.exists())
-}
-
-/// The launcher-trampoline binary bundled inside this app's Resources.
-#[cfg(target_os = "macos")]
-fn bundled_trampoline_path(app_handle: &tauri::AppHandle) -> Option<std::path::PathBuf> {
-    app_handle
-        .path()
-        .resolve("shell/launcher-trampoline", tauri::path::BaseDirectory::Resource)
+        .resolve(rel, tauri::path::BaseDirectory::Resource)
         .ok()
         .filter(|p| p.exists())
 }
@@ -1471,7 +1461,7 @@ fn ensure_app_launcher(
 
     // ensure the shared shell is extracted to its loose path (idempotent).
     let shell_dest = launcher::shell_install_path();
-    let src = bundled_shell_path(app_handle).ok_or_else(|| {
+    let src = bundled_resource(app_handle, "shell/calimero-shell").ok_or_else(|| {
         TauriError::new(TauriErrorCode::ShortcutCreationFailed, "bundled shell missing")
     })?;
     launcher::extract_shell(&src, &shell_dest)
@@ -1505,7 +1495,7 @@ fn ensure_app_launcher(
         cap: cap.clone(),
         icon,
     };
-    let trampoline = bundled_trampoline_path(app_handle).ok_or_else(|| {
+    let trampoline = bundled_resource(app_handle, "shell/launcher-trampoline").ok_or_else(|| {
         TauriError::new(
             TauriErrorCode::ShortcutCreationFailed,
             "bundled launcher trampoline missing",
@@ -4535,9 +4525,10 @@ fn main() {
                 let handle = app.handle().clone();
                 tauri::async_runtime::spawn_blocking(move || {
                     let shell_dest = launcher::shell_install_path();
-                    if let (Some(src), Some(trampoline)) =
-                        (bundled_shell_path(&handle), bundled_trampoline_path(&handle))
-                    {
+                    if let (Some(src), Some(trampoline)) = (
+                        bundled_resource(&handle, "shell/calimero-shell"),
+                        bundled_resource(&handle, "shell/launcher-trampoline"),
+                    ) {
                         let _ = launcher::extract_shell(&src, &shell_dest);
                         for a in app_registry::installed_apps(&caps_store_path()) {
                             let bundle = std::path::PathBuf::from(&a.bundle_path);

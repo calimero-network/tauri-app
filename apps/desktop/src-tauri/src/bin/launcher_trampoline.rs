@@ -1,7 +1,5 @@
-//! The per-app launcher bundle's executable. macOS 26 LaunchServices silently
-//! refuses to spawn a bundle whose CFBundleExecutable is a shell script, so the
-//! launcher needs a real Mach-O here. Execs the shared installed shell with this
-//! bundle's app.json.
+//! The per-app launcher bundle's executable: execs the installed shell with
+//! this bundle's app.json. Must be a Mach-O - see launcher.rs.
 
 #[cfg(target_os = "macos")]
 fn main() {

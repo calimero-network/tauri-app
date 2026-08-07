@@ -18,6 +18,7 @@ type InstalledAppsResponse = Awaited<ReturnType<typeof apiClient.node.listApplic
 
 let cached: { at: number; response: InstalledAppsResponse } | null = null;
 let inFlight: Promise<InstalledAppsResponse> | null = null;
+let epoch = 0;
 
 export async function listInstalledApps(
   ttlMs: number = DEFAULT_TTL_MS
@@ -25,12 +26,15 @@ export async function listInstalledApps(
   if (cached && Date.now() - cached.at < ttlMs) return cached.response;
   if (inFlight) return inFlight;
 
+  const startedAt = epoch;
   inFlight = apiClient.node
     .listApplications()
     .then((response) => {
       // Failures are never cached: a 401 on a stale token or a node that is
       // still booting would otherwise pin every caller to it for the whole TTL.
-      if (!response.error) {
+      // Nor is a read that an install invalidated mid-flight - it describes the
+      // node from before the install, so it answers its own caller and no one else.
+      if (!response.error && epoch === startedAt) {
         // Six callers hold this same array for the whole TTL, so an in-place
         // sort or splice by one of them has to fail loudly, not corrupt the rest.
         if (response.data) Object.freeze(response.data);
@@ -39,7 +43,7 @@ export async function listInstalledApps(
       return response;
     })
     .finally(() => {
-      inFlight = null;
+      if (epoch === startedAt) inFlight = null;
     });
 
   return inFlight;
@@ -48,4 +52,6 @@ export async function listInstalledApps(
 /** Drop the cache so the next read hits the node. Call after install/uninstall. */
 export function invalidateInstalledApps(): void {
   cached = null;
+  inFlight = null;
+  epoch++;
 }

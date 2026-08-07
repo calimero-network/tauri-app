@@ -64,6 +64,19 @@ describe('listInstalledApps', () => {
     expect(() => data!.sort((a, b) => a.id.localeCompare(b.id))).toThrow(TypeError);
   });
 
+  it('drops a read that an install invalidated mid-flight', async () => {
+    let finish!: (response: unknown) => void;
+    listApplications.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
+    const preInstall = listInstalledApps();
+
+    invalidateInstalledApps();
+    finish({ data: [{ id: 'app-1' }] });
+    await preInstall;
+
+    listApplications.mockResolvedValue({ data: [{ id: 'app-1' }, { id: 'app-2' }] });
+    expect((await listInstalledApps()).data).toHaveLength(2);
+  });
+
   it('clears the in-flight slot when the request rejects', async () => {
     listApplications.mockRejectedValueOnce(new Error('node down'));
 

@@ -300,6 +300,25 @@ jobs:
             exit 1
           fi
 
+          # Notarization rejects any unhardened Mach-O in the bundle.
+          TRAMPOLINE="apps/desktop/src-tauri/shell/launcher-trampoline"
+          if [ -f "$TRAMPOLINE" ]; then
+            echo "Signing launcher-trampoline before bundling: $TRAMPOLINE"
+            codesign --force --sign "$APPLE_SIGNING_IDENTITY" \
+              --options runtime \
+              --timestamp \
+              "$TRAMPOLINE"
+
+            codesign --verify --verbose "$TRAMPOLINE" || {
+              echo "Failed to verify launcher-trampoline signature"
+              exit 1
+            }
+            echo "Successfully signed launcher-trampoline"
+          else
+            echo "Error: launcher-trampoline not found at $TRAMPOLINE"
+            exit 1
+          fi
+
       - name: Install provisioning profile
         if: steps.build-mode.outputs.mode == 'release'
         env:
@@ -375,12 +394,26 @@ jobs:
             exit 0
           fi
 
-          xcrun notarytool submit "$DMG_FILE" \
+          SUBMIT_JSON=$(xcrun notarytool submit "$DMG_FILE" \
             --apple-id "$APPLE_ID" \
             --password "$APPLE_APP_SPECIFIC_PASSWORD" \
             --team-id "$APPLE_TEAM_ID" \
             --wait \
-            --timeout 30m
+            --timeout 30m \
+            --output-format json)
+          echo "$SUBMIT_JSON"
+          SUBMISSION_ID=$(echo "$SUBMIT_JSON" | jq -r .id)
+          STATUS=$(echo "$SUBMIT_JSON" | jq -r .status)
+
+          # Surface the notary's per-file findings; the bare status is useless.
+          if [ "$STATUS" != "Accepted" ]; then
+            echo "Notarization $STATUS - notary log follows:"
+            xcrun notarytool log "$SUBMISSION_ID" \
+              --apple-id "$APPLE_ID" \
+              --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+              --team-id "$APPLE_TEAM_ID"
+            exit 1
+          fi
 
           xcrun stapler staple "$DMG_FILE"
 

@@ -4356,6 +4356,10 @@ async fn remove_app_launchers(app_handle: tauri::AppHandle) -> Result<String, Ta
         if let Some(shell_dir) = launcher::shell_install_path().parent() {
             let _ = std::fs::remove_dir_all(shell_dir);
         }
+        // Cached icons too, or a regenerated launcher keeps a stale icon forever.
+        if let Some(parent) = app_icon_cache_path("x").parent() {
+            let _ = std::fs::remove_dir_all(parent);
+        }
 
         let summary = format!("Removed {removed} app launcher(s) and their capabilities");
         info!("[Reset] {summary}");

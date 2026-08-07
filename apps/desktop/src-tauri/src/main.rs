@@ -1152,6 +1152,16 @@ fn bundled_shell_path(app_handle: &tauri::AppHandle) -> Option<std::path::PathBu
         .filter(|p| p.exists())
 }
 
+/// The launcher-trampoline binary bundled inside this app's Resources.
+#[cfg(target_os = "macos")]
+fn bundled_trampoline_path(app_handle: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    app_handle
+        .path()
+        .resolve("shell/launcher-trampoline", tauri::path::BaseDirectory::Resource)
+        .ok()
+        .filter(|p| p.exists())
+}
+
 /// Stable per-app cache location for the generated launcher `.icns`, keyed by id.
 #[cfg(target_os = "macos")]
 fn app_icon_cache_path(app_id: &str) -> std::path::PathBuf {
@@ -1495,7 +1505,13 @@ fn ensure_app_launcher(
         cap: cap.clone(),
         icon,
     };
-    let bundle = launcher::generate_launcher(dest_dir, &shell_dest, &spec)
+    let trampoline = bundled_trampoline_path(app_handle).ok_or_else(|| {
+        TauriError::new(
+            TauriErrorCode::ShortcutCreationFailed,
+            "bundled launcher trampoline missing",
+        )
+    })?;
+    let bundle = launcher::generate_launcher(dest_dir, &trampoline, &spec)
         .map_err(|e| TauriError::new(TauriErrorCode::ShortcutCreationFailed, e.to_string()))?;
 
     app_registry::persist_app(
@@ -4509,9 +4525,9 @@ fn main() {
         .setup(|app| {
             // Migrate per-app launchers made by an OLDER desktop version: re-extract
             // the shared shell (dequarantine + preserve signature) and rewrite each
-            // launcher's trampoline to the current format. An old x86_64/Rosetta
-            // trampoline SIGKILLs on Apple Silicon, and a desktop update alone does
-            // NOT refresh a launcher until its app is re-opened - so do it here.
+            // launcher's trampoline to the current format - old script-based
+            // launchers are refused outright by macOS 26, and a desktop update
+            // alone does NOT refresh a launcher until its app is re-opened.
             // Off the main thread: setup() blocks the run loop that serves the
             // webview's assets, and this touches disk on every launch.
             #[cfg(target_os = "macos")]
@@ -4519,12 +4535,14 @@ fn main() {
                 let handle = app.handle().clone();
                 tauri::async_runtime::spawn_blocking(move || {
                     let shell_dest = launcher::shell_install_path();
-                    if let Some(src) = bundled_shell_path(&handle) {
+                    if let (Some(src), Some(trampoline)) =
+                        (bundled_shell_path(&handle), bundled_trampoline_path(&handle))
+                    {
                         let _ = launcher::extract_shell(&src, &shell_dest);
                         for a in app_registry::installed_apps(&caps_store_path()) {
                             let bundle = std::path::PathBuf::from(&a.bundle_path);
                             if bundle.exists() {
-                                if let Err(e) = launcher::refresh_trampoline(&bundle, &shell_dest) {
+                                if let Err(e) = launcher::refresh_trampoline(&bundle, &trampoline) {
                                     warn!(
                                         "[Launcher] refresh trampoline failed for {}: {}",
                                         a.id, e

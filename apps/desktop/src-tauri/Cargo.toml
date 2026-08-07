@@ -53,6 +53,10 @@ opt-level = "s"
 codegen-units = 1
 panic = "abort"
 
+[[bin]]
+name = "launcher-trampoline"
+path = "src/bin/launcher_trampoline.rs"
+
 [features]
 default = ["custom-protocol", "autostart"]
 custom-protocol = ["tauri/custom-protocol"]

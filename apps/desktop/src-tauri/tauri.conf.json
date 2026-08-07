@@ -26,7 +26,8 @@
     ],
     "resources": [
       "merod",
-      "shell/calimero-shell"
+      "shell/calimero-shell",
+      "shell/launcher-trampoline"
     ],
     "createUpdaterArtifacts": "v1Compatible"
   },

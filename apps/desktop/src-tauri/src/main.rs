@@ -1266,14 +1266,19 @@ async fn fetch_icon_png(client: &reqwest::Client, base: &str) -> Option<Vec<u8>>
 /// resizes) and runs `iconutil -c icns`.
 #[cfg(target_os = "macos")]
 fn png_to_icns(png: &std::path::Path, icns: &std::path::Path) -> std::io::Result<()> {
+    // Assembled at a temp path and renamed in. The icon cache trusts any file it
+    // finds, so a crash mid-conversion must not leave a partial one behind.
+    let tmp = icns.with_extension("icns.part");
+    let _ = std::fs::remove_file(&tmp);
+
     let out = std::process::Command::new("sips")
         .args(["-s", "format", "icns"])
         .arg(png)
         .arg("--out")
-        .arg(icns)
+        .arg(&tmp)
         .output()?;
-    if out.status.success() && icns.exists() {
-        return Ok(());
+    if out.status.success() && tmp.exists() {
+        return std::fs::rename(&tmp, icns);
     }
     // Fallback: build a minimal .iconset and let iconutil assemble the .icns.
     let iconset = icns.with_extension("iconset");
@@ -1297,11 +1302,11 @@ fn png_to_icns(png: &std::path::Path, icns: &std::path::Path) -> std::io::Result
         .args(["-c", "icns"])
         .arg(&iconset)
         .arg("-o")
-        .arg(icns)
+        .arg(&tmp)
         .output()?;
     let _ = std::fs::remove_dir_all(&iconset);
-    if out.status.success() && icns.exists() {
-        Ok(())
+    if out.status.success() && tmp.exists() {
+        std::fs::rename(&tmp, icns)
     } else {
         Err(std::io::Error::new(
             std::io::ErrorKind::Other,
@@ -2923,10 +2928,13 @@ fn is_process_running(pid: u32) -> bool {
 /// The reap probes every tracked node for liveness while holding the state lock,
 /// and this command is polled - too much to leave on a runtime worker.
 #[tauri::command]
-async fn get_merod_status(app_handle: tauri::AppHandle) -> Result<serde_json::Value, TauriError> {
+async fn get_merod_status(
+    app_handle: tauri::AppHandle,
+    merod_state: tauri::State<'_, MerodState>,
+) -> Result<serde_json::Value, TauriError> {
+    let merod_state = merod_state.inner().clone();
     tokio::task::spawn_blocking(move || {
-        let merod_state = app_handle.state::<MerodState>();
-        let mut state = merod_state.lock().unwrap();
+        let mut state = merod_state.lock().unwrap_or_else(|p| p.into_inner());
         if state.is_empty() {
             return serde_json::json!({ "running": false, "nodes": [] });
         }

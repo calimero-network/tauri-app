@@ -2930,11 +2930,17 @@ async fn stop_merod_by_pid_command(
 fn is_process_running(pid: u32) -> bool {
     #[cfg(unix)]
     {
+        // kill(2) reads pid <= 0 as a process-group target, so anything that is
+        // not a positive pid_t must never reach it.
+        let pid = match libc::pid_t::try_from(pid) {
+            Ok(pid) if pid > 0 => pid,
+            _ => return false,
+        };
         // Signal 0 only probes for existence. This runs per tracked node on
         // every status poll, under the state lock - too hot to fork `kill -0`.
-        // SAFETY: every pid here is a live `Child::id()`, so it is never 0 or
-        // negative and the call cannot widen into a process-group signal.
-        unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
+        // SAFETY: plain FFI call, no pointers; the guard above keeps pid a single
+        // positive process and signal 0 delivers nothing.
+        unsafe { libc::kill(pid, 0) == 0 }
     }
     #[cfg(windows)]
     {

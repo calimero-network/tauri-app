@@ -6,6 +6,7 @@
 //! Linux uses a data directory. This module owns both, plus the set of windows
 //! that got one - which the token broker consults before serving a window.
 
+use crate::LockUnpoisoned;
 use crate::{TauriError, TauriErrorCode};
 use std::collections::{BTreeMap, HashSet};
 use std::sync::{Arc, Mutex};
@@ -18,23 +19,20 @@ pub type IsolatedWindows = Arc<Mutex<HashSet<String>>>;
 pub fn remember(app_handle: &tauri::AppHandle, label: &str) {
     app_handle
         .state::<IsolatedWindows>()
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
+        .lock_unpoisoned()
         .insert(label.to_string());
 }
 
 pub fn forget(app_handle: &tauri::AppHandle, label: &str) {
     app_handle
         .state::<IsolatedWindows>()
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
+        .lock_unpoisoned()
         .remove(label);
 }
 
 pub fn is_isolated(state: &tauri::State<'_, IsolatedWindows>, label: &str) -> bool {
     state
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
+        .lock_unpoisoned()
         .contains(label)
 }
 
@@ -99,7 +97,7 @@ pub fn store_id(app_handle: &tauri::AppHandle, key: &str) -> Result<[u8; 16], Ta
     // Serialise the whole read-modify-write. Two concurrent first-time keys would
     // otherwise both compute max+1 from the same stale map and share one store.
     static SLOTS: Mutex<()> = Mutex::new(());
-    let _guard = SLOTS.lock().unwrap_or_else(|p| p.into_inner());
+    let _guard = SLOTS.lock_unpoisoned();
 
     let dir = app_handle.path().app_data_dir().map_err(|e| {
         TauriError::with_details(

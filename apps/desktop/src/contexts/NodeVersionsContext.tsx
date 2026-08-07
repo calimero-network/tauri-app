@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 import { listInstalledMerodVersions } from "../utils/merodVersions";
 import { getMerodBinaryVersion } from "../utils/merod";
 import { getSettings } from "../utils/settings";
+import { useMerodStatusChanged } from "../hooks/useMerodStatusChanged";
 
 export interface NodeVersionMap {
   /** node name -> version id it is pinned to */
@@ -41,6 +42,12 @@ export function NodeVersionsProvider({ children }: { children: ReactNode }) {
     setOverride(homeDir);
     setNonce((n) => n + 1);
   }, []);
+
+  // Node creation/deletion changes which nodes each version is pinned to; the
+  // per-page hooks this provider replaced refetched via their deps arrays.
+  // Keeps any caller-set override, unlike refresh().
+  const refetch = useCallback(() => setNonce((n) => n + 1), []);
+  useMerodStatusChanged(refetch);
 
   useEffect(() => {
     getMerodBinaryVersion().then(setBundled).catch(() => setBundled(""));

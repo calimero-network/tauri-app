@@ -8,6 +8,17 @@ use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, Manager};
 use thiserror::Error;
+
+/// Chain-style poison recovery: every mutex here guards a plain collection with
+/// no cross-field invariant, so the pre-poison data is always safe to reuse.
+pub(crate) trait LockUnpoisoned<T> {
+    fn lock_unpoisoned(&self) -> std::sync::MutexGuard<'_, T>;
+}
+impl<T> LockUnpoisoned<T> for std::sync::Mutex<T> {
+    fn lock_unpoisoned(&self) -> std::sync::MutexGuard<'_, T> {
+        self.lock_unpoisoned()
+    }
+}
 // Brings `.encode()` / `.decode()` onto the base64 engine used by the HTTP proxy.
 use base64::Engine as _;
 
@@ -768,7 +779,7 @@ async fn proxy_sse_stream(
 
     let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel::<()>();
     {
-        let mut registry = cancel_registry.lock().unwrap_or_else(|p| p.into_inner());
+        let mut registry = cancel_registry.lock_unpoisoned();
         registry.insert(stream_id.clone(), cancel_tx);
     }
 
@@ -777,8 +788,7 @@ async fn proxy_sse_stream(
 
     if let Err(reason) = validate_allowed_url(&url, None) {
         cancel_registry
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .lock_unpoisoned()
             .remove(&stream_id);
         let _ = window.emit(&end_event, "");
         return Err(TauriError::new(TauriErrorCode::UrlNotAllowed, reason));
@@ -797,8 +807,7 @@ async fn proxy_sse_stream(
         Ok(r) => r,
         Err(e) => {
             cancel_registry
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
+                .lock_unpoisoned()
                 .remove(&stream_id);
             let _ = window.emit(&end_event, "");
             return Err(TauriError::with_details(
@@ -828,8 +837,7 @@ async fn proxy_sse_stream(
     }
 
     cancel_registry
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
+        .lock_unpoisoned()
         .remove(&stream_id);
     let _ = window.emit(&end_event, "");
     Ok(())
@@ -897,8 +905,7 @@ async fn rotate_access_token(
 
     let (reply_tx, reply_rx) = tokio::sync::oneshot::channel::<TokenBrokerReply>();
     registry
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
+        .lock_unpoisoned()
         .insert(request_id.clone(), reply_tx);
 
     if let Err(e) = main_window.emit(
@@ -908,8 +915,7 @@ async fn rotate_access_token(
         },
     ) {
         registry
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .lock_unpoisoned()
             .remove(&request_id);
         return Err(format!("Failed to reach the desktop window: {e}"));
     }
@@ -921,8 +927,7 @@ async fn rotate_access_token(
         Ok(Err(_)) => Err("Desktop window closed before the token refresh completed".into()),
         Err(_) => {
             registry
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
+                .lock_unpoisoned()
                 .remove(&request_id);
             Err("Timed out waiting for the desktop to refresh the access token".into())
         }
@@ -960,8 +965,7 @@ type CapRegistry = std::sync::Arc<std::sync::Mutex<std::collections::HashMap<Str
 #[cfg(target_os = "macos")]
 fn cap_is_valid(registry: &CapRegistry, cap: &str, app_id: &str) -> bool {
     registry
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
+        .lock_unpoisoned()
         .get(cap)
         .map(|id| id == app_id)
         .unwrap_or(false)
@@ -1019,8 +1023,7 @@ fn resolve_token_request(
     registry: tauri::State<'_, TokenBrokerRegistry>,
 ) {
     if let Some(sender) = registry
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
+        .lock_unpoisoned()
         .remove(&request_id)
     {
         let reply = match access_token {
@@ -1440,7 +1443,7 @@ fn ensure_app_launcher(
     // interleave the caps.json read-modify-write below. Global, not per app id: the
     // cap must also match the bundle it was baked into when one app is opened twice.
     static BUILD: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    let _serialised = BUILD.lock().unwrap_or_else(|p| p.into_inner());
+    let _serialised = BUILD.lock_unpoisoned();
 
     // sanitize the name for the .app filename
     let safe: String = app_name
@@ -1510,8 +1513,7 @@ fn ensure_app_launcher(
     .map_err(|e| TauriError::new(TauriErrorCode::ShortcutCreationFailed, e.to_string()))?;
     app_handle
         .state::<CapRegistry>()
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
+        .lock_unpoisoned()
         .insert(cap, app_id.to_string());
 
     Ok(bundle)
@@ -2242,8 +2244,7 @@ impl NodeInitReservation {
     fn claim(home: &std::path::Path, node_name: &str) -> Result<Self, TauriError> {
         let key = format!("{}::{}", home.display(), node_name);
         let mut in_flight = NODE_INIT_IN_FLIGHT
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
+            .lock_unpoisoned();
 
         // merod init over an existing node reports success without minting the
         // admin account, leaving a node nobody can sign in to. Refuse instead.
@@ -2269,8 +2270,7 @@ impl NodeInitReservation {
 impl Drop for NodeInitReservation {
     fn drop(&mut self) {
         NODE_INIT_IN_FLIGHT
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .lock_unpoisoned()
             .remove(&self.0);
     }
 }
@@ -2384,7 +2384,7 @@ async fn start_merod(
 
     // Only stop a process that uses the same server_port (port conflict)
     let existing_on_port: Option<u32> = {
-        let state = merod_state.lock().unwrap_or_else(|p| p.into_inner());
+        let state = merod_state.lock_unpoisoned();
         state.iter().find(|p| p.port == server_port).map(|p| p.pid)
     };
 
@@ -2413,8 +2413,7 @@ async fn start_merod(
                 .output();
         }
         merod_state
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .lock_unpoisoned()
             .retain(|p| p.pid != pid);
         emit_merod_status_changed(&app_handle);
     }
@@ -2688,7 +2687,7 @@ async fn start_merod(
 
     // Store process state
     {
-        let mut state = merod_state.lock().unwrap_or_else(|p| p.into_inner());
+        let mut state = merod_state.lock_unpoisoned();
         state.push(MerodProcess {
             pid,
             port: server_port,
@@ -2705,7 +2704,7 @@ async fn start_merod(
     tokio::spawn(async move {
         let status = child.wait().await;
         {
-            let mut state = merod_state_clone.lock().unwrap_or_else(|p| p.into_inner());
+            let mut state = merod_state_clone.lock_unpoisoned();
             if let Ok(exit_status) = status {
                 if let Some(code) = exit_status.code() {
                     warn!("[Merod] Process {} exited with code: {}", monitored_pid, code);
@@ -2738,7 +2737,7 @@ async fn stop_merod(
     merod_state: tauri::State<'_, MerodState>,
 ) -> Result<String, TauriError> {
     let pids: Vec<u32> = {
-        let state = merod_state.lock().unwrap_or_else(|p| p.into_inner());
+        let state = merod_state.lock_unpoisoned();
         state.iter().map(|p| p.pid).collect()
     };
 
@@ -2824,8 +2823,7 @@ async fn stop_merod(
     }
 
     merod_state
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
+        .lock_unpoisoned()
         .clear();
     emit_merod_status_changed(&app_handle);
 
@@ -2918,8 +2916,7 @@ async fn stop_merod_by_pid_command(
 
     // Remove this process from state
     merod_state
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
+        .lock_unpoisoned()
         .retain(|p| p.pid != pid);
     emit_merod_status_changed(&app_handle);
 
@@ -2967,7 +2964,7 @@ async fn get_merod_status(
 ) -> Result<serde_json::Value, TauriError> {
     let merod_state = merod_state.inner().clone();
     tokio::task::spawn_blocking(move || {
-        let mut state = merod_state.lock().unwrap_or_else(|p| p.into_inner());
+        let mut state = merod_state.lock_unpoisoned();
         if state.is_empty() {
             return serde_json::json!({ "running": false, "nodes": [] });
         }
@@ -3759,8 +3756,7 @@ static BUNDLED_MEROD_VERSION: Mutex<Option<String>> = Mutex::new(None);
 
 fn bundled_merod_version() -> std::sync::MutexGuard<'static, Option<String>> {
     BUNDLED_MEROD_VERSION
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
+        .lock_unpoisoned()
 }
 
 /// Return the version string reported by the bundled merod binary (`merod --version`).
@@ -3997,8 +3993,7 @@ async fn kill_all_merod_processes(
     kill_pids(&pids).await;
 
     merod_state
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
+        .lock_unpoisoned()
         .clear();
     emit_merod_status_changed(&app_handle);
 
@@ -4224,8 +4219,7 @@ async fn remove_app_launchers(app_handle: tauri::AppHandle) -> Result<String, Ta
         let _ = std::fs::remove_file(&store);
         app_handle
             .state::<CapRegistry>()
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .lock_unpoisoned()
             .clear();
         if let Some(shell_dir) = launcher::shell_install_path().parent() {
             let _ = std::fs::remove_dir_all(shell_dir);
@@ -4679,7 +4673,7 @@ fn main() {
 
                 let caps = app.state::<CapRegistry>();
                 let loaded = app_registry::caps_map(&caps_store_path());
-                *caps.lock().unwrap_or_else(|p| p.into_inner()) = loaded;
+                *caps.lock_unpoisoned() = loaded;
             }
 
             // When launched from a desktop shortcut, or auto-booted headless by a

@@ -1,6 +1,7 @@
 //! Per-node merod version selection: id parsing, the shared binary store,
 //! GitHub release listing, install and remove.
 
+use crate::LockUnpoisoned;
 use crate::{TauriError, TauriErrorCode};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -441,7 +442,7 @@ pub async fn ensure_release_installed(
     // Serialise all installs. Downloads are rare and a few seconds each, so a
     // single gate is simpler than per-tag locks and cannot deadlock.
     let gate = {
-        let mut gates = IN_FLIGHT.lock().unwrap_or_else(|p| p.into_inner());
+        let mut gates = IN_FLIGHT.lock_unpoisoned();
         gates.entry(tag.to_string()).or_default().clone()
     };
     let _guard = gate.lock().await;

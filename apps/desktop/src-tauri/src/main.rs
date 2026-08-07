@@ -3285,26 +3285,10 @@ fn parse_node_ports(body: &str) -> (u16, u16) {
     )
 }
 
-/// Same, memoized on (path, mtime): node detection runs on a UI timer while a
-/// node's config effectively never changes, so re-parsing it is pure waste.
 fn node_ports(config_path: &std::path::Path) -> (u16, u16) {
-    type Cache = std::collections::HashMap<std::path::PathBuf, (std::time::SystemTime, (u16, u16))>;
-    static CACHE: std::sync::LazyLock<Mutex<Cache>> = std::sync::LazyLock::new(Default::default);
-
-    let Ok(mtime) = std::fs::metadata(config_path).and_then(|m| m.modified()) else {
-        return DEFAULT_NODE_PORTS;
-    };
-    let mut cache = CACHE.lock().unwrap_or_else(|p| p.into_inner());
-    if let Some(&(seen, ports)) = cache.get(config_path) {
-        if seen == mtime {
-            return ports;
-        }
-    }
-    let ports = std::fs::read_to_string(config_path)
+    std::fs::read_to_string(config_path)
         .map(|body| parse_node_ports(&body))
-        .unwrap_or(DEFAULT_NODE_PORTS);
-    cache.insert(config_path.to_path_buf(), (mtime, ports));
-    ports
+        .unwrap_or(DEFAULT_NODE_PORTS)
 }
 
 #[tauri::command]

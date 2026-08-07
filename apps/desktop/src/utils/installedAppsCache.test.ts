@@ -5,10 +5,14 @@ vi.mock('../lib/mero-client', () => ({
   apiClient: { node: { listApplications: () => listApplications() } },
 }));
 
+let nodeUrl = 'http://localhost:2528';
+vi.mock('./settings', () => ({ getSettings: () => ({ nodeUrl }) }));
+
 import { listInstalledApps, invalidateInstalledApps } from './installedAppsCache';
 
 beforeEach(() => {
   vi.clearAllMocks();
+  nodeUrl = 'http://localhost:2528';
   invalidateInstalledApps();
   listApplications.mockResolvedValue({ data: [{ id: 'app-1' }] });
 });
@@ -75,6 +79,16 @@ describe('listInstalledApps', () => {
 
     listApplications.mockResolvedValue({ data: [{ id: 'app-1' }, { id: 'app-2' }] });
     expect((await listInstalledApps()).data).toHaveLength(2);
+  });
+
+  it('never serves one node\'s list after the app is pointed at another', async () => {
+    expect((await listInstalledApps()).data).toEqual([{ id: 'app-1' }]);
+
+    nodeUrl = 'http://localhost:3528';
+    listApplications.mockResolvedValue({ data: [{ id: 'app-2' }] });
+
+    expect((await listInstalledApps()).data).toEqual([{ id: 'app-2' }]);
+    expect(listApplications).toHaveBeenCalledTimes(2);
   });
 
   it('clears the in-flight slot when the request rejects', async () => {

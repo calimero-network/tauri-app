@@ -5,11 +5,13 @@
  * Namespaces, Onboarding, deep-link resolution) and each used to issue its own
  * round trip. They share one here, deduped while a request is in flight.
  *
- * Anything that installs or uninstalls must call `invalidateInstalledApps()`.
+ * Anything that installs or uninstalls must call `invalidateInstalledApps()`;
+ * a change of target node drops the entry on its own.
  * The list handed out is shared and frozen - copy it to sort or filter.
  */
 
 import { apiClient } from "../lib/mero-client";
+import { getSettings } from "./settings";
 
 /** Default time-to-live: 5 minutes */
 const DEFAULT_TTL_MS = 5 * 60 * 1000;
@@ -19,10 +21,19 @@ type InstalledAppsResponse = Awaited<ReturnType<typeof apiClient.node.listApplic
 let cached: { at: number; response: InstalledAppsResponse } | null = null;
 let inFlight: Promise<InstalledAppsResponse> | null = null;
 let epoch = 0;
+let node = "";
 
 export async function listInstalledApps(
   ttlMs: number = DEFAULT_TTL_MS
 ): Promise<InstalledAppsResponse> {
+  // App lists are per node, and not every switch reloads the window - onboarding
+  // points the client at the node it just created without one.
+  const target = getSettings().nodeUrl;
+  if (target !== node) {
+    node = target;
+    invalidateInstalledApps();
+  }
+
   if (cached && Date.now() - cached.at < ttlMs) return cached.response;
   if (inFlight) return inFlight;
 

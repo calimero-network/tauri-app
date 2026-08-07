@@ -47,13 +47,30 @@ pub fn shell_install_path() -> PathBuf {
 }
 
 /// True when `dest` already holds `src`'s build, so the copy + dequarantine +
-/// codesign round-trip can be skipped. The copy stamps `dest` with "now", hence
-/// `src <= dest` rather than equality. Errors read as "not current" (copy wins).
+/// codesign round-trip can be skipped. Compared via the stamp recorded at
+/// extraction: re-signing changes dest's size, so dest's own metadata cannot
+/// testify to which build it came from. Errors read as "not current".
 fn shell_is_current(src: &Path, dest: &Path) -> bool {
-    let (Ok(s), Ok(d)) = (std::fs::metadata(src), std::fs::metadata(dest)) else {
+    let Ok(s) = std::fs::metadata(src) else {
         return false;
     };
-    s.len() == d.len() && matches!((s.modified(), d.modified()), (Ok(sm), Ok(dm)) if sm <= dm)
+    dest.exists()
+        && std::fs::read_to_string(stamp_path(dest)).is_ok_and(|rec| rec == src_stamp(&s))
+}
+
+/// Sidecar recording which source build `dest` was extracted from.
+fn stamp_path(dest: &Path) -> PathBuf {
+    dest.with_extension("src-stamp")
+}
+
+fn src_stamp(src_meta: &std::fs::Metadata) -> String {
+    let mtime = src_meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("{}:{}", src_meta.len(), mtime)
 }
 
 /// Copy the shared shell binary to a loose `dest`, PRESERVING its signature.
@@ -80,6 +97,8 @@ pub fn extract_shell(src: &Path, dest: &Path) -> Result<(), LauncherError> {
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent)?;
     }
+    // A failed extraction must not leave a stale claim of currency behind.
+    let _ = std::fs::remove_file(stamp_path(dest));
     std::fs::copy(src, dest)?;
     {
         use std::os::unix::fs::PermissionsExt;
@@ -107,6 +126,7 @@ pub fn extract_shell(src: &Path, dest: &Path) -> Result<(), LauncherError> {
             .map(|o| o.status.success())
             .unwrap_or(false);
     if already_signed {
+        record_stamp(src, dest);
         return Ok(());
     }
 
@@ -123,7 +143,14 @@ pub fn extract_shell(src: &Path, dest: &Path) -> Result<(), LauncherError> {
             String::from_utf8_lossy(&out.stderr).into_owned(),
         ));
     }
+    record_stamp(src, dest);
     Ok(())
+}
+
+fn record_stamp(src: &Path, dest: &Path) {
+    if let Ok(s) = std::fs::metadata(src) {
+        let _ = std::fs::write(stamp_path(dest), src_stamp(&s));
+    }
 }
 
 /// Remove the `com.apple.quarantine` flag from `path`, if present.

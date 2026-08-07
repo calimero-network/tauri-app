@@ -36,7 +36,6 @@ log = "0.4"
 env_logger = "0.11"
 dirs = "5.0"
 toml = "0.8"
-regex = "1.10"
 thiserror = "1.0"
 base64 = "0.22"
 keyring = "2"
@@ -52,6 +51,7 @@ strip = "symbols"
 lto = true
 opt-level = "s"
 codegen-units = 1
+panic = "abort"
 
 [features]
 default = ["custom-protocol", "autostart"]
@@ -61,4 +61,7 @@ devtools = ["tauri/devtools"]
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-updater = "2"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 

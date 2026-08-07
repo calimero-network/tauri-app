@@ -73,3 +73,7 @@ blob-report/
 # Package manager locks (keep pnpm-lock.yaml, ignore others)
 package-lock.json
 yarn.lock
+
+# Icon variants `pnpm tauri icon` regenerates but no bundle config references.
+apps/desktop/src-tauri/icons/Square*Logo.png
+apps/desktop/src-tauri/icons/StoreLogo.png

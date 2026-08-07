@@ -1,6 +1,7 @@
 //! Per-node merod version selection: id parsing, the shared binary store,
 //! GitHub release listing, install and remove.
 
+use crate::LockUnpoisoned;
 use crate::{TauriError, TauriErrorCode};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -210,7 +211,7 @@ pub struct ReleaseInfo {
 /// One hour, matching GitHub's unauthenticated rate-limit window (60 requests/hour).
 const RELEASE_CACHE_TTL: Duration = Duration::from_secs(3600);
 
-static RELEASE_CACHE: Mutex<Option<(Instant, Vec<ReleaseInfo>)>> = Mutex::new(None);
+static RELEASE_CACHE: Mutex<Option<(Instant, ReleaseListing)>> = Mutex::new(None);
 
 pub(crate) fn releases_from_json(body: &serde_json::Value, target: &str) -> Vec<ReleaseInfo> {
     body.as_array()
@@ -254,15 +255,21 @@ pub struct ReleaseListing {
 
 /// Serve whatever we last fetched when a refetch fails. The unauthenticated
 /// GitHub limit is 60/hour, so a rate-limited user would otherwise see nothing.
+/// Re-stamps the cache so a failure backs off for the TTL too - otherwise every
+/// later call refires the request, retrying hardest while GitHub rate-limits.
 fn stale_or_error(error: TauriError) -> Result<ReleaseListing, TauriError> {
-    let cached = RELEASE_CACHE.lock().ok().and_then(|g| g.as_ref().map(|(_, c)| c.clone()));
-    match cached {
-        Some(releases) if !releases.is_empty() => Ok(ReleaseListing {
-            releases,
-            stale: true,
-        }),
-        _ => Err(error),
-    }
+    RELEASE_CACHE
+        .lock_unpoisoned()
+        .as_mut()
+        .and_then(|(fetched_at, listing)| {
+            if listing.releases.is_empty() {
+                return None;
+            }
+            listing.stale = true;
+            *fetched_at = Instant::now();
+            Some(listing.clone())
+        })
+        .ok_or(error)
 }
 
 #[tauri::command]
@@ -271,10 +278,7 @@ pub async fn list_merod_releases(refresh: Option<bool>) -> Result<ReleaseListing
         if let Ok(guard) = RELEASE_CACHE.lock() {
             if let Some((fetched_at, cached)) = guard.as_ref() {
                 if fetched_at.elapsed() < RELEASE_CACHE_TTL {
-                    return Ok(ReleaseListing {
-                        releases: cached.clone(),
-                        stale: false,
-                    });
+                    return Ok(cached.clone());
                 }
             }
         }
@@ -313,14 +317,14 @@ pub async fn list_merod_releases(refresh: Option<bool>) -> Result<ReleaseListing
         ));
     }
 
-    let releases = releases_from_json(&body, merod_target_triple());
-    if let Ok(mut guard) = RELEASE_CACHE.lock() {
-        *guard = Some((Instant::now(), releases.clone()));
-    }
-    Ok(ReleaseListing {
-        releases,
+    let listing = ReleaseListing {
+        releases: releases_from_json(&body, merod_target_triple()),
         stale: false,
-    })
+    };
+    if let Ok(mut guard) = RELEASE_CACHE.lock() {
+        *guard = Some((Instant::now(), listing.clone()));
+    }
+    Ok(listing)
 }
 
 /// Repoint every node using `old_id` at a different local build. This is the
@@ -440,7 +444,7 @@ pub async fn ensure_release_installed(
     // Serialise all installs. Downloads are rare and a few seconds each, so a
     // single gate is simpler than per-tag locks and cannot deadlock.
     let gate = {
-        let mut gates = IN_FLIGHT.lock().unwrap_or_else(|p| p.into_inner());
+        let mut gates = IN_FLIGHT.lock_unpoisoned();
         gates.entry(tag.to_string()).or_default().clone()
     };
     let _guard = gate.lock().await;
@@ -805,7 +809,9 @@ pub async fn remove_merod_version(
             format!("Refusing to remove a path outside the merod store: {}", dir.display()),
         ));
     }
-    std::fs::remove_dir_all(&dir).map_err(|e| {
+    // A merod build is ~100MB of tree; the async form offloads it rather than
+    // stalling a runtime worker for the whole recursive delete.
+    tokio::fs::remove_dir_all(&dir).await.map_err(|e| {
         TauriError::with_details(
             TauriErrorCode::DirectoryError,
             format!("Failed to remove {}", tag),
@@ -885,9 +891,14 @@ pub(crate) fn find_merod_binary_in_dir(dir: &std::path::Path) -> Option<std::pat
 
 /// Runs `<binary> --version` and returns the trimmed stdout, or `None` on failure or timeout.
 pub(crate) async fn get_merod_version_at(path: &std::path::Path) -> Option<String> {
+    // kill_on_drop: on timeout the future is dropped, and without this the hung
+    // probe survives as an orphan (one per local build, per panel mount).
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(10),
-        Command::new(path).arg("--version").output(),
+        Command::new(path)
+            .arg("--version")
+            .kill_on_drop(true)
+            .output(),
     )
     .await
     .ok()?

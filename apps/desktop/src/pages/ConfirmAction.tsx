@@ -68,5 +68,5 @@ const ConfirmAction: React.FC<ConfirmActionProps> = ({
   );
 };
 
-export default ConfirmAction;
+export default React.memo(ConfirmAction);
 

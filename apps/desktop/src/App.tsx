@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef, lazy } from "react";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { createClientAsync, apiClient } from "./lib/mero-client";
 import { MeroContext, type MeroContextValue } from "@calimero-network/mero-react";
@@ -13,18 +13,12 @@ import {
   DEFAULT_EMBEDDED_SWARM_PORT,
 } from "./utils/settings";
 import { clearOnboardingProgress } from "./utils/onboardingProgress";
-import { startMerod, detectRunningMerodNodes, type RunningMerodNode } from "./utils/merod";
+import { startMerod, detectRunningMerodNodes, waitForNodeHealthy, type RunningMerodNode } from "./utils/merod";
 import { useToast } from "./contexts/ToastContext";
-import { checkOnboardingState, type OnboardingState } from "./utils/onboarding";
+import { checkOnboardingState } from "./utils/onboarding";
 import { decodeMetadata, openAppFrontend, parseTauriError } from "./utils/appUtils";
+import { listInstalledApps } from "./utils/installedAppsCache";
 import { useAppDeepLink } from "./hooks/useAppDeepLink";
-import Settings from "./pages/Settings";
-import Onboarding from "./pages/Onboarding";
-import Marketplace from "./pages/Marketplace";
-import InstalledApps from "./pages/InstalledApps";
-import Namespaces from "./pages/Namespaces";
-import NodeManagement from "./pages/NodeManagement";
-import ConfirmAction from "./pages/ConfirmAction";
 import UpdateNotification from "./components/UpdateNotification";
 import Sidebar from "./components/Sidebar";
 import { NodeStatusIndicator } from "./components/NodeStatusIndicator";
@@ -34,11 +28,22 @@ import { invoke } from "@tauri-apps/api/core";
 import { Settings as SettingsIcon, ArrowRight, Package, ShoppingCart } from "lucide-react";
 import calimeroLogo from "./assets/calimero-logo.svg";
 import { useTheme } from "./contexts/ThemeContext";
+import { useNodeVersions } from "./contexts/NodeVersionsContext";
 import "./App.css";
+
+// Only one page renders at a time, so keep them out of the initial bundle.
+const Settings = lazy(() => import("./pages/Settings"));
+const Onboarding = lazy(() => import("./pages/Onboarding"));
+const Marketplace = lazy(() => import("./pages/Marketplace"));
+const InstalledApps = lazy(() => import("./pages/InstalledApps"));
+const Namespaces = lazy(() => import("./pages/Namespaces"));
+const NodeManagement = lazy(() => import("./pages/NodeManagement"));
+const ConfirmAction = lazy(() => import("./pages/ConfirmAction"));
 
 function App() {
   const toast = useToast();
   const { theme } = useTheme();
+  const { refresh: refreshNodeVersions } = useNodeVersions();
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
@@ -103,7 +108,7 @@ function App() {
     if (!clientReady) return;
     setLoadingApps(true);
     try {
-      const response = await apiClient.node.listApplications();
+      const response = await listInstalledApps();
       if (response.error) {
         // If 401, show login (but not if we just completed onboarding)
         if (response.error.code === '401' && !showOnboarding) {
@@ -155,7 +160,27 @@ function App() {
     }
   }, [clientReady, showOnboarding]);
 
+  // Each set_tray_icon_connected decodes a PNG on the Rust side, and the health
+  // poll asks for the same value every tick. Only send changes; a failed send
+  // clears the guard so the next tick retries.
+  const trayConnected = useRef<boolean | null>(null);
+  const updateTrayIcon = useCallback((connected: boolean) => {
+    if (trayConnected.current === connected) return;
+    trayConnected.current = connected;
+    invoke("set_tray_icon_connected", { connected }).catch((err) => {
+      trayConnected.current = null;
+      console.warn("Failed to update tray icon:", err);
+    });
+  }, []);
+
+  const initRan = useRef(false);
+
   useEffect(() => {
+    // initializeApp sets clientReady, which rebuilds loadContexts and re-fires this
+    // effect; without the guard the whole init chain runs twice per launch.
+    if (initRan.current) return;
+    initRan.current = true;
+
     async function initializeApp() {
       const hasCustomSettings = localStorage.getItem('calimero-desktop-settings') !== null;
       const settings = getSettings();
@@ -191,7 +216,6 @@ function App() {
       }
 
       try {
-        const { startMerod } = await import('./utils/merod');
         const normalizeRunningNodes = (n: unknown): RunningMerodNode[] =>
           Array.isArray(n) ? n : [];
         let runningNodes = normalizeRunningNodes(await detectRunningMerodNodes());
@@ -211,7 +235,8 @@ function App() {
           const swarmPort = settings.embeddedNodeSwarmPort ?? DEFAULT_EMBEDDED_SWARM_PORT;
           try {
             await startMerod(serverPort, swarmPort, dataDir, settings.embeddedNodeName, settings.debugLogs);
-            await new Promise((r) => setTimeout(r, 4000)); // give merod time to start (longer when app launches at login)
+            // Non-fatal on timeout: the health check below is what decides connected state.
+            await waitForNodeHealthy(`http://localhost:${serverPort}/auth`, 15000).catch(() => {});
             runningNodes = normalizeRunningNodes(await detectRunningMerodNodes());
             setRunningNodes(runningNodes);
           } catch (startErr) {
@@ -277,39 +302,14 @@ function App() {
           setNeedsNodeConfig(false);
           loadContexts().catch(() => {});
           loadInstalledApps().catch(() => {});
-          invoke("set_tray_icon_connected", { connected: false }).catch(() => {});
+          updateTrayIcon(false);
           return;
         }
 
         setConnected(true);
-        invoke("set_tray_icon_connected", { connected: true }).catch(() => {});
+        updateTrayIcon(true);
         setError(null);
         setNeedsNodeConfig(false);
-
-        const onboardingState = await Promise.race([
-          checkOnboardingState(),
-          new Promise<OnboardingState>((resolve) =>
-            setTimeout(() => {
-              resolve({
-                isFirstTime: false,
-                authAvailable: false,
-                providersAvailable: false,
-                providersConfigured: false,
-                hasConfiguredProviders: false,
-                error: 'Connection timeout.',
-              });
-            }, 10000)
-          ),
-        ]);
-
-        // Debug logging
-        console.log('🔍 Onboarding State:', {
-          isFirstTime: onboardingState.isFirstTime,
-          authAvailable: onboardingState.authAvailable,
-          providersAvailable: onboardingState.providersAvailable,
-          hasConfiguredProviders: onboardingState.hasConfiguredProviders,
-          error: onboardingState.error,
-        });
 
         // Flow logic:
         // 1. FIRST: Check if user has existing tokens (already logged in)
@@ -342,7 +342,7 @@ function App() {
         setNeedsNodeConfig(false);
         loadContexts().catch(() => {});
         loadInstalledApps().catch(() => {});
-        invoke("set_tray_icon_connected", { connected: false }).catch(() => {});
+        updateTrayIcon(false);
       } finally {
         setCheckingOnboarding(false);
       }
@@ -350,12 +350,6 @@ function App() {
 
     initializeApp();
   }, [loadContexts]);
-
-  const updateTrayIcon = useCallback((connected: boolean) => {
-    invoke("set_tray_icon_connected", { connected }).catch((err) => {
-      console.warn("Failed to update tray icon:", err);
-    });
-  }, []);
 
   // Health-only check — no app loading. Keeps the status indicator up to date
   // without triggering re-renders of the app list on every tick.
@@ -416,7 +410,127 @@ function App() {
     }
   }, []);
 
+  // Page props are hoisted out of the JSX below: the pages are memoized, and an
+  // inline arrow would give them a new prop identity on every App render.
+  const handleOnboardingComplete = useCallback(async () => {
+    clearOnboardingProgress();
+    const settings = getSettings();
+    saveSettings({ ...settings, onboardingCompleted: true });
+    try {
+      await invoke("autostart_enable");
+      localStorage.setItem("calimero-autostart-default-applied", "1");
+    } catch {
+      // Autostart may not be available
+    }
+    // Onboarding never runs initializeApp, so nothing has marked the client
+    // ready - without this the loads below and the health interval no-op.
+    await createClientAsync({
+      baseUrl: settings.nodeUrl.replace(/\/$/, ''),
+      authBaseUrl: getAuthUrl(settings).replace(/\/$/, ''),
+      requestCredentials: 'omit',
+    });
+    setClientReady(true);
+    setShowLogin(false); // clear any stale login state from health checks during onboarding
+    setShowOnboarding(false);
+    setConnected(true);
+    setError(null);
+    // Onboarding may have pointed the node at a custom data dir.
+    refreshNodeVersions();
+    loadContexts().catch(() => {});
+    loadInstalledApps().catch(() => {});
+  }, [loadContexts, loadInstalledApps, refreshNodeVersions]);
 
+  const handleOnboardingSettings = useCallback(() => {
+    setShowOnboarding(false);
+    setShowSettings(true);
+  }, []);
+
+  const handleSettingsBack = useCallback(async () => {
+    // Reinitialize client BEFORE hiding Settings so the checkConnection useEffect
+    // only fires after the client has tokens loaded from localStorage
+    const settings = getSettings();
+    // baseUrl should NOT include /admin-api - mero-js adds that internally
+    const nodeBaseUrl = settings.nodeUrl.replace(/\/$/, '');
+    const authUrl = getAuthUrl(settings);
+    const authBaseUrl = authUrl.replace(/\/$/, '');
+
+    // Reload client with new settings and await token loading
+    await createClientAsync({
+      baseUrl: nodeBaseUrl,
+      authBaseUrl: authBaseUrl,
+      requestCredentials: 'omit',
+    });
+    setClientReady(true);
+    setClientVersion((v) => v + 1);
+
+    // Hide settings only after client is ready - this triggers the checkConnection
+    // useEffect, which needs a properly initialized client to avoid spurious 401 -> login
+    setShowSettings(false);
+
+    if (needsNodeConfig) {
+      // After first-time settings, continue with app initialization
+      setNeedsNodeConfig(false);
+
+      // Check onboarding state
+      setCheckingOnboarding(true);
+      try {
+        const state = await checkOnboardingState();
+
+        // Determine what to show
+        if (!state.authAvailable || !state.hasConfiguredProviders) {
+          setShowOnboarding(true);
+        } else if (!getAccessToken()) {
+          setShowLogin(true);
+        } else {
+          loadContexts();
+          loadInstalledApps();
+        }
+      } catch (err) {
+        console.error('Failed to check onboarding state:', err);
+        setShowOnboarding(true);
+      } finally {
+        setCheckingOnboarding(false);
+      }
+    } else {
+      // Settings changed, reload contexts if logged in
+      if (getAccessToken()) {
+        loadContexts();
+        loadInstalledApps();
+      }
+    }
+  }, [needsNodeConfig, loadContexts, loadInstalledApps]);
+
+  const handleAuthRequired = useCallback(() => setShowLogin(true), []);
+
+  const handleConfirmUninstall = useCallback((_appId: string, appName: string, onConfirm: () => Promise<void>) => {
+    setConfirmAction({
+      title: "Uninstall Application",
+      message: "Are you sure you want to uninstall this application? This action cannot be undone.",
+      itemName: appName,
+      actionLabel: "Uninstall",
+      onConfirm: async () => {
+        await onConfirm();
+        setCurrentPage('installed');
+        setConfirmAction(null);
+      },
+      breadcrumbs: [
+        { label: "Home", onClick: () => setCurrentPage('home') },
+        { label: "Applications", onClick: () => setCurrentPage('installed') },
+        { label: "Uninstall Application" },
+      ],
+    });
+    setCurrentPage('confirm');
+  }, []);
+
+  const handleConfirmCancel = useCallback(() => {
+    // Go back to the previous page (contexts or installed)
+    if (confirmAction?.breadcrumbs[1]?.onClick) {
+      confirmAction.breadcrumbs[1].onClick();
+    } else {
+      setCurrentPage('home');
+    }
+    setConfirmAction(null);
+  }, [confirmAction]);
 
   // Route incoming app deep-links (calimero://<slug>/<action>?<params> and the
   // https://links.calimero.network/... Universal Link) to the target app.
@@ -432,14 +546,14 @@ function App() {
     return () => { unlisten.then((off) => off()).catch(() => {}); };
   }, []);
 
-  // Health-check interval — lightweight, just updates the connected indicator.
-  // Skip on login/settings/onboarding screens.
+  // Gated on clientReady - the unconfigured singleton 401s on non-default ports.
+  // Not visibility-gated: the tray dot is the only UI while the window is hidden.
   useEffect(() => {
-    if (showLogin || showSettings || showOnboarding) return;
+    if (!clientReady || showLogin || showSettings || showOnboarding) return;
     checkConnection();
     const interval = setInterval(checkConnection, 10000);
     return () => clearInterval(interval);
-  }, [checkConnection, showLogin, showSettings, showOnboarding]);
+  }, [checkConnection, clientReady, showLogin, showSettings, showOnboarding]);
 
   // Load apps + contexts only when the user is on the home page.
   // Fires once on navigation — not on every health-check tick.
@@ -519,27 +633,8 @@ function App() {
   if (showOnboarding) {
     return (
       <Onboarding
-        onComplete={async () => {
-          clearOnboardingProgress();
-          const settings = getSettings();
-          saveSettings({ ...settings, onboardingCompleted: true });
-          try {
-            await invoke("autostart_enable");
-            localStorage.setItem("calimero-autostart-default-applied", "1");
-          } catch {
-            // Autostart may not be available
-          }
-          setShowLogin(false); // clear any stale login state from health checks during onboarding
-          setShowOnboarding(false);
-          setConnected(true);
-          setError(null);
-          loadContexts().catch(() => {});
-          loadInstalledApps().catch(() => {});
-        }}
-        onSettings={() => {
-          setShowOnboarding(false);
-          setShowSettings(true);
-        }}
+        onComplete={handleOnboardingComplete}
+        onSettings={handleOnboardingSettings}
       />
     );
   }
@@ -587,69 +682,7 @@ function App() {
   if (showSettings) {
     return (
       <ErrorBoundary componentName="Settings" onReset={() => setShowSettings(true)}>
-        <Settings
-          onBack={async () => {
-          // Reinitialize client BEFORE hiding Settings so the checkConnection useEffect
-          // only fires after the client has tokens loaded from localStorage
-          const settings = getSettings();
-          // baseUrl should NOT include /admin-api - mero-js adds that internally
-          const nodeBaseUrl = settings.nodeUrl.replace(/\/$/, '');
-          const authUrl = getAuthUrl(settings);
-          const authBaseUrl = authUrl.replace(/\/$/, '');
-
-          // Reload client with new settings and await token loading
-          await createClientAsync({
-            baseUrl: nodeBaseUrl,
-            authBaseUrl: authBaseUrl,
-            requestCredentials: 'omit',
-          });
-          setClientReady(true);
-          setClientVersion((v) => v + 1);
-
-          // Hide settings only after client is ready — this triggers the checkConnection
-          // useEffect, which needs a properly initialized client to avoid spurious 401→login
-          setShowSettings(false);
-          
-          if (needsNodeConfig) {
-            // After first-time settings, continue with app initialization
-            setNeedsNodeConfig(false);
-
-            // Check onboarding state
-            setCheckingOnboarding(true);
-            try {
-              const state = await checkOnboardingState();
-              // Onboarding state checked
-
-              // Determine what to show
-              if (!state.authAvailable) {
-                setShowOnboarding(true);
-              } else if (!state.hasConfiguredProviders) {
-                setShowOnboarding(true);
-              } else {
-                const hasToken = getAccessToken();
-                if (!hasToken) {
-                  setShowLogin(true);
-                } else {
-                  loadContexts();
-            loadInstalledApps();
-                }
-              }
-            } catch (err) {
-              console.error('Failed to check onboarding state:', err);
-              setShowOnboarding(true);
-            } finally {
-              setCheckingOnboarding(false);
-            }
-          } else {
-            // Settings changed, reload contexts if logged in
-            const hasToken = getAccessToken();
-            if (hasToken) {
-              loadContexts();
-            loadInstalledApps();
-            }
-          }
-        }}
-        />
+        <Settings onBack={handleSettingsBack} />
       </ErrorBoundary>
     );
   }
@@ -682,7 +715,7 @@ function App() {
               />
             </header>
             <main className="main">
-              <Marketplace clientReady={clientReady} />
+                <Marketplace clientReady={clientReady} />
             </main>
           </div>
         </div>
@@ -718,28 +751,10 @@ function App() {
               />
             </header>
             <main className="main">
-        <InstalledApps 
+        <InstalledApps
           clientReady={clientReady}
-          onAuthRequired={() => setShowLogin(true)}
-          onConfirmUninstall={(_appId, appName, onConfirm) => {
-            setConfirmAction({
-              title: "Uninstall Application",
-              message: "Are you sure you want to uninstall this application? This action cannot be undone.",
-              itemName: appName,
-              actionLabel: "Uninstall",
-              onConfirm: async () => {
-                await onConfirm();
-                setCurrentPage('installed');
-                setConfirmAction(null);
-              },
-              breadcrumbs: [
-                { label: "Home", onClick: () => setCurrentPage('home') },
-                { label: "Applications", onClick: () => setCurrentPage('installed') },
-                { label: "Uninstall Application" },
-              ],
-            });
-            setCurrentPage('confirm');
-          }}
+          onAuthRequired={handleAuthRequired}
+          onConfirmUninstall={handleConfirmUninstall}
         />
             </main>
           </div>
@@ -782,7 +797,7 @@ function App() {
               />
             </header>
             <main className="main">
-              <NodeManagement />
+                <NodeManagement />
             </main>
           </div>
         </div>
@@ -819,7 +834,7 @@ function App() {
             </header>
             <main className="main">
               <MeroContext.Provider value={meroContextValue}>
-                <Namespaces />
+                  <Namespaces />
               </MeroContext.Provider>
             </main>
           </div>
@@ -839,15 +854,7 @@ function App() {
           itemName={confirmAction.itemName}
           actionLabel={confirmAction.actionLabel}
           onConfirm={confirmAction.onConfirm}
-          onCancel={() => {
-            // Go back to the previous page (contexts or installed)
-            if (confirmAction.breadcrumbs[1]?.onClick) {
-              confirmAction.breadcrumbs[1].onClick();
-            } else {
-              setCurrentPage('home');
-            }
-            setConfirmAction(null);
-          }}
+          onCancel={handleConfirmCancel}
           breadcrumbs={confirmAction.breadcrumbs}
         />
       </div>

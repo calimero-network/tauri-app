@@ -8,6 +8,17 @@ use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, Manager};
 use thiserror::Error;
+
+/// Chain-style poison recovery: every mutex here guards a plain collection with
+/// no cross-field invariant, so the pre-poison data is always safe to reuse.
+pub(crate) trait LockUnpoisoned<T> {
+    fn lock_unpoisoned(&self) -> std::sync::MutexGuard<'_, T>;
+}
+impl<T> LockUnpoisoned<T> for std::sync::Mutex<T> {
+    fn lock_unpoisoned(&self) -> std::sync::MutexGuard<'_, T> {
+        self.lock().unwrap_or_else(|p| p.into_inner())
+    }
+}
 // Brings `.encode()` / `.decode()` onto the base64 engine used by the HTTP proxy.
 use base64::Engine as _;
 
@@ -620,15 +631,16 @@ async fn proxy_http_request_inner(
             if is_sensitive {
                 debug!("[Tauri Proxy] Adding header: '{}' = '[REDACTED]'", key);
             } else {
-                let value_preview = if value.len() > 50 {
-                    let preview: String = value.chars().take(50).collect();
-                    format!("{}...", preview)
-                } else {
-                    value.clone()
-                };
+                // Built inside the macro so the truncation/clone only runs when
+                // debug logging is actually enabled.
                 debug!(
                     "[Tauri Proxy] Adding header: '{}' = '{}'",
-                    key, value_preview
+                    key,
+                    if value.len() > 50 {
+                        format!("{}...", value.chars().take(50).collect::<String>())
+                    } else {
+                        value.clone()
+                    }
                 );
             }
             // Add header directly - reqwest will handle validation
@@ -767,7 +779,7 @@ async fn proxy_sse_stream(
 
     let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel::<()>();
     {
-        let mut registry = cancel_registry.lock().unwrap_or_else(|p| p.into_inner());
+        let mut registry = cancel_registry.lock_unpoisoned();
         registry.insert(stream_id.clone(), cancel_tx);
     }
 
@@ -776,8 +788,7 @@ async fn proxy_sse_stream(
 
     if let Err(reason) = validate_allowed_url(&url, None) {
         cancel_registry
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .lock_unpoisoned()
             .remove(&stream_id);
         let _ = window.emit(&end_event, "");
         return Err(TauriError::new(TauriErrorCode::UrlNotAllowed, reason));
@@ -796,8 +807,7 @@ async fn proxy_sse_stream(
         Ok(r) => r,
         Err(e) => {
             cancel_registry
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
+                .lock_unpoisoned()
                 .remove(&stream_id);
             let _ = window.emit(&end_event, "");
             return Err(TauriError::with_details(
@@ -827,8 +837,7 @@ async fn proxy_sse_stream(
     }
 
     cancel_registry
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
+        .lock_unpoisoned()
         .remove(&stream_id);
     let _ = window.emit(&end_event, "");
     Ok(())
@@ -896,8 +905,7 @@ async fn rotate_access_token(
 
     let (reply_tx, reply_rx) = tokio::sync::oneshot::channel::<TokenBrokerReply>();
     registry
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
+        .lock_unpoisoned()
         .insert(request_id.clone(), reply_tx);
 
     if let Err(e) = main_window.emit(
@@ -907,8 +915,7 @@ async fn rotate_access_token(
         },
     ) {
         registry
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .lock_unpoisoned()
             .remove(&request_id);
         return Err(format!("Failed to reach the desktop window: {e}"));
     }
@@ -920,8 +927,7 @@ async fn rotate_access_token(
         Ok(Err(_)) => Err("Desktop window closed before the token refresh completed".into()),
         Err(_) => {
             registry
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
+                .lock_unpoisoned()
                 .remove(&request_id);
             Err("Timed out waiting for the desktop to refresh the access token".into())
         }
@@ -959,8 +965,7 @@ type CapRegistry = std::sync::Arc<std::sync::Mutex<std::collections::HashMap<Str
 #[cfg(target_os = "macos")]
 fn cap_is_valid(registry: &CapRegistry, cap: &str, app_id: &str) -> bool {
     registry
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
+        .lock_unpoisoned()
         .get(cap)
         .map(|id| id == app_id)
         .unwrap_or(false)
@@ -1018,8 +1023,7 @@ fn resolve_token_request(
     registry: tauri::State<'_, TokenBrokerRegistry>,
 ) {
     if let Some(sender) = registry
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
+        .lock_unpoisoned()
         .remove(&request_id)
     {
         let reply = match access_token {
@@ -1266,14 +1270,19 @@ async fn fetch_icon_png(client: &reqwest::Client, base: &str) -> Option<Vec<u8>>
 /// resizes) and runs `iconutil -c icns`.
 #[cfg(target_os = "macos")]
 fn png_to_icns(png: &std::path::Path, icns: &std::path::Path) -> std::io::Result<()> {
+    // Assembled at a temp path and renamed in. The icon cache trusts any file it
+    // finds, so a crash mid-conversion must not leave a partial one behind.
+    let tmp = icns.with_extension("icns.part");
+    let _ = std::fs::remove_file(&tmp);
+
     let out = std::process::Command::new("sips")
         .args(["-s", "format", "icns"])
         .arg(png)
         .arg("--out")
-        .arg(icns)
+        .arg(&tmp)
         .output()?;
-    if out.status.success() && icns.exists() {
-        return Ok(());
+    if out.status.success() && tmp.exists() {
+        return std::fs::rename(&tmp, icns);
     }
     // Fallback: build a minimal .iconset and let iconutil assemble the .icns.
     let iconset = icns.with_extension("iconset");
@@ -1297,11 +1306,11 @@ fn png_to_icns(png: &std::path::Path, icns: &std::path::Path) -> std::io::Result
         .args(["-c", "icns"])
         .arg(&iconset)
         .arg("-o")
-        .arg(icns)
+        .arg(&tmp)
         .output()?;
     let _ = std::fs::remove_dir_all(&iconset);
-    if out.status.success() && icns.exists() {
-        Ok(())
+    if out.status.success() && tmp.exists() {
+        std::fs::rename(&tmp, icns)
     } else {
         Err(std::io::Error::new(
             std::io::ErrorKind::Other,
@@ -1365,16 +1374,30 @@ fn ensure_app_launcher_icon(
     frontend_url: &str,
     app_id: &str,
 ) -> Option<std::path::PathBuf> {
+    // A generated .icns is reused as-is: regenerating it costs a network fetch and
+    // ~11 `sips` forks. Manifest icons are content-keyed so a changed icon
+    // regenerates itself; fetched favicons (content unknown until fetched) key by
+    // app id and refresh via Remove Launchers, which clears this cache.
+    let cache_key = match bundled_icon {
+        Some(data) => {
+            use sha2::{Digest, Sha256};
+            format!("{app_id}-{}", &format!("{:x}", Sha256::digest(data.as_bytes()))[..12])
+        }
+        None => app_id.to_string(),
+    };
+    let cached = app_icon_cache_path(&cache_key);
+    if cached.exists() {
+        return Some(cached);
+    }
     let png = bundled_icon
         .and_then(decode_data_uri_png)
         .or_else(|| fetch_frontend_icon_png(frontend_url))?;
     let tmp_png = std::env::temp_dir().join(format!("calimero-appicon-{app_id}.png"));
     std::fs::write(&tmp_png, &png).ok()?;
-    let icns = app_icon_cache_path(app_id);
-    let result = png_to_icns(&tmp_png, &icns);
+    let result = png_to_icns(&tmp_png, &cached);
     let _ = std::fs::remove_file(&tmp_png);
     match result {
-        Ok(()) => Some(icns),
+        Ok(()) => Some(cached),
         Err(_) => None,
     }
 }
@@ -1415,6 +1438,12 @@ fn ensure_app_launcher(
 ) -> Result<std::path::PathBuf, TauriError> {
     launcher::validate_app_id(app_id)
         .map_err(|e| TauriError::new(TauriErrorCode::ShortcutCreationFailed, e.to_string()))?;
+
+    // Both callers now run this on a blocking thread, so two builds can overlap and
+    // interleave the caps.json read-modify-write below. Global, not per app id: the
+    // cap must also match the bundle it was baked into when one app is opened twice.
+    static BUILD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _serialised = BUILD.lock_unpoisoned();
 
     // sanitize the name for the .app filename
     let safe: String = app_name
@@ -1484,8 +1513,7 @@ fn ensure_app_launcher(
     .map_err(|e| TauriError::new(TauriErrorCode::ShortcutCreationFailed, e.to_string()))?;
     app_handle
         .state::<CapRegistry>()
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
+        .lock_unpoisoned()
         .insert(cap, app_id.to_string());
 
     Ok(bundle)
@@ -1494,9 +1522,33 @@ fn ensure_app_launcher(
 /// "Open" on macOS: launch the app through its per-app shell/launcher (first-class
 /// dock identity), creating a managed launcher if one doesn't exist yet. Reuses
 /// the app's existing launcher location (e.g. a Desktop one) when present.
+///
+/// The body takes seconds (shell extract, icon fetch, `sips`, waiting on `open`),
+/// so it runs on a blocking thread rather than a runtime worker.
 #[tauri::command]
+async fn open_app_launcher(
+    app_handle: tauri::AppHandle,
+    app_name: String,
+    frontend_url: String,
+    app_id: String,
+    icon: Option<String>,
+    node_url: String,
+) -> Result<String, TauriError> {
+    tokio::task::spawn_blocking(move || {
+        open_app_launcher_blocking(app_handle, app_name, frontend_url, app_id, icon, node_url)
+    })
+    .await
+    .map_err(|e| {
+        TauriError::with_details(
+            TauriErrorCode::ShortcutCreationFailed,
+            "Launcher task failed",
+            e.to_string(),
+        )
+    })?
+}
+
 #[allow(unused_variables)]
-fn open_app_launcher(
+fn open_app_launcher_blocking(
     app_handle: tauri::AppHandle,
     app_name: String,
     frontend_url: String,
@@ -1564,9 +1616,32 @@ fn open_app_launcher(
     }
 }
 
+/// Shares `ensure_app_launcher` with `open_app_launcher`, so it blocks for just as
+/// long and takes the same blocking thread.
 #[tauri::command]
+async fn create_desktop_shortcut(
+    app_handle: tauri::AppHandle,
+    app_name: String,
+    frontend_url: String,
+    app_id: Option<String>,
+    icon: Option<String>,
+    node_url: String,
+) -> Result<String, TauriError> {
+    tokio::task::spawn_blocking(move || {
+        create_desktop_shortcut_blocking(app_handle, app_name, frontend_url, app_id, icon, node_url)
+    })
+    .await
+    .map_err(|e| {
+        TauriError::with_details(
+            TauriErrorCode::ShortcutCreationFailed,
+            "Shortcut task failed",
+            e.to_string(),
+        )
+    })?
+}
+
 #[allow(unused_variables)]
-fn create_desktop_shortcut(
+fn create_desktop_shortcut_blocking(
     app_handle: tauri::AppHandle,
     app_name: String,
     frontend_url: String,
@@ -2117,6 +2192,13 @@ struct MerodProcess {
 
 type MerodState = Arc<Mutex<Vec<MerodProcess>>>;
 
+/// Announce that the set of tracked merod processes changed, so the frontend can
+/// refetch on the edge instead of polling for it. Emitted on every mutation of
+/// `MerodState`; carries no payload.
+fn emit_merod_status_changed(app_handle: &tauri::AppHandle) {
+    let _ = app_handle.emit("merod-status-changed", ());
+}
+
 /// A registered log writer plus a reference count of live processes using it.
 /// Ref-counting means a restart or a concurrent second start (which reuse the
 /// same writer) don't drop the shared registration until the *last* user exits.
@@ -2162,8 +2244,7 @@ impl NodeInitReservation {
     fn claim(home: &std::path::Path, node_name: &str) -> Result<Self, TauriError> {
         let key = format!("{}::{}", home.display(), node_name);
         let mut in_flight = NODE_INIT_IN_FLIGHT
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
+            .lock_unpoisoned();
 
         // merod init over an existing node reports success without minting the
         // admin account, leaving a node nobody can sign in to. Refuse instead.
@@ -2189,8 +2270,7 @@ impl NodeInitReservation {
 impl Drop for NodeInitReservation {
     fn drop(&mut self) {
         NODE_INIT_IN_FLIGHT
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .lock_unpoisoned()
             .remove(&self.0);
     }
 }
@@ -2273,6 +2353,21 @@ fn spawn_log_drain<R>(
     });
 }
 
+/// Repoint the port of the first `/<proto>/<digits>` component of a multiaddr,
+/// leaving any trailing components (e.g. `/quic-v1`) intact.
+fn replace_multiaddr_port(addr: &str, proto: &str, port: u16) -> String {
+    let needle = format!("/{}/", proto);
+    let Some(start) = addr.find(&needle) else {
+        return addr.to_string();
+    };
+    let rest = &addr[start + needle.len()..];
+    let tail = rest.trim_start_matches(|c: char| c.is_ascii_digit());
+    if tail.len() == rest.len() {
+        return addr.to_string();
+    }
+    format!("{}{}{}{}", &addr[..start], needle, port, tail)
+}
+
 #[tauri::command]
 async fn start_merod(
     server_port: Option<u16>,
@@ -2289,7 +2384,7 @@ async fn start_merod(
 
     // Only stop a process that uses the same server_port (port conflict)
     let existing_on_port: Option<u32> = {
-        let state = merod_state.lock().unwrap();
+        let state = merod_state.lock_unpoisoned();
         state.iter().find(|p| p.port == server_port).map(|p| p.pid)
     };
 
@@ -2317,8 +2412,10 @@ async fn start_merod(
                 .arg("/F")
                 .output();
         }
-        let mut state = merod_state.lock().unwrap();
-        state.retain(|p| p.pid != pid);
+        merod_state
+            .lock_unpoisoned()
+            .retain(|p| p.pid != pid);
+        emit_merod_status_changed(&app_handle);
     }
 
     // Prepare home directory (where .calimero folder is, e.g., ~/.calimero)
@@ -2389,19 +2486,14 @@ async fn start_merod(
                         for listen_str in listen_array.iter_mut() {
                             if let Some(addr) = listen_str.as_str() {
                                 // Replace port in IPv4 server addresses (e.g., /ip4/127.0.0.1/tcp/2528)
-                                if addr.contains("/ip4/127.0.0.1/tcp/") {
-                                    let new_addr = regex::Regex::new(r"/tcp/\d+")
-                                        .unwrap()
-                                        .replace(addr, &format!("/tcp/{}", server_port))
-                                        .to_string();
-                                    *listen_str = toml::Value::String(new_addr);
-                                } else if addr.contains("/ip6/::1/tcp/") {
-                                    // Replace port in IPv6 server addresses
-                                    let new_addr = regex::Regex::new(r"/tcp/\d+")
-                                        .unwrap()
-                                        .replace(addr, &format!("/tcp/{}", server_port))
-                                        .to_string();
-                                    *listen_str = toml::Value::String(new_addr);
+                                if addr.contains("/ip4/127.0.0.1/tcp/")
+                                    || addr.contains("/ip6/::1/tcp/")
+                                {
+                                    *listen_str = toml::Value::String(replace_multiaddr_port(
+                                        addr,
+                                        "tcp",
+                                        server_port,
+                                    ));
                                 }
                             }
                         }
@@ -2418,18 +2510,14 @@ async fn start_merod(
                                 // Replace port in swarm addresses - handle both TCP and UDP
                                 if addr.contains("/tcp/") && !addr.contains("/udp/") {
                                     // Replace TCP port (e.g., /ip4/0.0.0.0/tcp/2428)
-                                    let new_addr = regex::Regex::new(r"/tcp/\d+")
-                                        .unwrap()
-                                        .replace(addr, &format!("/tcp/{}", swarm_port))
-                                        .to_string();
-                                    *listen_str = toml::Value::String(new_addr);
+                                    *listen_str = toml::Value::String(replace_multiaddr_port(
+                                        addr, "tcp", swarm_port,
+                                    ));
                                 } else if addr.contains("/udp/") {
                                     // Replace UDP port (e.g., /ip4/0.0.0.0/udp/2428/quic-v1)
-                                    let new_addr = regex::Regex::new(r"/udp/\d+")
-                                        .unwrap()
-                                        .replace(addr, &format!("/udp/{}", swarm_port))
-                                        .to_string();
-                                    *listen_str = toml::Value::String(new_addr);
+                                    *listen_str = toml::Value::String(replace_multiaddr_port(
+                                        addr, "udp", swarm_port,
+                                    ));
                                 }
                             }
                         }
@@ -2599,22 +2687,24 @@ async fn start_merod(
 
     // Store process state
     {
-        let mut state = merod_state.lock().unwrap();
+        let mut state = merod_state.lock_unpoisoned();
         state.push(MerodProcess {
             pid,
             port: server_port,
         });
     }
+    emit_merod_status_changed(&app_handle);
 
     // Spawn a task to monitor the process
     let merod_state_clone = merod_state.inner().clone();
     let log_writers_clone = log_writers.inner().clone();
     let exit_log_key = log_key.clone();
     let monitored_pid = pid; // Capture PID for verification
+    let exit_app_handle = app_handle.clone();
     tokio::spawn(async move {
         let status = child.wait().await;
         {
-            let mut state = merod_state_clone.lock().unwrap();
+            let mut state = merod_state_clone.lock_unpoisoned();
             if let Ok(exit_status) = status {
                 if let Some(code) = exit_status.code() {
                     warn!("[Merod] Process {} exited with code: {}", monitored_pid, code);
@@ -2622,6 +2712,7 @@ async fn start_merod(
             }
             state.retain(|p| p.pid != monitored_pid);
         }
+        emit_merod_status_changed(&exit_app_handle);
         // Drop one reference to this node's writer; remove the registration only
         // when the last user exits. Ref-counting means a restart or a concurrent
         // second start (which reuse the same writer) don't unregister it out from
@@ -2641,9 +2732,12 @@ async fn start_merod(
 }
 
 #[tauri::command]
-async fn stop_merod(merod_state: tauri::State<'_, MerodState>) -> Result<String, TauriError> {
+async fn stop_merod(
+    app_handle: tauri::AppHandle,
+    merod_state: tauri::State<'_, MerodState>,
+) -> Result<String, TauriError> {
     let pids: Vec<u32> = {
-        let state = merod_state.lock().unwrap();
+        let state = merod_state.lock_unpoisoned();
         state.iter().map(|p| p.pid).collect()
     };
 
@@ -2728,10 +2822,10 @@ async fn stop_merod(merod_state: tauri::State<'_, MerodState>) -> Result<String,
         info!("[Merod] Stopped process with PID: {}", pid);
     }
 
-    {
-        let mut state = merod_state.lock().unwrap();
-        state.clear();
-    }
+    merod_state
+        .lock_unpoisoned()
+        .clear();
+    emit_merod_status_changed(&app_handle);
 
     Ok("Merod stopped successfully".to_string())
 }
@@ -2739,6 +2833,7 @@ async fn stop_merod(merod_state: tauri::State<'_, MerodState>) -> Result<String,
 #[tauri::command]
 async fn stop_merod_by_pid_command(
     pid: u32,
+    app_handle: tauri::AppHandle,
     merod_state: tauri::State<'_, MerodState>,
 ) -> Result<String, TauriError> {
     #[cfg(unix)]
@@ -2820,10 +2915,10 @@ async fn stop_merod_by_pid_command(
     }
 
     // Remove this process from state
-    {
-        let mut state = merod_state.lock().unwrap();
-        state.retain(|p| p.pid != pid);
-    }
+    merod_state
+        .lock_unpoisoned()
+        .retain(|p| p.pid != pid);
+    emit_merod_status_changed(&app_handle);
 
     info!("[Merod] Stopped process with PID: {}", pid);
     Ok(format!("Merod stopped successfully (PID: {})", pid))
@@ -2832,9 +2927,15 @@ async fn stop_merod_by_pid_command(
 fn is_process_running(pid: u32) -> bool {
     #[cfg(unix)]
     {
-        use std::process::Command;
-        let output = Command::new("kill").arg("-0").arg(pid.to_string()).output();
-        output.is_ok() && output.unwrap().status.success()
+        // kill(2) reads pid <= 0 as a process-group target, so anything that is
+        // not a positive pid_t must never reach it.
+        let pid = match libc::pid_t::try_from(pid) {
+            Ok(pid) if pid > 0 => pid,
+            _ => return false,
+        };
+        // SAFETY: plain FFI call, no pointers; the guard above keeps pid a single
+        // positive process and signal 0 delivers nothing.
+        unsafe { libc::kill(pid, 0) == 0 }
     }
     #[cfg(windows)]
     {
@@ -2852,30 +2953,49 @@ fn is_process_running(pid: u32) -> bool {
     }
 }
 
+/// The reap probes every tracked node for liveness while holding the state lock,
+/// and this command is polled - too much to leave on a runtime worker.
 #[tauri::command]
 async fn get_merod_status(
+    app_handle: tauri::AppHandle,
     merod_state: tauri::State<'_, MerodState>,
 ) -> Result<serde_json::Value, TauriError> {
-    let mut state = merod_state.lock().unwrap();
-    if state.is_empty() {
-        return Ok(serde_json::json!({ "running": false, "nodes": [] }));
-    }
-    // Filter out dead processes
-    state.retain(|p| is_process_running(p.pid));
-    if state.is_empty() {
-        return Ok(serde_json::json!({ "running": false, "nodes": [] }));
-    }
-    let nodes: Vec<_> = state
-        .iter()
-        .map(|p| serde_json::json!({ "pid": p.pid, "port": p.port }))
-        .collect();
-    let first = &state[0];
-    Ok(serde_json::json!({
-        "running": true,
-        "nodes": nodes,
-        "pid": first.pid,
-        "port": first.port
-    }))
+    let merod_state = merod_state.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        let mut state = merod_state.lock_unpoisoned();
+        if state.is_empty() {
+            return serde_json::json!({ "running": false, "nodes": [] });
+        }
+        // Filter out dead processes. Only announce when this reap actually dropped
+        // one, or a polling caller would emit on every tick.
+        let before = state.len();
+        state.retain(|p| is_process_running(p.pid));
+        if state.len() != before {
+            emit_merod_status_changed(&app_handle);
+        }
+        if state.is_empty() {
+            return serde_json::json!({ "running": false, "nodes": [] });
+        }
+        let nodes: Vec<_> = state
+            .iter()
+            .map(|p| serde_json::json!({ "pid": p.pid, "port": p.port }))
+            .collect();
+        let first = &state[0];
+        serde_json::json!({
+            "running": true,
+            "nodes": nodes,
+            "pid": first.pid,
+            "port": first.port
+        })
+    })
+    .await
+    .map_err(|e| {
+        TauriError::with_details(
+            TauriErrorCode::InternalError,
+            "Status task failed",
+            e.to_string(),
+        )
+    })
 }
 
 #[tauri::command]
@@ -2979,18 +3099,13 @@ async fn check_merod_health(node_url: String) -> Result<serde_json::Value, Tauri
 
     info!("[Merod] Checking health at: {}", health_url);
 
-    let client = reqwest::Client::builder()
+    // Onboarding polls this twice a second, so it shares the pooled client rather
+    // than building one (and reloading the trust store) per call.
+    let response = http_client()
+        .get(&health_url)
         .timeout(std::time::Duration::from_secs(5))
-        .build()
-        .map_err(|e| {
-            TauriError::with_details(
-                TauriErrorCode::HttpClientError,
-                "Failed to create HTTP client",
-                e.to_string(),
-            )
-        })?;
-
-    let response = client.get(&health_url).send().await;
+        .send()
+        .await;
 
     match response {
         Ok(resp) => {
@@ -3165,18 +3280,56 @@ async fn init_merod_node(
     Ok(format!("Node '{}' initialized successfully", node_name))
 }
 
+/// `(server, swarm)` ports a node uses when its config says nothing usable.
+const DEFAULT_NODE_PORTS: (u16, u16) = (2528, 2428);
+
+/// The port out of a multiaddr like `/ip4/127.0.0.1/tcp/2528` or
+/// `/ip4/0.0.0.0/udp/2428/quic-v1`.
+fn multiaddr_port(addr: &str, proto: &str) -> Option<u16> {
+    addr[addr.find(proto)? + proto.len()..]
+        .split('/')
+        .next()?
+        .parse()
+        .ok()
+}
+
+/// `(server, swarm)` ports declared by a node's `config.toml` body.
+fn parse_node_ports(body: &str) -> (u16, u16) {
+    let Ok(config) = body.parse::<toml::Value>() else {
+        return DEFAULT_NODE_PORTS;
+    };
+    let port_of = |section: &str, protos: &[&str]| -> Option<u16> {
+        config
+            .get(section)?
+            .get("listen")?
+            .as_array()?
+            .iter()
+            .filter_map(|v| v.as_str())
+            .find_map(|addr| protos.iter().find_map(|p| multiaddr_port(addr, p)))
+    };
+    (
+        port_of("server", &["/tcp/"]).unwrap_or(DEFAULT_NODE_PORTS.0),
+        port_of("swarm", &["/tcp/", "/udp/"]).unwrap_or(DEFAULT_NODE_PORTS.1),
+    )
+}
+
+fn node_ports(config_path: &std::path::Path) -> (u16, u16) {
+    std::fs::read_to_string(config_path)
+        .map(|body| parse_node_ports(&body))
+        .unwrap_or(DEFAULT_NODE_PORTS)
+}
+
 #[tauri::command]
 async fn detect_running_merod_nodes() -> Result<Vec<serde_json::Value>, TauriError> {
     #[cfg(unix)]
     {
-        use std::process::Command;
-
         // Use ps to find merod processes
-        let output = Command::new("ps")
+        let output = tokio::process::Command::new("ps")
             .arg("ax")
             .arg("-o")
             .arg("pid,command")
             .output()
+            .await
             .map_err(|e| {
                 TauriError::with_details(
                     TauriErrorCode::InternalError,
@@ -3192,7 +3345,7 @@ async fn detect_running_merod_nodes() -> Result<Vec<serde_json::Value>, TauriErr
             if line.contains("merod") && line.contains("run") {
                 // Parse PID and extract node name and home directory from command
                 let parts: Vec<&str> = line.split_whitespace().collect();
-                if let Some(pid_str) = parts.get(0) {
+                if let Some(pid_str) = parts.first() {
                     if let Ok(pid) = pid_str.parse::<u32>() {
                         // Try to extract node name and home directory from arguments
                         let mut node_name = None;
@@ -3207,107 +3360,14 @@ async fn detect_running_merod_nodes() -> Result<Vec<serde_json::Value>, TauriErr
                             }
                         }
 
-                        // Try to read ports from config.toml
-                        let mut server_port = 2528; // Default
-                        let mut swarm_port = 2428; // Default
-                        if let (Some(name), Some(home)) = (&node_name, &home_dir) {
-                            let config_path = std::path::PathBuf::from(home)
-                                .join(name)
-                                .join("config.toml");
-                            if config_path.exists() {
-                                if let Ok(config_content) = std::fs::read_to_string(&config_path) {
-                                    if let Ok(config) = config_content.parse::<toml::Value>() {
-                                        // Try to extract server port from server.listen
-                                        if let Some(server) = config.get("server") {
-                                            if let Some(listen) = server.get("listen") {
-                                                if let Some(listen_array) = listen.as_array() {
-                                                    for listen_str in listen_array {
-                                                        if let Some(addr) = listen_str.as_str() {
-                                                            // Extract port from /ip4/127.0.0.1/tcp/2528
-                                                            if let Some(tcp_pos) =
-                                                                addr.find("/tcp/")
-                                                            {
-                                                                let port_str = &addr[tcp_pos + 5..];
-                                                                if let Some(slash_pos) =
-                                                                    port_str.find('/')
-                                                                {
-                                                                    if let Ok(p) = port_str
-                                                                        [..slash_pos]
-                                                                        .parse::<u16>()
-                                                                    {
-                                                                        server_port = p;
-                                                                        break;
-                                                                    }
-                                                                } else if let Ok(p) =
-                                                                    port_str.parse::<u16>()
-                                                                {
-                                                                    server_port = p;
-                                                                    break;
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-
-                                        // Try to extract swarm port from swarm.listen
-                                        if let Some(swarm) = config.get("swarm") {
-                                            if let Some(listen) = swarm.get("listen") {
-                                                if let Some(listen_array) = listen.as_array() {
-                                                    for listen_str in listen_array {
-                                                        if let Some(addr) = listen_str.as_str() {
-                                                            // Extract port from /ip4/0.0.0.0/tcp/2428 or /ip4/0.0.0.0/udp/2428/quic-v1
-                                                            if let Some(tcp_pos) =
-                                                                addr.find("/tcp/")
-                                                            {
-                                                                let port_str = &addr[tcp_pos + 5..];
-                                                                if let Some(slash_pos) =
-                                                                    port_str.find('/')
-                                                                {
-                                                                    if let Ok(p) = port_str
-                                                                        [..slash_pos]
-                                                                        .parse::<u16>()
-                                                                    {
-                                                                        swarm_port = p;
-                                                                        break;
-                                                                    }
-                                                                } else if let Ok(p) =
-                                                                    port_str.parse::<u16>()
-                                                                {
-                                                                    swarm_port = p;
-                                                                    break;
-                                                                }
-                                                            } else if let Some(udp_pos) =
-                                                                addr.find("/udp/")
-                                                            {
-                                                                let port_str = &addr[udp_pos + 5..];
-                                                                if let Some(slash_pos) =
-                                                                    port_str.find('/')
-                                                                {
-                                                                    if let Ok(p) = port_str
-                                                                        [..slash_pos]
-                                                                        .parse::<u16>()
-                                                                    {
-                                                                        swarm_port = p;
-                                                                        break;
-                                                                    }
-                                                                } else if let Ok(p) =
-                                                                    port_str.parse::<u16>()
-                                                                {
-                                                                    swarm_port = p;
-                                                                    break;
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                        let (server_port, swarm_port) = match (&node_name, &home_dir) {
+                            (Some(name), Some(home)) => node_ports(
+                                &std::path::PathBuf::from(home)
+                                    .join(name)
+                                    .join("config.toml"),
+                            ),
+                            _ => DEFAULT_NODE_PORTS,
+                        };
 
                         running_nodes.push(serde_json::json!({
                             "pid": pid,
@@ -3326,13 +3386,14 @@ async fn detect_running_merod_nodes() -> Result<Vec<serde_json::Value>, TauriErr
 
     #[cfg(windows)]
     {
-        use std::process::Command;
+        use tokio::process::Command;
 
         // Use tasklist and wmic on Windows
         let output = Command::new("tasklist")
             .arg("/FO")
             .arg("CSV")
             .output()
+            .await
             .map_err(|e| {
                 TauriError::with_details(
                     TauriErrorCode::InternalError,
@@ -3358,7 +3419,8 @@ async fn detect_running_merod_nodes() -> Result<Vec<serde_json::Value>, TauriErr
                             .arg(format!("ProcessId={}", pid))
                             .arg("get")
                             .arg("CommandLine")
-                            .output();
+                            .output()
+                            .await;
 
                         if let Ok(cmd_out) = cmd_output {
                             let cmd_line = String::from_utf8_lossy(&cmd_out.stdout);
@@ -3676,6 +3738,7 @@ async fn download_and_replace_merod(
     // Verification passed — safe to discard backup
     let _ = tokio::fs::remove_file(&bak_path).await;
 
+    *BUNDLED_MEROD_VERSION.lock_unpoisoned() = Some(new_version.clone());
     info!("[Updater] merod updated to {}", new_version);
     Ok(serde_json::json!({
         "replaced": true,
@@ -3685,14 +3748,25 @@ async fn download_and_replace_merod(
     }))
 }
 
+/// `merod --version` for the bundled binary. Cached: three UI surfaces re-invoke
+/// this on mount, and only `download_and_replace_merod` can change the answer.
+static BUNDLED_MEROD_VERSION: Mutex<Option<String>> = Mutex::new(None);
+
+
 /// Return the version string reported by the bundled merod binary (`merod --version`).
 #[tauri::command]
 async fn get_merod_binary_version(app_handle: tauri::AppHandle) -> Result<String, TauriError> {
+    if let Some(version) = BUNDLED_MEROD_VERSION.lock_unpoisoned().clone() {
+        return Ok(version);
+    }
     let merod_binary = get_bundled_merod_path(&app_handle)
         .map_err(|e| TauriError::new(TauriErrorCode::FileNotFound, e))?;
-    Ok(get_merod_version_at(&merod_binary)
-        .await
-        .unwrap_or_else(|| "unknown".to_string()))
+    // A failed probe is not cached: the binary may simply be mid-replacement.
+    let Some(version) = get_merod_version_at(&merod_binary).await else {
+        return Ok("unknown".to_string());
+    };
+    *BUNDLED_MEROD_VERSION.lock_unpoisoned() = Some(version.clone());
+    Ok(version)
 }
 
 /// Read merod logs for a node. Logs are only available for nodes started by the app.
@@ -3901,21 +3975,22 @@ async fn autostart_is_enabled(_app: tauri::AppHandle) -> Result<bool, TauriError
 /// has the data directory open. Clears MerodState and waits for processes to fully exit.
 #[tauri::command]
 async fn kill_all_merod_processes(
+    app_handle: tauri::AppHandle,
     merod_state: tauri::State<'_, MerodState>,
 ) -> Result<String, TauriError> {
     let tracked: Vec<u32> = merod_state
-        .lock()
-        .map(|s| s.iter().map(|p| p.pid).collect())
-        .unwrap_or_default();
+        .lock_unpoisoned()
+        .iter()
+        .map(|p| p.pid)
+        .collect();
     let pids = collect_merod_pids(&tracked);
 
     kill_pids(&pids).await;
 
-    {
-        if let Ok(mut state) = merod_state.lock() {
-            state.clear();
-        }
-    }
+    merod_state
+        .lock_unpoisoned()
+        .clear();
+    emit_merod_status_changed(&app_handle);
 
     info!("[Calimero] Killed {} merod process(es)", pids.len());
     Ok(format!("Stopped {} merod process(es)", pids.len()))
@@ -3938,165 +4013,6 @@ async fn open_url_in_browser(url: String, app_handle: tauri::AppHandle) -> Resul
         .shell()
         .open(url, None)
         .map_err(|e| TauriError::new(TauriErrorCode::InternalError, e.to_string()))
-}
-
-/// One WebRTC ICE server entry, serialized exactly as the browser's
-/// `RTCIceServer` expects (so the frontend can feed it straight into
-/// `new RTCPeerConnection({ iceServers })`).
-#[derive(Serialize)]
-struct IceServer {
-    urls: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    username: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none", rename = "credential")]
-    credential: Option<String>,
-}
-
-/// Validate a credential/secret value: trims whitespace and rejects empty,
-/// over-long (>256 chars), or control-character-bearing values so a malformed or
-/// hostile value can't be forwarded verbatim into the frontend's
-/// `RTCPeerConnection` config.
-fn sanitize_secret(value: &str) -> Option<String> {
-    let v = value.trim();
-    (!v.is_empty() && v.len() <= 256 && !v.chars().any(char::is_control)).then(|| v.to_string())
-}
-
-/// Read and sanitize an optional TURN credential env var.
-fn sanitized_turn_secret(var: &str) -> Option<String> {
-    std::env::var(var).ok().as_deref().and_then(sanitize_secret)
-}
-
-/// The ICE credential endpoint URL. Runtime `CALIMERO_ICE_ENDPOINT` wins; otherwise
-/// the value baked in at build time via `option_env!` (so release builds ship a
-/// working default the installed app uses with zero user configuration). Returns
-/// `None` unless the resolved value is an http(s) URL.
-fn ice_endpoint() -> Option<String> {
-    let raw = std::env::var("CALIMERO_ICE_ENDPOINT")
-        .ok()
-        .or_else(|| option_env!("CALIMERO_ICE_ENDPOINT").map(str::to_string))?;
-    let raw = raw.trim();
-    (raw.starts_with("http://") || raw.starts_with("https://")).then(|| raw.to_string())
-}
-
-/// The bearer key sent to the ICE endpoint. Runtime env wins; otherwise the
-/// build-time baked value (paired with the baked `ice_endpoint`).
-fn ice_endpoint_key() -> Option<String> {
-    sanitized_turn_secret("CALIMERO_ICE_ENDPOINT_KEY")
-        .or_else(|| option_env!("CALIMERO_ICE_ENDPOINT_KEY").and_then(sanitize_secret))
-}
-
-/// JSON returned by a self-hosted ICE credential endpoint (`CALIMERO_ICE_ENDPOINT`).
-/// Matches the conventional `{ "iceServers": [...] }` shape so a coturn + minting
-/// service (or any compatible TURN-as-a-service endpoint) can be swapped without a
-/// code change. Each entry carries one `urls` string (the minting service emits one
-/// url per entry).
-#[derive(Deserialize)]
-struct IceEndpointResponse {
-    #[serde(rename = "iceServers")]
-    ice_servers: Vec<IceServerWire>,
-}
-
-#[derive(Deserialize)]
-struct IceServerWire {
-    urls: String,
-    #[serde(default)]
-    username: Option<String>,
-    #[serde(default)]
-    credential: Option<String>,
-}
-
-/// Fetch ICE servers (with freshly-minted, short-lived TURN credentials) from a
-/// self-hosted endpoint. Sends `CALIMERO_ICE_ENDPOINT_KEY` as a bearer token when
-/// set so the minting service can authenticate the desktop app. Returns `None` on
-/// any failure (unreachable, non-2xx, malformed, no usable entries) so the caller
-/// falls back to the static path — a momentarily-down endpoint must never block a
-/// user from joining a call. Bounded by a short timeout for the same reason.
-async fn fetch_ice_servers_from_endpoint(endpoint: &str) -> Option<Vec<IceServer>> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(4))
-        .build()
-        .ok()?;
-    let mut req = client.get(endpoint);
-    if let Some(key) = ice_endpoint_key() {
-        req = req.bearer_auth(key);
-    }
-    let resp = req.send().await.ok()?;
-    if !resp.status().is_success() {
-        log::warn!("[webrtc] ICE endpoint returned status {}", resp.status());
-        return None;
-    }
-    let parsed: IceEndpointResponse = resp.json().await.ok()?;
-    let servers: Vec<IceServer> = parsed
-        .ice_servers
-        .into_iter()
-        .filter_map(|s| {
-            let urls = s.urls.trim().to_string();
-            let is_ice = urls.starts_with("stun:")
-                || urls.starts_with("stuns:")
-                || urls.starts_with("turn:")
-                || urls.starts_with("turns:");
-            is_ice.then(|| IceServer {
-                urls,
-                username: s.username,
-                credential: s.credential,
-            })
-        })
-        .collect();
-    if servers.is_empty() {
-        None
-    } else {
-        Some(servers)
-    }
-}
-
-/// ICE servers for WebRTC apps (Mero Meet). Resolution order:
-///
-/// 1. `CALIMERO_ICE_ENDPOINT` — an endpoint that mints short-lived TURN
-///    credentials (authenticated with `CALIMERO_ICE_ENDPOINT_KEY` if set).
-///    Resolved from the runtime env var, or from a value baked in at build time
-///    (`option_env!`) so release builds use it with zero user configuration.
-///    This is the preferred production path: no long-lived TURN secret ships in
-///    the app binary, and the endpoint owns the full STUN+TURN list. If it's
-///    configured and reachable, its response is authoritative.
-/// 2. Static `CALIMERO_TURN_URL` (+ optional `CALIMERO_TURN_USER` /
-///    `CALIMERO_TURN_CRED`) — appended to a default STUN server. Simple to set
-///    up, but the credentials live in the environment/binary.
-/// 3. Public STUN only — last resort so an un-provisioned build still gets basic
-///    NAT discovery. Configuring (1) or (2) is required for calls between peers
-///    behind symmetric NAT/CGNAT, where a relay is mandatory.
-#[tauri::command]
-async fn get_ice_servers() -> Vec<IceServer> {
-    // (1) Preferred: ephemeral-credential endpoint (runtime env, else baked at build).
-    if let Some(endpoint) = ice_endpoint() {
-        if let Some(servers) = fetch_ice_servers_from_endpoint(&endpoint).await {
-            return servers;
-        }
-        log::warn!(
-            "[webrtc] CALIMERO_ICE_ENDPOINT unreachable/invalid; falling back to static config"
-        );
-    }
-
-    // (2)/(3) Static STUN (+ optional static TURN from env).
-    let mut servers = vec![IceServer {
-        urls: "stun:stun.l.google.com:19302".to_string(),
-        username: None,
-        credential: None,
-    }];
-    if let Ok(turn_url) = std::env::var("CALIMERO_TURN_URL") {
-        let turn_url = turn_url.trim();
-        // Only accept a real TURN URI; an unset/garbled env value must not be
-        // forwarded to RTCPeerConnection (it would invalidate the whole entry).
-        if turn_url.starts_with("turn:") || turn_url.starts_with("turns:") {
-            servers.push(IceServer {
-                urls: turn_url.to_string(),
-                username: sanitized_turn_secret("CALIMERO_TURN_USER"),
-                credential: sanitized_turn_secret("CALIMERO_TURN_CRED"),
-            });
-        } else if !turn_url.is_empty() {
-            log::warn!("[webrtc] ignoring CALIMERO_TURN_URL: must start with 'turn:' or 'turns:'");
-        }
-    }
-    servers
 }
 
 #[tauri::command]
@@ -4298,11 +4214,14 @@ async fn remove_app_launchers(app_handle: tauri::AppHandle) -> Result<String, Ta
         let _ = std::fs::remove_file(&store);
         app_handle
             .state::<CapRegistry>()
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .lock_unpoisoned()
             .clear();
         if let Some(shell_dir) = launcher::shell_install_path().parent() {
             let _ = std::fs::remove_dir_all(shell_dir);
+        }
+        // Cached icons too, or a regenerated launcher keeps a stale icon forever.
+        if let Some(parent) = app_icon_cache_path("x").parent() {
+            let _ = std::fs::remove_dir_all(parent);
         }
 
         let summary = format!("Removed {removed} app launcher(s) and their capabilities");
@@ -4315,7 +4234,7 @@ async fn remove_app_launchers(app_handle: tauri::AppHandle) -> Result<String, Ta
 /// 1. Drain in-flight proxy requests up to REQUEST_DRAIN_TIMEOUT_SECS
 /// 2. SIGTERM all managed (and detected) merod processes
 /// 3. Wait up to PROCESS_TERM_WAIT_SECS, then SIGKILL survivors
-fn graceful_shutdown(merod_state: &MerodState) {
+fn graceful_shutdown(app_handle: &tauri::AppHandle, merod_state: &MerodState) {
     info!("[Shutdown] Starting graceful shutdown...");
 
     // Drain in-flight proxy requests before killing merod so they can complete
@@ -4345,9 +4264,10 @@ fn graceful_shutdown(merod_state: &MerodState) {
     }
 
     let tracked: Vec<u32> = merod_state
-        .lock()
-        .map(|s| s.iter().map(|p| p.pid).collect())
-        .unwrap_or_default();
+        .lock_unpoisoned()
+        .iter()
+        .map(|p| p.pid)
+        .collect();
     let pids = collect_merod_pids(&tracked);
 
     if !pids.is_empty() {
@@ -4369,6 +4289,7 @@ fn graceful_shutdown(merod_state: &MerodState) {
     if let Ok(mut state) = merod_state.lock() {
         state.clear();
     }
+    emit_merod_status_changed(app_handle);
     info!("[Shutdown] Graceful shutdown complete");
 }
 
@@ -4590,22 +4511,29 @@ fn main() {
             // the shared shell (dequarantine + preserve signature) and rewrite each
             // launcher's trampoline to the current format. An old x86_64/Rosetta
             // trampoline SIGKILLs on Apple Silicon, and a desktop update alone does
-            // NOT refresh a launcher until its app is re-opened — so do it here.
+            // NOT refresh a launcher until its app is re-opened - so do it here.
+            // Off the main thread: setup() blocks the run loop that serves the
+            // webview's assets, and this touches disk on every launch.
             #[cfg(target_os = "macos")]
             {
                 let handle = app.handle().clone();
-                let shell_dest = launcher::shell_install_path();
-                if let Some(src) = bundled_shell_path(&handle) {
-                    let _ = launcher::extract_shell(&src, &shell_dest);
-                    for a in app_registry::installed_apps(&caps_store_path()) {
-                        let bundle = std::path::PathBuf::from(&a.bundle_path);
-                        if bundle.exists() {
-                            if let Err(e) = launcher::refresh_trampoline(&bundle, &shell_dest) {
-                                warn!("[Launcher] refresh trampoline failed for {}: {}", a.id, e);
+                tauri::async_runtime::spawn_blocking(move || {
+                    let shell_dest = launcher::shell_install_path();
+                    if let Some(src) = bundled_shell_path(&handle) {
+                        let _ = launcher::extract_shell(&src, &shell_dest);
+                        for a in app_registry::installed_apps(&caps_store_path()) {
+                            let bundle = std::path::PathBuf::from(&a.bundle_path);
+                            if bundle.exists() {
+                                if let Err(e) = launcher::refresh_trampoline(&bundle, &shell_dest) {
+                                    warn!(
+                                        "[Launcher] refresh trampoline failed for {}: {}",
+                                        a.id, e
+                                    );
+                                }
                             }
                         }
                     }
-                }
+                });
             }
 
             // System tray with context menu
@@ -4627,7 +4555,7 @@ fn main() {
                     }
                     "quit" => {
                         if let Some(merod_state) = app.try_state::<MerodState>() {
-                            graceful_shutdown(&merod_state);
+                            graceful_shutdown(app, &merod_state);
                         }
                         std::process::exit(0);
                     }
@@ -4741,7 +4669,7 @@ fn main() {
 
                 let caps = app.state::<CapRegistry>();
                 let loaded = app_registry::caps_map(&caps_store_path());
-                *caps.lock().unwrap_or_else(|p| p.into_inner()) = loaded;
+                *caps.lock_unpoisoned() = loaded;
             }
 
             // When launched from a desktop shortcut, or auto-booted headless by a
@@ -4839,7 +4767,6 @@ fn main() {
             autostart_is_enabled,
             close_current_window,
             open_url_in_browser,
-            get_ice_servers,
             secure_store_token,
             secure_get_token,
             secure_delete_token,
@@ -4856,12 +4783,68 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
+    use super::LockUnpoisoned;
+
+    #[test]
+    fn lock_unpoisoned_locks_and_recovers() {
+        let m = std::sync::Mutex::new(1);
+        *m.lock_unpoisoned() = 2;
+        // Poison it, then confirm recovery instead of panic.
+        let _ = std::panic::catch_unwind(|| {
+            let _g = m.lock().unwrap();
+            panic!("poison");
+        });
+        assert_eq!(*m.lock_unpoisoned(), 2);
+    }
+
     use super::{
         is_textual_content_type, launcher_bundle_is_removable, merod_target_triple,
-        parse_app_deep_link, score_merod_asset, validate_allowed_url,
+        parse_app_deep_link, parse_node_ports, replace_multiaddr_port, score_merod_asset,
+        validate_allowed_url, DEFAULT_NODE_PORTS,
     };
     use base64::Engine as _;
     use std::path::Path;
+
+    #[test]
+    fn multiaddr_port_is_replaced_in_place() {
+        assert_eq!(
+            replace_multiaddr_port("/ip4/127.0.0.1/tcp/2528", "tcp", 3001),
+            "/ip4/127.0.0.1/tcp/3001"
+        );
+        assert_eq!(
+            replace_multiaddr_port("/ip6/::1/tcp/2528", "tcp", 3001),
+            "/ip6/::1/tcp/3001"
+        );
+        // Trailing components survive.
+        assert_eq!(
+            replace_multiaddr_port("/ip4/0.0.0.0/udp/2428/quic-v1", "udp", 4001),
+            "/ip4/0.0.0.0/udp/4001/quic-v1"
+        );
+        // No matching component, or no port digits: left untouched.
+        assert_eq!(
+            replace_multiaddr_port("/ip4/0.0.0.0/udp/2428", "tcp", 4001),
+            "/ip4/0.0.0.0/udp/2428"
+        );
+        assert_eq!(
+            replace_multiaddr_port("/ip4/0.0.0.0/tcp/", "tcp", 4001),
+            "/ip4/0.0.0.0/tcp/"
+        );
+    }
+
+    #[test]
+    fn node_ports_are_read_from_listen_multiaddrs() {
+        let config = r#"
+[server]
+listen = ["/ip4/127.0.0.1/tcp/3001"]
+[swarm]
+listen = ["/ip4/0.0.0.0/udp/4001/quic-v1", "/ip4/0.0.0.0/tcp/4002"]
+"#;
+        assert_eq!(parse_node_ports(config), (3001, 4001));
+
+        // Anything unusable falls back rather than reporting a wrong port.
+        assert_eq!(parse_node_ports("[server]\n"), DEFAULT_NODE_PORTS);
+        assert_eq!(parse_node_ports("not toml ["), DEFAULT_NODE_PORTS);
+    }
 
     #[cfg(target_os = "macos")]
     #[test]

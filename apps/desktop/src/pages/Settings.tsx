@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, memo } from "react";
 import { getSettings, saveSettings } from "../utils/settings";
 import { parseTauriError } from "../utils/appUtils";
 import { invoke } from "@tauri-apps/api/core";
@@ -25,7 +25,7 @@ interface SettingsProps {
   onBack?: () => void;
 }
 
-export default function Settings({ onBack }: SettingsProps) {
+function Settings({ onBack }: SettingsProps) {
   const { theme, toggleTheme } = useTheme();
   const toast = useToast();
   const [registries, setRegistries] = useState<string[]>([]);
@@ -869,3 +869,5 @@ export default function Settings({ onBack }: SettingsProps) {
     </div>
   );
 }
+
+export default memo(Settings);

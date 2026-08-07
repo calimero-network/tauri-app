@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo, memo } from "react";
 import { checkOnboardingState, getOnboardingMessage, type OnboardingState } from "../utils/onboarding";
 import { apiClient, createClientAsync } from "../lib/mero-client";
 import { LoginView } from "../components/LoginView";
@@ -12,6 +12,7 @@ import {
   DEFAULT_EMBEDDED_SWARM_PORT,
 } from "../utils/settings";
 import { hardReset, wipeClientState } from "../utils/hardReset";
+import { listInstalledApps, invalidateInstalledApps } from "../utils/installedAppsCache";
 import { parseTauriError } from "../utils/appUtils";
 import { setAccessToken, setRefreshToken, setTokenExpiresAt } from "../lib/token-storage";
 import { saveOnboardingProgress, loadOnboardingProgress } from "../utils/onboardingProgress";
@@ -32,7 +33,7 @@ interface OnboardingProps {
 
 type OnboardingStep = 'welcome' | 'what-is' | 'node-setup' | 'cloud-connect' | 'login' | 'install-app';
 
-export default function Onboarding({ onComplete, onSettings }: OnboardingProps) {
+function Onboarding({ onComplete, onSettings }: OnboardingProps) {
   const toast = useToast();
   const { setTheme } = useTheme();
 
@@ -498,7 +499,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
       
       // Load installed apps
       try {
-        const response = await apiClient.node.listApplications();
+        const response = await listInstalledApps();
         if (response.data) {
           const installed = new Set<string>(
             (Array.isArray(response.data) ? response.data : []).map((app: any) => app.id as string)
@@ -584,6 +585,7 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
         throw new Error(installResponse.error.message);
       }
 
+      invalidateInstalledApps();
       toast.success(`Successfully installed ${app.name}!`);
       setInstalledAppIds(new Set([...installedAppIds, app.id]));
 
@@ -1415,3 +1417,5 @@ export default function Onboarding({ onComplete, onSettings }: OnboardingProps) 
   // If we reach here, something went wrong - go to dashboard
   return null;
 }
+
+export default memo(Onboarding);

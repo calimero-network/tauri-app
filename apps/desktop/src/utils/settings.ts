@@ -36,19 +36,23 @@ export const DEFAULT_EMBEDDED_SWARM_PORT = 2428;
 const DEFAULT_REGISTRY_URL = 'https://apps.calimero.network/';
 const OLD_DEFAULT_REGISTRY_URL = 'http://localhost:8080';
 
-/**
- * Get raw settings without migration (used internally)
- */
-function getSettingsRaw(): AppSettings | null {
+function readStored(): string | null {
   try {
-    const stored = localStorage.getItem(SETTINGS_KEY);
-    if (stored) {
-      return JSON.parse(stored);
-    }
+    return localStorage.getItem(SETTINGS_KEY);
   } catch (error) {
     console.error('Failed to load settings:', error);
+    return null;
   }
-  return null;
+}
+
+function parseStored(stored: string | null): AppSettings | null {
+  if (!stored) return null;
+  try {
+    return JSON.parse(stored);
+  } catch (error) {
+    console.error('Failed to load settings:', error);
+    return null;
+  }
 }
 
 /**
@@ -74,21 +78,25 @@ function migrateRegistries(registries: string[] | undefined, rawSettings: AppSet
   // If we made changes, save them back
   const hasChanges = migrated.some((url, index) => url !== registries[index]);
   if (hasChanges && rawSettings) {
-    saveSettings({
-      ...rawSettings,
-      registries: migrated,
-    });
+    try {
+      saveSettings({
+        ...rawSettings,
+        registries: migrated,
+      });
+    } catch {
+      // A failed write must not cost the caller its settings. The memo still keys
+      // on the unchanged raw string, so a later successful write re-derives.
+    }
   }
 
   return migrated;
 }
 
-export function getSettings(): AppSettings {
+function buildSettings(rawSettings: AppSettings | null): AppSettings {
   try {
-    const rawSettings = getSettingsRaw();
     if (rawSettings) {
       const migratedRegistries = migrateRegistries(rawSettings.registries, rawSettings);
-      
+
       return {
         nodeUrl: rawSettings.nodeUrl || DEFAULT_NODE_URL,
         authUrl: rawSettings.authUrl,
@@ -116,11 +124,34 @@ export function getSettings(): AppSettings {
   } catch (error) {
     console.error('Failed to load settings:', error);
   }
-  
+
   return {
     nodeUrl: DEFAULT_NODE_URL,
     registries: [DEFAULT_REGISTRY_URL], // Default to Calimero apps registry
   };
+}
+
+let cachedStored: string | null = null;
+let cachedSettings: AppSettings | null = null;
+
+/**
+ * Parsed settings. Called dozens of times per render pass, so the result is
+ * memoised on the raw stored string: any write invalidates it, ours or not.
+ * The returned object is shared and frozen - spread it to derive a new one.
+ */
+export function getSettings(): AppSettings {
+  const stored = readStored();
+  if (cachedSettings && stored === cachedStored) return cachedSettings;
+
+  const built = buildSettings(parseStored(stored));
+  // Freeze one level down too: the shared registries array is the mutation
+  // callers would otherwise reach for.
+  Object.freeze(built.registries);
+  const settings = Object.freeze(built);
+  // Re-read: the registry migration writes back while we build.
+  cachedStored = readStored();
+  cachedSettings = settings;
+  return settings;
 }
 
 export function getAuthUrl(settings: AppSettings): string {

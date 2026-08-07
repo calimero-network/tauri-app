@@ -4,7 +4,7 @@
  * Provides the same apiClient.auth.* / apiClient.node.* surface the desktop
  * app relies on, while the Namespaces page uses mero-react hooks directly.
  */
-import { MeroJs, type TokenStore, type TokenData } from '@calimero-network/mero-js';
+import { MeroJs, type TokenStore, type TokenData, type Application } from '@calimero-network/mero-js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -256,7 +256,7 @@ class NodeApi {
     }
   }
 
-  async listApplications(): Promise<ApiResponse<any[]>> {
+  async listApplications(): Promise<ApiResponse<Application[]>> {
     try {
       const r = await this.meroJs.admin.listApplications();
       const raw = r as any;

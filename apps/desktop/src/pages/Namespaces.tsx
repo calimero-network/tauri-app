@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, memo } from "react";
 import {
   useMero,
   useNamespaces,
@@ -14,9 +14,9 @@ import {
 import type { GroupInfo, MetadataRecord } from "@calimero-network/mero-js";
 import { useToast } from "../contexts/ToastContext";
 import { ChevronLeft, Users, Box, Layers, Copy, ChevronRight, Shield, Globe, Plus, X, Trash2, UserMinus, Link, ChevronDown, Check, MoreHorizontal, LogIn, LogOut } from "lucide-react";
-import { apiClient } from "../lib/mero-client";
 import { saveContextKey } from "../utils/contextKeys";
 import { decodeMetadata } from "../utils/appUtils";
+import { listInstalledApps } from "../utils/installedAppsCache";
 import { getSettings } from "../utils/settings";
 import {
   enableHaForNamespace,
@@ -85,7 +85,7 @@ interface InstalledApp {
 }
 
 function readInstalledApps(): Promise<InstalledApp[]> {
-  return apiClient.node.listApplications().then((res) => {
+  return listInstalledApps().then((res) => {
     if (res.error || !Array.isArray(res.data)) return [];
     return res.data.map((app: any) => {
       let name: string = app.id;
@@ -174,7 +174,7 @@ function countTreeSubgroups(tree: NamespaceTree): number {
   return n;
 }
 
-export default function Namespaces() {
+function Namespaces() {
   const toast = useToast();
   const { mero } = useMero();
   const cloudEnabled = useCloudEnabled();
@@ -1835,6 +1835,8 @@ export default function Namespaces() {
 
   return null;
 }
+
+export default memo(Namespaces);
 
 // ─── Modals ───
 

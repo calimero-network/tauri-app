@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, memo } from "react";
 import { getSettings, saveSettings } from "../utils/settings";
 import { clearAccessToken, clearRefreshToken } from "../lib/token-storage";
 import {
@@ -10,7 +10,6 @@ import {
   detectRunningMerodNodes,
   getMerodLogs,
   clearMerodLogs,
-  getMerodBinaryVersion,
   type RunningMerodNode,
 } from "../utils/merod";
 import {
@@ -26,10 +25,12 @@ import { Play, Square, RefreshCw, Check, FileText, ChevronDown } from "lucide-re
 import { LogsViewer } from "../components/LogsViewer";
 import { ScrollHint } from "../components/ScrollHint";
 import { VersionsPanel } from "../components/VersionsPanel";
-import { useNodeVersions } from "../hooks/useNodeVersions";
+import { useNodeVersions } from "../contexts/NodeVersionsContext";
+import { useMerodStatusChanged } from "../hooks/useMerodStatusChanged";
+import { useVisiblePoll } from "../hooks/useVisiblePoll";
 import "./NodeManagement.css";
 
-export default function NodeManagement() {
+function NodeManagement() {
   const toast = useToast();
   
   // Node management state
@@ -54,25 +55,36 @@ export default function NodeManagement() {
   const [showLogsModal, setShowLogsModal] = useState(false);
   const [logsContent, setLogsContent] = useState("");
   const [logsLoading, setLogsLoading] = useState(false);
-  const [merodBinaryVersion, setMerodBinaryVersion] = useState<string>("");
   const [versionId, setVersionId] = useState<string>(BUNDLED_VERSION_ID);
   const [releases, setReleases] = useState<ReleaseInfo[]>([]);
   const [releasesError, setReleasesError] = useState<string>("");
   const [releasesStale, setReleasesStale] = useState(false);
   const developerMode = getSettings().developerMode ?? false;
-  const { byNode: nodeVersions, measured: versionMeasured, drifted: driftedNodes } =
-    useNodeVersions(developerMode, homeDir, [availableNodes]);
+  const {
+    byNode: nodeVersions,
+    measured: versionMeasured,
+    drifted: driftedNodes,
+    bundled: merodBinaryVersion,
+    refresh: refreshNodeVersions,
+  } = useNodeVersions();
   const safeAvailableNodes = Array.isArray(availableNodes) ? availableNodes : [];
   const safeRunningNodes = Array.isArray(runningNodes) ? runningNodes : [];
+
+  // This page creates nodes and edits the data dir, so it has to tell the shared
+  // map to re-read - against its own field, which may not be saved yet.
+  useEffect(() => {
+    refreshNodeVersions(homeDir);
+  }, [homeDir, availableNodes, refreshNodeVersions]);
+
+  // The override is page-local state in a shared provider; leaving the page
+  // must hand the map back to the saved settings dir.
+  useEffect(() => () => refreshNodeVersions(), [refreshNodeVersions]);
 
   useEffect(() => {
     const settings = getSettings();
     setHomeDir(settings.embeddedNodeDataDir || "~/.calimero");
     setNodeUrl(settings.nodeUrl || "");
     setAuthUrl(settings.authUrl || "");
-    getMerodBinaryVersion()
-      .then(setMerodBinaryVersion)
-      .catch(() => setMerodBinaryVersion("unknown"));
   }, []);
 
   useEffect(() => {
@@ -86,12 +98,11 @@ export default function NodeManagement() {
   }, [developerMode]);
 
 
+  useVisiblePoll(() => detectRunning(), 30000);
+  useMerodStatusChanged(() => detectRunning());
+
   useEffect(() => {
     loadNodes();
-    detectRunning();
-
-    const interval = setInterval(detectRunning, 3000);
-    return () => clearInterval(interval);
   }, [homeDir]);
 
   // When selected node is not running and current ports conflict with running nodes, auto-assign next free ports
@@ -710,3 +721,5 @@ export default function NodeManagement() {
     </div>
   );
 }
+
+export default memo(NodeManagement);

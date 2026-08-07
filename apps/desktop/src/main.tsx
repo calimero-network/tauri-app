@@ -1,8 +1,9 @@
-import React from "react";
+import React, { Suspense } from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import { ToastProvider } from "./contexts/ToastContext";
+import { NodeVersionsProvider } from "./contexts/NodeVersionsContext";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { installRefreshSingleFlight } from "./lib/token-broker";
 import "./index.css";
@@ -19,9 +20,13 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <ThemeProvider>
       <ToastProvider>
-        <ErrorBoundary componentName="Calimero Desktop">
-          <App />
-        </ErrorBoundary>
+        <NodeVersionsProvider>
+          <ErrorBoundary componentName="Calimero Desktop">
+            <Suspense fallback={null}>
+              <App />
+            </Suspense>
+          </ErrorBoundary>
+        </NodeVersionsProvider>
       </ToastProvider>
     </ThemeProvider>
   </React.StrictMode>

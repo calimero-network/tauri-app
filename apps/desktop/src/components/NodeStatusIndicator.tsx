@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import { Server, ChevronDown } from "lucide-react";
 import type { RunningMerodNode } from "../utils/merod";
 import { formatVersionLabel, BUNDLED_VERSION_ID } from "../utils/merodVersions";
-import { useNodeVersions } from "../hooks/useNodeVersions";
+import { useNodeVersions } from "../contexts/NodeVersionsContext";
 import "./NodeStatusIndicator.css";
 
 interface NodeStatusIndicatorProps {
@@ -26,8 +26,7 @@ export function NodeStatusIndicator({
 }: NodeStatusIndicatorProps) {
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
-  const { byNode: nodeVersions, measured: versionMeasured, bundled } =
-    useNodeVersions(!!developerMode, undefined, [runningNodes]);
+  const { byNode: nodeVersions, measured: versionMeasured, bundled } = useNodeVersions();
 
   // Pass the measured version through, or a local build always reads as the
   // generic "local build" and a rebuild produces no visible signal here.

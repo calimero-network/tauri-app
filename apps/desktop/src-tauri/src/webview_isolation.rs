@@ -6,6 +6,7 @@
 //! Linux uses a data directory. This module owns both, plus the set of windows
 //! that got one - which the token broker consults before serving a window.
 
+use crate::LockUnpoisoned;
 use crate::{TauriError, TauriErrorCode};
 use std::collections::{BTreeMap, HashSet};
 use std::sync::{Arc, Mutex};
@@ -18,50 +19,53 @@ pub type IsolatedWindows = Arc<Mutex<HashSet<String>>>;
 pub fn remember(app_handle: &tauri::AppHandle, label: &str) {
     app_handle
         .state::<IsolatedWindows>()
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
+        .lock_unpoisoned()
         .insert(label.to_string());
 }
 
 pub fn forget(app_handle: &tauri::AppHandle, label: &str) {
     app_handle
         .state::<IsolatedWindows>()
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
+        .lock_unpoisoned()
         .remove(label);
 }
 
 pub fn is_isolated(state: &tauri::State<'_, IsolatedWindows>, label: &str) -> bool {
     state
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
+        .lock_unpoisoned()
         .contains(label)
 }
 
 /// Whether this platform can give a webview its own storage. Never guess: below
 /// macOS 14 wry falls back to the shared store silently, merging two sessions.
+///
+/// Answered once: this is a sync command (so it runs on the main thread) and the
+/// OS version cannot change under a running process.
 #[tauri::command]
 pub fn webview_isolation_supported() -> bool {
-    #[cfg(target_os = "macos")]
-    {
-        // Matches wry's own gate for WKWebsiteDataStore::dataStoreForIdentifier.
-        std::process::Command::new("sw_vers")
-            .arg("-productVersion")
-            .output()
-            .ok()
-            .and_then(|o| String::from_utf8(o.stdout).ok())
-            .and_then(|v| v.trim().split('.').next()?.parse::<u32>().ok())
-            .map(|major| major >= 14)
-            .unwrap_or(false)
-    }
-    #[cfg(target_os = "linux")]
-    {
-        true
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-    {
-        false
-    }
+    static SUPPORTED: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| {
+        #[cfg(target_os = "macos")]
+        {
+            // Matches wry's own gate for WKWebsiteDataStore::dataStoreForIdentifier.
+            std::process::Command::new("sw_vers")
+                .arg("-productVersion")
+                .output()
+                .ok()
+                .and_then(|o| String::from_utf8(o.stdout).ok())
+                .and_then(|v| v.trim().split('.').next()?.parse::<u32>().ok())
+                .map(|major| major >= 14)
+                .unwrap_or(false)
+        }
+        #[cfg(target_os = "linux")]
+        {
+            true
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        {
+            false
+        }
+    });
+    *SUPPORTED
 }
 
 /// Find or assign this key's identifier, reporting whether the map changed so
@@ -93,7 +97,7 @@ pub fn store_id(app_handle: &tauri::AppHandle, key: &str) -> Result<[u8; 16], Ta
     // Serialise the whole read-modify-write. Two concurrent first-time keys would
     // otherwise both compute max+1 from the same stale map and share one store.
     static SLOTS: Mutex<()> = Mutex::new(());
-    let _guard = SLOTS.lock().unwrap_or_else(|p| p.into_inner());
+    let _guard = SLOTS.lock_unpoisoned();
 
     let dir = app_handle.path().app_data_dir().map_err(|e| {
         TauriError::with_details(

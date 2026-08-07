@@ -5,10 +5,13 @@ import DataTable from "../components/DataTable";
 import ContextMenu from "../components/ContextMenu";
 import Skeleton from "../components/Skeleton";
 import { decodeMetadata, openAppFrontend, parseTauriError } from "../utils/appUtils";
+import { listInstalledApps, invalidateInstalledApps } from "../utils/installedAppsCache";
 import { getSettings } from "../utils/settings";
 import { detectRunningMerodNodes, type RunningMerodNode } from "../utils/merod";
 import { formatVersionLabel, BUNDLED_VERSION_ID } from "../utils/merodVersions";
-import { useNodeVersions } from "../hooks/useNodeVersions";
+import { useNodeVersions } from "../contexts/NodeVersionsContext";
+import { useMerodStatusChanged } from "../hooks/useMerodStatusChanged";
+import { useVisiblePoll } from "../hooks/useVisiblePoll";
 import { invoke } from "@tauri-apps/api/core";
 import { RefreshCw, MoreHorizontal, Trash2, Copy, Rocket } from "lucide-react";
 import "./InstalledApps.css";
@@ -46,7 +49,7 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
   const [runningNodes, setRunningNodes] = useState<RunningMerodNode[]>([]);
   const [isolationOk, setIsolationOk] = useState(false);
   const [targets, setTargets] = useState<Record<string, string>>({});
-  const { byNode: nodeVersions, bundled: bundledVersion } = useNodeVersions(developerMode);
+  const { byNode: nodeVersions, bundled: bundledVersion } = useNodeVersions();
 
   // Options are keyed by running-node port, so derive the default the same way:
   // a settings URL of 127.0.0.1 or with a trailing slash matched no option, and
@@ -64,20 +67,22 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
   })();
   const targetFor = (appId: string) => targets[appId] ?? activeTarget;
 
+  // Nodes start and stop while this page stays open, so a one-shot fetch would
+  // keep offering a dead node as a target.
+  const refreshRunning = useCallback(() => {
+    detectRunningMerodNodes()
+      .then((n) => setRunningNodes(Array.isArray(n) ? n : []))
+      .catch(() => setRunningNodes([]));
+  }, []);
+  useVisiblePoll(refreshRunning, 30000, developerMode);
+  useMerodStatusChanged(refreshRunning, developerMode);
+
   useEffect(() => {
     if (!developerMode) return;
-    // Nodes start and stop while this page stays open, so a one-shot fetch would
-    // keep offering a dead node as a target. Platform support cannot change.
-    const refreshRunning = () =>
-      detectRunningMerodNodes()
-        .then((n) => setRunningNodes(Array.isArray(n) ? n : []))
-        .catch(() => setRunningNodes([]));
-    refreshRunning();
+    // Platform support cannot change.
     invoke<boolean>('webview_isolation_supported')
       .then(setIsolationOk)
       .catch(() => setIsolationOk(false));
-    const interval = setInterval(refreshRunning, 5000);
-    return () => clearInterval(interval);
   }, [developerMode]);
   const mountedRef = useRef(true);
 
@@ -99,13 +104,14 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
     loadInstalledApps();
   }, [clientReady]);
 
-  const loadInstalledApps = async () => {
+  const loadInstalledApps = async (force = false) => {
+    if (force) invalidateInstalledApps();
     setLoading(true);
     setError(null);
     const start = Date.now();
 
     try {
-      const response = await apiClient.node.listApplications();
+      const response = await listInstalledApps();
 
       if (response.error) {
         if (response.error.code === '401') {
@@ -156,7 +162,7 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
             return;
           }
           toast.success(`"${appName}" uninstalled`);
-          await loadInstalledApps();
+          await loadInstalledApps(true);
         } catch (err) {
           toast.error(`Failed to uninstall: ${parseTauriError(err, "Unknown error")}`);
         }
@@ -169,7 +175,7 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
           return;
         }
         toast.success(`"${appName}" uninstalled`);
-        await loadInstalledApps();
+        await loadInstalledApps(true);
       } catch (err) {
         toast.error(`Failed to uninstall: ${err instanceof Error ? err.message : "Unknown error"}`);
       }
@@ -178,6 +184,7 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
 
   const handleOpenFrontend = async (frontendUrl: string, appName?: string, applicationId?: string, iconData?: string) => {
     // Warm up the token so any refresh completes before we read it from localStorage.
+    // Wanted for the side effect, so it deliberately bypasses the list cache.
     try { await apiClient.node.listApplications(); } catch {}
     const targetNodeUrl = applicationId ? targetFor(applicationId) : undefined;
     await openAppFrontend(frontendUrl, appName, (error) => {
@@ -208,7 +215,7 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
           <p>Manage your installed applications</p>
         </div>
         <button
-          onClick={loadInstalledApps}
+          onClick={() => loadInstalledApps(true)}
           className="installed-refresh-btn"
           disabled={loading}
           title="Refresh"
@@ -455,4 +462,4 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
   );
 };
 
-export default InstalledApps;
+export default React.memo(InstalledApps);

@@ -2920,36 +2920,46 @@ fn is_process_running(pid: u32) -> bool {
     }
 }
 
+/// The reap probes every tracked node for liveness while holding the state lock,
+/// and this command is polled - too much to leave on a runtime worker.
 #[tauri::command]
-async fn get_merod_status(
-    app_handle: tauri::AppHandle,
-    merod_state: tauri::State<'_, MerodState>,
-) -> Result<serde_json::Value, TauriError> {
-    let mut state = merod_state.lock().unwrap();
-    if state.is_empty() {
-        return Ok(serde_json::json!({ "running": false, "nodes": [] }));
-    }
-    // Filter out dead processes. Only announce when this reap actually dropped
-    // one, or a polling caller would emit on every tick.
-    let before = state.len();
-    state.retain(|p| is_process_running(p.pid));
-    if state.len() != before {
-        emit_merod_status_changed(&app_handle);
-    }
-    if state.is_empty() {
-        return Ok(serde_json::json!({ "running": false, "nodes": [] }));
-    }
-    let nodes: Vec<_> = state
-        .iter()
-        .map(|p| serde_json::json!({ "pid": p.pid, "port": p.port }))
-        .collect();
-    let first = &state[0];
-    Ok(serde_json::json!({
-        "running": true,
-        "nodes": nodes,
-        "pid": first.pid,
-        "port": first.port
-    }))
+async fn get_merod_status(app_handle: tauri::AppHandle) -> Result<serde_json::Value, TauriError> {
+    tokio::task::spawn_blocking(move || {
+        let merod_state = app_handle.state::<MerodState>();
+        let mut state = merod_state.lock().unwrap();
+        if state.is_empty() {
+            return serde_json::json!({ "running": false, "nodes": [] });
+        }
+        // Filter out dead processes. Only announce when this reap actually dropped
+        // one, or a polling caller would emit on every tick.
+        let before = state.len();
+        state.retain(|p| is_process_running(p.pid));
+        if state.len() != before {
+            emit_merod_status_changed(&app_handle);
+        }
+        if state.is_empty() {
+            return serde_json::json!({ "running": false, "nodes": [] });
+        }
+        let nodes: Vec<_> = state
+            .iter()
+            .map(|p| serde_json::json!({ "pid": p.pid, "port": p.port }))
+            .collect();
+        let first = &state[0];
+        serde_json::json!({
+            "running": true,
+            "nodes": nodes,
+            "pid": first.pid,
+            "port": first.port
+        })
+    })
+    .await
+    .map_err(|e| {
+        TauriError::with_details(
+            TauriErrorCode::InternalError,
+            "Status task failed",
+            e.to_string(),
+        )
+    })
 }
 
 #[tauri::command]

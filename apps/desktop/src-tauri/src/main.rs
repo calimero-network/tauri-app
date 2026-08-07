@@ -2384,7 +2384,7 @@ async fn start_merod(
 
     // Only stop a process that uses the same server_port (port conflict)
     let existing_on_port: Option<u32> = {
-        let state = merod_state.lock().unwrap();
+        let state = merod_state.lock().unwrap_or_else(|p| p.into_inner());
         state.iter().find(|p| p.port == server_port).map(|p| p.pid)
     };
 
@@ -2412,7 +2412,10 @@ async fn start_merod(
                 .arg("/F")
                 .output();
         }
-        merod_state.lock().unwrap().retain(|p| p.pid != pid);
+        merod_state
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .retain(|p| p.pid != pid);
         emit_merod_status_changed(&app_handle);
     }
 
@@ -2685,7 +2688,7 @@ async fn start_merod(
 
     // Store process state
     {
-        let mut state = merod_state.lock().unwrap();
+        let mut state = merod_state.lock().unwrap_or_else(|p| p.into_inner());
         state.push(MerodProcess {
             pid,
             port: server_port,
@@ -2702,7 +2705,7 @@ async fn start_merod(
     tokio::spawn(async move {
         let status = child.wait().await;
         {
-            let mut state = merod_state_clone.lock().unwrap();
+            let mut state = merod_state_clone.lock().unwrap_or_else(|p| p.into_inner());
             if let Ok(exit_status) = status {
                 if let Some(code) = exit_status.code() {
                     warn!("[Merod] Process {} exited with code: {}", monitored_pid, code);
@@ -2735,7 +2738,7 @@ async fn stop_merod(
     merod_state: tauri::State<'_, MerodState>,
 ) -> Result<String, TauriError> {
     let pids: Vec<u32> = {
-        let state = merod_state.lock().unwrap();
+        let state = merod_state.lock().unwrap_or_else(|p| p.into_inner());
         state.iter().map(|p| p.pid).collect()
     };
 
@@ -2820,7 +2823,10 @@ async fn stop_merod(
         info!("[Merod] Stopped process with PID: {}", pid);
     }
 
-    merod_state.lock().unwrap().clear();
+    merod_state
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .clear();
     emit_merod_status_changed(&app_handle);
 
     Ok("Merod stopped successfully".to_string())
@@ -2911,7 +2917,10 @@ async fn stop_merod_by_pid_command(
     }
 
     // Remove this process from state
-    merod_state.lock().unwrap().retain(|p| p.pid != pid);
+    merod_state
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .retain(|p| p.pid != pid);
     emit_merod_status_changed(&app_handle);
 
     info!("[Merod] Stopped process with PID: {}", pid);

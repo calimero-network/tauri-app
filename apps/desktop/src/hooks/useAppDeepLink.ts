@@ -2,11 +2,7 @@ import { useEffect } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { apiClient } from '../lib/mero-client';
-import {
-  appendParamsToUrl,
-  decodeMetadata,
-  openAppFrontend,
-} from '../utils/appUtils';
+import { decodeMetadata, openAppFrontend } from '../utils/appUtils';
 import { listInstalledApps, invalidateInstalledApps } from '../utils/installedAppsCache';
 import { fetchAppsFromRegistry } from '../utils/registry';
 
@@ -71,8 +67,8 @@ type OpenOutcome = 'opened' | 'retry' | 'forget';
 
 /**
  * Resolve a deep-link `slug` → an app and open it with the deep-link params
- * appended to the app's frontend URL. If the app isn't installed, install it
- * from the registry first (install-on-demand), then open it.
+ * applied to that one open. If the app isn't installed, install it from the
+ * registry first (install-on-demand), then open it.
  *
  * The `<slug>` segment is the app's PACKAGE — the registry identifier (e.g.
  * `com.calimero.curb`): globally unique and stable across renames, unlike a
@@ -118,15 +114,14 @@ async function resolveAndOpen(dl: AppDeepLink): Promise<OpenOutcome> {
     return 'forget';
   }
 
-  // Append the deep-link params to the frontend URL so the app reads them on
-  // load (e.g. mero-chat's extractInvitationFromUrl reads ?invitation=...).
-  const urlWithParams = appendParamsToUrl(frontendUrl, dl.params);
-
+  // The params ride along as one-shot launch params so the app reads them on
+  // load (e.g. mero-chat's extractInvitationFromUrl reads ?invitation=...)
+  // without them becoming the URL this app is launched from ever after.
   await openAppFrontend(
-    urlWithParams,
+    frontendUrl,
     appName,
     (err) => console.error('[deep-link] failed to open app:', err),
-    { applicationId: match.id },
+    { applicationId: match.id, launchParams: dl.params },
   );
   return 'opened';
 }

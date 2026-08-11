@@ -18,13 +18,17 @@ fn default_node_url() -> String {
 }
 
 pub fn parse_app_config_arg(args: &[String]) -> Option<PathBuf> {
-    let mut it = args.iter();
-    while let Some(a) = it.next() {
-        if a == "--app-config" {
-            return it.next().map(PathBuf::from);
-        }
-    }
-    None
+    flag_value(args, "--app-config").map(PathBuf::from)
+}
+
+/// Query params for THIS launch only (a deep link's `invitation=…`), passed on
+/// argv precisely so they stay out of the bundle's stored URL.
+pub fn parse_url_params_arg(args: &[String]) -> Option<String> {
+    flag_value(args, "--url-params")
+}
+
+fn flag_value(args: &[String], flag: &str) -> Option<String> {
+    args.windows(2).find(|w| w[0] == flag).map(|w| w[1].clone())
 }
 
 pub fn load_shell_config(path: &Path) -> Option<ShellConfig> {
@@ -38,9 +42,17 @@ mod tests {
 
     #[test]
     fn parses_flag_and_file() {
-        let args = vec!["bin".into(), "--app-config".into(), "/x/app.json".into()];
+        let args: Vec<String> = vec![
+            "bin".into(),
+            "--app-config".into(),
+            "/x/app.json".into(),
+            "--url-params".into(),
+            "invitation=abc".into(),
+        ];
         assert_eq!(parse_app_config_arg(&args), Some(PathBuf::from("/x/app.json")));
+        assert_eq!(parse_url_params_arg(&args), Some("invitation=abc".into()));
         assert_eq!(parse_app_config_arg(&["bin".into()]), None);
+        assert_eq!(parse_url_params_arg(&["bin".into(), "--url-params".into()]), None);
 
         let dir = std::env::temp_dir().join(format!("cal-shellcfg-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();

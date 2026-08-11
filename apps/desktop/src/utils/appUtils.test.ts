@@ -141,6 +141,36 @@ describe('openAppFrontend token handoff', () => {
   });
 });
 
+describe('openAppFrontend one-shot launch params', () => {
+  // A deep link's `?invitation=` used to be baked into the frontend URL handed
+  // to the launcher, which stores it in the bundle + registry, so every later
+  // launch from the dock replayed an invitation the user had already answered.
+  it('keeps them out of the URL the launcher stores', async () => {
+    invoke.mockResolvedValue(undefined); // launcher available, as on macOS
+
+    await openAppFrontend('https://app.example.com/', 'Example', undefined, {
+      applicationId: 'app-1',
+      launchParams: 'invitation=INVITE-CODE',
+    });
+
+    const call = invoke.mock.calls.find((c) => c[0] === 'open_app_launcher');
+    expect(call, 'open_app_launcher was not invoked').toBeTruthy();
+    const args = (call as [string, Record<string, unknown>])[1];
+    expect(args.frontendUrl).toBe('https://app.example.com/');
+    // ...while this one open still gets them, out of band.
+    expect(args.launchParams).toBe('invitation=INVITE-CODE');
+  });
+
+  it('applies them to the fallback window URL', async () => {
+    await openAppFrontend('https://app.example.com/', 'Example', undefined, {
+      applicationId: 'app-1',
+      launchParams: 'invitation=INVITE-CODE',
+    });
+
+    expect(new URL(openedUrl()).searchParams.get('invitation')).toBe('INVITE-CODE');
+  });
+});
+
 describe('openAppFrontend re-opening an existing window', () => {
   it('focuses it and signals a re-read, carrying no credentials', async () => {
     const emit = vi.fn().mockResolvedValue(undefined);

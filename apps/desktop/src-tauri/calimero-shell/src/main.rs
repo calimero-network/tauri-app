@@ -155,7 +155,7 @@ mod shell {
     /// the app starts authenticated + pointed at the node (node_url + a brokered
     /// access token + the brokered-refresh sentinel). Falls back to the raw URL
     /// (manual login) if no token can be brokered.
-    fn build_app_url(cfg: &shell_config::ShellConfig) -> String {
+    fn build_app_url(cfg: &shell_config::ShellConfig, launch_params: Option<&str>) -> String {
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis())
@@ -186,6 +186,9 @@ mod shell {
 
         match url::Url::parse(&cfg.url) {
             Ok(mut u) => {
+                for (k, v) in url::form_urlencoded::parse(launch_params.unwrap_or("").as_bytes()) {
+                    u.query_pairs_mut().append_pair(&k, &v);
+                }
                 u.query_pairs_mut().append_pair("_cb", &now_ms.to_string());
                 format!("{}#{}", u, hash)
             }
@@ -198,6 +201,7 @@ mod shell {
         let cfg = shell_config::parse_app_config_arg(&args)
             .and_then(|p| shell_config::load_shell_config(&p))
             .expect("calimero-shell requires --app-config <app.json>");
+        let launch_params = shell_config::parse_url_params_arg(&args);
 
         // Claim the per-app launcher's registered bundle id BEFORE any notify, so
         // macOS attributes native notifications to the launcher `.app` (its icon +
@@ -236,7 +240,7 @@ mod shell {
 
                 ensure_host_running(&host_socket_path());
                 // Inject SSO (node_url + brokered token) like the desktop's "Open".
-                let url = build_app_url(&cfg_for_setup);
+                let url = build_app_url(&cfg_for_setup, launch_params.as_deref());
                 webview::open_app_webview(
                     app.handle(),
                     "app",

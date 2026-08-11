@@ -20,9 +20,12 @@ fn main() {
         .unwrap_or_else(std::env::temp_dir)
         .join("network.calimero.desktop/shell/CalimeroShell");
 
+    // Forward whatever `open --args` handed us (e.g. a deep link's one-shot
+    // --url-params), so those params never have to live in app.json.
     let err = std::process::Command::new(&shell)
         .arg("--app-config")
         .arg(&cfg)
+        .args(std::env::args().skip(1))
         .exec();
     eprintln!("launcher failed to exec {}: {err}", shell.display());
     std::process::exit(1);

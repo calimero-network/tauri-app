@@ -1539,9 +1539,18 @@ async fn open_app_launcher(
     app_id: String,
     icon: Option<String>,
     node_url: String,
+    launch_params: Option<String>,
 ) -> Result<String, TauriError> {
     tokio::task::spawn_blocking(move || {
-        open_app_launcher_blocking(app_handle, app_name, frontend_url, app_id, icon, node_url)
+        open_app_launcher_blocking(
+            app_handle,
+            app_name,
+            frontend_url,
+            app_id,
+            icon,
+            node_url,
+            launch_params,
+        )
     })
     .await
     .map_err(|e| {
@@ -1561,6 +1570,7 @@ fn open_app_launcher_blocking(
     app_id: String,
     icon: Option<String>,
     node_url: String,
+    launch_params: Option<String>,
 ) -> Result<String, TauriError> {
     #[cfg(target_os = "macos")]
     {
@@ -1589,16 +1599,20 @@ fn open_app_launcher_blocking(
         // Wait for `open` rather than spawning it: spawn only reports that the
         // helper started, so a LaunchServices failure left the caller with no
         // window and no error instead of falling back to an in-process one.
-        let out = std::process::Command::new("open")
-            .arg(&bundle)
-            .output()
-            .map_err(|e| {
-                TauriError::with_details(
-                    TauriErrorCode::ShortcutCreationFailed,
-                    "Failed to open launcher",
-                    e.to_string(),
-                )
-            })?;
+        let mut open = std::process::Command::new("open");
+        open.arg(&bundle);
+        // One-shot params (a deep link's invitation) travel in argv, never into
+        // the bundle's app.json: that URL is replayed on every dock launch.
+        if let Some(params) = launch_params.as_deref().filter(|p| !p.is_empty()) {
+            open.args(["--args", "--url-params", params]);
+        }
+        let out = open.output().map_err(|e| {
+            TauriError::with_details(
+                TauriErrorCode::ShortcutCreationFailed,
+                "Failed to open launcher",
+                e.to_string(),
+            )
+        })?;
         if !out.status.success() {
             let detail = String::from_utf8_lossy(&out.stderr).trim().to_string();
             return Err(TauriError::with_details(

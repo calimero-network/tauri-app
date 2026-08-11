@@ -104,6 +104,10 @@ export interface OpenAppFrontendContext {
   /** Node this app should run against. Defaults to the one the desktop is on;
    * anything else opens an isolated window that logs in for itself. */
   targetNodeUrl?: string;
+  /** Raw query string (no leading `?`) that applies to THIS open only, e.g. a
+   * deep link's `invitation=…`. Never reaches the URL the launcher remembers,
+   * or every later dock launch would replay the invitation. */
+  launchParams?: string;
 }
 
 /** Canonical form for comparing two node URLs: scheme, host case, port and
@@ -163,6 +167,7 @@ export async function openAppFrontend(
           appId: context.applicationId,
           icon: context.iconData ?? null,
           nodeUrl: settings.nodeUrl,
+          launchParams: context.launchParams ?? null,
         });
         return;
       } catch (e) {
@@ -204,16 +209,17 @@ export async function openAppFrontend(
     // avoid leaking the user's dev-mode preference to every app frontend.
     if (settings.developerMode) hashParams.set('dev_mode', '1');
 
+    const urlForThisOpen = appendParamsToUrl(frontendUrl, context?.launchParams ?? '');
     // Cache-bust the document URL so the webview loads fresh HTML on open instead
     // of a stale cached index.html pointing at an old bundle. Query param, not the
     // SSO hash; auth is per-origin so SSO/localStorage are unaffected.
     let urlToOpen: string;
     try {
-      const u = new URL(frontendUrl);
+      const u = new URL(urlForThisOpen);
       u.searchParams.set('_cb', String(Date.now()));
       urlToOpen = `${u.toString()}#${hashParams.toString()}`;
     } catch {
-      urlToOpen = `${frontendUrl}#${hashParams.toString()}`;
+      urlToOpen = `${urlForThisOpen}#${hashParams.toString()}`;
     }
 
     // Stable window label keyed by applicationId so every call site

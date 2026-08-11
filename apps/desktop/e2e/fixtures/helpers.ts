@@ -67,7 +67,10 @@ export async function stubTauriIPC(page: Page): Promise<void> {
  * command to actually *succeed*. Must be called before the page navigates.
  *
  * A command with no entry in `responses` resolves to `null`, matching the
- * permissive v1 stub.
+ * permissive v1 stub. **Stub every command whose result the page treats as an
+ * array** — components hand these straight to `useState` and then call
+ * `.reduce`/`.map` on them, so a `null` throws during render and the error
+ * boundary replaces the page you were trying to test.
  */
 export async function stubTauriInvoke(
   page: Page,

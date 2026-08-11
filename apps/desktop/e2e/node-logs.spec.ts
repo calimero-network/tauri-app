@@ -36,6 +36,12 @@ describeAfter35("Nodes – logs viewer", () => {
       detect_running_merod_nodes: [],
       get_merod_status: null,
       get_merod_binary_version: "0.11.0-rc.20",
+      // Every command whose result the page treats as an array has to be
+      // stubbed: unstubbed commands resolve to null, and the Nodes page feeds
+      // this one straight into state (`versions.reduce`), so a null takes the
+      // whole page down through the error boundary before the logs modal exists.
+      list_installed_merod_versions: [],
+      list_merod_releases: [],
       get_merod_logs: LOG_TAIL,
       clear_merod_logs: "Cleared logs (2 rotated segment(s) removed)",
       export_merod_logs: { path: `/Users/tester/Downloads/merod-${NODE}.txt`, bytes: 5 * 1024 * 1024 },

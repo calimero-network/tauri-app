@@ -42,17 +42,33 @@ fn seg_path(dir: &Path, n: u32) -> PathBuf {
 
 /// Whether `path` is named like a log file this module manages (`merod.log` or
 /// `merod.log.<N>`) — in any directory, so it identifies *any* node's log.
+///
+/// Matched case-insensitively: macOS (APFS) and Windows (NTFS) are
+/// case-insensitive by default, where `MEROD.LOG` opens the very same file as
+/// `merod.log`. On a case-sensitive filesystem this over-matches, and that is
+/// the right way to be wrong — the cost is a user renaming an oddly-named
+/// export, against silently truncating a live log.
 fn is_log_file_name(path: &Path) -> bool {
-    match path.file_name().and_then(|s| s.to_str()) {
-        Some(name) => {
-            name == ACTIVE_NAME
-                || name
-                    .strip_prefix(&format!("{}.", ACTIVE_NAME))
-                    .and_then(|rest| rest.parse::<u32>().ok())
-                    .is_some()
-        }
-        None => false,
-    }
+    let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
+        return false;
+    };
+    let name = name.to_ascii_lowercase(); // ACTIVE_NAME is already lowercase
+    name == ACTIVE_NAME
+        || name
+            .strip_prefix(&format!("{}.", ACTIVE_NAME))
+            .and_then(|rest| rest.parse::<u32>().ok())
+            .is_some()
+}
+
+/// `dest` as `File::create` will actually resolve it.
+///
+/// A destination can exist even when the user believes they typed a new name
+/// (case-insensitive filesystems), and it can be a symlink with an innocuous
+/// name pointing straight at a log file. Judging the literal path would miss
+/// both; canonicalizing performs the same resolution `File::create` is about to.
+/// A path that doesn't resolve is genuinely new, so it stands as written.
+fn resolved_dest(dest: &Path) -> PathBuf {
+    dest.canonicalize().unwrap_or_else(|_| dest.to_path_buf())
 }
 
 /// Append-only writer for `merod.log` that rotates by size and enforces the cap.
@@ -327,7 +343,8 @@ pub fn export_logs(dir: &Path, dest: &Path) -> io::Result<u64> {
     // log while its drain task is still writing to it, and the caller only holds
     // the exported node's writer lock. Checking the name rather than enumerating
     // running nodes also covers stopped ones, whose logs are just as destroyable.
-    if is_log_file_name(dest) {
+    let probe = resolved_dest(dest);
+    if is_log_file_name(&probe) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "cannot export over a merod log file — pick a different name",
@@ -335,7 +352,7 @@ pub fn export_logs(dir: &Path, dest: &Path) -> io::Result<u64> {
     }
     // Anything inside the source node's own logs dir, whatever it is named: that
     // is the file set we are about to read.
-    if let Some(parent) = dest.parent() {
+    if let Some(parent) = probe.parent() {
         let same_dir = match (parent.canonicalize(), dir.canonicalize()) {
             (Ok(a), Ok(b)) => a == b,
             _ => parent == dir,
@@ -717,6 +734,48 @@ mod tests {
         // successful save of a node that happened to have no logs.
         assert!(export_logs(&dir, &dest).is_err());
         assert!(!dest.exists(), "a failed scan must not leave a stray file behind");
+    }
+
+    #[test]
+    fn export_refuses_a_differently_cased_log_name() {
+        // APFS and NTFS are case-insensitive by default, so MEROD.LOG opens the
+        // same file as merod.log. The name check has to match that, or the guard
+        // is absent on the two platforms this app actually ships to.
+        let source = tmp();
+        let other = tmp();
+        let mut w = RollingLogWriter::open(&other).unwrap();
+        w.write_line(b"other node\n").unwrap();
+
+        for name in ["MEROD.LOG", "Merod.Log", "merod.LOG.1", "MEROD.log.2"] {
+            let err = export_logs(&source, &other.join(name)).unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::InvalidInput, "name {name}");
+        }
+        assert_eq!(read_tail(&other, 10).unwrap(), "other node");
+        fs::remove_dir_all(&source).ok();
+        fs::remove_dir_all(&other).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn export_refuses_a_symlink_pointing_at_a_log() {
+        // File::create follows symlinks, so an innocuous *name* is no guarantee:
+        // judging the literal path would truncate the target the link resolves to.
+        let source = tmp();
+        let other = tmp();
+        let mut w = RollingLogWriter::open(&other).unwrap();
+        w.write_line(b"precious history\n").unwrap();
+
+        let link = source.parent().unwrap().join(format!("export_link_{}.txt", std::process::id()));
+        fs::remove_file(&link).ok();
+        std::os::unix::fs::symlink(active_path(&other), &link).unwrap();
+
+        let err = export_logs(&source, &link).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(read_tail(&other, 10).unwrap(), "precious history");
+
+        fs::remove_file(&link).ok();
+        fs::remove_dir_all(&source).ok();
+        fs::remove_dir_all(&other).ok();
     }
 
     #[test]

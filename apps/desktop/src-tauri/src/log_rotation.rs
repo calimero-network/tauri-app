@@ -266,20 +266,22 @@ pub fn clear_logs(dir: &Path) -> io::Result<usize> {
 /// highest-numbered rotated segment first, down to `.1`, then the active file.
 /// Built by scanning the directory rather than walking `1..N` so a gap left by
 /// age-based cleanup can't cut the history short.
-fn ordered_paths_oldest_first(dir: &Path) -> Vec<PathBuf> {
+///
+/// A failed scan is an error, never an empty list: `export_logs` treats this as
+/// the authoritative file set, so swallowing the error would write a
+/// plausible-looking export that silently omits every rotated segment.
+fn ordered_paths_oldest_first(dir: &Path) -> io::Result<Vec<PathBuf>> {
     let mut segments: Vec<(u32, PathBuf)> = Vec::new();
-    if let Ok(entries) = fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
-                continue;
-            };
-            if let Some(idx) = name
-                .strip_prefix(&format!("{}.", ACTIVE_NAME))
-                .and_then(|rest| rest.parse::<u32>().ok())
-            {
-                segments.push((idx, path));
-            }
+    for entry in fs::read_dir(dir)? {
+        let path = entry?.path();
+        let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        if let Some(idx) = name
+            .strip_prefix(&format!("{}.", ACTIVE_NAME))
+            .and_then(|rest| rest.parse::<u32>().ok())
+        {
+            segments.push((idx, path));
         }
     }
     // Descending index == ascending age-of-newest-line: merod.log.9 is the oldest.
@@ -289,7 +291,7 @@ fn ordered_paths_oldest_first(dir: &Path) -> Vec<PathBuf> {
     if active.exists() {
         paths.push(active);
     }
-    paths
+    Ok(paths)
 }
 
 /// Concatenate a node's entire retained log history into `dest` as plain text,
@@ -317,7 +319,9 @@ pub fn export_logs(dir: &Path, dest: &Path) -> io::Result<u64> {
         }
     }
 
-    let paths = ordered_paths_oldest_first(dir);
+    // Scan before creating `dest`, so a failed scan doesn't leave a stray empty
+    // file where the user expected their logs.
+    let paths = ordered_paths_oldest_first(dir)?;
     let mut out = BufWriter::new(File::create(dest)?);
     let mut total: u64 = 0;
 
@@ -646,6 +650,18 @@ mod tests {
         // Any other path in the same dir is refused too.
         assert!(export_logs(&dir, &dir.join("dump.txt")).is_err());
         fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn export_of_an_unscannable_dir_errors_instead_of_writing_a_partial_file() {
+        let dir = tmp();
+        fs::remove_dir_all(&dir).ok(); // dir cannot be scanned
+        let dest = dir.parent().unwrap().join(format!("export_bad_{}.txt", std::process::id()));
+        fs::remove_file(&dest).ok();
+        // A silently-empty export is the worst outcome here: it looks like a
+        // successful save of a node that happened to have no logs.
+        assert!(export_logs(&dir, &dest).is_err());
+        assert!(!dest.exists(), "a failed scan must not leave a stray file behind");
     }
 
     #[test]

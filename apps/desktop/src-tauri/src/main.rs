@@ -2609,12 +2609,11 @@ async fn start_merod(
     // monitor (which is what normally decrements) is spawned — otherwise a failed
     // spawn / immediate exit would leak the registration (and its file handle).
     let unregister_writer = || {
-        if let Ok(mut map) = log_writers.lock() {
-            if let Some(entry) = map.get_mut(&log_key) {
-                entry.refs = entry.refs.saturating_sub(1);
-                if entry.refs == 0 {
-                    map.remove(&log_key);
-                }
+        let mut map = log_writers.lock_unpoisoned();
+        if let Some(entry) = map.get_mut(&log_key) {
+            entry.refs = entry.refs.saturating_sub(1);
+            if entry.refs == 0 {
+                map.remove(&log_key);
             }
         }
     };
@@ -3834,8 +3833,10 @@ async fn clear_merod_logs(
     // If a node is running, clear through its live writer (serialized with the
     // drain tasks by the inner Mutex) so we don't race a concurrent rotation or
     // leave the writer's cached length desynced. Otherwise clear on disk.
+    // Same reasoning as export_merod_logs: a poisoned lock must not downgrade a
+    // running node to the raw-path clear, which races the drain tasks.
     let key = log_dir.to_string_lossy().to_string();
-    let live = log_writers.lock().ok().and_then(|m| m.get(&key).map(|e| e.writer.clone()));
+    let live = log_writers.lock_unpoisoned().get(&key).map(|e| e.writer.clone());
 
     let removed = tokio::task::spawn_blocking(move || -> std::io::Result<usize> {
         if let Some(writer) = live {
@@ -3913,8 +3914,11 @@ async fn export_merod_logs(
     // rotation can't rename segments mid-export and duplicate or drop one. The
     // drain tasks only stall for the duration of the copy, which backpressures
     // merod's stdout pipe harmlessly.
+    // lock_unpoisoned, not `.lock().ok()`: swallowing a poisoned lock would make
+    // a running node look stopped, and the export would then run *without* the
+    // writer guard below — silently losing the very protection it exists for.
     let key = log_dir.to_string_lossy().to_string();
-    let live = log_writers.lock().ok().and_then(|m| m.get(&key).map(|e| e.writer.clone()));
+    let live = log_writers.lock_unpoisoned().get(&key).map(|e| e.writer.clone());
 
     let export_dir = log_dir.clone();
     let export_dest = dest.clone();

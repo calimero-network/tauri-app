@@ -2218,6 +2218,21 @@ struct LogWriterEntry {
 /// Mutex) rather than racing it via free functions on raw paths.
 type MerodLogWriters = Arc<Mutex<std::collections::HashMap<String, LogWriterEntry>>>;
 
+/// The rotating writer a running node is draining into `log_dir`, if any.
+///
+/// `lock_unpoisoned`, never `.lock().ok()`: swallowing a poisoned lock would
+/// report a *running* node as stopped, and both callers then take a fallback
+/// path that races the live drain tasks — a silent loss of the serialization
+/// they ask for. The map has no cross-field invariant, so the pre-poison
+/// contents are safe to reuse.
+fn live_log_writer(
+    log_writers: &MerodLogWriters,
+    log_dir: &std::path::Path,
+) -> Option<Arc<Mutex<log_rotation::RollingLogWriter>>> {
+    let key = log_dir.to_string_lossy().to_string();
+    log_writers.lock_unpoisoned().get(&key).map(|e| e.writer.clone())
+}
+
 /// Resolve an optional caller-supplied home dir: expand a leading `~`, or fall
 /// back to `~/.calimero`. Single source of truth for the node commands.
 pub(crate) fn resolve_home_dir(home_dir: Option<String>) -> Result<std::path::PathBuf, TauriError> {
@@ -3833,10 +3848,7 @@ async fn clear_merod_logs(
     // If a node is running, clear through its live writer (serialized with the
     // drain tasks by the inner Mutex) so we don't race a concurrent rotation or
     // leave the writer's cached length desynced. Otherwise clear on disk.
-    // Same reasoning as export_merod_logs: a poisoned lock must not downgrade a
-    // running node to the raw-path clear, which races the drain tasks.
-    let key = log_dir.to_string_lossy().to_string();
-    let live = log_writers.lock_unpoisoned().get(&key).map(|e| e.writer.clone());
+    let live = live_log_writer(&log_writers, &log_dir);
 
     let removed = tokio::task::spawn_blocking(move || -> std::io::Result<usize> {
         if let Some(writer) = live {
@@ -3914,11 +3926,7 @@ async fn export_merod_logs(
     // rotation can't rename segments mid-export and duplicate or drop one. The
     // drain tasks only stall for the duration of the copy, which backpressures
     // merod's stdout pipe harmlessly.
-    // lock_unpoisoned, not `.lock().ok()`: swallowing a poisoned lock would make
-    // a running node look stopped, and the export would then run *without* the
-    // writer guard below — silently losing the very protection it exists for.
-    let key = log_dir.to_string_lossy().to_string();
-    let live = log_writers.lock_unpoisoned().get(&key).map(|e| e.writer.clone());
+    let live = live_log_writer(&log_writers, &log_dir);
 
     let export_dir = log_dir.clone();
     let export_dest = dest.clone();

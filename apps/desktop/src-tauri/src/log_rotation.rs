@@ -60,15 +60,33 @@ fn is_log_file_name(path: &Path) -> bool {
             .is_some()
 }
 
-/// `dest` as `File::create` will actually resolve it.
+/// `dest` as `File::create` will actually resolve it, or an error if it is a
+/// symlink.
 ///
-/// A destination can exist even when the user believes they typed a new name
-/// (case-insensitive filesystems), and it can be a symlink with an innocuous
-/// name pointing straight at a log file. Judging the literal path would miss
-/// both; canonicalizing performs the same resolution `File::create` is about to.
-/// A path that doesn't resolve is genuinely new, so it stands as written.
-fn resolved_dest(dest: &Path) -> PathBuf {
-    dest.canonicalize().unwrap_or_else(|_| dest.to_path_buf())
+/// Symlinks are refused outright rather than followed. Resolving them is a trap:
+/// `canonicalize` fails on a *dangling* link — the target not existing is enough,
+/// which is the normal state right after a node's logs are cleared — and falling
+/// back to the literal path then hides an innocuous name pointing at a log file
+/// that `File::create` will happily create and truncate. Chained and relative
+/// links have the same shape. A save destination is never legitimately a symlink,
+/// so the categorical rule is both safer and simpler than out-resolving each case.
+///
+/// What remains is honest resolution: a destination can exist even when the user
+/// believes they typed a new name, because the filesystems macOS and Windows
+/// default to are case-insensitive.
+fn resolved_dest(dest: &Path) -> io::Result<PathBuf> {
+    // symlink_metadata does not follow the link, so this sees dangling ones too.
+    if dest
+        .symlink_metadata()
+        .map(|m| m.file_type().is_symlink())
+        .unwrap_or(false)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "cannot export to a symlink — pick a regular file",
+        ));
+    }
+    Ok(dest.canonicalize().unwrap_or_else(|_| dest.to_path_buf()))
 }
 
 /// Append-only writer for `merod.log` that rotates by size and enforces the cap.
@@ -343,7 +361,7 @@ pub fn export_logs(dir: &Path, dest: &Path) -> io::Result<u64> {
     // log while its drain task is still writing to it, and the caller only holds
     // the exported node's writer lock. Checking the name rather than enumerating
     // running nodes also covers stopped ones, whose logs are just as destroyable.
-    let probe = resolved_dest(dest);
+    let probe = resolved_dest(dest)?;
     if is_log_file_name(&probe) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -772,6 +790,32 @@ mod tests {
         let err = export_logs(&source, &link).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
         assert_eq!(read_tail(&other, 10).unwrap(), "precious history");
+
+        fs::remove_file(&link).ok();
+        fs::remove_dir_all(&source).ok();
+        fs::remove_dir_all(&other).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn export_refuses_a_dangling_symlink() {
+        // canonicalize() fails when the *target* is missing, not just the link —
+        // the normal state right after a node's logs are cleared. Treating an
+        // unresolvable path as "genuinely new" would let File::create follow the
+        // link and recreate the log file at the far end.
+        let source = tmp();
+        let other = tmp();
+        let target = active_path(&other);
+        assert!(!target.exists(), "target must not exist for this test");
+
+        let link = source.parent().unwrap().join(format!("dangling_{}.txt", std::process::id()));
+        fs::remove_file(&link).ok();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        assert!(link.canonicalize().is_err(), "a dangling link must not canonicalize");
+
+        let err = export_logs(&source, &link).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert!(!target.exists(), "the export must not create the link's target");
 
         fs::remove_file(&link).ok();
         fs::remove_dir_all(&source).ok();

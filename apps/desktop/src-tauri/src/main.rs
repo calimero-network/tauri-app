@@ -3919,14 +3919,18 @@ async fn export_merod_logs(
     let export_dir = log_dir.clone();
     let export_dest = dest.clone();
     let bytes = tokio::task::spawn_blocking(move || -> std::io::Result<u64> {
-        if let Some(writer) = live {
-            let _guard = writer.lock().map_err(|_| {
-                std::io::Error::new(std::io::ErrorKind::Other, "log writer lock poisoned")
-            })?;
-            log_rotation::export_logs(&export_dir, &export_dest)
-        } else {
-            log_rotation::export_logs(&export_dir, &export_dest)
-        }
+        // Unlike clear_merod_logs, both cases run the *same* export — the lock is
+        // the only difference, so bind the guard (None when no node is running)
+        // and let it drop at the end of the block.
+        let _guard = live
+            .as_ref()
+            .map(|w| {
+                w.lock().map_err(|_| {
+                    std::io::Error::new(std::io::ErrorKind::Other, "log writer lock poisoned")
+                })
+            })
+            .transpose()?;
+        log_rotation::export_logs(&export_dir, &export_dest)
     })
     .await
     .map_err(|e| TauriError::with_details(TauriErrorCode::InternalError, "Log export task failed", e.to_string()))?

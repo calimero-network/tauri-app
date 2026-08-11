@@ -10,7 +10,7 @@
 //! memory, even if a legacy pre-rotation `merod.log` is huge.
 
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::io::{self, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
@@ -38,6 +38,55 @@ fn active_path(dir: &Path) -> PathBuf {
 
 fn seg_path(dir: &Path, n: u32) -> PathBuf {
     dir.join(format!("{}.{}", ACTIVE_NAME, n))
+}
+
+/// Whether `path` is named like a log file this module manages (`merod.log` or
+/// `merod.log.<N>`) — in any directory, so it identifies *any* node's log.
+///
+/// Matched case-insensitively: macOS (APFS) and Windows (NTFS) are
+/// case-insensitive by default, where `MEROD.LOG` opens the very same file as
+/// `merod.log`. On a case-sensitive filesystem this over-matches, and that is
+/// the right way to be wrong — the cost is a user renaming an oddly-named
+/// export, against silently truncating a live log.
+fn is_log_file_name(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
+        return false;
+    };
+    let name = name.to_ascii_lowercase(); // ACTIVE_NAME is already lowercase
+    name == ACTIVE_NAME
+        || name
+            .strip_prefix(&format!("{}.", ACTIVE_NAME))
+            .and_then(|rest| rest.parse::<u32>().ok())
+            .is_some()
+}
+
+/// `dest` as `File::create` will actually resolve it, or an error if it is a
+/// symlink.
+///
+/// Symlinks are refused outright rather than followed. Resolving them is a trap:
+/// `canonicalize` fails on a *dangling* link — the target not existing is enough,
+/// which is the normal state right after a node's logs are cleared — and falling
+/// back to the literal path then hides an innocuous name pointing at a log file
+/// that `File::create` will happily create and truncate. Chained and relative
+/// links have the same shape. A save destination is never legitimately a symlink,
+/// so the categorical rule is both safer and simpler than out-resolving each case.
+///
+/// What remains is honest resolution: a destination can exist even when the user
+/// believes they typed a new name, because the filesystems macOS and Windows
+/// default to are case-insensitive.
+fn resolved_dest(dest: &Path) -> io::Result<PathBuf> {
+    // symlink_metadata does not follow the link, so this sees dangling ones too.
+    if dest
+        .symlink_metadata()
+        .map(|m| m.file_type().is_symlink())
+        .unwrap_or(false)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "cannot export to a symlink — pick a regular file",
+        ));
+    }
+    Ok(dest.canonicalize().unwrap_or_else(|_| dest.to_path_buf()))
 }
 
 /// Append-only writer for `merod.log` that rotates by size and enforces the cap.
@@ -260,6 +309,116 @@ pub fn clear_logs(dir: &Path) -> io::Result<usize> {
         OpenOptions::new().write(true).open(&active)?.set_len(0)?;
     }
     Ok(remove_rotated_segments(dir))
+}
+
+/// Every `merod.log[.N]` file in `dir`, ordered oldest → newest: the
+/// highest-numbered rotated segment first, down to `.1`, then the active file.
+/// Built by scanning the directory rather than walking `1..N` so a gap left by
+/// age-based cleanup can't cut the history short.
+///
+/// A failed scan is an error, never an empty list: `export_logs` treats this as
+/// the authoritative file set, so swallowing the error would write a
+/// plausible-looking export that silently omits every rotated segment.
+fn ordered_paths_oldest_first(dir: &Path) -> io::Result<Vec<PathBuf>> {
+    let mut segments: Vec<(u32, PathBuf)> = Vec::new();
+    for entry in fs::read_dir(dir)? {
+        let path = entry?.path();
+        let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        if let Some(idx) = name
+            .strip_prefix(&format!("{}.", ACTIVE_NAME))
+            .and_then(|rest| rest.parse::<u32>().ok())
+        {
+            segments.push((idx, path));
+        }
+    }
+    // Descending index == ascending age-of-newest-line: merod.log.9 is the oldest.
+    segments.sort_by(|a, b| b.0.cmp(&a.0));
+    let mut paths: Vec<PathBuf> = segments.into_iter().map(|(_, p)| p).collect();
+    let active = active_path(dir);
+    if active.exists() {
+        paths.push(active);
+    }
+    Ok(paths)
+}
+
+/// Concatenate a node's entire retained log history into `dest` as plain text,
+/// oldest line first, each source file introduced by a banner comment. Streams
+/// in fixed-size chunks, so exporting a full ~100 MB history never buffers it in
+/// memory. Returns the number of bytes written.
+///
+/// A file that disappears mid-export (a rotation renamed it) is skipped rather
+/// than failing the whole export; callers that hold the live writer's lock — see
+/// `export_merod_logs` — prevent that from happening at all.
+pub fn export_logs(dir: &Path, dest: &Path) -> io::Result<u64> {
+    // `File::create` truncates, so two kinds of destination have to be refused —
+    // the file picker will happily hand us either.
+    //
+    // Any file named `merod.log[.N]`, wherever it lives. That is the name every
+    // node's log carries, so this is not only about the node being exported: a
+    // destination in *another* node's logs dir would truncate that node's live
+    // log while its drain task is still writing to it, and the caller only holds
+    // the exported node's writer lock. Checking the name rather than enumerating
+    // running nodes also covers stopped ones, whose logs are just as destroyable.
+    let probe = resolved_dest(dest)?;
+    if is_log_file_name(&probe) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "cannot export over a merod log file — pick a different name",
+        ));
+    }
+    // Anything inside the source node's own logs dir, whatever it is named: that
+    // is the file set we are about to read.
+    if let Some(parent) = probe.parent() {
+        let same_dir = match (parent.canonicalize(), dir.canonicalize()) {
+            (Ok(a), Ok(b)) => a == b,
+            _ => parent == dir,
+        };
+        if same_dir {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "cannot export into the node's own logs directory",
+            ));
+        }
+    }
+
+    // Scan before creating `dest`, so a failed scan doesn't leave a stray empty
+    // file where the user expected their logs.
+    let paths = ordered_paths_oldest_first(dir)?;
+    let mut out = BufWriter::new(File::create(dest)?);
+    let mut total: u64 = 0;
+
+    for path in &paths {
+        let mut f = match File::open(path) {
+            Ok(f) => f,
+            // Rotated out from under us between listing and open — skip it.
+            Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(e),
+        };
+        let name = path.file_name().and_then(|s| s.to_str()).unwrap_or(ACTIVE_NAME);
+        let size = f.metadata().map(|m| m.len()).unwrap_or(0);
+        // `#` so the banner is obviously not a merod log line and greps skip it.
+        let banner = format!("# ===== {} ({} bytes) =====\n", name, size);
+        out.write_all(banner.as_bytes())?;
+        total += banner.len() as u64;
+        total += io::copy(&mut f, &mut out)?;
+        // Segments are byte streams, not guaranteed to end on a line boundary;
+        // separate them so the next banner can't be glued onto a partial line.
+        if size > 0 {
+            out.write_all(b"\n")?;
+            total += 1;
+        }
+    }
+
+    if paths.is_empty() {
+        let note = b"# (no logs recorded for this node)\n";
+        out.write_all(note)?;
+        total += note.len() as u64;
+    }
+
+    out.flush()?;
+    Ok(total)
 }
 
 /// Read up to `max_lines` trailing lines across the active file and rotated
@@ -502,6 +661,186 @@ mod tests {
         w.write_line(b"fresh\n").unwrap();
         assert!(!seg_path(&dir, 1).exists());
         assert_eq!(read_tail(&dir, 10).unwrap(), "fresh");
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn export_concatenates_every_segment_oldest_first() {
+        let dir = tmp();
+        let mut w = RollingLogWriter::open_with(&dir, 40, 5).unwrap();
+        for i in 0..30 {
+            w.write_line(format!("line{:02}\n", i).as_bytes()).unwrap();
+        }
+        assert!(seg_path(&dir, 1).exists(), "test needs at least one rotation");
+
+        let dest = dir.parent().unwrap().join(format!("export_{}.txt", std::process::id()));
+        let written = export_logs(&dir, &dest).unwrap();
+        let text = fs::read_to_string(&dest).unwrap();
+        assert_eq!(written, text.len() as u64);
+
+        // Every line survives the export, in write order — unlike read_tail, which
+        // only ever returns the trailing slice.
+        let logged: Vec<&str> = text.lines().filter(|l| !l.starts_with('#')).filter(|l| !l.is_empty()).collect();
+        assert_eq!(logged.len(), 30, "all 30 lines must be exported, got {:?}", logged);
+        assert_eq!(logged[0], "line00");
+        assert_eq!(*logged.last().unwrap(), "line29");
+        // Banners name each source file.
+        assert!(text.contains("# ===== merod.log.1"));
+        assert!(text.contains("# ===== merod.log ("));
+
+        fs::remove_file(&dest).ok();
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn export_of_empty_dir_writes_a_note_not_an_error() {
+        let dir = tmp();
+        let dest = dir.parent().unwrap().join(format!("export_empty_{}.txt", std::process::id()));
+        export_logs(&dir, &dest).unwrap();
+        assert!(fs::read_to_string(&dest).unwrap().contains("no logs recorded"));
+        fs::remove_file(&dest).ok();
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn export_refuses_to_write_into_the_log_dir() {
+        let dir = tmp();
+        let mut w = RollingLogWriter::open(&dir).unwrap();
+        w.write_line(b"keep me\n").unwrap();
+        // Picking the active log itself as the destination must not truncate it.
+        let err = export_logs(&dir, &active_path(&dir)).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(read_tail(&dir, 10).unwrap(), "keep me");
+        // Any other path in the same dir is refused too.
+        assert!(export_logs(&dir, &dir.join("dump.txt")).is_err());
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn export_refuses_to_overwrite_another_nodes_log() {
+        // The same-dir check alone would let this through: the destination is a
+        // *different* node's logs dir, whose drain task we hold no lock on, so a
+        // truncation there races a live writer exactly as it would at home.
+        let source = tmp();
+        let other = tmp();
+        let mut sw = RollingLogWriter::open(&source).unwrap();
+        sw.write_line(b"source line\n").unwrap();
+        let mut ow = RollingLogWriter::open(&other).unwrap();
+        ow.write_line(b"other node's history\n").unwrap();
+
+        for dest in [active_path(&other), seg_path(&other, 1)] {
+            let err = export_logs(&source, &dest).unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::InvalidInput, "dest {dest:?}");
+        }
+        // The other node's log is untouched.
+        assert_eq!(read_tail(&other, 10).unwrap(), "other node's history");
+
+        // A normal name in that directory is fine — nothing writes to it.
+        assert!(export_logs(&source, &other.join("exported.txt")).is_ok());
+
+        fs::remove_dir_all(&source).ok();
+        fs::remove_dir_all(&other).ok();
+    }
+
+    #[test]
+    fn export_of_an_unscannable_dir_errors_instead_of_writing_a_partial_file() {
+        let dir = tmp();
+        fs::remove_dir_all(&dir).ok(); // dir cannot be scanned
+        let dest = dir.parent().unwrap().join(format!("export_bad_{}.txt", std::process::id()));
+        fs::remove_file(&dest).ok();
+        // A silently-empty export is the worst outcome here: it looks like a
+        // successful save of a node that happened to have no logs.
+        assert!(export_logs(&dir, &dest).is_err());
+        assert!(!dest.exists(), "a failed scan must not leave a stray file behind");
+    }
+
+    #[test]
+    fn export_refuses_a_differently_cased_log_name() {
+        // APFS and NTFS are case-insensitive by default, so MEROD.LOG opens the
+        // same file as merod.log. The name check has to match that, or the guard
+        // is absent on the two platforms this app actually ships to.
+        let source = tmp();
+        let other = tmp();
+        let mut w = RollingLogWriter::open(&other).unwrap();
+        w.write_line(b"other node\n").unwrap();
+
+        for name in ["MEROD.LOG", "Merod.Log", "merod.LOG.1", "MEROD.log.2"] {
+            let err = export_logs(&source, &other.join(name)).unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::InvalidInput, "name {name}");
+        }
+        assert_eq!(read_tail(&other, 10).unwrap(), "other node");
+        fs::remove_dir_all(&source).ok();
+        fs::remove_dir_all(&other).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn export_refuses_a_symlink_pointing_at_a_log() {
+        // File::create follows symlinks, so an innocuous *name* is no guarantee:
+        // judging the literal path would truncate the target the link resolves to.
+        let source = tmp();
+        let other = tmp();
+        let mut w = RollingLogWriter::open(&other).unwrap();
+        w.write_line(b"precious history\n").unwrap();
+
+        let link = source.parent().unwrap().join(format!("export_link_{}.txt", std::process::id()));
+        fs::remove_file(&link).ok();
+        std::os::unix::fs::symlink(active_path(&other), &link).unwrap();
+
+        let err = export_logs(&source, &link).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(read_tail(&other, 10).unwrap(), "precious history");
+
+        fs::remove_file(&link).ok();
+        fs::remove_dir_all(&source).ok();
+        fs::remove_dir_all(&other).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn export_refuses_a_dangling_symlink() {
+        // canonicalize() fails when the *target* is missing, not just the link —
+        // the normal state right after a node's logs are cleared. Treating an
+        // unresolvable path as "genuinely new" would let File::create follow the
+        // link and recreate the log file at the far end.
+        let source = tmp();
+        let other = tmp();
+        let target = active_path(&other);
+        assert!(!target.exists(), "target must not exist for this test");
+
+        let link = source.parent().unwrap().join(format!("dangling_{}.txt", std::process::id()));
+        fs::remove_file(&link).ok();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        assert!(link.canonicalize().is_err(), "a dangling link must not canonicalize");
+
+        let err = export_logs(&source, &link).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert!(!target.exists(), "the export must not create the link's target");
+
+        fs::remove_file(&link).ok();
+        fs::remove_dir_all(&source).ok();
+        fs::remove_dir_all(&other).ok();
+    }
+
+    #[test]
+    fn export_survives_a_gap_in_segment_numbering() {
+        let dir = tmp();
+        // Age-based cleanup can delete .2 while leaving .3 — walking 1..N upward
+        // would stop at the gap and silently drop the older half of the history.
+        for k in [1u32, 3] {
+            let mut f = File::create(seg_path(&dir, k)).unwrap();
+            writeln!(f, "seg{}", k).unwrap();
+        }
+        let mut f = File::create(active_path(&dir)).unwrap();
+        writeln!(f, "active").unwrap();
+        drop(f);
+
+        let dest = dir.parent().unwrap().join(format!("export_gap_{}.txt", std::process::id()));
+        export_logs(&dir, &dest).unwrap();
+        let text = fs::read_to_string(&dest).unwrap();
+        let logged: Vec<&str> = text.lines().filter(|l| !l.starts_with('#') && !l.is_empty()).collect();
+        assert_eq!(logged, vec!["seg3", "seg1", "active"]);
+        fs::remove_file(&dest).ok();
         fs::remove_dir_all(&dir).ok();
     }
 

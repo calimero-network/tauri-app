@@ -56,6 +56,55 @@ export async function stubTauriIPC(page: Page): Promise<void> {
   });
 }
 
+/**
+ * Stub the Tauri **v2** invoke bridge (`window.__TAURI_INTERNALS__`) with a
+ * per-command response map, and record every call on `window.__invokeCalls` so a
+ * test can assert what the UI asked the backend to do.
+ *
+ * `stubTauriIPC` above only stubs the v1 `__TAURI_IPC__` global, which
+ * `@tauri-apps/api@2`'s `invoke()` never reads — under it every command rejects
+ * and the app falls back to its error paths. Use this when a test needs a
+ * command to actually *succeed*. Must be called before the page navigates.
+ *
+ * A command with no entry in `responses` resolves to `null`, matching the
+ * permissive v1 stub. **Stub every command whose result the page treats as an
+ * array** — components hand these straight to `useState` and then call
+ * `.reduce`/`.map` on them, so a `null` throws during render and the error
+ * boundary replaces the page you were trying to test.
+ */
+export async function stubTauriInvoke(
+  page: Page,
+  responses: Record<string, unknown> = {},
+): Promise<void> {
+  await page.addInitScript((responses: Record<string, unknown>) => {
+    (window as any).__invokeCalls = [];
+    (window as any).__TAURI_INTERNALS__ = {
+      // invoke() calls this to register callbacks; an identity fn is enough
+      // because we never round-trip through the real IPC channel.
+      transformCallback: (cb: unknown) => cb,
+      invoke: (cmd: string, args: unknown) => {
+        (window as any).__invokeCalls.push({ cmd, args });
+        const value = Object.prototype.hasOwnProperty.call(responses, cmd)
+          ? responses[cmd]
+          : null;
+        // Errors are expressed as { __error: "..." } so a plain string payload
+        // stays a successful result.
+        if (value && typeof value === "object" && "__error" in (value as object)) {
+          return Promise.reject(new Error(String((value as any).__error)));
+        }
+        return Promise.resolve(value);
+      },
+    };
+  }, responses);
+}
+
+/** Commands invoked so far, oldest first. */
+export async function getInvokeCalls(
+  page: Page,
+): Promise<Array<{ cmd: string; args: any }>> {
+  return await page.evaluate(() => (window as any).__invokeCalls ?? []);
+}
+
 // ─── localStorage seeding ────────────────────────────────────────────────────
 
 export async function seedSettings(

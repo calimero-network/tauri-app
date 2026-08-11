@@ -2218,6 +2218,21 @@ struct LogWriterEntry {
 /// Mutex) rather than racing it via free functions on raw paths.
 type MerodLogWriters = Arc<Mutex<std::collections::HashMap<String, LogWriterEntry>>>;
 
+/// The rotating writer a running node is draining into `log_dir`, if any.
+///
+/// `lock_unpoisoned`, never `.lock().ok()`: swallowing a poisoned lock would
+/// report a *running* node as stopped, and both callers then take a fallback
+/// path that races the live drain tasks — a silent loss of the serialization
+/// they ask for. The map has no cross-field invariant, so the pre-poison
+/// contents are safe to reuse.
+fn live_log_writer(
+    log_writers: &MerodLogWriters,
+    log_dir: &std::path::Path,
+) -> Option<Arc<Mutex<log_rotation::RollingLogWriter>>> {
+    let key = log_dir.to_string_lossy().to_string();
+    log_writers.lock_unpoisoned().get(&key).map(|e| e.writer.clone())
+}
+
 /// Resolve an optional caller-supplied home dir: expand a leading `~`, or fall
 /// back to `~/.calimero`. Single source of truth for the node commands.
 pub(crate) fn resolve_home_dir(home_dir: Option<String>) -> Result<std::path::PathBuf, TauriError> {
@@ -2609,12 +2624,11 @@ async fn start_merod(
     // monitor (which is what normally decrements) is spawned — otherwise a failed
     // spawn / immediate exit would leak the registration (and its file handle).
     let unregister_writer = || {
-        if let Ok(mut map) = log_writers.lock() {
-            if let Some(entry) = map.get_mut(&log_key) {
-                entry.refs = entry.refs.saturating_sub(1);
-                if entry.refs == 0 {
-                    map.remove(&log_key);
-                }
+        let mut map = log_writers.lock_unpoisoned();
+        if let Some(entry) = map.get_mut(&log_key) {
+            entry.refs = entry.refs.saturating_sub(1);
+            if entry.refs == 0 {
+                map.remove(&log_key);
             }
         }
     };
@@ -3834,8 +3848,7 @@ async fn clear_merod_logs(
     // If a node is running, clear through its live writer (serialized with the
     // drain tasks by the inner Mutex) so we don't race a concurrent rotation or
     // leave the writer's cached length desynced. Otherwise clear on disk.
-    let key = log_dir.to_string_lossy().to_string();
-    let live = log_writers.lock().ok().and_then(|m| m.get(&key).map(|e| e.writer.clone()));
+    let live = live_log_writer(&log_writers, &log_dir);
 
     let removed = tokio::task::spawn_blocking(move || -> std::io::Result<usize> {
         if let Some(writer) = live {
@@ -3852,6 +3865,123 @@ async fn clear_merod_logs(
     .map_err(|e| TauriError::with_details(TauriErrorCode::FileWriteError, "Failed to clear log files", e.to_string()))?;
 
     Ok(format!("Cleared logs ({} rotated segment(s) removed)", removed))
+}
+
+/// Save a node's complete retained log history (active file + every rotated
+/// segment, oldest line first) to a plain-text file the user picks.
+///
+/// The viewer only ever shows a bounded tail, so this is the way to get the whole
+/// ~100 MB history off disk and into a bug report. Returns `null` when the user
+/// cancels the save dialog.
+#[tauri::command]
+async fn export_merod_logs(
+    node_name: String,
+    home_dir: Option<String>,
+    default_file_name: Option<String>,
+    app_handle: tauri::AppHandle,
+    log_writers: tauri::State<'_, MerodLogWriters>,
+) -> Result<Option<serde_json::Value>, TauriError> {
+    use tauri_plugin_dialog::DialogExt;
+
+    validate_node_name(&node_name).map_err(|e| TauriError::new(TauriErrorCode::InvalidInput, e))?;
+
+    let home_dir_path = resolve_home_dir(home_dir)?;
+    let log_dir = home_dir_path.join(&node_name).join("logs");
+    // Path safety is from validate_node_name, as in get_merod_logs/clear_merod_logs.
+    if !log_dir.exists() {
+        return Err(TauriError::new(
+            TauriErrorCode::FileNotFound,
+            format!("No logs found for node '{}'. Logs are only available for nodes started by the app.", node_name),
+        ));
+    }
+
+    // Never let a caller-supplied name carry a directory component — the user
+    // chooses the directory in the dialog, this only seeds the file name.
+    let suggested = default_file_name
+        .as_deref()
+        .and_then(|n| std::path::Path::new(n).file_name())
+        .and_then(|n| n.to_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("{}-logs.txt", node_name));
+
+    // The callback API plus a oneshot, never blocking_save_file(): the dialog
+    // stays open for as long as the user deliberates, so blocking on it would
+    // hold a thread for an unbounded time. On an async command that thread is a
+    // Tokio worker shared with the log drain tasks — stalling it backs merod's
+    // stdout pipe up behind a file picker. spawn_blocking would avoid *that*,
+    // but still parks a pool thread for the dialog's whole lifetime; awaiting
+    // the callback parks nothing.
+    let (dest_tx, dest_rx) = tokio::sync::oneshot::channel();
+    app_handle
+        .dialog()
+        .file()
+        .set_file_name(&suggested)
+        .add_filter("Text log", &["txt"])
+        .save_file(move |picked| {
+            let _ = dest_tx.send(picked);
+        });
+
+    let Some(dest) = dest_rx.await.map_err(|e| {
+        TauriError::with_details(
+            TauriErrorCode::InternalError,
+            "The save dialog closed without returning a result",
+            e.to_string(),
+        )
+    })?
+    else {
+        return Ok(None); // user cancelled
+    };
+    let dest = dest.into_path().map_err(|e| {
+        TauriError::with_details(
+            TauriErrorCode::InvalidInput,
+            "Unsupported save location",
+            e.to_string(),
+        )
+    })?;
+
+    // Hold the live writer's lock (when the node is running) across the copy so a
+    // rotation can't rename segments mid-export and duplicate or drop one. The
+    // drain tasks only stall for the duration of the copy, which backpressures
+    // merod's stdout pipe harmlessly.
+    let live = live_log_writer(&log_writers, &log_dir);
+
+    let export_dir = log_dir.clone();
+    let export_dest = dest.clone();
+    let bytes = tokio::task::spawn_blocking(move || -> std::io::Result<u64> {
+        // Unlike clear_merod_logs, both cases run the *same* export — the lock is
+        // the only difference, so bind the guard (None when no node is running)
+        // and let it drop at the end of the block.
+        let _guard = live
+            .as_ref()
+            .map(|w| {
+                w.lock().map_err(|_| {
+                    std::io::Error::new(std::io::ErrorKind::Other, "log writer lock poisoned")
+                })
+            })
+            .transpose()?;
+        log_rotation::export_logs(&export_dir, &export_dest)
+    })
+    .await
+    .map_err(|e| TauriError::with_details(TauriErrorCode::InternalError, "Log export task failed", e.to_string()))?
+    // A refused destination is the user's to fix, so surface its reason as the
+    // message (that's what the toast shows) instead of burying it in details
+    // behind a generic write failure.
+    .map_err(|e| match e.kind() {
+        std::io::ErrorKind::InvalidInput => {
+            TauriError::new(TauriErrorCode::InvalidInput, e.to_string())
+        }
+        _ => TauriError::with_details(
+            TauriErrorCode::FileWriteError,
+            "Failed to write the log export",
+            e.to_string(),
+        ),
+    })?;
+
+    info!("[Logs] Exported {} bytes for node '{}' to {}", bytes, node_name, dest.display());
+    Ok(Some(serde_json::json!({
+        "path": dest.to_string_lossy(),
+        "bytes": bytes,
+    })))
 }
 
 #[tauri::command]
@@ -4760,6 +4890,7 @@ fn main() {
             detect_running_merod_nodes,
             get_merod_logs,
             clear_merod_logs,
+            export_merod_logs,
             get_merod_binary_version,
             download_and_replace_merod,
             list_merod_releases,

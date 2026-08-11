@@ -10,6 +10,7 @@ import {
   detectRunningMerodNodes,
   getMerodLogs,
   clearMerodLogs,
+  exportMerodLogs,
   type RunningMerodNode,
 } from "../utils/merod";
 import {
@@ -55,6 +56,7 @@ function NodeManagement() {
   const [showLogsModal, setShowLogsModal] = useState(false);
   const [logsContent, setLogsContent] = useState("");
   const [logsLoading, setLogsLoading] = useState(false);
+  const [logsExporting, setLogsExporting] = useState(false);
   const [versionId, setVersionId] = useState<string>(BUNDLED_VERSION_ID);
   const [releases, setReleases] = useState<ReleaseInfo[]>([]);
   const [releasesError, setReleasesError] = useState<string>("");
@@ -367,6 +369,29 @@ function NodeManagement() {
       setLogsContent("(No log output yet)");
     } finally {
       setLogsLoading(false);
+    }
+  };
+
+  const handleDownloadLogs = async () => {
+    if (!selectedNode || logsExporting) return;
+    setLogsExporting(true);
+    try {
+      // Stamp the suggested name so repeated exports don't overwrite each other.
+      // Colons are illegal in Windows file names, so use a flat timestamp.
+      const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+      const result = await exportMerodLogs(
+        selectedNode,
+        homeDir,
+        `merod-${selectedNode}-${stamp}.txt`
+      );
+      if (!result) return; // dialog cancelled — nothing to report
+      const mb = result.bytes / (1024 * 1024);
+      const size = mb >= 1 ? `${mb.toFixed(1)} MB` : `${Math.max(1, Math.round(result.bytes / 1024))} KB`;
+      toast.success(`Saved ${size} of logs to ${result.path}`);
+    } catch (err: any) {
+      toast.error(err?.message || "Failed to save logs");
+    } finally {
+      setLogsExporting(false);
     }
   };
 
@@ -713,6 +738,8 @@ function NodeManagement() {
             loading={logsLoading}
             onRefresh={handleRefreshLogs}
             onClear={handleClearLogs}
+            onDownload={handleDownloadLogs}
+            downloading={logsExporting}
             onClose={() => setShowLogsModal(false)}
           />
         )}

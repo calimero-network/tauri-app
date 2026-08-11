@@ -1,5 +1,5 @@
 import { useState, useMemo, useRef, useEffect } from "react";
-import { Search, Copy, Check, RefreshCw, X, Trash2 } from "lucide-react";
+import { Search, Copy, Check, RefreshCw, X, Trash2, Download } from "lucide-react";
 import Convert from "ansi-to-html";
 import { useTheme } from "../contexts/ThemeContext";
 import "./LogsViewer.css";
@@ -11,6 +11,10 @@ interface LogsViewerProps {
   onRefresh: () => void;
   onClose: () => void;
   onClear?: () => void;
+  /** Save the node's full on-disk history (not just the fetched tail) to a file. */
+  onDownload?: () => void;
+  /** True while the export is streaming, so the button can't be double-fired. */
+  downloading?: boolean;
 }
 
 // Cap how many lines are ever put in the DOM at once. The backend already tails
@@ -26,6 +30,8 @@ export function LogsViewer({
   onRefresh,
   onClose,
   onClear,
+  onDownload,
+  downloading = false,
 }: LogsViewerProps) {
   const { theme } = useTheme();
   const [filterInput, setFilterInput] = useState("");
@@ -152,6 +158,17 @@ export function LogsViewer({
               {copied ? <Check size={14} /> : <Copy size={14} />}
               {copied ? "Copied!" : "Copy"}
             </button>
+            {onDownload && (
+              <button
+                onClick={onDownload}
+                className="logs-viewer-btn"
+                disabled={downloading}
+                title="Save the node's full log history to a .txt file"
+              >
+                <Download size={14} />
+                {downloading ? "Saving..." : "Download"}
+              </button>
+            )}
             {onClear && (
               <button
                 onClick={onClear}
@@ -222,7 +239,8 @@ export function LogsViewer({
                 <div className="logs-viewer-truncated">
                   {hiddenCount.toLocaleString()} older line(s) hidden — showing the
                   most recent {MAX_RENDERED_LINES.toLocaleString()}. Use the filter to
-                  narrow down, or Copy to export everything fetched.
+                  narrow down, or Copy to export everything fetched
+                  {onDownload ? " — Download saves the node's full on-disk history." : "."}
                 </div>
               )}
               <div dangerouslySetInnerHTML={{ __html: renderedContent }} />

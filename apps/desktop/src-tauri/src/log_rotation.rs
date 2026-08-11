@@ -10,7 +10,7 @@
 //! memory, even if a legacy pre-rotation `merod.log` is huge.
 
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::io::{self, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
@@ -262,6 +262,97 @@ pub fn clear_logs(dir: &Path) -> io::Result<usize> {
     Ok(remove_rotated_segments(dir))
 }
 
+/// Every `merod.log[.N]` file in `dir`, ordered oldest → newest: the
+/// highest-numbered rotated segment first, down to `.1`, then the active file.
+/// Built by scanning the directory rather than walking `1..N` so a gap left by
+/// age-based cleanup can't cut the history short.
+fn ordered_paths_oldest_first(dir: &Path) -> Vec<PathBuf> {
+    let mut segments: Vec<(u32, PathBuf)> = Vec::new();
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            if let Some(idx) = name
+                .strip_prefix(&format!("{}.", ACTIVE_NAME))
+                .and_then(|rest| rest.parse::<u32>().ok())
+            {
+                segments.push((idx, path));
+            }
+        }
+    }
+    // Descending index == ascending age-of-newest-line: merod.log.9 is the oldest.
+    segments.sort_by(|a, b| b.0.cmp(&a.0));
+    let mut paths: Vec<PathBuf> = segments.into_iter().map(|(_, p)| p).collect();
+    let active = active_path(dir);
+    if active.exists() {
+        paths.push(active);
+    }
+    paths
+}
+
+/// Concatenate a node's entire retained log history into `dest` as plain text,
+/// oldest line first, each source file introduced by a banner comment. Streams
+/// in fixed-size chunks, so exporting a full ~100 MB history never buffers it in
+/// memory. Returns the number of bytes written.
+///
+/// A file that disappears mid-export (a rotation renamed it) is skipped rather
+/// than failing the whole export; callers that hold the live writer's lock — see
+/// `export_merod_logs` — prevent that from happening at all.
+pub fn export_logs(dir: &Path, dest: &Path) -> io::Result<u64> {
+    // `File::create` on a destination inside the log dir would truncate the very
+    // file we're about to read — and truncating the *active* log would silently
+    // wipe a running node's history. Refuse rather than trust the file picker.
+    if let Some(parent) = dest.parent() {
+        let same_dir = match (parent.canonicalize(), dir.canonicalize()) {
+            (Ok(a), Ok(b)) => a == b,
+            _ => parent == dir,
+        };
+        if same_dir {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "cannot export into the node's own logs directory",
+            ));
+        }
+    }
+
+    let paths = ordered_paths_oldest_first(dir);
+    let mut out = BufWriter::new(File::create(dest)?);
+    let mut total: u64 = 0;
+
+    for path in &paths {
+        let mut f = match File::open(path) {
+            Ok(f) => f,
+            // Rotated out from under us between listing and open — skip it.
+            Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(e),
+        };
+        let name = path.file_name().and_then(|s| s.to_str()).unwrap_or(ACTIVE_NAME);
+        let size = f.metadata().map(|m| m.len()).unwrap_or(0);
+        // `#` so the banner is obviously not a merod log line and greps skip it.
+        let banner = format!("# ===== {} ({} bytes) =====\n", name, size);
+        out.write_all(banner.as_bytes())?;
+        total += banner.len() as u64;
+        total += io::copy(&mut f, &mut out)?;
+        // Segments are byte streams, not guaranteed to end on a line boundary;
+        // separate them so the next banner can't be glued onto a partial line.
+        if size > 0 {
+            out.write_all(b"\n")?;
+            total += 1;
+        }
+    }
+
+    if paths.is_empty() {
+        let note = b"# (no logs recorded for this node)\n";
+        out.write_all(note)?;
+        total += note.len() as u64;
+    }
+
+    out.flush()?;
+    Ok(total)
+}
+
 /// Read up to `max_lines` trailing lines across the active file and rotated
 /// segments (newest first), reading at most `TAIL_READ_CAP_BYTES` from any single
 /// file. Returns the lines joined oldest→newest.
@@ -502,6 +593,80 @@ mod tests {
         w.write_line(b"fresh\n").unwrap();
         assert!(!seg_path(&dir, 1).exists());
         assert_eq!(read_tail(&dir, 10).unwrap(), "fresh");
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn export_concatenates_every_segment_oldest_first() {
+        let dir = tmp();
+        let mut w = RollingLogWriter::open_with(&dir, 40, 5).unwrap();
+        for i in 0..30 {
+            w.write_line(format!("line{:02}\n", i).as_bytes()).unwrap();
+        }
+        assert!(seg_path(&dir, 1).exists(), "test needs at least one rotation");
+
+        let dest = dir.parent().unwrap().join(format!("export_{}.txt", std::process::id()));
+        let written = export_logs(&dir, &dest).unwrap();
+        let text = fs::read_to_string(&dest).unwrap();
+        assert_eq!(written, text.len() as u64);
+
+        // Every line survives the export, in write order — unlike read_tail, which
+        // only ever returns the trailing slice.
+        let logged: Vec<&str> = text.lines().filter(|l| !l.starts_with('#')).filter(|l| !l.is_empty()).collect();
+        assert_eq!(logged.len(), 30, "all 30 lines must be exported, got {:?}", logged);
+        assert_eq!(logged[0], "line00");
+        assert_eq!(*logged.last().unwrap(), "line29");
+        // Banners name each source file.
+        assert!(text.contains("# ===== merod.log.1"));
+        assert!(text.contains("# ===== merod.log ("));
+
+        fs::remove_file(&dest).ok();
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn export_of_empty_dir_writes_a_note_not_an_error() {
+        let dir = tmp();
+        let dest = dir.parent().unwrap().join(format!("export_empty_{}.txt", std::process::id()));
+        export_logs(&dir, &dest).unwrap();
+        assert!(fs::read_to_string(&dest).unwrap().contains("no logs recorded"));
+        fs::remove_file(&dest).ok();
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn export_refuses_to_write_into_the_log_dir() {
+        let dir = tmp();
+        let mut w = RollingLogWriter::open(&dir).unwrap();
+        w.write_line(b"keep me\n").unwrap();
+        // Picking the active log itself as the destination must not truncate it.
+        let err = export_logs(&dir, &active_path(&dir)).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(read_tail(&dir, 10).unwrap(), "keep me");
+        // Any other path in the same dir is refused too.
+        assert!(export_logs(&dir, &dir.join("dump.txt")).is_err());
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn export_survives_a_gap_in_segment_numbering() {
+        let dir = tmp();
+        // Age-based cleanup can delete .2 while leaving .3 — walking 1..N upward
+        // would stop at the gap and silently drop the older half of the history.
+        for k in [1u32, 3] {
+            let mut f = File::create(seg_path(&dir, k)).unwrap();
+            writeln!(f, "seg{}", k).unwrap();
+        }
+        let mut f = File::create(active_path(&dir)).unwrap();
+        writeln!(f, "active").unwrap();
+        drop(f);
+
+        let dest = dir.parent().unwrap().join(format!("export_gap_{}.txt", std::process::id()));
+        export_logs(&dir, &dest).unwrap();
+        let text = fs::read_to_string(&dest).unwrap();
+        let logged: Vec<&str> = text.lines().filter(|l| !l.starts_with('#') && !l.is_empty()).collect();
+        assert_eq!(logged, vec!["seg3", "seg1", "active"]);
+        fs::remove_file(&dest).ok();
         fs::remove_dir_all(&dir).ok();
     }
 

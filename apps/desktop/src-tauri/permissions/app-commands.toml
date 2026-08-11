@@ -142,6 +142,11 @@ description = "Enables the clear_merod_logs command."
 commands.allow = ["clear_merod_logs"]
 
 [[permission]]
+identifier = "allow-export-merod-logs"
+description = "Enables the export_merod_logs command."
+commands.allow = ["export_merod_logs"]
+
+[[permission]]
 identifier = "allow-get-merod-binary-version"
 description = "Enables the get_merod_binary_version command."
 commands.allow = ["get_merod_binary_version"]
@@ -298,6 +303,7 @@ permissions = [
   "allow-detect-running-merod-nodes",
   "allow-get-merod-logs",
   "allow-clear-merod-logs",
+  "allow-export-merod-logs",
   "allow-get-merod-binary-version",
   "allow-download-and-replace-merod",
   "allow-list-merod-releases",

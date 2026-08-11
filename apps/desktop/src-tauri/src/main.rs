@@ -3854,6 +3854,91 @@ async fn clear_merod_logs(
     Ok(format!("Cleared logs ({} rotated segment(s) removed)", removed))
 }
 
+/// Save a node's complete retained log history (active file + every rotated
+/// segment, oldest line first) to a plain-text file the user picks.
+///
+/// The viewer only ever shows a bounded tail, so this is the way to get the whole
+/// ~100 MB history off disk and into a bug report. Returns `null` when the user
+/// cancels the save dialog.
+#[tauri::command]
+async fn export_merod_logs(
+    node_name: String,
+    home_dir: Option<String>,
+    default_file_name: Option<String>,
+    app_handle: tauri::AppHandle,
+    log_writers: tauri::State<'_, MerodLogWriters>,
+) -> Result<Option<serde_json::Value>, TauriError> {
+    use tauri_plugin_dialog::DialogExt;
+
+    validate_node_name(&node_name).map_err(|e| TauriError::new(TauriErrorCode::InvalidInput, e))?;
+
+    let home_dir_path = resolve_home_dir(home_dir)?;
+    let log_dir = home_dir_path.join(&node_name).join("logs");
+    // Path safety is from validate_node_name, as in get_merod_logs/clear_merod_logs.
+    if !log_dir.exists() {
+        return Err(TauriError::new(
+            TauriErrorCode::FileNotFound,
+            format!("No logs found for node '{}'. Logs are only available for nodes started by the app.", node_name),
+        ));
+    }
+
+    // Never let a caller-supplied name carry a directory component — the user
+    // chooses the directory in the dialog, this only seeds the file name.
+    let suggested = default_file_name
+        .as_deref()
+        .and_then(|n| std::path::Path::new(n).file_name())
+        .and_then(|n| n.to_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("{}-logs.txt", node_name));
+
+    let dest = app_handle
+        .dialog()
+        .file()
+        .set_file_name(&suggested)
+        .add_filter("Text log", &["txt"])
+        .blocking_save_file();
+
+    let Some(dest) = dest else {
+        return Ok(None); // user cancelled
+    };
+    let dest = dest.into_path().map_err(|e| {
+        TauriError::with_details(
+            TauriErrorCode::InvalidInput,
+            "Unsupported save location",
+            e.to_string(),
+        )
+    })?;
+
+    // Hold the live writer's lock (when the node is running) across the copy so a
+    // rotation can't rename segments mid-export and duplicate or drop one. The
+    // drain tasks only stall for the duration of the copy, which backpressures
+    // merod's stdout pipe harmlessly.
+    let key = log_dir.to_string_lossy().to_string();
+    let live = log_writers.lock().ok().and_then(|m| m.get(&key).map(|e| e.writer.clone()));
+
+    let export_dir = log_dir.clone();
+    let export_dest = dest.clone();
+    let bytes = tokio::task::spawn_blocking(move || -> std::io::Result<u64> {
+        if let Some(writer) = live {
+            let _guard = writer.lock().map_err(|_| {
+                std::io::Error::new(std::io::ErrorKind::Other, "log writer lock poisoned")
+            })?;
+            log_rotation::export_logs(&export_dir, &export_dest)
+        } else {
+            log_rotation::export_logs(&export_dir, &export_dest)
+        }
+    })
+    .await
+    .map_err(|e| TauriError::with_details(TauriErrorCode::InternalError, "Log export task failed", e.to_string()))?
+    .map_err(|e| TauriError::with_details(TauriErrorCode::FileWriteError, "Failed to write the log export", e.to_string()))?;
+
+    info!("[Logs] Exported {} bytes for node '{}' to {}", bytes, node_name, dest.display());
+    Ok(Some(serde_json::json!({
+        "path": dest.to_string_lossy(),
+        "bytes": bytes,
+    })))
+}
+
 #[tauri::command]
 async fn set_tray_icon_connected(
     connected: bool,
@@ -4760,6 +4845,7 @@ fn main() {
             detect_running_merod_nodes,
             get_merod_logs,
             clear_merod_logs,
+            export_merod_logs,
             get_merod_binary_version,
             download_and_replace_merod,
             list_merod_releases,

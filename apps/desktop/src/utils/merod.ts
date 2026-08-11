@@ -133,6 +133,26 @@ export async function clearMerodLogs(
   return await invoke('clear_merod_logs', { nodeName, homeDir });
 }
 
+export interface ExportedLogs {
+  /** Absolute path the user chose in the save dialog. */
+  path: string;
+  /** Bytes written, including the per-segment banner lines. */
+  bytes: number;
+}
+
+/**
+ * Save a node's full retained log history (active file + all rotated segments)
+ * to a .txt file the user picks. Resolves to null if the save dialog was
+ * cancelled. Unlike getMerodLogs, this is the whole history, not a tail.
+ */
+export async function exportMerodLogs(
+  nodeName: string,
+  homeDir?: string,
+  defaultFileName?: string
+): Promise<ExportedLogs | null> {
+  return await invoke('export_merod_logs', { nodeName, homeDir, defaultFileName });
+}
+
 /**
  * Kill all merod processes on the system. Call before total nuke.
  */

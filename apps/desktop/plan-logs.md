@@ -11,14 +11,14 @@ also cleaned up."_ Concretely:
 3. **Delete** old segments (and stale per-node log dirs) automatically.
 4. Make the **Nodes-tab log viewer** fast even when a node has logged a lot.
 
-> **Status (this PR):** the core of the plan is now **implemented** — 100 MB cap,
-> rotation, startup cleanup, a bounded tail read, a `clear_merod_logs` command, and a
-> faster viewer. What's implemented vs. deferred is called out inline with
-> **✅ Implemented** / **⏭️ Deferred** tags. The deferred items (incremental
-> `get_merod_logs_since` live-tail, DOM virtualization library, Settings knobs,
-> Download-full-log) are follow-ups, not required for the cap/cleanup goal.
+> **Status:** the plan is **implemented**. Rotation, the 100 MB cap, startup cleanup, a
+> bounded tail read, `clear_merod_logs` and the faster viewer shipped in PR #151;
+> **Download-full-log** shipped after it. What's implemented vs. deferred is called out
+> inline with **✅ Implemented** / **⏭️ Deferred** tags. The remaining deferred items
+> (incremental `get_merod_logs_since` live-tail, DOM virtualization library, Settings
+> knobs) are optional follow-ups, not required for the cap/cleanup goal.
 
-### Implemented in this PR
+### Implemented in PR #151
 - `src-tauri/src/log_rotation.rs` — `RollingLogWriter` (10 MB segments × up to 10 files
   ≈ 100 MB), `cleanup_logs`, `clear_logs`, bounded `read_tail`; 6 unit tests.
 - `start_merod` now pipes merod stdout/stderr and drains them into the rotating writer,
@@ -27,6 +27,28 @@ also cleaned up."_ Concretely:
 - New `clear_merod_logs` Tauri command (+ `clearMerodLogs` in `utils/merod.ts`).
 - `LogsViewer.tsx`: single split, debounced filter, DOM capped to the last 3 000 lines,
   ANSI conversion of only the rendered slice, pin-to-bottom auto-scroll, **Clear** button.
+
+### Implemented after PR #151 — Download full log
+- `log_rotation::export_logs(dir, dest)` streams the whole retained history for **one
+  node** — every rotated segment oldest→newest, then the active file — into a plain
+  `.txt`, chunk by chunk, so a 100 MB export never buffers in memory. Each source file
+  gets a `# ===== merod.log.N (bytes) =====` banner. Segment order comes from a
+  directory scan (not a `1..N` walk), so a gap left by age-based cleanup can't truncate
+  the history, and a destination inside the node's own logs dir is refused — picking
+  `merod.log` there would otherwise truncate a running node's log. 4 unit tests.
+- New `export_merod_logs` Tauri command: opens the native save dialog
+  (`tauri-plugin-dialog`, already a dependency), seeded with a timestamped
+  `merod-<node>-<stamp>.txt`; returns `null` on cancel and `{path, bytes}` on success.
+  It holds the live `RollingLogWriter` lock across the copy so a rotation can't rename
+  segments mid-export. Registered in `permissions/app-commands.toml` (the
+  `generate_handler_commands_match_acl_permissions` test enforces this).
+- `exportMerodLogs` in `utils/merod.ts`; **Download** button in `LogsViewer.tsx` wired
+  through `NodeManagement.handleDownloadLogs`, with a toast naming the saved path.
+- e2e: `e2e/node-logs.spec.ts` (4 tests) covers the viewer, Download, a cancelled
+  dialog and Clear. It needed a new `stubTauriInvoke` helper — the existing
+  `stubTauriIPC` only stubs the **v1** `__TAURI_IPC__` global, which
+  `@tauri-apps/api@2`'s `invoke()` never reads, so every command rejected and the logs
+  modal was unreachable from a test.
 
 ---
 
@@ -170,8 +192,9 @@ a **bounded reverse tail**:
 - ✅ **Auto-scroll only when pinned to bottom** (tracked via an `onScroll` handler) so it
   no longer yanks the view when the user scrolls up.
 - ✅ **"Clear logs"** button → `clear_merod_logs` (via `clearMerodLogs` in `utils/merod.ts`).
-- ⏭️ **Deferred** — live-tail polling of the incremental API (§3); **"Download full log"**
-  button.
+- ✅ **"Download"** button → `export_merod_logs` (via `exportMerodLogs`): saves the
+  selected node's *entire* on-disk history to a `.txt`, not just the fetched tail.
+- ⏭️ **Deferred** — live-tail polling of the incremental API (§3).
 
 ---
 

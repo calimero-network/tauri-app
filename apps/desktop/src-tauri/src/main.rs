@@ -3904,14 +3904,31 @@ async fn export_merod_logs(
         .map(str::to_string)
         .unwrap_or_else(|| format!("{}-logs.txt", node_name));
 
-    let dest = app_handle
+    // The callback API plus a oneshot, never blocking_save_file(): the dialog
+    // stays open for as long as the user deliberates, so blocking on it would
+    // hold a thread for an unbounded time. On an async command that thread is a
+    // Tokio worker shared with the log drain tasks — stalling it backs merod's
+    // stdout pipe up behind a file picker. spawn_blocking would avoid *that*,
+    // but still parks a pool thread for the dialog's whole lifetime; awaiting
+    // the callback parks nothing.
+    let (dest_tx, dest_rx) = tokio::sync::oneshot::channel();
+    app_handle
         .dialog()
         .file()
         .set_file_name(&suggested)
         .add_filter("Text log", &["txt"])
-        .blocking_save_file();
+        .save_file(move |picked| {
+            let _ = dest_tx.send(picked);
+        });
 
-    let Some(dest) = dest else {
+    let Some(dest) = dest_rx.await.map_err(|e| {
+        TauriError::with_details(
+            TauriErrorCode::InternalError,
+            "The save dialog closed without returning a result",
+            e.to_string(),
+        )
+    })?
+    else {
         return Ok(None); // user cancelled
     };
     let dest = dest.into_path().map_err(|e| {

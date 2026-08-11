@@ -40,6 +40,21 @@ fn seg_path(dir: &Path, n: u32) -> PathBuf {
     dir.join(format!("{}.{}", ACTIVE_NAME, n))
 }
 
+/// Whether `path` is named like a log file this module manages (`merod.log` or
+/// `merod.log.<N>`) — in any directory, so it identifies *any* node's log.
+fn is_log_file_name(path: &Path) -> bool {
+    match path.file_name().and_then(|s| s.to_str()) {
+        Some(name) => {
+            name == ACTIVE_NAME
+                || name
+                    .strip_prefix(&format!("{}.", ACTIVE_NAME))
+                    .and_then(|rest| rest.parse::<u32>().ok())
+                    .is_some()
+        }
+        None => false,
+    }
+}
+
 /// Append-only writer for `merod.log` that rotates by size and enforces the cap.
 pub struct RollingLogWriter {
     dir: PathBuf,
@@ -303,9 +318,23 @@ fn ordered_paths_oldest_first(dir: &Path) -> io::Result<Vec<PathBuf>> {
 /// than failing the whole export; callers that hold the live writer's lock — see
 /// `export_merod_logs` — prevent that from happening at all.
 pub fn export_logs(dir: &Path, dest: &Path) -> io::Result<u64> {
-    // `File::create` on a destination inside the log dir would truncate the very
-    // file we're about to read — and truncating the *active* log would silently
-    // wipe a running node's history. Refuse rather than trust the file picker.
+    // `File::create` truncates, so two kinds of destination have to be refused —
+    // the file picker will happily hand us either.
+    //
+    // Any file named `merod.log[.N]`, wherever it lives. That is the name every
+    // node's log carries, so this is not only about the node being exported: a
+    // destination in *another* node's logs dir would truncate that node's live
+    // log while its drain task is still writing to it, and the caller only holds
+    // the exported node's writer lock. Checking the name rather than enumerating
+    // running nodes also covers stopped ones, whose logs are just as destroyable.
+    if is_log_file_name(dest) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "cannot export over a merod log file — pick a different name",
+        ));
+    }
+    // Anything inside the source node's own logs dir, whatever it is named: that
+    // is the file set we are about to read.
     if let Some(parent) = dest.parent() {
         let same_dir = match (parent.canonicalize(), dir.canonicalize()) {
             (Ok(a), Ok(b)) => a == b,
@@ -650,6 +679,32 @@ mod tests {
         // Any other path in the same dir is refused too.
         assert!(export_logs(&dir, &dir.join("dump.txt")).is_err());
         fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn export_refuses_to_overwrite_another_nodes_log() {
+        // The same-dir check alone would let this through: the destination is a
+        // *different* node's logs dir, whose drain task we hold no lock on, so a
+        // truncation there races a live writer exactly as it would at home.
+        let source = tmp();
+        let other = tmp();
+        let mut sw = RollingLogWriter::open(&source).unwrap();
+        sw.write_line(b"source line\n").unwrap();
+        let mut ow = RollingLogWriter::open(&other).unwrap();
+        ow.write_line(b"other node's history\n").unwrap();
+
+        for dest in [active_path(&other), seg_path(&other, 1)] {
+            let err = export_logs(&source, &dest).unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::InvalidInput, "dest {dest:?}");
+        }
+        // The other node's log is untouched.
+        assert_eq!(read_tail(&other, 10).unwrap(), "other node's history");
+
+        // A normal name in that directory is fine — nothing writes to it.
+        assert!(export_logs(&source, &other.join("exported.txt")).is_ok());
+
+        fs::remove_dir_all(&source).ok();
+        fs::remove_dir_all(&other).ok();
     }
 
     #[test]

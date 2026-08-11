@@ -3946,7 +3946,19 @@ async fn export_merod_logs(
     })
     .await
     .map_err(|e| TauriError::with_details(TauriErrorCode::InternalError, "Log export task failed", e.to_string()))?
-    .map_err(|e| TauriError::with_details(TauriErrorCode::FileWriteError, "Failed to write the log export", e.to_string()))?;
+    // A refused destination is the user's to fix, so surface its reason as the
+    // message (that's what the toast shows) instead of burying it in details
+    // behind a generic write failure.
+    .map_err(|e| match e.kind() {
+        std::io::ErrorKind::InvalidInput => {
+            TauriError::new(TauriErrorCode::InvalidInput, e.to_string())
+        }
+        _ => TauriError::with_details(
+            TauriErrorCode::FileWriteError,
+            "Failed to write the log export",
+            e.to_string(),
+        ),
+    })?;
 
     info!("[Logs] Exported {} bytes for node '{}' to {}", bytes, node_name, dest.display());
     Ok(Some(serde_json::json!({

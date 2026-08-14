@@ -1,21 +1,5 @@
-//! Reproduces the root condition of the 14 Aug 2026 data loss: two live nodes
-//! holding one store.
-//!
-//! RocksDB normally refuses the second opener - its LOCK file is an `fcntl` lock
-//! and the second process cannot take it. But the lock is bound to an *inode*,
-//! so replacing the node home leaves the first node holding a lock nobody can
-//! see, and the second walks in. From there each instance deletes the files its
-//! own manifest does not list, which is what destroyed the store overnight.
-//!
-//! The two tests are a pair: the control shows the lock working, and the second
-//! shows it defeated. Keeping the control is deliberate - it is what makes the
-//! second test mean something, and if it ever fails then the store lock has
-//! started covering this case and the app guard is no longer the only thing
-//! standing here. The overnight corruption itself is not reproduced (it needs
-//! hours of write activity); this is the condition it requires.
-//!
-//! Ignored by default: drives a real merod. Run with
-//!   MEROD_BIN=/path/to/merod cargo test --test double_writer_repro -- --ignored
+//! Two live nodes on one store: the LOCK is bound to an inode, so replacing the home
+//! defeats it. `MEROD_BIN=... cargo test --test double_writer_repro -- --ignored`
 
 mod common;
 
@@ -26,9 +10,8 @@ use std::time::{Duration, Instant};
 
 const NODE: &str = "n1";
 
-/// Starts a second node on `home` and returns everything it printed before it
-/// stopped. It always stops - the first node holds the port - so what matters is
-/// how far it got: refused at the store, or all the way to a running node.
+/// It always stops, since the first node holds the port; what matters is how far
+/// it got - refused at the store, or all the way to the network bind.
 fn second_node_output(home: &Path) -> String {
     let mut child = Command::new(merod())
         .args([
@@ -65,9 +48,8 @@ fn refused_at_the_store(output: &str) -> bool {
     output.contains("While lock file")
 }
 
-/// The second node got the store open. The peer ID is printed *before* the store
-/// is touched - it comes from the config keypair - so the signal is reaching the
-/// network bind, which only happens once the store is open.
+/// Reaching the network bind is the signal, not the peer ID: that is printed from
+/// the config keypair before the store is touched.
 fn opened_the_store(output: &str) -> bool {
     !refused_at_the_store(output) && output.contains("Address already in use")
 }

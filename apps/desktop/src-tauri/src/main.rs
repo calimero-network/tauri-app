@@ -50,6 +50,9 @@ use calimero_tauri_app::node_discovery::{
 
 static HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 static SSE_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+/// Serialises starting a node against deleting a node home; unguarded they
+/// interleave into a delete unlinking a store a start just opened.
+static NODE_LIFECYCLE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// Version of the merod binary this build expects, embedded at compile time from merod-config.json.
 const MEROD_CONFIG_VERSION: &str = match option_env!("MEROD_CONFIG_VERSION") {
@@ -2051,7 +2054,11 @@ impl Drop for InFlightGuard {
     }
 }
 
+/// How long in-flight proxy requests get to finish before the node is stopped.
 const REQUEST_DRAIN_TIMEOUT_SECS: u64 = 10;
+/// How long a node gets to flush and exit before it is killed outright.
+const PROCESS_TERM_MAX_WAIT_SECS: u64 = 30;
+
 /// Removes terminal colour codes, so a node's own error reads cleanly in the UI.
 fn strip_ansi(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
@@ -2071,41 +2078,36 @@ fn strip_ansi(text: &str) -> String {
     out
 }
 
-/// The error a node reported as it died, pulled from its log so the UI can show
-/// the actual cause instead of telling the user to go and read a file.
-///
-/// The *last* matching lines, not the first: a failing start logs its context
-/// before its cause, so the lines nearest the end are the ones that explain it.
-fn error_lines_from_log(body: &str) -> Option<String> {
-    const KEEP: usize = 3;
-    let matches: Vec<String> = body
-        .lines()
-        .map(strip_ansi)
-        .filter(|line| {
-            let line = line.trim();
-            !line.is_empty()
-                && (line.starts_with("Error")
-                    || line.contains("error:")
-                    || line.contains("Corruption")
-                    || line.contains("Storage error"))
-        })
-        .collect();
-    if matches.is_empty() {
-        return None;
+/// What to tell the user when a node dies on startup: its own error if the log
+/// carried one, else the bare exit code.
+fn start_failure_message(code: i32, log: Option<&str>) -> String {
+    match log.and_then(error_lines_from_log) {
+        Some(reason) => format!("The node stopped immediately: {reason}"),
+        None => format!(
+            "Merod process exited immediately with code: {code}. Check merod logs for details."
+        ),
     }
-    Some(
-        matches[matches.len().saturating_sub(KEEP)..]
-            .iter()
-            .map(|line| line.trim())
-            .collect::<Vec<_>>()
-            .join(" "),
-    )
 }
 
-/// How long a node gets to shut down on its own before it is killed outright.
-/// Generous because a large store takes a while to flush, and polling means a
-/// quick exit costs nothing.
-const PROCESS_TERM_MAX_WAIT_SECS: u64 = 30;
+/// Parses the shape merod prints - an `Error:` line then indented numbered frames.
+/// The last block wins: a start logs its context before its cause.
+fn error_lines_from_log(body: &str) -> Option<String> {
+    let lines: Vec<String> = body.lines().map(strip_ansi).collect();
+    let header = lines.iter().rposition(|line| line.trim() == "Error:")?;
+    let frames: Vec<String> = lines[header + 1..]
+        .iter()
+        // Frames are indented; the next unindented line ends the block.
+        .take_while(|line| line.starts_with([' ', '\t']) && !line.trim().is_empty())
+        .map(|line| {
+            line.trim()
+                // Drop the frame number, e.g. "0: ".
+                .trim_start_matches(|c: char| c.is_ascii_digit() || c == ':')
+                .trim()
+                .to_string()
+        })
+        .collect();
+    (!frames.is_empty()).then(|| frames.join(" "))
+}
 
 use tokio::process::Command;
 
@@ -2132,9 +2134,8 @@ fn tracked_pids_for(
 /// authenticated app webview (and would re-flush its localStorage after a wipe).
 #[cfg(target_os = "macos")]
 fn collect_shell_pids() -> Vec<u32> {
-    // Only shells this app installed, identified by where they run from. Matching
-    // on the binary name killed a developer's `cargo run -p calimero-shell` and
-    // missed the app's own shells, whose install path contains a space.
+    // Matched by where they run from, not by name: a `cargo run -p calimero-shell`
+    // from a checkout is not this app's to kill.
     let Some(install_dir) = launcher::shell_install_path().parent().map(|p| p.to_path_buf()) else {
         return Vec::new();
     };
@@ -2148,13 +2149,7 @@ fn collect_shell_pids() -> Vec<u32> {
 }
 
 /// Sends SIGTERM to all pids, waits, then force-kills any survivors.
-/// How long to wait for a node to exit before killing it outright.
-///
-/// `Wait` is for a user-initiated stop, where the UI can show progress and a
-/// clean flush is worth the seconds. `SignalOnly` is for app exit: a node that
-/// has been asked to stop finishes on its own, and blocking quit on it hangs the
-/// app for as long as the flush takes - measured at ten seconds. If it never
-/// exits, the next launch adopts it rather than starting a second writer.
+/// `SignalOnly` is for app exit: waiting there hangs quit for the whole flush.
 enum TermPatience {
     Wait,
     SignalOnly,
@@ -2179,11 +2174,8 @@ async fn kill_pids(pids: &[u32], patience: TermPatience) {
         if matches!(patience, TermPatience::SignalOnly) {
             return;
         }
-        // Poll for exit rather than sleeping a fixed span. Measured: merod takes
-        // about ten seconds to flush, so a plain three-second sleep meant every
-        // shutdown escalated to SIGKILL and the graceful path never actually ran.
-        // RocksDB survives a hard kill, so that cost freshness rather than
-        // integrity - but there is no reason to pay it.
+        // Poll, never a fixed sleep: merod takes about ten seconds to flush, so a
+        // three-second sleep hard-killed it on every shutdown.
         let deadline =
             std::time::Instant::now() + std::time::Duration::from_secs(PROCESS_TERM_MAX_WAIT_SECS);
         while std::time::Instant::now() < deadline {
@@ -2234,9 +2226,8 @@ struct MerodProcess {
     /// nodes from any other node on the machine without matching on a name.
     home: std::path::PathBuf,
     node: Option<String>,
-    /// Whether this app started the node. Tracked either way so the UI reflects
-    /// reality, but only owned nodes are stopped automatically - a node someone
-    /// started from a terminal is not the app's to shut down on quit.
+    /// Tracked either way so the UI reflects reality, but only owned nodes are
+    /// stopped automatically.
     owned: bool,
 }
 
@@ -2314,16 +2305,6 @@ struct NodeInitReservation(String);
 static NODE_INIT_IN_FLIGHT: std::sync::LazyLock<
     std::sync::Mutex<std::collections::HashSet<String>>,
 > = std::sync::LazyLock::new(Default::default);
-
-/// Serialises starting a node against deleting a node home.
-///
-/// Each checks the other's condition and then acts, so without this they can
-/// interleave: a delete confirms nothing is running, a start opens a store in
-/// that directory, and the delete then unlinks it underneath - the incident,
-/// from inside the app. Held only across each check-and-act, never across the
-/// download a pinned release may need. One lock for all homes, because the
-/// contention is two rare user actions; per-home locks would buy nothing.
-static NODE_LIFECYCLE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 impl NodeInitReservation {
     fn claim(home: &std::path::Path, node_name: &str) -> Result<Self, TauriError> {
@@ -2453,6 +2434,37 @@ fn replace_multiaddr_port(addr: &str, proto: &str, port: u16) -> String {
     format!("{}{}{}{}", &addr[..start], needle, port, tail)
 }
 
+/// Takes over a node already serving `(home, node)` instead of starting a second
+/// writer, which RocksDB's lock stops only while its directory still exists there.
+#[cfg(unix)]
+fn adopt_running_node(
+    home: &std::path::Path,
+    node: &str,
+    merod_state: &MerodState,
+    app_handle: &tauri::AppHandle,
+) -> Option<u32> {
+    let pid = existing_node_for(&discover_nodes(), home, node)?;
+    let (port, _) = node_ports(&home.join(node).join("config.toml"));
+    // Only a node this app started is the app's to shut down on quit.
+    let owned = claim_matches(home, node, pid);
+    let origin = if owned { "started by this app" } else { "started elsewhere" };
+    info!("[Merod] Node '{node}' already running on port {port} (PID {pid}); reusing it ({origin})");
+
+    let mut state = merod_state.lock_unpoisoned();
+    if !state.iter().any(|p| p.pid == pid) {
+        state.push(MerodProcess {
+            pid,
+            port,
+            home: home.to_path_buf(),
+            node: Some(node.to_string()),
+            owned,
+        });
+    }
+    drop(state);
+    emit_merod_status_changed(app_handle);
+    Some(pid)
+}
+
 #[tauri::command]
 async fn start_merod(
     server_port: Option<u16>,
@@ -2529,51 +2541,15 @@ async fn start_merod(
     };
     let merod_binary = merod_versions::resolve_binary(&app_handle, &version_id).await?;
 
-    // Never put a second writer on one data directory. RocksDB's own lock stops
-    // that only while the directory it was taken on still exists at that path, so
-    // once the home has been replaced both processes purge the files the other's
-    // manifest does not list. Checked before the config rewrite below, which
-    // would otherwise re-point a live node's listen addresses.
-    // Taken after the binary is resolved above, because that may download a
-    // release, and released when this function returns - so it covers the check
-    // below through the spawn, and nothing longer. Two concurrent starts serialise
-    // here too, which is what stops both of them passing the check.
+    // Taken after the download above, so it spans only the check through the spawn.
     let _lifecycle = NODE_LIFECYCLE.lock().await;
 
     #[cfg(unix)]
-    if let Some(name) = &node_name {
-        if let Some(pid) = existing_node_for(&discover_nodes(), &home_dir_path, name) {
-            let (running_port, _) = node_ports(&home_dir_path.join(name).join("config.toml"));
-            // The claim distinguishes an orphan of a previous launch, which is ours
-            // to manage and to stop on quit, from a node started outside the app,
-            // which we connect to but must not shut down behind the user's back.
-            let ours = claim_matches(&home_dir_path, name, pid);
-            info!(
-                "[Merod] Node '{}' is already running on port {} (PID {}); reusing it ({})",
-                name,
-                running_port,
-                pid,
-                if ours {
-                    "started by this app"
-                } else {
-                    "started elsewhere - will not be stopped on quit"
-                }
-            );
-            {
-                let mut state = merod_state.lock_unpoisoned();
-                if !state.iter().any(|p| p.pid == pid) {
-                    state.push(MerodProcess {
-                        pid,
-                        port: running_port,
-                        home: home_dir_path.clone(),
-                        node: Some(name.clone()),
-                        owned: ours,
-                    });
-                }
-            }
-            emit_merod_status_changed(&app_handle);
-            return Ok(format!("Merod already running with PID: {}", pid));
-        }
+    if let Some(pid) = node_name
+        .as_deref()
+        .and_then(|node| adopt_running_node(&home_dir_path, node, &merod_state, &app_handle))
+    {
+        return Ok(format!("Merod already running with PID: {pid}"));
     }
 
     // Update config.toml with the specified ports if node_name is provided
@@ -2807,16 +2783,8 @@ async fn start_merod(
     if let Ok(Some(status)) = child.try_wait() {
         if let Some(code) = status.code() {
             // Quote the node's own error rather than sending the user to a log file.
-            let reason = std::fs::read_to_string(log_dir.join("merod.log"))
-                .ok()
-                .as_deref()
-                .and_then(error_lines_from_log);
-            let error_msg = match &reason {
-                Some(reason) => format!("The node stopped immediately: {reason}"),
-                None => format!(
-                    "Merod process exited immediately with code: {code}. Check merod logs for details."
-                ),
-            };
+            let log = std::fs::read_to_string(log_dir.join("merod.log")).ok();
+            let error_msg = start_failure_message(code, log.as_deref());
             warn!("[Merod] {}", error_msg);
             unregister_writer();
             return Err(TauriError::new(TauriErrorCode::MerodProcessExited, error_msg));
@@ -2888,6 +2856,28 @@ async fn start_merod(
     Ok(format!("Merod started successfully with PID: {}", pid))
 }
 
+/// Tracked PIDs the OS still reports as nodes, forgetting any that have died -
+/// an adopted node has no monitor task, so this is the only place they are dropped.
+#[cfg(unix)]
+fn live_tracked_pids(
+    tracked: Vec<u32>,
+    merod_state: &MerodState,
+    app_handle: &tauri::AppHandle,
+) -> Vec<u32> {
+    let running = discover_nodes();
+    let (alive, dead): (Vec<u32>, Vec<u32>) = tracked
+        .into_iter()
+        .partition(|pid| is_signalable(*pid, &running));
+    if !dead.is_empty() {
+        info!("[Merod] Dropping {} stale tracked node(s): {dead:?}", dead.len());
+        merod_state
+            .lock_unpoisoned()
+            .retain(|p| !dead.contains(&p.pid));
+        emit_merod_status_changed(app_handle);
+    }
+    alive
+}
+
 #[tauri::command]
 async fn stop_merod(
     node_name: Option<String>,
@@ -2909,31 +2899,12 @@ async fn stop_merod(
         };
         tracked_pids_for(&state, target)
     };
-    // Tracked state can outlive a node - nothing reaps it while the app runs - so
-    // confirm each PID is still a node before signalling it, or a recycled PID
-    // sends the user's Stop button at an unrelated process. Windows has no process
+    // A recycled PID would send Stop at an unrelated process. Windows has no
     // discovery, so there the tracked entry is all there is to go on.
     #[cfg(unix)]
-    let pids: Vec<u32> = {
-        let running = discover_nodes();
-        let (alive, dead): (Vec<u32>, Vec<u32>) = tracked
-            .into_iter()
-            .partition(|pid| is_signalable(*pid, &running));
-        // Forget the dead ones here, before the early return below. An adopted node
-        // has no monitor task to notice it exited, so this is the only place a
-        // stale entry gets dropped - and left in place it would keep the UI
-        // reporting a node that is gone.
-        if !dead.is_empty() {
-            info!("[Merod] Dropping {} stale tracked node(s): {:?}", dead.len(), dead);
-            merod_state
-                .lock_unpoisoned()
-                .retain(|p| !dead.contains(&p.pid));
-            emit_merod_status_changed(&app_handle);
-        }
-        alive
-    };
+    let pids = live_tracked_pids(tracked, &merod_state, &app_handle);
     #[cfg(not(unix))]
-    let pids: Vec<u32> = tracked;
+    let pids = tracked;
 
     if pids.is_empty() {
         return Err(TauriError::new(
@@ -3032,13 +3003,8 @@ async fn stop_merod_by_pid_command(
     app_handle: tauri::AppHandle,
     merod_state: tauri::State<'_, MerodState>,
 ) -> Result<String, TauriError> {
-    // The PID arrives as a bare number from the webview. Signal it only if the app
-    // can account for it as a node; anything else is some other program, possibly
-    // whatever inherited a recycled PID.
-    //
-    // Unix asks the process table. Windows has no discovery, so the app's own
-    // tracked state is the only account available there - weaker, but it still
-    // refuses a PID the webview invented.
+    // A bare number from the webview, so account for it as a node first. Unix asks
+    // the process table; Windows has only tracked state, which is weaker.
     #[cfg(unix)]
     let accountable = is_signalable(pid, &discover_nodes());
     #[cfg(not(unix))]
@@ -4325,12 +4291,8 @@ async fn delete_calimero_data_dir(data_dir: String) -> Result<String, TauriError
         ));
     }
 
-    // Refuse rather than trust the caller to have stopped things first. Deleting
-    // a node's directory does not stop the node: it keeps its open files and goes
-    // on writing by absolute path, so the directory repopulates and any node that
-    // later opens this path shares a store with the survivor.
-    // Held across the check and the removal, so a node cannot be started into this
-    // directory in between - which is the incident, reproduced from inside the app.
+    // Deleting a directory does not stop the node holding it; it writes on by
+    // absolute path. Unix-only: Windows locks open files, so the delete just fails.
     let _lifecycle = NODE_LIFECYCLE.lock().await;
 
     #[cfg(unix)]
@@ -4525,8 +4487,8 @@ async fn remove_app_launchers(app_handle: tauri::AppHandle) -> Result<String, Ta
     }
 }
 
-/// Shutdown is requested from both the tray's Quit item and the run loop's exit
-/// event, and on some quit paths both fire. Only the first request does the work.
+/// Both the tray's Quit item and the run loop's exit event request shutdown, and
+/// some quit paths fire both.
 static SHUTDOWN_CLAIMED: AtomicBool = AtomicBool::new(false);
 
 fn claim_shutdown() -> bool {
@@ -4570,9 +4532,8 @@ fn graceful_shutdown(app_handle: &tauri::AppHandle, merod_state: &MerodState) {
         info!("[Shutdown] No in-flight proxy requests to drain");
     }
 
-    // Only this app's own nodes. A machine-wide scan would also take down a
-    // node started from a terminal or a cargo build on an unrelated home, and
-    // orphans of a previous launch are adopted at start rather than reaped here.
+    // Only this app's own: a machine-wide scan would take down a node started from
+    // a terminal, and orphans are adopted at start rather than reaped here.
     let pids: Vec<u32> = owned_pids(&merod_state.lock_unpoisoned());
 
     if !pids.is_empty() {
@@ -5086,13 +5047,8 @@ fn main() {
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        // Every quit path other than the tray's own Quit item arrives here: the
-        // default macOS menu's Quit and its Cmd-Q, Dock -> Quit, and the
-        // updater's relaunch. Without this the node is orphaned, and the next
-        // launch puts a second writer on its store.
-        // Both events, because macOS decides which one arrives: closing the last
-        // window requests an exit, while Cmd-Q and the Quit menu item come through
-        // as a terminate and emit only `Exit`. `claim_shutdown` keeps it to once.
+        // Both events: closing the last window requests an exit, while Cmd-Q and the
+        // Quit menu terminate and emit only `Exit`. Without this a node is orphaned.
         .run(|app_handle, event| {
             if matches!(
                 event,
@@ -5533,39 +5489,59 @@ listen = ["/ip4/0.0.0.0/udp/4001/quic-v1", "/ip4/0.0.0.0/tcp/4002"]
         }
     }
 
-    /// A node that dies on startup should say why, not "check the logs". The
-    /// incident's own error is the fixture.
+    /// Faithful merod output: an `Error:` line, indented numbered frames, then an
+    /// unindented `Location:` block that must not be swallowed.
     #[test]
     fn a_failed_start_surfaces_the_stores_own_error() {
-        let body = "\u{1b}[32m INFO\u{1b}[0m merod::cli::run: TEE not configured\n\
-                    Error: \n   0: \u{1b}[91mCorruption: IO error: No such file or directory: \
-                    While open a file for random read: /Users/x/.calimero/default/data/000178.sst\u{1b}[0m\n\
-                    Location:\n   crates/store/impl/rocksdb/src/lib.rs:137\n";
+        let body = concat!(
+            "\u{1b}[32m INFO\u{1b}[0m merod::cli::run: TEE not configured\n",
+            "Error: \n",
+            "   0: \u{1b}[91mCorruption: IO error: No such file or directory: ",
+            "/Users/x/.calimero/default/data/000178.sst\u{1b}[0m\n",
+            "\n",
+            "Location:\n",
+            "   crates/store/impl/rocksdb/src/lib.rs:137\n",
+        );
         let found = super::error_lines_from_log(body).expect("should surface an error");
-        assert!(found.contains("Corruption"), "got: {found}");
+        assert!(found.starts_with("Corruption:"), "frame number dropped: {found}");
         assert!(found.contains("000178.sst"), "got: {found}");
         assert!(!found.contains('\u{1b}'), "colour codes must be stripped: {found}");
+        assert!(!found.contains("Location"), "must stop at the frames: {found}");
     }
 
-    /// A node logs its context before its cause, so the lines nearest the end are
-    /// the ones that explain the failure. Keeping the earliest matches instead
-    /// surfaced a stale error from a previous run.
+    /// A start logs its context before its cause, so the last report is the one
+    /// that explains the failure - an earlier retry's error is stale.
     #[test]
-    fn a_failed_start_surfaces_the_last_error_not_the_first() {
-        let body = "Error: an earlier failure that has since been retried\n\
-                    INFO some progress\n\
-                    Error: another old one\n\
-                    Error: and another\n\
-                    Error: the one that actually stopped the node\n";
+    fn a_failed_start_surfaces_the_last_report_not_the_first() {
+        let body = concat!(
+            "Error: \n",
+            "   0: an earlier failure that was retried\n",
+            "\n",
+            "INFO some progress\n",
+            "Error: \n",
+            "   0: the one that actually stopped the node\n",
+        );
         let found = super::error_lines_from_log(body).expect("should surface an error");
-        assert!(
-            found.contains("actually stopped the node"),
-            "must include the last error, got: {found}"
+        assert_eq!(found, "the one that actually stopped the node");
+    }
+
+    #[test]
+    fn a_start_failure_quotes_the_nodes_error_when_the_log_has_one() {
+        let log = "Error: \n   0: Corruption: the store is unopenable\n";
+        assert_eq!(
+            super::start_failure_message(1, Some(log)),
+            "The node stopped immediately: Corruption: the store is unopenable"
         );
-        assert!(
-            !found.contains("an earlier failure"),
-            "must not surface the oldest error, got: {found}"
-        );
+    }
+
+    /// No parseable error: the exit code is all the user has, so it must survive.
+    #[test]
+    fn a_start_failure_falls_back_to_the_exit_code() {
+        for log in [None, Some(" INFO merod::cli::run: nothing wrong here\n")] {
+            let msg = super::start_failure_message(101, log);
+            assert!(msg.contains("101"), "exit code lost: {msg}");
+            assert!(msg.contains("Check merod logs"), "got: {msg}");
+        }
     }
 
     #[test]

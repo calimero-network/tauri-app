@@ -74,10 +74,8 @@ export interface RunningMerodNode {
   home_dir?: string; // Data directory the node runs under, parsed from its argv
 }
 
-/** Normalize a home-dir path for comparison: strips a trailing `/` or `\`
- *  separator and expands a leading `~` against the OS home dir, so a literal
- *  `~/.calimero` compares equal to the already-resolved absolute path merod
- *  runs under. */
+/** Normalize a home-dir path for comparison: strips a trailing separator and
+ *  expands a leading `~`, so it compares equal to merod's resolved absolute path. */
 export function normalizeHomeDir(dir: string | undefined | null, osHomeDir?: string): string {
   if (!dir) return '';
   let normalized = dir.trim().replace(/[\\/]+$/, '');

@@ -41,24 +41,11 @@ const Namespaces = lazy(() => import("./pages/Namespaces"));
 const NodeManagement = lazy(() => import("./pages/NodeManagement"));
 const ConfirmAction = lazy(() => import("./pages/ConfirmAction"));
 
-// --- Node ownership guards -------------------------------------------------
-//
-// A node running on a home this app didn't create (e.g. a developer's own
-// `merod --home ~/dev-nodes --node alice run`) must never be auto-adopted as
-// settings.nodeUrl, and must never suppress this app's own auto-start - two
-// independent RocksDB writers on the same data directory corrupt each other.
-// Kept as pure functions so the ownership decision is unit-testable without
-// mounting the app.
+// A node on a home this app didn't create must never be auto-adopted or block
+// this app's own auto-start - two writers on one data directory corrupt each other.
 
-/** Running nodes whose home_dir resolves to the home this app manages. */
-/**
- * The node to adopt as settings.nodeUrl, if it is currently running.
- *
- * Matched on the node NAME as well as the home directory. One home can hold
- * several nodes - `~/.calimero` is also merod's own default, so a hand-started
- * `mydev` sits beside the app's `default` - and picking the first in the home
- * would silently point the UI at whichever the scan happened to list first.
- */
+/** The node to adopt as settings.nodeUrl, if running. Matched on node name too -
+ *  `~/.calimero` is also merod's own default home, so one home can hold several nodes. */
 export function decideManagedNodes(
   nodes: RunningMerodNode[],
   managedHomeDir: string,
@@ -74,11 +61,8 @@ export function decideManagedNodes(
 
 export type RestartAction = 'reconnect' | 'start' | 'manage';
 
-/** Decide what clicking "Restart"/"Reconnect" should do. A node already
- *  running for this app's home+node name is reconnected to, never
- *  double-spawned. This is process-list based, not HTTP-status based, so an
- *  unauthenticated (401) node - alive, just not logged in - never reads as
- *  dead. */
+/** Decide what clicking "Restart"/"Reconnect" should do: process-list based, not
+ *  HTTP-status based, so an unauthenticated (401) node never reads as dead. */
 export function decideRestartAction(
   nodes: RunningMerodNode[],
   settings: { embeddedNodeName?: string; embeddedNodeDataDir?: string },
@@ -279,17 +263,13 @@ function App() {
         setRunningNodes(runningNodes);
 
         const managedHomeDir = settings.embeddedNodeDataDir || '~/.calimero';
-        // No fallback on failure: a wrong osHomeDir (e.g. '') could make a real
-        // managed node under '~/...' stop matching, which risks the double-spawn
-        // this guard exists to prevent - safer to abort via the outer catch.
+        // No fallback here: a wrong osHomeDir risks the double-spawn this guard
+        // exists to prevent, so a failure aborts via the outer catch instead of guessing.
         const osHomeDir = await homeDir();
         let adoptableNode = decideManagedNodes(runningNodes, managedHomeDir, osHomeDir, settings.embeddedNodeName);
 
-        // Call startMerod whenever an embedded node is configured, even if one is
-        // already running in the managed home - start_merod adopts a live node
-        // instead of double-spawning, and adoption is what lets the app stop it on
-        // quit. A node on some other home - e.g. a developer's own
-        // `merod --home ~/dev-nodes` - is never touched by this at all.
+        // Called even if a node is already running in the managed home: start_merod
+        // adopts it rather than double-spawning, which is what lets the app stop it on quit.
         if (settings.embeddedNodeName) {
           const serverPort = settings.embeddedNodePort ?? DEFAULT_EMBEDDED_NODE_PORT;
           // Must come from settings: start_merod rewrites config.toml with whatever it
@@ -308,12 +288,8 @@ function App() {
           }
         }
 
-        // Auto-update nodeUrl if we detect our own running node and user has no URL set.
-        // Never adopts a node on a different home - that node isn't ours to hand the UI
-        // to. In developer mode, never auto-override — the user explicitly manages which
-        // node to connect to (via NodeManagement or the dropdown). Auto-overriding here
-        // races with the reload from NodeManagement and silently reverts the user's
-        // selection.
+        // Never adopts a node on a different home - that node isn't ours to hand the UI to.
+        // In developer mode, never auto-override: the user manages the connection explicitly.
         if (adoptableNode && !settings.developerMode) {
           const node = adoptableNode;
           const nodeUrl = `http://localhost:${node.port}`;
@@ -460,9 +436,8 @@ function App() {
         const dataDir = settings.embeddedNodeDataDir || '~/.calimero';
         const serverPort = settings.embeddedNodePort ?? DEFAULT_EMBEDDED_NODE_PORT;
         const swarmPort = settings.embeddedNodeSwarmPort ?? DEFAULT_EMBEDDED_SWARM_PORT;
-        // Route through startMerod either way - it adopts an already-running node
-        // instead of double-spawning, which is what keeps the backend's tracked
-        // state (used to stop nodes on quit) accurate for a reconnect too.
+        // Route through startMerod either way - it adopts a live node instead of
+        // double-spawning, keeping the backend's quit-time tracking accurate too.
         await startMerod(serverPort, swarmPort, dataDir, settings.embeddedNodeName, settings.debugLogs);
         if (action === 'start') {
           await new Promise((r) => setTimeout(r, 3000));

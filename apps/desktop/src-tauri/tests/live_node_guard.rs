@@ -1,11 +1,5 @@
-//! End-to-end checks of the guards against *real* merod processes.
-//!
-//! The unit tests feed hand-written `ps` output to the parser. These start actual
-//! nodes and ask the same questions the app asks before it spawns, deletes, or
-//! signals anything - so the answer comes from the live process table.
-//!
-//! Ignored by default: drives a real merod. Run with
-//!   MEROD_BIN=/path/to/merod cargo test --test live_node_guard -- --ignored --nocapture
+//! The guards asked against real merod processes, not fixtures.
+//! `MEROD_BIN=... cargo test --test live_node_guard -- --ignored`
 
 mod common;
 

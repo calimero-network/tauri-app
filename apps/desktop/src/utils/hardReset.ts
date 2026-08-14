@@ -17,13 +17,8 @@
  * - Per-app launchers keep working (and keep getting tokens brokered) off a
  *   capability store that outlives the data directory — `remove_app_launchers`.
  *
- * A hard reset is scoped by PATH, not by ownership: a real incident deleted a
- * node's home while it was still running, a second node then started on the
- * same store, and two RocksDB writers destroyed each other's files. So every
- * node whose data dir sits at or under a target path gets stopped first -
- * whether this app started it or not - verified by re-polling the process
- * scan (never in-memory status, which a kill step has already cleared), with
- * the delete aborted if anything is still alive.
+ * A hard reset is scoped by PATH, not by ownership - every node whose data dir
+ * sits under a target path gets stopped and verified gone before the delete.
  */
 import { invoke } from '@tauri-apps/api/core';
 import { homeDir } from '@tauri-apps/api/path';
@@ -49,11 +44,8 @@ const FILE_HANDLE_SETTLE_MS = 500;
 export interface HardResetOptions {
   /** Progress text for the button label ("Stopping nodes...", "Deleting...", …). */
   onStatus?: (status: string) => void;
-  /**
-   * How long to wait for targeted nodes to disappear from the process scan.
-   * Overridable so a test of the give-up path does not spend the real timeout
-   * waiting on wall-clock time.
-   */
+  /** How long to wait for targeted nodes to disappear from the process scan.
+   *  Overridable so tests of the give-up path skip the real wall-clock wait. */
   stopTimeoutMs?: number;
 }
 
@@ -115,11 +107,8 @@ function isAtOrUnder(path: string, base: string): boolean {
   return p === b || p.startsWith(b + '/');
 }
 
-/**
- * Running nodes whose data directory (`<home_dir>/<node_name>`) sits at or under
- * any of the given target paths - regardless of who started them. A node on an
- * unrelated home is left alone.
- */
+/** Running nodes whose data directory sits at or under any of the given target
+ *  paths, regardless of who started them; a node on an unrelated home is left alone. */
 function nodesUnderPaths(
   nodes: RunningMerodNode[],
   targetPaths: string[],
@@ -159,27 +148,15 @@ export async function previewHardReset(): Promise<HardResetPreview> {
   return { dirsToDelete, nodesToStop };
 }
 
-/**
- * Deletes `dir` and reports whether there was anything left to delete.
- *
- * Named for the delete, not for the answer: there is no read-only "does this
- * path exist" command, and adding one to reach the same conclusion would be more
- * surface for no gain. Repeating the delete is also the remedy — if a surviving
- * writer repopulated the directory, this removes it again and says so.
- */
+/** Deletes `dir` and reports whether there was anything there. There is no
+ *  read-only "does this exist" op, so repeating the delete doubles as the check. */
 async function deleteAndReportWhetherAnythingWasThere(dir: string): Promise<boolean> {
   const result = await deleteCalimeroDataDir(dir);
   return !/did not exist/i.test(result);
 }
 
-/**
- * Full reset: stop every node under a target path, delete the data directories,
- * then wipe all client state. The caller reloads the window afterwards.
- *
- * Throws if a targeted node never stops, or if a data directory could not be
- * deleted or verified gone - before any client state is touched. Never deletes
- * under a live writer.
- */
+/** Full reset: stop every node under a target path, delete the data directories,
+ *  then wipe client state - never deletes under a live writer. */
 export async function hardReset({
   onStatus,
   stopTimeoutMs,
@@ -215,9 +192,8 @@ export async function hardReset({
   }
   await new Promise((r) => setTimeout(r, FILE_HANDLE_SETTLE_MS));
 
-  // 6-7. Delete each dir, re-checking immediately beforehand that nothing has
-  // started writing to it since, then confirming it stays gone: a surviving
-  // node writes by absolute path and can repopulate the folder.
+  // 6-7. Delete each dir, re-checking beforehand that nothing has started writing
+  // to it, then confirming it stays gone.
   onStatus?.('Deleting...');
   for (const dir of dirsToDelete) {
     const alive = nodesUnderPaths(await detectRunningMerodNodes(), [dir], osHomeDir);
@@ -228,9 +204,8 @@ export async function hardReset({
     }
 
     await deleteCalimeroDataDir(dir);
-    // One check, after a settle. A writer repopulates by absolute path, and the
-    // delay is what gives that time to show up - an immediate second check only
-    // repeated the same call without telling us anything the delayed one does not.
+    // One check, after a settle - the delay is what gives a repopulating writer
+    // time to show up before the second check runs.
     await new Promise((r) => setTimeout(r, FILE_HANDLE_SETTLE_MS));
     if (await deleteAndReportWhetherAnythingWasThere(dir)) {
       throw new Error(`${dir} reappeared after being deleted - a live writer is repopulating it.`);

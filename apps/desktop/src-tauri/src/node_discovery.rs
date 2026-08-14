@@ -1,15 +1,5 @@
-//! Finding node processes, and deciding which of them a destructive action may
-//! touch.
-//!
-//! This exists because the app used to answer "is a node already running?" from
-//! its own in-memory list, which dies with the process. A force-quit therefore
-//! left an orphan the next launch could not see, and it started a second node on
-//! the same RocksDB directory. Two writers then deleted the files each other's
-//! manifest did not list, and the store was destroyed.
-//!
-//! So ownership of a node home is a property of the machine, not of app memory:
-//! the OS process table is the source of truth, and every match is keyed on the
-//! data directory rather than on a port or a process name.
+//! Which node processes are running, and which a destructive action may touch.
+//! The OS process table is the source of truth, keyed on the data directory.
 
 use std::path::{Path, PathBuf};
 
@@ -28,13 +18,8 @@ pub fn resolved(path: &Path) -> PathBuf {
 }
 
 #[cfg(unix)]
-/// Parses `ps ax -o pid,command` output into the node processes it describes.
-///
-/// The executable path and the `--home` value can both contain spaces, so
-/// neither is isolated by whitespace position: the executable is everything
-/// before the first flag, and a flag's value runs to the next flag. Getting this
-/// wrong is what blinded the app to its own node - the shipped binary lives at
-/// `/Applications/Calimero Desktop.app/...`, and that space shifted every field.
+/// The executable path and `--home` can both contain spaces, so nothing is
+/// isolated by whitespace position: a flag's value runs to the next flag.
 fn parse_node_listing(listing: &str) -> Vec<DiscoveredNode> {
     fn flag_value<'a>(command: &'a str, flag: &str) -> Option<&'a str> {
         let needle = format!("{flag} ");
@@ -76,9 +61,8 @@ pub fn discover_nodes() -> Vec<DiscoveredNode> {
         .unwrap_or_default()
 }
 
-/// The PID of a live node already serving `(home, node)`, if there is one.
-/// Keyed on the data directory rather than the port: the port is incidental, the
-/// directory is the resource two writers cannot share.
+/// Keyed on the data directory, not the port: the directory is the resource two
+/// writers cannot share.
 pub fn existing_node_for(running: &[DiscoveredNode], home: &Path, node: &str) -> Option<u32> {
     let home = resolved(home);
     running
@@ -101,13 +85,8 @@ pub fn nodes_under_path<'a>(
 }
 
 #[cfg(unix)]
-/// PIDs of shell processes running from `install_dir` - the directory this app
-/// extracted its shell into.
-///
-/// Matched by install path, not by binary name. Name matching killed a developer's
-/// `cargo run -p calimero-shell` from an unrelated checkout, and it *missed* the
-/// app's own shells, because the installed path contains a space and the old parse
-/// isolated the executable by whitespace position.
+/// Matched by install path, not binary name: a `cargo run -p calimero-shell` from
+/// a checkout is not this app's to kill.
 pub fn parse_shell_pids(listing: &str, install_dir: &Path) -> Vec<u32> {
     // Trailing separator so the prefix cannot match a sibling whose name merely
     // starts the same way - a leftover `shell-backup/` is not the shell directory.
@@ -148,17 +127,16 @@ fn process_start_time(pid: u32) -> Option<String> {
 }
 
 #[cfg(unix)]
-/// Records that this app started the node, so a later launch can tell its own
-/// orphan - which it should adopt and shut down - from a node someone started by
-/// hand, which it must leave alone.
+/// Lets a later launch tell its own orphan, which it may adopt and stop, from a
+/// node started by hand, which it must leave alone.
 pub fn write_claim(home: &Path, node: &str, pid: u32) -> std::io::Result<()> {
     let started = process_start_time(pid).unwrap_or_default();
     std::fs::write(claim_path(home, node), format!("{pid}\n{started}\n"))
 }
 
 #[cfg(unix)]
-/// True when the claim names exactly this live process. A dead PID, a recycled
-/// one, or a node this app never started all read as "not mine".
+/// A dead PID, a recycled one, or a node this app never started all read as
+/// "not mine".
 pub fn claim_matches(home: &Path, node: &str, pid: u32) -> bool {
     let Ok(body) = std::fs::read_to_string(claim_path(home, node)) else {
         return false;
@@ -176,13 +154,8 @@ pub fn remove_claim(home: &Path, node: &str) {
     let _ = std::fs::remove_file(claim_path(home, node));
 }
 
-/// Whether the app may signal this PID: the OS must report it as a node right
-/// now. A bare PID from the webview is otherwise unaccountable, and the OS
-/// recycles PIDs, so an unchecked one can name an unrelated process.
-///
-/// Deliberately not satisfied by the app's own tracked state: a tracked PID the
-/// process table no longer lists is dead, and signalling it either does nothing
-/// or reaches whatever inherited the number.
+/// Not satisfied by tracked state alone: a tracked PID the process table no longer
+/// lists is dead, and the OS recycles PIDs.
 pub fn is_signalable(pid: u32, running: &[DiscoveredNode]) -> bool {
     running.iter().any(|found| found.pid == pid)
 }
@@ -450,9 +423,8 @@ mod tests {
         assert!(!claim_matches(&home, "n1", me));
     }
 
-    /// A dev build must not share the installed app's data directory, or it steals
-    /// its host socket and the single-instance plugin routes launches to the wrong
-    /// binary. Tests are a debug build, so this pins the dev-side value.
+    /// Sharing it with the installed app steals its socket and misroutes launches.
+    /// Tests are a debug build, so this pins the dev-side value.
     #[test]
     fn a_debug_build_uses_its_own_app_directory() {
         assert_eq!(

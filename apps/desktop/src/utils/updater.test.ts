@@ -84,9 +84,8 @@ describe('installUpdate', () => {
   });
 
   it('stops only the app\'s own tracked node(s), never every merod on the machine', async () => {
-    // Regression: installUpdate used to force-kill every merod process on the
-    // machine. It must only stop nodes this app is tracking, which stopMerod()
-    // does. The machine-wide command it used to call no longer exists at all.
+    // Regression: installUpdate force-killed every merod on the machine; it must
+    // stop only the nodes this app tracks.
     await installUpdate();
 
     expect(mockStopMerod).toHaveBeenCalledOnce();

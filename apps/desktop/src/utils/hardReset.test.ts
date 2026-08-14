@@ -199,9 +199,8 @@ describe('hardReset', () => {
   });
 
   it('polls the running-node scan to verify a stop, not in-memory status', async () => {
-    // Regression: the old wait loop read getMerodStatus(), the in-memory state
-    // the kill step had just cleared, so it reported "stopped" on the first
-    // tick regardless of reality. The scan must be re-polled until it agrees.
+    // Regression: the old loop read in-memory status the kill step had just
+    // cleared, so it reported "stopped" on the first tick regardless of reality.
     const node = nodeUnder({ pid: 321 });
     detectRunningMerodNodes
       .mockResolvedValueOnce([node]) // initial enumeration

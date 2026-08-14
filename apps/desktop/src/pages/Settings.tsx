@@ -566,8 +566,7 @@ function Settings({ onBack }: SettingsProps) {
                     </p>
                     {nukePreviewError ? (
                       // Without the preview we cannot say what would be stopped, so
-                      // the confirm stays blocked - but say why, and offer a retry
-                      // rather than leaving the dialog stuck on "Checking...".
+                      // the confirm stays blocked - but say why, and offer a retry.
                       <p className="reset-confirm-warning">
                         Could not check for running nodes: {nukePreviewError}{' '}
                         <button

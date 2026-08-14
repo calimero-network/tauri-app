@@ -6,10 +6,8 @@ function node(overrides: Partial<RunningMerodNode>): RunningMerodNode {
   return { pid: 111, node_name: "default", port: 2528, swarm_port: 2428, home_dir: "/Users/dev/.calimero", ...overrides };
 }
 
-// Regression coverage for a real data-loss incident: the app started a second
-// merod on a data directory another node already had open, then bumped ports
-// to route around the conflict instead of recognizing the node was running.
-// Two RocksDB writers on one store destroyed it.
+// Regression coverage: starting a second merod on a data dir another node already
+// had open let two RocksDB writers destroy one store.
 describe("homeDirsMatch", () => {
   it("matches identical paths", () => {
     expect(homeDirsMatch("/Users/dev/.calimero", "/Users/dev/.calimero")).toBe(true);

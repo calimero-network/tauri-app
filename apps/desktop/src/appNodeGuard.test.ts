@@ -37,9 +37,8 @@ describe('decideManagedNodes', () => {
   });
 
   it('adopts the app\'s own node, not a sibling sharing the same home', () => {
-    // ~/.calimero is also merod's own default home, so a hand-started node sits
-    // beside the app's. Matching on the home alone adopted whichever the scan
-    // listed first, silently pointing the UI at the wrong node.
+    // ~/.calimero is merod's own default home, so a hand-started node sits beside
+    // the app's; matching on the home alone adopted whichever came first.
     const handStarted = node({ node_name: 'mydev', port: 3001 });
     const ours = node({ node_name: 'node1', port: 2528 });
 
@@ -74,9 +73,8 @@ describe('decideRestartAction', () => {
   const settings = { embeddedNodeName: 'node1', embeddedNodeDataDir: '~/.calimero' };
 
   it('reconnects instead of spawning when the node is already running', () => {
-    // This decision is made purely from the OS process list, so it never sees
-    // an HTTP-layer 401 (unauthenticated, but alive) at all — the running node
-    // is enough to choose reconnect over start.
+    // Decided from the OS process list, so a 401 (unauthenticated but alive) never
+    // reaches it.
     const ours = node({ home_dir: `${OS_HOME}/.calimero`, node_name: 'node1', port: 2528 });
 
     expect(decideRestartAction([ours], settings, OS_HOME)).toBe('reconnect');

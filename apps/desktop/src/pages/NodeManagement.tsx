@@ -33,11 +33,8 @@ import { useMerodStatusChanged } from "../hooks/useMerodStatusChanged";
 import { useVisiblePoll } from "../hooks/useVisiblePoll";
 import "./NodeManagement.css";
 
-/**
- * The running process, if any, for this exact home+node pair. Matching on
- * node_name alone is what let this app mistake another home dir's node of
- * the same name for its own — or miss its own already-running node entirely.
- */
+/** The running process, if any, for this exact home+node pair. Node name alone is
+ *  ambiguous - a different home dir can have a node with the same name. */
 export function findRunningNode(
   runningNodes: RunningMerodNode[],
   homeDir: string,
@@ -57,13 +54,8 @@ export interface StartPortsResult {
   swarmPort: number;
 }
 
-/**
- * Decide the ports to start a node on. Bumping to a free port is only correct
- * when starting a genuinely different node (different home or node name) —
- * routing around a conflict caused by the SAME home+node already running is
- * how two RocksDB writers ended up on one store. So an already-running match
- * short-circuits here and must not start at all.
- */
+/** Decide the ports to start a node on. Bumping around a conflict from the SAME
+ *  home+node already running is how two RocksDB writers ended up on one store. */
 export function resolveStartPorts(
   runningNodes: RunningMerodNode[],
   homeDir: string,
@@ -103,8 +95,7 @@ function NodeManagement() {
   const [serverPort, setServerPort] = useState<number>(2528);
   const [swarmPort, setSwarmPort] = useState<number>(2428);
   // Needed to compare a "~/..." home dir against an already-running node's
-  // resolved absolute argv path — without it those two spellings of the same
-  // directory look unrelated.
+  // resolved absolute argv path - otherwise the two spellings look unrelated.
   const [osHomeDir, setOsHomeDir] = useState<string>("");
 
   // Node configuration state

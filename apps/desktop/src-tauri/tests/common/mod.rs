@@ -1,10 +1,5 @@
-//! Shared harness for the integration suites that drive a real merod.
-//!
-//! Every node these start lives in a scratch directory whose path contains a
-//! space, because the shipped binary does and that is what the parser used to get
-//! wrong. Nothing here touches `~/.calimero`.
-//!
-//! Compiled into every integration binary, so not every suite uses every helper.
+//! Shared harness for the suites that drive a real merod. Scratch homes contain a
+//! space, as the shipped binary's path does; nothing here touches `~/.calimero`.
 #![allow(dead_code)]
 
 use std::path::{Path, PathBuf};

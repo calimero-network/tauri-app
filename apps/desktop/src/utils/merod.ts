@@ -85,12 +85,21 @@ export function normalizeHomeDir(dir: string | undefined | null, osHomeDir?: str
   return normalized;
 }
 
-/** Whether two home-dir strings resolve to the same directory once
- *  normalized. Empty/unresolved strings never match each other. */
-export function homeDirsMatch(a?: string | null, b?: string | null, osHomeDir?: string): boolean {
-  const na = normalizeHomeDir(a, osHomeDir);
-  const nb = normalizeHomeDir(b, osHomeDir);
-  return na !== '' && na === nb;
+/** The running node under `homeDir`, narrowed to `nodeName` when one is given. A name
+ *  alone is ambiguous: one home holds several nodes, and another home can repeat a name. */
+export function findRunningNode(
+  nodes: RunningMerodNode[],
+  homeDir: string,
+  nodeName: string,
+  osHomeDir?: string
+): RunningMerodNode | undefined {
+  const target = normalizeHomeDir(homeDir, osHomeDir);
+  // Neither an unresolved home nor an unnamed node identifies one: `~/.calimero`
+  // is merod's own default, so the home alone can match several nodes.
+  if (!target || !nodeName) return undefined;
+  return nodes.find(
+    (n) => normalizeHomeDir(n.home_dir, osHomeDir) === target && n.node_name === nodeName
+  );
 }
 
 /**
@@ -113,10 +122,12 @@ export async function initMerodNode(
 }
 
 /**
- * Detect running merod nodes on the system
+ * Detect running merod nodes on the system. Always an array: a stubbed or
+ * unavailable command resolves to null, which every caller used to re-check.
  */
 export async function detectRunningMerodNodes(): Promise<RunningMerodNode[]> {
-  return await invoke('detect_running_merod_nodes');
+  const nodes = await invoke<RunningMerodNode[] | null>('detect_running_merod_nodes');
+  return Array.isArray(nodes) ? nodes : [];
 }
 
 /**

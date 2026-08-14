@@ -52,7 +52,7 @@ describeAfter35("Node lifecycle – connected", () => {
     await expect(dot).toBeVisible();
   });
 
-  test("does not show 'Restart Node' action when healthy", async ({
+  test("does not show the 'Reconnect' action when healthy", async ({
     page,
   }) => {
     await waitForNodeStatus(page, "connected");

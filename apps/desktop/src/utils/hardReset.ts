@@ -29,16 +29,14 @@ import {
   normalizeHomeDir,
   type RunningMerodNode,
 } from './merod';
-import { getSettings, clearAllAppData } from './settings';
+import { getSettings, clearAllAppData, DEFAULT_NODE_HOME_DIR } from './settings';
 import { revokeMdmaSession } from './cloudAuth';
 
-const DEFAULT_DATA_DIR = '~/.calimero';
-
-/** How long to wait for targeted nodes to actually disappear from the process scan. */
+/** How long to wait for targeted nodes to disappear from the process scan. */
 const NODE_STOP_TIMEOUT_MS = 10_000;
+/** How often to re-run the process scan while waiting for that. */
 const NODE_STOP_POLL_MS = 500;
-/** OS-level settle so a stopped node's file handles are released, and so a
- *  delayed repopulation from a surviving writer has time to show up. */
+/** Settle so file handles are released, and so a repopulating writer shows up. */
 const FILE_HANDLE_SETTLE_MS = 500;
 
 export interface HardResetOptions {
@@ -99,14 +97,6 @@ export async function wipeClientState({
   return ok;
 }
 
-/** A path sits at or under `base` once both are normalized (trailing
- *  separator stripped, leading `~` expanded). */
-function isAtOrUnder(path: string, base: string): boolean {
-  const p = normalizeHomeDir(path);
-  const b = normalizeHomeDir(base);
-  return p === b || p.startsWith(b + '/');
-}
-
 /** Running nodes whose data directory sits at or under any of the given target
  *  paths, regardless of who started them; a node on an unrelated home is left alone. */
 function nodesUnderPaths(
@@ -117,16 +107,16 @@ function nodesUnderPaths(
   const targets = targetPaths.map((p) => normalizeHomeDir(p, osHomeDir));
   return nodes.filter((n) => {
     if (!n.home_dir) return false;
-    const nodeDir = `${normalizeHomeDir(n.home_dir)}/${n.node_name}`;
-    return targets.some((t) => isAtOrUnder(nodeDir, t));
+    const nodeDir = `${normalizeHomeDir(n.home_dir, osHomeDir)}/${n.node_name}`;
+    return targets.some((t) => nodeDir === t || nodeDir.startsWith(`${t}/`));
   });
 }
 
 /** The configured data dir plus the default, deduped: after a reset, onboarding
- *  starts from ~/.calimero regardless of what was configured. */
+ *  starts from the default home regardless of what was configured. */
 function targetDataDirs(): string[] {
-  const settingsDataDir = getSettings().embeddedNodeDataDir || DEFAULT_DATA_DIR;
-  return [...new Set([settingsDataDir, DEFAULT_DATA_DIR])];
+  const settingsDataDir = getSettings().embeddedNodeDataDir || DEFAULT_NODE_HOME_DIR;
+  return [...new Set([settingsDataDir, DEFAULT_NODE_HOME_DIR])];
 }
 
 function describeNode(node: RunningMerodNode): string {
@@ -148,19 +138,10 @@ export async function previewHardReset(): Promise<HardResetPreview> {
   return { dirsToDelete, nodesToStop };
 }
 
-/** Full reset: stop every node under a target path, delete the data directories,
- *  then wipe client state - never deletes under a live writer. */
-export async function hardReset({
-  onStatus,
-  stopTimeoutMs,
-}: HardResetOptions = {}): Promise<void> {
-  const osHomeDir = await homeDir();
-  const dirsToDelete = targetDataDirs();
-
-  // 1-3. Stop every node whose data dir sits under a target path, regardless of
-  // who started it - a hard reset is scoped by path, not by app ownership.
-  onStatus?.('Stopping nodes...');
-  const toStop = nodesUnderPaths(await detectRunningMerodNodes(), dirsToDelete, osHomeDir);
+/** Stop every node whose data dir sits under one of `dirs`, whoever started it - a
+ *  hard reset is scoped by path, not by app ownership. Failures are not fatal here. */
+async function stopNodesUnder(dirs: string[], osHomeDir: string): Promise<void> {
+  const toStop = nodesUnderPaths(await detectRunningMerodNodes(), dirs, osHomeDir);
   for (const node of toStop) {
     try {
       await stopMerodByPid(node.pid);
@@ -168,47 +149,64 @@ export async function hardReset({
       console.warn(`[hardReset] failed to stop ${describeNode(node)}:`, err);
     }
   }
+}
 
-  // 4-5. Verify by re-polling the running-node scan - never in-memory status,
-  // which the stop step above has already cleared. Abort if anything survives.
-  onStatus?.('Waiting for nodes to stop...');
-  const deadline = Date.now() + (stopTimeoutMs ?? NODE_STOP_TIMEOUT_MS);
-  let stillRunning = nodesUnderPaths(await detectRunningMerodNodes(), dirsToDelete, osHomeDir);
+/** Wait for the process scan to stop reporting nodes under `dirs`. Throws rather than
+ *  let the delete run: in-memory status is useless here, the stop already cleared it. */
+async function waitForNodesGone(dirs: string[], osHomeDir: string, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  let stillRunning = nodesUnderPaths(await detectRunningMerodNodes(), dirs, osHomeDir);
   while (stillRunning.length > 0 && Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, NODE_STOP_POLL_MS));
-    stillRunning = nodesUnderPaths(await detectRunningMerodNodes(), dirsToDelete, osHomeDir);
+    stillRunning = nodesUnderPaths(await detectRunningMerodNodes(), dirs, osHomeDir);
   }
   if (stillRunning.length > 0) {
     throw new Error(
       `Node ${describeNode(stillRunning[0])} is still running - aborting the delete to avoid corrupting its store.`
     );
   }
+}
+
+/** Delete `dir`, then delete it again after a settle: the second call reports
+ *  `deleted` only if a surviving writer has repopulated the directory. */
+async function deleteAndVerifyGone(dir: string): Promise<void> {
+  await deleteCalimeroDataDir(dir);
+  await new Promise((r) => setTimeout(r, FILE_HANDLE_SETTLE_MS));
+  if ((await deleteCalimeroDataDir(dir)).deleted) {
+    throw new Error(`${dir} reappeared after being deleted - a live writer is repopulating it.`);
+  }
+}
+
+/** Full reset: stop every node under a target path, delete those directories, then wipe
+ *  client state. Never deletes under a live writer, and throws before wiping anything. */
+export async function hardReset({
+  onStatus,
+  stopTimeoutMs,
+}: HardResetOptions = {}): Promise<void> {
+  const osHomeDir = await homeDir();
+  const dirsToDelete = targetDataDirs();
+
+  onStatus?.('Stopping nodes...');
+  await stopNodesUnder(dirsToDelete, osHomeDir);
+
+  onStatus?.('Waiting for nodes to stop...');
+  await waitForNodesGone(dirsToDelete, osHomeDir, stopTimeoutMs ?? NODE_STOP_TIMEOUT_MS);
   await new Promise((r) => setTimeout(r, FILE_HANDLE_SETTLE_MS));
 
-  // 6-7. Delete each dir, re-checking beforehand that nothing has started writing
-  // to it, then confirming it stays gone.
   onStatus?.('Deleting...');
   for (const dir of dirsToDelete) {
+    // Re-checked per path: a node that started during an earlier delete would
+    // otherwise have its store deleted underneath it.
     const alive = nodesUnderPaths(await detectRunningMerodNodes(), [dir], osHomeDir);
     if (alive.length > 0) {
       throw new Error(
         `Node ${describeNode(alive[0])} started under ${dir} - aborting the delete to avoid corrupting its store.`
       );
     }
-
-    await deleteCalimeroDataDir(dir);
-    // One check, after a settle - the delay is what gives a repopulating writer
-    // time to show up before the second check runs.
-    await new Promise((r) => setTimeout(r, FILE_HANDLE_SETTLE_MS));
-    // Deleting again doubles as the check: a writer that repopulated the directory
-    // is removed a second time, and `deleted` says it happened.
-    if ((await deleteCalimeroDataDir(dir)).deleted) {
-      throw new Error(`${dir} reappeared after being deleted - a live writer is repopulating it.`);
-    }
+    await deleteAndVerifyGone(dir);
   }
 
-  // 8. Only now discard the client state - including the settings that told us
-  //    which directories to delete. The launchers go too: the apps they point at
-  //    lived in the data directory we just deleted.
+  // Only now discard the client state - including the settings that told us which
+  // directories to delete. The launchers go too: their apps lived in those dirs.
   await wipeClientState({ removeLaunchers: true });
 }

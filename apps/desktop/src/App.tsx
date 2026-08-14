@@ -11,9 +11,10 @@ import {
   saveSettings,
   DEFAULT_EMBEDDED_NODE_PORT,
   DEFAULT_EMBEDDED_SWARM_PORT,
+  DEFAULT_NODE_HOME_DIR,
 } from "./utils/settings";
 import { clearOnboardingProgress } from "./utils/onboardingProgress";
-import { startMerod, detectRunningMerodNodes, waitForNodeHealthy, homeDirsMatch, type RunningMerodNode } from "./utils/merod";
+import { startMerod, detectRunningMerodNodes, waitForNodeHealthy, findRunningNode, type RunningMerodNode } from "./utils/merod";
 import { homeDir } from "@tauri-apps/api/path";
 import { useToast } from "./contexts/ToastContext";
 import { checkOnboardingState } from "./utils/onboarding";
@@ -40,46 +41,6 @@ const InstalledApps = lazy(() => import("./pages/InstalledApps"));
 const Namespaces = lazy(() => import("./pages/Namespaces"));
 const NodeManagement = lazy(() => import("./pages/NodeManagement"));
 const ConfirmAction = lazy(() => import("./pages/ConfirmAction"));
-
-// A node on a home this app didn't create must never be auto-adopted or block
-// this app's own auto-start - two writers on one data directory corrupt each other.
-
-/** The node to adopt as settings.nodeUrl, if running. Matched on node name too -
- *  `~/.calimero` is also merod's own default home, so one home can hold several nodes. */
-export function decideManagedNodes(
-  nodes: RunningMerodNode[],
-  managedHomeDir: string,
-  osHomeDir: string,
-  managedNodeName?: string
-): RunningMerodNode | undefined {
-  return nodes.find(
-    (n) =>
-      homeDirsMatch(n.home_dir, managedHomeDir, osHomeDir) &&
-      (managedNodeName === undefined || n.node_name === managedNodeName)
-  );
-}
-
-export type RestartAction = 'reconnect' | 'start' | 'manage';
-
-/** Decide what clicking "Restart"/"Reconnect" should do: process-list based, not
- *  HTTP-status based, so an unauthenticated (401) node never reads as dead. */
-export function decideRestartAction(
-  nodes: RunningMerodNode[],
-  settings: { embeddedNodeName?: string; embeddedNodeDataDir?: string },
-  osHomeDir: string
-): RestartAction {
-  if (!settings.embeddedNodeName) return 'manage';
-  const managedHomeDir = settings.embeddedNodeDataDir || '~/.calimero';
-  // Same question as adoption - "is the app's own node running?" - so the same
-  // answer. These were two matches, and only one of them checked the node name.
-  const alreadyRunning = decideManagedNodes(
-    nodes,
-    managedHomeDir,
-    osHomeDir,
-    settings.embeddedNodeName
-  );
-  return alreadyRunning ? 'reconnect' : 'start';
-}
 
 function App() {
   const toast = useToast();
@@ -257,16 +218,14 @@ function App() {
       }
 
       try {
-        const normalizeRunningNodes = (n: unknown): RunningMerodNode[] =>
-          Array.isArray(n) ? n : [];
-        let runningNodes = normalizeRunningNodes(await detectRunningMerodNodes());
+        let runningNodes = await detectRunningMerodNodes();
         setRunningNodes(runningNodes);
 
-        const managedHomeDir = settings.embeddedNodeDataDir || '~/.calimero';
+        const managedHomeDir = settings.embeddedNodeDataDir || DEFAULT_NODE_HOME_DIR;
         // No fallback here: a wrong osHomeDir risks the double-spawn this guard
         // exists to prevent, so a failure aborts via the outer catch instead of guessing.
         const osHomeDir = await homeDir();
-        let adoptableNode = decideManagedNodes(runningNodes, managedHomeDir, osHomeDir, settings.embeddedNodeName);
+        let adoptableNode = findRunningNode(runningNodes, managedHomeDir, settings.embeddedNodeName ?? '', osHomeDir);
 
         // Called even if a node is already running in the managed home: start_merod
         // adopts it rather than double-spawning, which is what lets the app stop it on quit.
@@ -280,9 +239,9 @@ function App() {
             await startMerod(serverPort, swarmPort, managedHomeDir, settings.embeddedNodeName, settings.debugLogs);
             // Non-fatal on timeout: the health check below is what decides connected state.
             await waitForNodeHealthy(`http://localhost:${serverPort}/auth`, 15000).catch(() => {});
-            runningNodes = normalizeRunningNodes(await detectRunningMerodNodes());
+            runningNodes = await detectRunningMerodNodes();
             setRunningNodes(runningNodes);
-            adoptableNode = decideManagedNodes(runningNodes, managedHomeDir, osHomeDir, settings.embeddedNodeName);
+            adoptableNode = findRunningNode(runningNodes, managedHomeDir, settings.embeddedNodeName ?? '', osHomeDir);
           } catch (startErr) {
             console.warn('Auto-start merod failed:', startErr);
           }
@@ -425,29 +384,35 @@ function App() {
 
   const handleRestartNode = useCallback(async () => {
     const settings = getSettings();
-    if (settings.embeddedNodeName) {
-      try {
-        const osHomeDir = await homeDir();
-        const nodes = await detectRunningMerodNodes().catch(() => []);
-        const action = decideRestartAction(Array.isArray(nodes) ? nodes : [], settings, osHomeDir);
-        toast.success(
-          action === 'reconnect' ? "Node is already running - reconnecting..." : "Starting node..."
-        );
-        const dataDir = settings.embeddedNodeDataDir || '~/.calimero';
-        const serverPort = settings.embeddedNodePort ?? DEFAULT_EMBEDDED_NODE_PORT;
-        const swarmPort = settings.embeddedNodeSwarmPort ?? DEFAULT_EMBEDDED_SWARM_PORT;
-        // Route through startMerod either way - it adopts a live node instead of
-        // double-spawning, keeping the backend's quit-time tracking accurate too.
-        await startMerod(serverPort, swarmPort, dataDir, settings.embeddedNodeName, settings.debugLogs);
-        if (action === 'start') {
-          await new Promise((r) => setTimeout(r, 3000));
-        }
-        await checkConnection();
-      } catch (err) {
-        toast.error(`Failed to start node: ${parseTauriError(err)}`);
-      }
-    } else {
+    if (!settings.embeddedNodeName) {
       setCurrentPage('nodes');
+      return;
+    }
+    try {
+      const dataDir = settings.embeddedNodeDataDir || DEFAULT_NODE_HOME_DIR;
+      const osHomeDir = await homeDir();
+      // Decided from the process list, not the health check: an unauthenticated node
+      // answers 401, which reads as dead even though it is running.
+      const alreadyRunning = findRunningNode(
+        await detectRunningMerodNodes().catch(() => []),
+        dataDir,
+        settings.embeddedNodeName ?? '',
+        osHomeDir
+      );
+      toast.success(
+        alreadyRunning ? "Node is already running - reconnecting..." : "Starting node..."
+      );
+      const serverPort = settings.embeddedNodePort ?? DEFAULT_EMBEDDED_NODE_PORT;
+      const swarmPort = settings.embeddedNodeSwarmPort ?? DEFAULT_EMBEDDED_SWARM_PORT;
+      // Route through startMerod either way - it adopts a live node instead of
+      // double-spawning, keeping the backend's quit-time tracking accurate too.
+      await startMerod(serverPort, swarmPort, dataDir, settings.embeddedNodeName, settings.debugLogs);
+      if (!alreadyRunning) {
+        await new Promise((r) => setTimeout(r, 3000));
+      }
+      await checkConnection();
+    } catch (err) {
+      toast.error(`Failed to start node: ${parseTauriError(err)}`);
     }
   }, [checkConnection, toast]);
 

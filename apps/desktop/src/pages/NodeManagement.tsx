@@ -1,17 +1,22 @@
 import { useState, useEffect, useRef, memo } from "react";
-import { getSettings, saveSettings } from "../utils/settings";
+import {
+  getSettings,
+  saveSettings,
+  DEFAULT_EMBEDDED_NODE_PORT,
+  DEFAULT_EMBEDDED_SWARM_PORT,
+  DEFAULT_NODE_HOME_DIR,
+} from "../utils/settings";
 import { clearAccessToken, clearRefreshToken } from "../lib/token-storage";
 import {
   listMerodNodes,
   initMerodNode,
   startMerod,
-  stopMerod,
   stopMerodByPid,
   detectRunningMerodNodes,
   getMerodLogs,
   clearMerodLogs,
   exportMerodLogs,
-  homeDirsMatch,
+  findRunningNode,
   type RunningMerodNode,
 } from "../utils/merod";
 import {
@@ -33,22 +38,8 @@ import { useMerodStatusChanged } from "../hooks/useMerodStatusChanged";
 import { useVisiblePoll } from "../hooks/useVisiblePoll";
 import "./NodeManagement.css";
 
-/** The running process, if any, for this exact home+node pair. Node name alone is
- *  ambiguous - a different home dir can have a node with the same name. */
-export function findRunningNode(
-  runningNodes: RunningMerodNode[],
-  homeDir: string,
-  nodeName: string,
-  osHomeDir?: string
-): RunningMerodNode | undefined {
-  if (!nodeName) return undefined;
-  return runningNodes.find(
-    (n) => n.node_name === nodeName && homeDirsMatch(n.home_dir, homeDir, osHomeDir)
-  );
-}
-
 export interface StartPortsResult {
-  /** Set when this exact home+node is already running — must not start or bump. */
+  /** Set when this exact home+node is already running - must not start or bump. */
   alreadyRunning?: RunningMerodNode;
   serverPort: number;
   swarmPort: number;
@@ -69,13 +60,13 @@ export function resolveStartPorts(
     return { alreadyRunning, serverPort: requestedServerPort, swarmPort: requestedSwarmPort };
   }
 
-  const usedServerPorts = runningNodes.map((n) => n.port ?? 2528);
-  const usedSwarmPorts = runningNodes.map((n) => n.swarm_port ?? 2428);
+  const usedServerPorts = runningNodes.map((n) => n.port ?? DEFAULT_EMBEDDED_NODE_PORT);
+  const usedSwarmPorts = runningNodes.map((n) => n.swarm_port ?? DEFAULT_EMBEDDED_SWARM_PORT);
   const serverPort = usedServerPorts.includes(requestedServerPort)
-    ? Math.max(2528, ...usedServerPorts) + 1
+    ? Math.max(DEFAULT_EMBEDDED_NODE_PORT, ...usedServerPorts) + 1
     : requestedServerPort;
   const swarmPort = usedSwarmPorts.includes(requestedSwarmPort)
-    ? Math.max(2428, ...usedSwarmPorts) + 1
+    ? Math.max(DEFAULT_EMBEDDED_SWARM_PORT, ...usedSwarmPorts) + 1
     : requestedSwarmPort;
   return { serverPort, swarmPort };
 }
@@ -86,14 +77,14 @@ function NodeManagement() {
   // Node management state
   const [availableNodes, setAvailableNodes] = useState<string[]>([]);
   const [runningNodes, setRunningNodes] = useState<RunningMerodNode[]>([]);
-  const [homeDir, setHomeDir] = useState("~/.calimero");
+  const [homeDir, setHomeDir] = useState(DEFAULT_NODE_HOME_DIR);
   const [selectedNode, setSelectedNode] = useState<string>("");
   const [newNodeName, setNewNodeName] = useState("");
   const [newAdminUser, setNewAdminUser] = useState("");
   const [newAdminPassword, setNewAdminPassword] = useState("");
   const [loading, setLoading] = useState(false);
-  const [serverPort, setServerPort] = useState<number>(2528);
-  const [swarmPort, setSwarmPort] = useState<number>(2428);
+  const [serverPort, setServerPort] = useState<number>(DEFAULT_EMBEDDED_NODE_PORT);
+  const [swarmPort, setSwarmPort] = useState<number>(DEFAULT_EMBEDDED_SWARM_PORT);
   // Needed to compare a "~/..." home dir against an already-running node's
   // resolved absolute argv path - otherwise the two spellings look unrelated.
   const [osHomeDir, setOsHomeDir] = useState<string>("");
@@ -136,7 +127,7 @@ function NodeManagement() {
 
   useEffect(() => {
     const settings = getSettings();
-    setHomeDir(settings.embeddedNodeDataDir || "~/.calimero");
+    setHomeDir(settings.embeddedNodeDataDir || DEFAULT_NODE_HOME_DIR);
     setNodeUrl(settings.nodeUrl || "");
     setAuthUrl(settings.authUrl || "");
   }, []);
@@ -163,10 +154,12 @@ function NodeManagement() {
     loadNodes();
   }, [homeDir]);
 
-  // Matches on home_dir AND node_name — a node_name-only match would confuse
-  // this node with a same-named node another process has running elsewhere.
+  // An empty selection must match nothing: findRunningNode without a name would
+  // report whichever node shares the home dir.
   const getRunningNodeInfo = (nodeName: string): { running: boolean; port?: number } => {
-    const runningNode = findRunningNode(safeRunningNodes, homeDir, nodeName, osHomeDir);
+    const runningNode = nodeName
+      ? findRunningNode(safeRunningNodes, homeDir, nodeName, osHomeDir)
+      : undefined;
     return runningNode ? { running: true, port: runningNode.port } : { running: false };
   };
 
@@ -293,7 +286,7 @@ function NodeManagement() {
     // Compute port at click time to avoid race with port-bump effect.
     const result = resolveStartPorts(safeRunningNodes, homeDir, selectedNode, serverPort, swarmPort, osHomeDir);
     if (result.alreadyRunning) {
-      // Never route around this with a port bump — that's how two writers end
+      // Never route around this with a port bump - that is how two writers end
       // up on one store. Surface it and stop.
       toast.error(`Node "${selectedNode}" is already running (PID ${result.alreadyRunning.pid}). Stop it before starting again.`);
       return;
@@ -343,19 +336,18 @@ function NodeManagement() {
       return;
     }
 
+    // Only ever stop the PID running under this home+node: falling back to "the
+    // embedded node" can take down a different node than the selected one.
+    const runningNode = findRunningNode(safeRunningNodes, homeDir, selectedNode, osHomeDir);
+    if (!runningNode?.pid) {
+      toast.error(`Node "${selectedNode}" is not running`);
+      return;
+    }
+
     setLoading(true);
     try {
-      // Match on home_dir AND node_name — by name alone this could resolve to
-      // another process's node of the same name in a different home dir.
-      const runningNode = findRunningNode(safeRunningNodes, homeDir, selectedNode, osHomeDir);
-      if (runningNode && runningNode.pid) {
-        await stopMerodByPid(runningNode.pid);
-        toast.success(`Node "${selectedNode}" stopped successfully`);
-      } else {
-        // Fallback to stopping the embedded node
-        await stopMerod();
-        toast.success(`Node "${selectedNode}" stopped successfully`);
-      }
+      await stopMerodByPid(runningNode.pid);
+      toast.success(`Node "${selectedNode}" stopped successfully`);
       await detectRunning();
     } catch (error: any) {
       console.error("Failed to stop node:", error);

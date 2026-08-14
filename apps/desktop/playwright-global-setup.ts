@@ -3,10 +3,12 @@ import { homedir } from "node:os";
 import { createConnection } from "node:net";
 import path from "node:path";
 
-// Node directories the onboarding flow creates. Default node name is "default";
-// "node1" is a common alternative used in dev.
+// Node names the onboarding flow creates under ~/.calimero, which is also merod's
+// own default home: nothing here is a "test-only" directory to clean up.
 const TEST_NODE_NAMES = ["default", "node1"];
 const NODE_SERVER_PORT = 2528;
+/** A local port either answers at once or is not listening. */
+const PORT_PROBE_TIMEOUT_MS = 1000;
 
 /** Whether anything is already serving the port the tests expect to be free. */
 function portIsOccupied(port: number): Promise<boolean> {
@@ -16,23 +18,15 @@ function portIsOccupied(port: number): Promise<boolean> {
       socket.destroy();
       resolve(occupied);
     };
-    socket.setTimeout(1000);
+    socket.setTimeout(PORT_PROBE_TIMEOUT_MS);
     socket.once("connect", () => settle(true));
     socket.once("timeout", () => settle(false));
     socket.once("error", () => settle(false));
   });
 }
 
-/**
- * Refuses to run while a node is serving localhost:2528, because a live node
- * lets the tests skip onboarding and login.
- *
- * This used to `pkill -f merod` and delete `~/.calimero/{default,node1}`
- * outright, which silently destroyed a developer's real node the first time they
- * ran the suite locally — the node home is shared with `merod`'s own default, so
- * there is no such thing as a "test-only" directory here. CI never has a node
- * running, so refusing costs nothing there and protects everyone else.
- */
+/** Refuses to run while a node serves the node port: a live node lets the tests skip
+ *  onboarding and login. Never stops it or touches its data - that is the user's node. */
 export default async function globalSetup(): Promise<void> {
   if (!(await portIsOccupied(NODE_SERVER_PORT))) {
     return;

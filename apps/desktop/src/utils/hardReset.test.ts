@@ -164,6 +164,27 @@ describe('hardReset', () => {
     expect(deleteCalimeroDataDir).toHaveBeenCalled();
   });
 
+  it('stops a node whose home is still spelled with a ~ against a resolved target', async () => {
+    const ours = nodeUnder({ pid: 4711, home_dir: '~/.calimero' });
+    detectRunningMerodNodes.mockResolvedValueOnce([ours]).mockResolvedValue([]);
+
+    await hardReset();
+
+    expect(stopMerodByPid).toHaveBeenCalledWith(4711);
+  });
+
+  it('ignores a running node whose home dir the scan could not read', async () => {
+    // No home_dir means no way to tell whether it writes under a target path, and
+    // stopping a node we cannot place is not ours to do.
+    const unplaceable = nodeUnder({ pid: 888, home_dir: undefined });
+    detectRunningMerodNodes.mockResolvedValue([unplaceable]);
+
+    await hardReset();
+
+    expect(stopMerodByPid).not.toHaveBeenCalled();
+    expect(deleteCalimeroDataDir).toHaveBeenCalled();
+  });
+
   it('keeps going when a targeted node refuses to stop gracefully - the delete is the real test', async () => {
     const node = nodeUnder();
     // Reported once, then gone on every re-poll: stop "succeeded" even though
@@ -237,10 +258,18 @@ describe('hardReset', () => {
     expect(deletedDirsInOrder()).toEqual(['~/custom-node']);
   });
 
-  it('aborts when a wiped path is not actually gone (delete silently failed)', async () => {
-    deleteCalimeroDataDir.mockResolvedValue({ deleted: true, path: '/Users/alice/.calimero' });
+  it('completes when the delete removed a populated dir and it stays gone', async () => {
+    let calls = 0;
+    // The ordinary nuke: the dir was there and went away, so the re-check finds
+    // nothing left to delete.
+    deleteCalimeroDataDir.mockImplementation(async () => ({
+      deleted: ++calls === 1,
+      path: '/Users/alice/.calimero',
+    }));
 
-    await expect(hardReset()).rejects.toThrow(/still|reappeared/i);
+    await expect(hardReset()).resolves.toBeUndefined();
+
+    expect(invoke).toHaveBeenCalledWith('clear_app_sessions');
   });
 
   it('aborts when a path reappears a moment after being wiped - a surviving writer repopulating it', async () => {

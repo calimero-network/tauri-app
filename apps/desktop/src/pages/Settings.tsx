@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, memo } from "react";
-import { getSettings, saveSettings } from "../utils/settings";
+import { getSettings, saveSettings, DEFAULT_NODE_HOME_DIR } from "../utils/settings";
 import { parseTauriError } from "../utils/appUtils";
 import { invoke } from "@tauri-apps/api/core";
 import { hardReset, wipeClientState, previewHardReset, type HardResetPreview } from "../utils/hardReset";
@@ -24,10 +24,32 @@ interface SettingsProps {
   onBack?: () => void;
 }
 
-/** The soft reset: clears client-side state only. Deletes no data and stops no
- *  node - that's the hard reset's job. */
-export async function runSoftReset(): Promise<void> {
-  await wipeClientState();
+/** What the nuke dialog knows about what it would destroy. Only `ready` may confirm:
+ *  the other two mean we cannot yet say which nodes would be stopped. */
+export type NukePreviewStatus =
+  | { kind: 'loading' }
+  | { kind: 'failed'; message: string }
+  | { kind: 'ready'; nodesToStop: HardResetPreview['nodesToStop'] };
+
+/** A failed check outranks any preview held from before it: never claim nothing is
+ *  running while the question is unanswered. */
+export function nukePreviewStatus(
+  preview: HardResetPreview | null,
+  error: string
+): NukePreviewStatus {
+  if (error) return { kind: 'failed', message: error };
+  if (!preview) return { kind: 'loading' };
+  return { kind: 'ready', nodesToStop: preview.nodesToStop };
+}
+
+/** The confirm stays blocked until the preview is in, so the user always sees what
+ *  would be stopped and deleted before agreeing to it. */
+export function canConfirmNuke(
+  status: NukePreviewStatus,
+  confirmed: boolean,
+  nuking: boolean
+): boolean {
+  return confirmed && !nuking && status.kind === 'ready';
 }
 
 function Settings({ onBack }: SettingsProps) {
@@ -85,6 +107,18 @@ function Settings({ onBack }: SettingsProps) {
   useEffect(() => {
     getCurrentVersion().then(setAppVersion);
   }, []);
+
+  const loadNukePreview = () => {
+    setNukePreview(null);
+    setNukePreviewError('');
+    previewHardReset()
+      .then(setNukePreview)
+      .catch((err) => {
+        console.error('[Settings] previewHardReset failed:', err);
+        setNukePreviewError(parseTauriError(err));
+      });
+  };
+  const nukePreviewState = nukePreviewStatus(nukePreview, nukePreviewError);
 
   const handleCheckForUpdates = async () => {
     setUpdateState('checking');
@@ -515,9 +549,9 @@ function Settings({ onBack }: SettingsProps) {
                         onClick={async () => {
                           if (!resetConfirmed) return;
                           setResetting(true);
-                          // Wipes this origin's storage AND the webview's website data,
-                          // so app windows don't keep a session the reset just revoked.
-                          await runSoftReset();
+                          // Client state only: wipes this origin's storage AND the webview's
+                          // website data, so no app window keeps a revoked session.
+                          await wipeClientState();
                           window.location.reload();
                         }}
                         className="button button-danger"
@@ -539,14 +573,7 @@ function Settings({ onBack }: SettingsProps) {
                     type="button"
                     onClick={() => {
                       setShowNukeConfirm(true);
-                      setNukePreview(null);
-                      setNukePreviewError('');
-                      previewHardReset()
-                        .then(setNukePreview)
-                        .catch((err) => {
-                          console.error('[Settings] previewHardReset failed:', err);
-                          setNukePreviewError(parseTauriError(err));
-                        });
+                      loadNukePreview();
                     }}
                     className="button button-danger"
                   >
@@ -560,46 +587,41 @@ function Settings({ onBack }: SettingsProps) {
                     </p>
                     <p className="reset-confirm-path">
                       {/* Falls back to the configured dir so the dialog isn't empty while the preview loads. */}
-                      {(nukePreview?.dirsToDelete ?? [getSettings().embeddedNodeDataDir || "~/.calimero"]).map((dir) => (
+                      {(nukePreview?.dirsToDelete ?? [getSettings().embeddedNodeDataDir || DEFAULT_NODE_HOME_DIR]).map((dir) => (
                         <code key={dir} style={{ display: 'block' }}>{dir}</code>
                       ))}
                     </p>
-                    {nukePreviewError ? (
-                      // Without the preview we cannot say what would be stopped, so
-                      // the confirm stays blocked - but say why, and offer a retry.
+                    {nukePreviewState.kind === 'failed' && (
                       <p className="reset-confirm-warning">
-                        Could not check for running nodes: {nukePreviewError}{' '}
+                        Could not check for running nodes: {nukePreviewState.message}{' '}
                         <button
                           type="button"
                           className="button button-secondary"
-                          onClick={() => {
-                            setNukePreviewError('');
-                            previewHardReset()
-                              .then(setNukePreview)
-                              .catch((err) => setNukePreviewError(parseTauriError(err)));
-                          }}
+                          onClick={loadNukePreview}
                         >
                           Retry
                         </button>
                       </p>
-                    ) : nukePreview === null ? (
+                    )}
+                    {nukePreviewState.kind === 'loading' && (
                       <p className="reset-confirm-warning">Checking for running nodes...</p>
-                    ) : nukePreview.nodesToStop.length > 0 ? (
+                    )}
+                    {nukePreviewState.kind === 'ready' && nukePreviewState.nodesToStop.length > 0 && (
                       <>
                         <p className="reset-confirm-warning">
-                          {nukePreview.nodesToStop.length > 1
+                          {nukePreviewState.nodesToStop.length > 1
                             ? "The following running nodes will be stopped first, whether or not this app started them:"
                             : "The following running node will be stopped first, whether or not this app started it:"}
                         </p>
                         <p className="reset-confirm-path">
-                          {nukePreview.nodesToStop.map((node) => (
+                          {nukePreviewState.nodesToStop.map((node) => (
                             <code key={node.pid} style={{ display: 'block' }}>
                               {`${node.node_name} (PID ${node.pid}) - ${node.home_dir}`}
                             </code>
                           ))}
                         </p>
                       </>
-                    ) : null}
+                    )}
                     <label className="reset-confirm-checkbox">
                       <input
                         type="checkbox"
@@ -615,6 +637,7 @@ function Settings({ onBack }: SettingsProps) {
                           setShowNukeConfirm(false);
                           setNukeConfirmed(false);
                           setNukePreview(null);
+                          setNukePreviewError('');
                         }}
                         className="button button-secondary"
                       >
@@ -638,9 +661,7 @@ function Settings({ onBack }: SettingsProps) {
                           window.location.reload();
                         }}
                         className="button button-danger"
-                        // Blocked until the preview has loaded, so the user knows what
-                        // would be stopped and deleted.
-                        disabled={!nukeConfirmed || nuking || nukePreview === null}
+                        disabled={!canConfirmNuke(nukePreviewState, nukeConfirmed, nuking)}
                       >
                         {nuking ? (nukeStatus || 'Deleting...') : 'Delete everything and reset'}
                       </button>

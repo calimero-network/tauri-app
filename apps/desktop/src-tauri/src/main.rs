@@ -2315,6 +2315,16 @@ static NODE_INIT_IN_FLIGHT: std::sync::LazyLock<
     std::sync::Mutex<std::collections::HashSet<String>>,
 > = std::sync::LazyLock::new(Default::default);
 
+/// Serialises starting a node against deleting a node home.
+///
+/// Each checks the other's condition and then acts, so without this they can
+/// interleave: a delete confirms nothing is running, a start opens a store in
+/// that directory, and the delete then unlinks it underneath - the incident,
+/// from inside the app. Held only across each check-and-act, never across the
+/// download a pinned release may need. One lock for all homes, because the
+/// contention is two rare user actions; per-home locks would buy nothing.
+static NODE_LIFECYCLE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 impl NodeInitReservation {
     fn claim(home: &std::path::Path, node_name: &str) -> Result<Self, TauriError> {
         let key = format!("{}::{}", home.display(), node_name);
@@ -2516,6 +2526,10 @@ async fn start_merod(
     // once the home has been replaced both processes purge the files the other's
     // manifest does not list. Checked before the config rewrite below, which
     // would otherwise re-point a live node's listen addresses.
+    // Held until this function returns, so a delete cannot land between the check
+    // below and the spawn further down.
+    let _lifecycle = NODE_LIFECYCLE.lock().await;
+
     #[cfg(unix)]
     if let Some(name) = &node_name {
         if let Some(pid) = existing_node_for(&discover_nodes(), &home_dir_path, name) {
@@ -4302,6 +4316,10 @@ async fn delete_calimero_data_dir(data_dir: String) -> Result<String, TauriError
     // a node's directory does not stop the node: it keeps its open files and goes
     // on writing by absolute path, so the directory repopulates and any node that
     // later opens this path shares a store with the survivor.
+    // Held across the check and the removal, so a node cannot be started into this
+    // directory in between - which is the incident, reproduced from inside the app.
+    let _lifecycle = NODE_LIFECYCLE.lock().await;
+
     #[cfg(unix)]
     {
         let running = discover_nodes();

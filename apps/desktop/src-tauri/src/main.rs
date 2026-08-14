@@ -2179,11 +2179,7 @@ enum TermPatience {
     SignalOnly,
 }
 
-async fn kill_pids(pids: &[u32]) {
-    kill_pids_with(pids, TermPatience::Wait).await
-}
-
-async fn kill_pids_with(pids: &[u32], patience: TermPatience) {
+async fn kill_pids(pids: &[u32], patience: TermPatience) {
     if pids.is_empty() {
         return;
     }
@@ -2813,9 +2809,7 @@ async fn start_merod(
     // Check if process already exited
     if let Ok(Some(status)) = child.try_wait() {
         if let Some(code) = status.code() {
-            // Quote the node's own error rather than sending the user to a log
-            // file. On the incident's first occurrence this would have named the
-            // missing SST instead of showing a bare exit code.
+            // Quote the node's own error rather than sending the user to a log file.
             let reason = std::fs::read_to_string(log_dir.join("merod.log"))
                 .ok()
                 .as_deref()
@@ -4448,7 +4442,7 @@ async fn clear_app_sessions(app_handle: tauri::AppHandle) -> Result<String, Taur
     {
         let pids = collect_shell_pids();
         if !pids.is_empty() {
-            kill_pids(&pids).await;
+            kill_pids(&pids, TermPatience::Wait).await;
             done.push(format!("{} launcher process(es)", pids.len()));
         }
     }
@@ -4615,7 +4609,7 @@ fn graceful_shutdown(app_handle: &tauri::AppHandle, merod_state: &MerodState) {
             .enable_all()
             .build()
             .unwrap()
-            .block_on(kill_pids_with(&pids, TermPatience::SignalOnly));
+            .block_on(kill_pids(&pids, TermPatience::SignalOnly));
         info!("[Shutdown] Asked {} node(s) to stop; they finish flushing on their own", pids.len());
     } else {
         info!("[Shutdown] No merod processes to terminate");
@@ -5123,8 +5117,7 @@ fn main() {
         // launch puts a second writer on its store.
         // Both events, because macOS decides which one arrives: closing the last
         // window requests an exit, while Cmd-Q and the Quit menu item come through
-        // as a terminate and only emit `Exit`. Handling one of them was verified
-        // by hand to leave the node running. `claim_shutdown` keeps it to once.
+        // as a terminate and emit only `Exit`. `claim_shutdown` keeps it to once.
         .run(|app_handle, event| {
             if matches!(
                 event,
@@ -5550,32 +5543,16 @@ listen = ["/ip4/0.0.0.0/udp/4001/quic-v1", "/ip4/0.0.0.0/tcp/4002"]
     }
 
     #[cfg(unix)]
-    /// Removes the scratch directories when the test ends, however it ends.
+    const HOME_A: &str = "/tmp/calimero-test-home-a";
     #[cfg(unix)]
-    struct Cleanup(std::path::PathBuf);
-    #[cfg(unix)]
-    impl Drop for Cleanup {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
-
-    /// Two real directories, since matching canonicalises and that needs them to exist.
-    #[cfg(unix)]
-    fn two_homes(tag: &str) -> (Cleanup, std::path::PathBuf, std::path::PathBuf) {
-        let base = std::env::temp_dir().join(format!("calimero-stop-{}-{tag}", std::process::id()));
-        let (a, b) = (base.join("home-a"), base.join("home-b"));
-        std::fs::create_dir_all(&a).unwrap();
-        std::fs::create_dir_all(&b).unwrap();
-        (Cleanup(base), a, b)
-    }
+    const HOME_B: &str = "/tmp/calimero-test-home-b";
 
     #[cfg(unix)]
-    fn tracked(pid: u32, port: u16, home: &std::path::Path, node: &str) -> super::MerodProcess {
+    fn tracked(pid: u32, home: &str, node: &str) -> super::MerodProcess {
         super::MerodProcess {
             pid,
-            port,
-            home: home.to_path_buf(),
+            port: 2528,
+            home: std::path::PathBuf::from(home),
             node: Some(node.to_string()),
             owned: true,
         }
@@ -5605,10 +5582,8 @@ listen = ["/ip4/0.0.0.0/udp/4001/quic-v1", "/ip4/0.0.0.0/tcp/4002"]
     #[cfg(unix)]
     #[test]
     fn quitting_stops_only_the_nodes_this_app_started() {
-        let (_cleanup, home, _other) = two_homes("owned");
-        let mut mine = tracked(11, 2528, &home, "default");
-        mine.owned = true;
-        let mut theirs = tracked(22, 2529, &home, "mydev");
+        let mine = tracked(11, HOME_A, "default");
+        let mut theirs = tracked(22, HOME_A, "mydev");
         theirs.owned = false;
         assert_eq!(super::owned_pids(&[mine, theirs]), vec![11]);
     }
@@ -5617,13 +5592,12 @@ listen = ["/ip4/0.0.0.0/udp/4001/quic-v1", "/ip4/0.0.0.0/tcp/4002"]
     #[cfg(unix)]
     #[test]
     fn stopping_a_named_node_leaves_its_siblings_running() {
-        let (_cleanup, home, _other) = two_homes("stop-one");
         let state = [
-            tracked(11, 2528, &home, "default"),
-            tracked(22, 2529, &home, "mydev"),
+            tracked(11, HOME_A, "default"),
+            tracked(22, HOME_A, "mydev"),
         ];
         assert_eq!(
-            super::tracked_pids_for(&state, Some((&home, "mydev"))),
+            super::tracked_pids_for(&state, Some((std::path::Path::new(HOME_A), "mydev"))),
             vec![22]
         );
     }
@@ -5631,10 +5605,9 @@ listen = ["/ip4/0.0.0.0/udp/4001/quic-v1", "/ip4/0.0.0.0/tcp/4002"]
     #[cfg(unix)]
     #[test]
     fn stopping_without_naming_a_node_stops_every_tracked_node() {
-        let (_cleanup, home, _other) = two_homes("stop-all");
         let state = [
-            tracked(11, 2528, &home, "default"),
-            tracked(22, 2529, &home, "mydev"),
+            tracked(11, HOME_A, "default"),
+            tracked(22, HOME_A, "mydev"),
         ];
         assert_eq!(super::tracked_pids_for(&state, None), vec![11, 22]);
     }
@@ -5642,9 +5615,11 @@ listen = ["/ip4/0.0.0.0/udp/4001/quic-v1", "/ip4/0.0.0.0/tcp/4002"]
     #[cfg(unix)]
     #[test]
     fn stopping_a_node_of_the_same_name_on_another_home_matches_nothing() {
-        let (_cleanup, home, other) = two_homes("stop-other");
-        let state = [tracked(11, 2528, &home, "default")];
-        assert!(super::tracked_pids_for(&state, Some((&other, "default"))).is_empty());
+        let state = [tracked(11, HOME_A, "default")];
+        assert!(
+            super::tracked_pids_for(&state, Some((std::path::Path::new(HOME_B), "default")))
+                .is_empty()
+        );
     }
 
     /// Wiring a second shutdown path must not run the teardown twice.

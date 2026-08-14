@@ -34,7 +34,7 @@ pub fn resolved(path: &Path) -> PathBuf {
 /// before the first flag, and a flag's value runs to the next flag. Getting this
 /// wrong is what blinded the app to its own node - the shipped binary lives at
 /// `/Applications/Calimero Desktop.app/...`, and that space shifted every field.
-pub fn parse_node_listing(listing: &str) -> Vec<DiscoveredNode> {
+fn parse_node_listing(listing: &str) -> Vec<DiscoveredNode> {
     fn flag_value<'a>(command: &'a str, flag: &str) -> Option<&'a str> {
         let needle = format!("{flag} ");
         let rest = &command[command.find(&needle)? + needle.len()..];
@@ -126,13 +126,13 @@ pub fn parse_shell_pids(listing: &str, install_dir: &Path) -> Vec<u32> {
 
 /// Where a node records that this app started it. Lives beside the node's `logs/`
 /// and version pin, so it travels with the node.
-pub fn claim_path(home: &Path, node: &str) -> PathBuf {
+fn claim_path(home: &Path, node: &str) -> PathBuf {
     home.join(node).join(".desktop-owner")
 }
 
 /// A process's start time, as the OS reports it. Paired with the PID this
 /// identifies a process: PIDs are recycled, start times are not.
-pub fn process_start_time(pid: u32) -> Option<String> {
+fn process_start_time(pid: u32) -> Option<String> {
     let out = std::process::Command::new("ps")
         .args(["-o", "lstart=", "-p", &pid.to_string()])
         .output()

@@ -3,7 +3,6 @@ import { getSettings, saveSettings } from "../utils/settings";
 import { parseTauriError } from "../utils/appUtils";
 import { invoke } from "@tauri-apps/api/core";
 import { hardReset, wipeClientState, previewHardReset, type HardResetPreview } from "../utils/hardReset";
-import type { RunningMerodNode } from "../utils/merod";
 import { startCloudLogin, disconnectCloud } from "../utils/cloudAuth";
 import { getCloudSubscription, CloudSessionExpiredError } from "../utils/cloudApi";
 import { isCloudEnabled, notifyCloudEnabledChanged } from "../utils/featureFlags";
@@ -23,35 +22,6 @@ import "./Settings.css";
 
 interface SettingsProps {
   onBack?: () => void;
-}
-
-/** Data directories the nuke confirmation shows: the real preview once it has
- *  loaded, else the best guess so the dialog isn't empty while it fetches. */
-export function getNukeDirsToDisplay(preview: HardResetPreview | null, fallbackDir: string): string[] {
-  return preview?.dirsToDelete ?? [fallbackDir];
-}
-
-export function formatNodeToStop(node: RunningMerodNode): string {
-  return `${node.node_name} (PID ${node.pid}) - ${node.home_dir}`;
-}
-
-export function nodesToStopWarningText(count: number): string {
-  const plural = count > 1;
-  return `The following running node${plural ? 's' : ''} will be stopped first, whether or not this app started ${plural ? 'them' : 'it'}:`;
-}
-
-/** Blocked until the preview has loaded (so we know what we'd be stopping/deleting),
- *  the checkbox is checked, and no nuke is already in flight. */
-export function isNukeConfirmDisabled(
-  nukeConfirmed: boolean,
-  nuking: boolean,
-  nukePreview: HardResetPreview | null
-): boolean {
-  return !nukeConfirmed || nuking || nukePreview === null;
-}
-
-export function isSoftResetConfirmDisabled(resetConfirmed: boolean, resetting: boolean): boolean {
-  return !resetConfirmed || resetting;
 }
 
 /** The soft reset: clears client-side state only. Deletes no data and stops no
@@ -550,7 +520,7 @@ function Settings({ onBack }: SettingsProps) {
                           window.location.reload();
                         }}
                         className="button button-danger"
-                        disabled={isSoftResetConfirmDisabled(resetConfirmed, resetting)}
+                        disabled={!resetConfirmed || resetting}
                       >
                         {resetting ? 'Resetting...' : 'Confirm reset'}
                       </button>
@@ -584,7 +554,8 @@ function Settings({ onBack }: SettingsProps) {
                       This will permanently delete the data folders below and everything in them (nodes, apps, keys).
                     </p>
                     <p className="reset-confirm-path">
-                      {getNukeDirsToDisplay(nukePreview, getSettings().embeddedNodeDataDir || "~/.calimero").map((dir) => (
+                      {/* Falls back to the configured dir so the dialog isn't empty while the preview loads. */}
+                      {(nukePreview?.dirsToDelete ?? [getSettings().embeddedNodeDataDir || "~/.calimero"]).map((dir) => (
                         <code key={dir} style={{ display: 'block' }}>{dir}</code>
                       ))}
                     </p>
@@ -593,12 +564,14 @@ function Settings({ onBack }: SettingsProps) {
                     ) : nukePreview.nodesToStop.length > 0 ? (
                       <>
                         <p className="reset-confirm-warning">
-                          {nodesToStopWarningText(nukePreview.nodesToStop.length)}
+                          {nukePreview.nodesToStop.length > 1
+                            ? "The following running nodes will be stopped first, whether or not this app started them:"
+                            : "The following running node will be stopped first, whether or not this app started it:"}
                         </p>
                         <p className="reset-confirm-path">
                           {nukePreview.nodesToStop.map((node) => (
                             <code key={node.pid} style={{ display: 'block' }}>
-                              {formatNodeToStop(node)}
+                              {`${node.node_name} (PID ${node.pid}) - ${node.home_dir}`}
                             </code>
                           ))}
                         </p>
@@ -642,7 +615,9 @@ function Settings({ onBack }: SettingsProps) {
                           window.location.reload();
                         }}
                         className="button button-danger"
-                        disabled={isNukeConfirmDisabled(nukeConfirmed, nuking, nukePreview)}
+                        // Blocked until the preview has loaded, so the user knows what
+                        // would be stopped and deleted.
+                        disabled={!nukeConfirmed || nuking || nukePreview === null}
                       >
                         {nuking ? (nukeStatus || 'Deleting...') : 'Delete everything and reset'}
                       </button>

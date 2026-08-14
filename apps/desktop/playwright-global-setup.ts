@@ -1,56 +1,60 @@
-import { spawnSync } from "node:child_process";
-import { existsSync, rmSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { homedir } from "node:os";
+import { createConnection } from "node:net";
 import path from "node:path";
 
-// Node directories created by the onboarding flow that need to be wiped before tests.
-// Default node name is "default"; "node1" is a common alternative used in dev.
+// Node directories the onboarding flow creates. Default node name is "default";
+// "node1" is a common alternative used in dev.
 const TEST_NODE_NAMES = ["default", "node1"];
+const NODE_SERVER_PORT = 2528;
 
-function killMerod(): void {
-  // pkill exits with 1 when no matching process is found — that is fine.
-  const result = spawnSync("pkill", ["-f", "merod"], { stdio: "ignore" });
-  if (result.status === 0) {
-    console.log("    killed running merod process");
-  } else {
-    console.log("    no merod process running");
-  }
-}
-
-function cleanNodeData(): void {
-  const calimeroDir = path.join(homedir(), ".calimero");
-  const deleted: string[] = [];
-
-  for (const name of TEST_NODE_NAMES) {
-    const dir = path.join(calimeroDir, name);
-    if (existsSync(dir)) {
-      rmSync(dir, { recursive: true, force: true });
-      deleted.push(`~/.calimero/${name}`);
-    }
-  }
-
-  if (deleted.length > 0) {
-    console.log(`    deleted node data: ${deleted.join(", ")}`);
-  } else {
-    console.log("    no node data to clean up");
-  }
+/** Whether anything is already serving the port the tests expect to be free. */
+function portIsOccupied(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = createConnection({ host: "127.0.0.1", port });
+    const settle = (occupied: boolean) => {
+      socket.destroy();
+      resolve(occupied);
+    };
+    socket.setTimeout(1000);
+    socket.once("connect", () => settle(true));
+    socket.once("timeout", () => settle(false));
+    socket.once("error", () => settle(false));
+  });
 }
 
 /**
- * Kills any running merod process and wipes test node data directories so a
- * live node on localhost:2528 cannot bypass the onboarding/login flow in tests.
+ * Refuses to run while a node is serving localhost:2528, because a live node
+ * lets the tests skip onboarding and login.
+ *
+ * This used to `pkill -f merod` and delete `~/.calimero/{default,node1}`
+ * outright, which silently destroyed a developer's real node the first time they
+ * ran the suite locally — the node home is shared with `merod`'s own default, so
+ * there is no such thing as a "test-only" directory here. CI never has a node
+ * running, so refusing costs nothing there and protects everyone else.
  */
 export default async function globalSetup(): Promise<void> {
-  console.log("\n\x1b[33m⚠  E2E pre-run cleanup\x1b[0m");
-  console.log(
-    `  Killing merod and deleting node data in ~/.calimero/{${TEST_NODE_NAMES.join(",")}}`,
-  );
-  console.log(
-    "  (Prevents a running node from bypassing onboarding/login in tests)\n",
-  );
+  if (!(await portIsOccupied(NODE_SERVER_PORT))) {
+    return;
+  }
 
-  killMerod();
-  cleanNodeData();
+  const homes = TEST_NODE_NAMES.map((name) =>
+    path.join(homedir(), ".calimero", name),
+  ).filter(existsSync);
 
-  console.log("\n  \x1b[32m✓\x1b[0m cleanup done — starting tests\n");
+  throw new Error(
+    [
+      `\n\x1b[33m⚠  A node is already serving localhost:${NODE_SERVER_PORT}.\x1b[0m`,
+      "",
+      "  These tests need onboarding and login to be reachable, which a running",
+      "  node bypasses. Stop it and run them again:",
+      "",
+      "    pkill -f 'merod .*run'    # or quit Calimero Desktop",
+      "",
+      homes.length > 0
+        ? `  Your node data is left untouched (${homes.join(", ")}).`
+        : "  No node data found under ~/.calimero.",
+      "",
+    ].join("\n"),
+  );
 }

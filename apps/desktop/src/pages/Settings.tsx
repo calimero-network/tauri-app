@@ -2,8 +2,8 @@ import { useState, useEffect, useRef, memo } from "react";
 import { getSettings, saveSettings } from "../utils/settings";
 import { parseTauriError } from "../utils/appUtils";
 import { invoke } from "@tauri-apps/api/core";
-import { killAllMerodProcesses, stopMerod } from "../utils/merod";
-import { hardReset, wipeClientState } from "../utils/hardReset";
+import { hardReset, wipeClientState, previewHardReset, type HardResetPreview } from "../utils/hardReset";
+import type { RunningMerodNode } from "../utils/merod";
 import { startCloudLogin, disconnectCloud } from "../utils/cloudAuth";
 import { getCloudSubscription, CloudSessionExpiredError } from "../utils/cloudApi";
 import { isCloudEnabled, notifyCloudEnabledChanged } from "../utils/featureFlags";
@@ -23,6 +23,41 @@ import "./Settings.css";
 
 interface SettingsProps {
   onBack?: () => void;
+}
+
+/** Data directories the nuke confirmation shows: the real preview once it has
+ *  loaded, else the best guess so the dialog isn't empty while it fetches. */
+export function getNukeDirsToDisplay(preview: HardResetPreview | null, fallbackDir: string): string[] {
+  return preview?.dirsToDelete ?? [fallbackDir];
+}
+
+export function formatNodeToStop(node: RunningMerodNode): string {
+  return `${node.node_name} (PID ${node.pid}) - ${node.home_dir}`;
+}
+
+export function nodesToStopWarningText(count: number): string {
+  const plural = count > 1;
+  return `The following running node${plural ? 's' : ''} will be stopped first, whether or not this app started ${plural ? 'them' : 'it'}:`;
+}
+
+/** Blocked until the preview has loaded (so we know what we'd be stopping/deleting),
+ *  the checkbox is checked, and no nuke is already in flight. */
+export function isNukeConfirmDisabled(
+  nukeConfirmed: boolean,
+  nuking: boolean,
+  nukePreview: HardResetPreview | null
+): boolean {
+  return !nukeConfirmed || nuking || nukePreview === null;
+}
+
+export function isSoftResetConfirmDisabled(resetConfirmed: boolean, resetting: boolean): boolean {
+  return !resetConfirmed || resetting;
+}
+
+/** The soft reset: clears client-side state only. Deletes no data and stops no
+ *  node - that's the hard reset's job. */
+export async function runSoftReset(): Promise<void> {
+  await wipeClientState();
 }
 
 function Settings({ onBack }: SettingsProps) {
@@ -49,6 +84,7 @@ function Settings({ onBack }: SettingsProps) {
   const [nukeConfirmed, setNukeConfirmed] = useState(false);
   const [nuking, setNuking] = useState(false);
   const [nukeStatus, setNukeStatus] = useState('');
+  const [nukePreview, setNukePreview] = useState<HardResetPreview | null>(null);
   const [startAtLogin, setStartAtLogin] = useState(false);
   const [startAtLoginLoading, setStartAtLoginLoading] = useState(true);
   const [startAtLoginAvailable, setStartAtLoginAvailable] = useState(true);
@@ -467,7 +503,7 @@ function Settings({ onBack }: SettingsProps) {
               <div className="settings-field" style={{ marginTop: '16px', paddingTop: '16px', borderTop: '1px solid var(--border-color, #333)' }}>
                 <span className="settings-field-label">Reset app</span>
                 <p className="field-hint" style={{ marginBottom: '8px' }}>
-                  Stop the node, clear all settings and theme, and start from scratch.
+                  Clear all settings and theme, and start from scratch. Nodes are left running.
                 </p>
                 {!showResetConfirm ? (
                   <button
@@ -476,12 +512,13 @@ function Settings({ onBack }: SettingsProps) {
                     className="button button-danger"
                   >
                     <RotateCcw size={14} style={{ marginRight: '6px', verticalAlign: 'middle' }} />
-                    Reset node and all settings
+                    Reset settings
                   </button>
                 ) : (
                   <div className="reset-confirm-form">
                     <p className="reset-confirm-warning">
-                      This will stop the node, clear all settings and theme, and reload the app. You will need to set up from scratch.
+                      This will clear all settings and theme, and reload the app. You will need to set up from scratch.
+                      It deletes no data and does not stop any running node.
                     </p>
                     <label className="reset-confirm-checkbox">
                       <input
@@ -507,25 +544,13 @@ function Settings({ onBack }: SettingsProps) {
                         onClick={async () => {
                           if (!resetConfirmed) return;
                           setResetting(true);
-                          try {
-                            await stopMerod();
-                          } catch {
-                            // not running — ok
-                          }
-                          try {
-                            await killAllMerodProcesses();
-                          } catch {
-                            // best-effort
-                          }
-                          // Brief settle so OS releases file handles before reload
-                          await new Promise((r) => setTimeout(r, 500));
                           // Wipes this origin's storage AND the webview's website data,
                           // so app windows don't keep a session the reset just revoked.
-                          await wipeClientState();
+                          await runSoftReset();
                           window.location.reload();
                         }}
                         className="button button-danger"
-                        disabled={!resetConfirmed || resetting}
+                        disabled={isSoftResetConfirmDisabled(resetConfirmed, resetting)}
                       >
                         {resetting ? 'Resetting...' : 'Confirm reset'}
                       </button>
@@ -541,7 +566,13 @@ function Settings({ onBack }: SettingsProps) {
                 {!showNukeConfirm ? (
                   <button
                     type="button"
-                    onClick={() => setShowNukeConfirm(true)}
+                    onClick={() => {
+                      setShowNukeConfirm(true);
+                      setNukePreview(null);
+                      previewHardReset()
+                        .then(setNukePreview)
+                        .catch((err) => console.error('[Settings] previewHardReset failed:', err));
+                    }}
                     className="button button-danger"
                   >
                     <Trash2 size={14} style={{ marginRight: '6px', verticalAlign: 'middle' }} />
@@ -550,11 +581,29 @@ function Settings({ onBack }: SettingsProps) {
                 ) : (
                   <div className="reset-confirm-form">
                     <p className="reset-confirm-warning">
-                      This will permanently delete the data folder and everything in it (nodes, apps, keys). The path to be deleted:
+                      This will permanently delete the data folders below and everything in them (nodes, apps, keys).
                     </p>
                     <p className="reset-confirm-path">
-                      <code>{getSettings().embeddedNodeDataDir || "~/.calimero"}</code>
+                      {getNukeDirsToDisplay(nukePreview, getSettings().embeddedNodeDataDir || "~/.calimero").map((dir) => (
+                        <code key={dir} style={{ display: 'block' }}>{dir}</code>
+                      ))}
                     </p>
+                    {nukePreview === null ? (
+                      <p className="reset-confirm-warning">Checking for running nodes...</p>
+                    ) : nukePreview.nodesToStop.length > 0 ? (
+                      <>
+                        <p className="reset-confirm-warning">
+                          {nodesToStopWarningText(nukePreview.nodesToStop.length)}
+                        </p>
+                        <p className="reset-confirm-path">
+                          {nukePreview.nodesToStop.map((node) => (
+                            <code key={node.pid} style={{ display: 'block' }}>
+                              {formatNodeToStop(node)}
+                            </code>
+                          ))}
+                        </p>
+                      </>
+                    ) : null}
                     <label className="reset-confirm-checkbox">
                       <input
                         type="checkbox"
@@ -569,6 +618,7 @@ function Settings({ onBack }: SettingsProps) {
                         onClick={() => {
                           setShowNukeConfirm(false);
                           setNukeConfirmed(false);
+                          setNukePreview(null);
                         }}
                         className="button button-secondary"
                       >
@@ -592,7 +642,7 @@ function Settings({ onBack }: SettingsProps) {
                           window.location.reload();
                         }}
                         className="button button-danger"
-                        disabled={!nukeConfirmed || nuking}
+                        disabled={isNukeConfirmDisabled(nukeConfirmed, nuking, nukePreview)}
                       >
                         {nuking ? (nukeStatus || 'Deleting...') : 'Delete everything and reset'}
                       </button>

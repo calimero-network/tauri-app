@@ -16,28 +16,44 @@
  *   token leaves it alive and replayable until it expires.
  * - Per-app launchers keep working (and keep getting tokens brokered) off a
  *   capability store that outlives the data directory — `remove_app_launchers`.
+ *
+ * A hard reset is scoped by PATH, not by ownership: a real incident deleted a
+ * node's home while it was still running, a second node then started on the
+ * same store, and two RocksDB writers destroyed each other's files. So every
+ * node whose data dir sits at or under a target path gets stopped first -
+ * whether this app started it or not - verified by re-polling the process
+ * scan (never in-memory status, which a kill step has already cleared), with
+ * the delete aborted if anything is still alive.
  */
 import { invoke } from '@tauri-apps/api/core';
+import { homeDir } from '@tauri-apps/api/path';
 import {
-  stopMerod,
-  killAllMerodProcesses,
-  getMerodStatus,
+  detectRunningMerodNodes,
+  stopMerodByPid,
   deleteCalimeroDataDir,
+  type RunningMerodNode,
 } from './merod';
 import { getSettings, clearAllAppData } from './settings';
 import { revokeMdmaSession } from './cloudAuth';
 
 const DEFAULT_DATA_DIR = '~/.calimero';
 
-/** How long to wait for the embedded node to report stopped before moving on. */
+/** How long to wait for targeted nodes to actually disappear from the process scan. */
 const NODE_STOP_TIMEOUT_MS = 10_000;
 const NODE_STOP_POLL_MS = 500;
-/** OS-level settle so merod's file handles are released before the delete. */
+/** OS-level settle so a stopped node's file handles are released, and so a
+ *  delayed repopulation from a surviving writer has time to show up. */
 const FILE_HANDLE_SETTLE_MS = 500;
 
 export interface HardResetOptions {
   /** Progress text for the button label ("Stopping nodes...", "Deleting...", …). */
   onStatus?: (status: string) => void;
+  /**
+   * How long to wait for targeted nodes to disappear from the process scan.
+   * Overridable so a test of the give-up path does not spend the real timeout
+   * waiting on wall-clock time.
+   */
+  stopTimeoutMs?: number;
 }
 
 export interface WipeClientStateOptions {
@@ -90,56 +106,139 @@ export async function wipeClientState({
   return ok;
 }
 
+/** Expand a leading `~` the same way the Rust side does, so comparisons line up
+ *  with the absolute `home_dir` a running node reports. */
+function expandHome(path: string, home: string): string {
+  if (path === '~') return home;
+  return path.startsWith('~/') ? home + path.slice(1) : path;
+}
+
+function stripTrailingSlash(path: string): string {
+  return path.length > 1 ? path.replace(/\/+$/, '') : path;
+}
+
+function isAtOrUnder(path: string, base: string): boolean {
+  const p = stripTrailingSlash(path);
+  const b = stripTrailingSlash(base);
+  return p === b || p.startsWith(b + '/');
+}
+
 /**
- * Full reset: stop and kill every node, delete the data directories, then wipe
- * all client state. The caller reloads the window afterwards.
- *
- * Throws if a data directory could not be deleted, *before* any client state is
- * touched — a half-deleted node plus a fresh-looking app is worse than a clean
- * failure the user can retry. On that path the caller may still call
- * `wipeClientState()` explicitly. Failing to stop a node is not fatal: the
- * delete that follows is the real test, and it reports its own failure.
+ * Running nodes whose data directory (`<home_dir>/<node_name>`) sits at or under
+ * any of the given target paths - regardless of who started them. A node on an
+ * unrelated home is left alone.
  */
-export async function hardReset({ onStatus }: HardResetOptions = {}): Promise<void> {
-  // 1. Graceful stop of the embedded node.
+async function nodesUnderPaths(
+  nodes: RunningMerodNode[],
+  targetPaths: string[]
+): Promise<RunningMerodNode[]> {
+  const home = await homeDir();
+  const targets = targetPaths.map((p) => expandHome(p, home));
+  return nodes.filter((n) => {
+    if (!n.home_dir) return false;
+    const nodeDir = `${stripTrailingSlash(n.home_dir)}/${n.node_name}`;
+    return targets.some((t) => isAtOrUnder(nodeDir, t));
+  });
+}
+
+/** The configured data dir plus the default, deduped: after a reset, onboarding
+ *  starts from ~/.calimero regardless of what was configured. */
+function targetDataDirs(): string[] {
+  const settingsDataDir = getSettings().embeddedNodeDataDir || DEFAULT_DATA_DIR;
+  return [...new Set([settingsDataDir, DEFAULT_DATA_DIR])];
+}
+
+function describeNode(node: RunningMerodNode): string {
+  return `"${node.node_name}" (PID ${node.pid}) under ${node.home_dir}`;
+}
+
+export interface HardResetPreview {
+  /** Every directory the reset will delete - always includes ~/.calimero. */
+  dirsToDelete: string[];
+  /** Every running node, anywhere on the machine, whose data dir sits under one of those. */
+  nodesToStop: RunningMerodNode[];
+}
+
+/** What a hard reset would do, for the confirmation dialog. Read-only. */
+export async function previewHardReset(): Promise<HardResetPreview> {
+  const dirsToDelete = targetDataDirs();
+  const nodesToStop = await nodesUnderPaths(await detectRunningMerodNodes(), dirsToDelete);
+  return { dirsToDelete, nodesToStop };
+}
+
+/** A directory is gone when deleting it again reports nothing was there. Reusing
+ *  the delete call is also the fix: if a writer repopulated it, this removes it
+ *  again while telling us that happened. */
+async function isDirGone(dir: string): Promise<boolean> {
+  const result = await deleteCalimeroDataDir(dir);
+  return /did not exist/i.test(result);
+}
+
+/**
+ * Full reset: stop every node under a target path, delete the data directories,
+ * then wipe all client state. The caller reloads the window afterwards.
+ *
+ * Throws if a targeted node never stops, or if a data directory could not be
+ * deleted or verified gone - before any client state is touched. Never deletes
+ * under a live writer.
+ */
+export async function hardReset({
+  onStatus,
+  stopTimeoutMs,
+}: HardResetOptions = {}): Promise<void> {
+  const dirsToDelete = targetDataDirs();
+
+  // 1-3. Stop every node whose data dir sits under a target path, regardless of
+  // who started it - a hard reset is scoped by path, not by app ownership.
   onStatus?.('Stopping nodes...');
-  try {
-    await stopMerod();
-  } catch {
-    // not running — ok
-  }
-
-  // 2. Force-kill any remaining merod process, so nothing holds the data dir open.
-  try {
-    await killAllMerodProcesses();
-  } catch (err) {
-    console.warn('[hardReset] killAllMerodProcesses failed, continuing:', err);
-  }
-
-  // 3. Wait until the embedded node actually reports stopped.
-  onStatus?.('Waiting for nodes to stop...');
-  const deadline = Date.now() + NODE_STOP_TIMEOUT_MS;
-  while (Date.now() < deadline) {
+  const toStop = await nodesUnderPaths(await detectRunningMerodNodes(), dirsToDelete);
+  for (const node of toStop) {
     try {
-      const status = await getMerodStatus();
-      if (!status.running) break;
-    } catch {
-      break; // process gone — treat as stopped
+      await stopMerodByPid(node.pid);
+    } catch (err) {
+      console.warn(`[hardReset] failed to stop ${describeNode(node)}:`, err);
     }
+  }
+
+  // 4-5. Verify by re-polling the running-node scan - never in-memory status,
+  // which the stop step above has already cleared. Abort if anything survives.
+  onStatus?.('Waiting for nodes to stop...');
+  const deadline = Date.now() + (stopTimeoutMs ?? NODE_STOP_TIMEOUT_MS);
+  let stillRunning = await nodesUnderPaths(await detectRunningMerodNodes(), dirsToDelete);
+  while (stillRunning.length > 0 && Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, NODE_STOP_POLL_MS));
+    stillRunning = await nodesUnderPaths(await detectRunningMerodNodes(), dirsToDelete);
+  }
+  if (stillRunning.length > 0) {
+    throw new Error(
+      `Node ${describeNode(stillRunning[0])} is still running - aborting the delete to avoid corrupting its store.`
+    );
   }
   await new Promise((r) => setTimeout(r, FILE_HANDLE_SETTLE_MS));
 
-  // 4. Delete the configured data dir AND the default one: after the reset,
-  //    onboarding starts from ~/.calimero regardless of what was configured.
+  // 6-7. Delete each dir, re-checking immediately beforehand that nothing has
+  // started writing to it since, then confirming it stays gone: a surviving
+  // node writes by absolute path and can repopulate the folder.
   onStatus?.('Deleting...');
-  const settingsDataDir = getSettings().embeddedNodeDataDir || DEFAULT_DATA_DIR;
-  const dirsToDelete = [...new Set([settingsDataDir, DEFAULT_DATA_DIR])];
   for (const dir of dirsToDelete) {
+    const alive = await nodesUnderPaths(await detectRunningMerodNodes(), [dir]);
+    if (alive.length > 0) {
+      throw new Error(
+        `Node ${describeNode(alive[0])} started under ${dir} - aborting the delete to avoid corrupting its store.`
+      );
+    }
+
     await deleteCalimeroDataDir(dir);
+    if (!(await isDirGone(dir))) {
+      throw new Error(`${dir} still has data immediately after delete - a live writer may be repopulating it.`);
+    }
+    await new Promise((r) => setTimeout(r, FILE_HANDLE_SETTLE_MS));
+    if (!(await isDirGone(dir))) {
+      throw new Error(`${dir} reappeared after being deleted - a live writer is repopulating it.`);
+    }
   }
 
-  // 5. Only now discard the client state — including the settings that told us
+  // 8. Only now discard the client state - including the settings that told us
   //    which directories to delete. The launchers go too: the apps they point at
   //    lived in the data directory we just deleted.
   await wipeClientState({ removeLaunchers: true });

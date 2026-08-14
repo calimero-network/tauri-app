@@ -1,10 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
 
-export interface MerodStatus {
-  running: boolean;
-  exit_code?: number;
-}
-
 export interface MerodHealth {
   status: number;
   healthy: boolean;
@@ -47,13 +42,6 @@ export async function stopMerodByPid(pid: number): Promise<string> {
 }
 
 /**
- * Get the current status of the embedded merod node
- */
-export async function getMerodStatus(): Promise<MerodStatus> {
-  return await invoke('get_merod_status');
-}
-
-/**
  * Check the health of a merod node at the given URL
  */
 export async function checkMerodHealth(nodeUrl: string): Promise<MerodHealth> {
@@ -84,6 +72,27 @@ export interface RunningMerodNode {
   port: number; // Server port
   swarm_port?: number; // Swarm port
   home_dir?: string; // Data directory the node runs under, parsed from its argv
+}
+
+/** Normalize a home-dir path for comparison: strips a trailing `/` or `\`
+ *  separator and expands a leading `~` against the OS home dir, so a literal
+ *  `~/.calimero` compares equal to the already-resolved absolute path merod
+ *  runs under. */
+export function normalizeHomeDir(dir: string | undefined | null, osHomeDir?: string): string {
+  if (!dir) return '';
+  let normalized = dir.trim().replace(/[\\/]+$/, '');
+  if (osHomeDir && (normalized === '~' || normalized.startsWith('~/'))) {
+    normalized = osHomeDir.replace(/[\\/]+$/, '') + normalized.slice(1);
+  }
+  return normalized;
+}
+
+/** Whether two home-dir strings resolve to the same directory once
+ *  normalized. Empty/unresolved strings never match each other. */
+export function homeDirsMatch(a?: string | null, b?: string | null, osHomeDir?: string): boolean {
+  const na = normalizeHomeDir(a, osHomeDir);
+  const nb = normalizeHomeDir(b, osHomeDir);
+  return na !== '' && na === nb;
 }
 
 /**

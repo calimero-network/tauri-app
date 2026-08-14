@@ -31,6 +31,7 @@ import {
   detectRunningMerodNodes,
   stopMerodByPid,
   deleteCalimeroDataDir,
+  normalizeHomeDir,
   type RunningMerodNode,
 } from './merod';
 import { getSettings, clearAllAppData } from './settings';
@@ -106,20 +107,11 @@ export async function wipeClientState({
   return ok;
 }
 
-/** Expand a leading `~` the same way the Rust side does, so comparisons line up
- *  with the absolute `home_dir` a running node reports. */
-function expandHome(path: string, home: string): string {
-  if (path === '~') return home;
-  return path.startsWith('~/') ? home + path.slice(1) : path;
-}
-
-function stripTrailingSlash(path: string): string {
-  return path.length > 1 ? path.replace(/\/+$/, '') : path;
-}
-
+/** A path sits at or under `base` once both are normalized (trailing
+ *  separator stripped, leading `~` expanded). */
 function isAtOrUnder(path: string, base: string): boolean {
-  const p = stripTrailingSlash(path);
-  const b = stripTrailingSlash(base);
+  const p = normalizeHomeDir(path);
+  const b = normalizeHomeDir(base);
   return p === b || p.startsWith(b + '/');
 }
 
@@ -128,15 +120,15 @@ function isAtOrUnder(path: string, base: string): boolean {
  * any of the given target paths - regardless of who started them. A node on an
  * unrelated home is left alone.
  */
-async function nodesUnderPaths(
+function nodesUnderPaths(
   nodes: RunningMerodNode[],
-  targetPaths: string[]
-): Promise<RunningMerodNode[]> {
-  const home = await homeDir();
-  const targets = targetPaths.map((p) => expandHome(p, home));
+  targetPaths: string[],
+  osHomeDir: string
+): RunningMerodNode[] {
+  const targets = targetPaths.map((p) => normalizeHomeDir(p, osHomeDir));
   return nodes.filter((n) => {
     if (!n.home_dir) return false;
-    const nodeDir = `${stripTrailingSlash(n.home_dir)}/${n.node_name}`;
+    const nodeDir = `${normalizeHomeDir(n.home_dir)}/${n.node_name}`;
     return targets.some((t) => isAtOrUnder(nodeDir, t));
   });
 }
@@ -162,7 +154,8 @@ export interface HardResetPreview {
 /** What a hard reset would do, for the confirmation dialog. Read-only. */
 export async function previewHardReset(): Promise<HardResetPreview> {
   const dirsToDelete = targetDataDirs();
-  const nodesToStop = await nodesUnderPaths(await detectRunningMerodNodes(), dirsToDelete);
+  const osHomeDir = await homeDir();
+  const nodesToStop = nodesUnderPaths(await detectRunningMerodNodes(), dirsToDelete, osHomeDir);
   return { dirsToDelete, nodesToStop };
 }
 
@@ -186,12 +179,13 @@ export async function hardReset({
   onStatus,
   stopTimeoutMs,
 }: HardResetOptions = {}): Promise<void> {
+  const osHomeDir = await homeDir();
   const dirsToDelete = targetDataDirs();
 
   // 1-3. Stop every node whose data dir sits under a target path, regardless of
   // who started it - a hard reset is scoped by path, not by app ownership.
   onStatus?.('Stopping nodes...');
-  const toStop = await nodesUnderPaths(await detectRunningMerodNodes(), dirsToDelete);
+  const toStop = nodesUnderPaths(await detectRunningMerodNodes(), dirsToDelete, osHomeDir);
   for (const node of toStop) {
     try {
       await stopMerodByPid(node.pid);
@@ -204,10 +198,10 @@ export async function hardReset({
   // which the stop step above has already cleared. Abort if anything survives.
   onStatus?.('Waiting for nodes to stop...');
   const deadline = Date.now() + (stopTimeoutMs ?? NODE_STOP_TIMEOUT_MS);
-  let stillRunning = await nodesUnderPaths(await detectRunningMerodNodes(), dirsToDelete);
+  let stillRunning = nodesUnderPaths(await detectRunningMerodNodes(), dirsToDelete, osHomeDir);
   while (stillRunning.length > 0 && Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, NODE_STOP_POLL_MS));
-    stillRunning = await nodesUnderPaths(await detectRunningMerodNodes(), dirsToDelete);
+    stillRunning = nodesUnderPaths(await detectRunningMerodNodes(), dirsToDelete, osHomeDir);
   }
   if (stillRunning.length > 0) {
     throw new Error(
@@ -221,7 +215,7 @@ export async function hardReset({
   // node writes by absolute path and can repopulate the folder.
   onStatus?.('Deleting...');
   for (const dir of dirsToDelete) {
-    const alive = await nodesUnderPaths(await detectRunningMerodNodes(), [dir]);
+    const alive = nodesUnderPaths(await detectRunningMerodNodes(), [dir], osHomeDir);
     if (alive.length > 0) {
       throw new Error(
         `Node ${describeNode(alive[0])} started under ${dir} - aborting the delete to avoid corrupting its store.`

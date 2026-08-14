@@ -168,11 +168,15 @@ pub fn remove_claim(home: &Path, node: &str) {
     let _ = std::fs::remove_file(claim_path(home, node));
 }
 
-/// Whether the app may signal this PID: it must be a node this app started or a
-/// node the OS reports. A bare PID from the webview is otherwise unaccountable,
-/// and the OS recycles PIDs, so an unchecked one can name an unrelated process.
-pub fn is_signalable(pid: u32, running: &[DiscoveredNode], tracked: &[u32]) -> bool {
-    tracked.contains(&pid) || running.iter().any(|found| found.pid == pid)
+/// Whether the app may signal this PID: the OS must report it as a node right
+/// now. A bare PID from the webview is otherwise unaccountable, and the OS
+/// recycles PIDs, so an unchecked one can name an unrelated process.
+///
+/// Deliberately not satisfied by the app's own tracked state: a tracked PID the
+/// process table no longer lists is dead, and signalling it either does nothing
+/// or reaches whatever inherited the number.
+pub fn is_signalable(pid: u32, running: &[DiscoveredNode]) -> bool {
+    running.iter().any(|found| found.pid == pid)
 }
 
 #[cfg(test)]
@@ -444,11 +448,14 @@ mod tests {
     fn a_pid_the_app_cannot_account_for_is_not_signalable() {
         let (_cleanup, home, _other) = two_homes("signalable");
         let running = [found(11, &home, "default")];
-        assert!(is_signalable(11, &running, &[]), "a known node");
-        assert!(is_signalable(22, &[], &[22]), "a tracked node");
+        assert!(is_signalable(11, &running), "a node the OS reports");
         assert!(
-            !is_signalable(999, &running, &[11]),
+            !is_signalable(999, &running),
             "an unrelated process must be refused"
+        );
+        assert!(
+            !is_signalable(11, &[]),
+            "a PID the process table no longer lists is dead, tracked or not"
         );
     }
 }

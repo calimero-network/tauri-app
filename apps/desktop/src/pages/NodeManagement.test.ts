@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { findRunningNode, homeDirsMatch, resolveStartPorts } from "./NodeManagement";
-import type { RunningMerodNode } from "../utils/merod";
+import { findRunningNode, resolveStartPorts } from "./NodeManagement";
+import { homeDirsMatch, type RunningMerodNode } from "../utils/merod";
 
 function node(overrides: Partial<RunningMerodNode>): RunningMerodNode {
   return { pid: 111, node_name: "default", port: 2528, swarm_port: 2428, home_dir: "/Users/dev/.calimero", ...overrides };

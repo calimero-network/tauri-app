@@ -103,11 +103,11 @@ fn a_live_node_blocks_deleting_its_directory_and_is_signalable() {
     }
 
     assert!(
-        is_signalable(node.pid(), &running, &[]),
+        is_signalable(node.pid(), &running),
         "a discovered node must be signalable"
     );
     assert!(
-        !is_signalable(u32::MAX, &running, &[]),
+        !is_signalable(u32::MAX, &running),
         "an unaccountable pid must not be"
     );
 }

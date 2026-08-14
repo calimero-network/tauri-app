@@ -11,6 +11,7 @@ import {
   getMerodLogs,
   clearMerodLogs,
   exportMerodLogs,
+  homeDirsMatch,
   type RunningMerodNode,
 } from "../utils/merod";
 import {
@@ -31,26 +32,6 @@ import { useNodeVersions } from "../contexts/NodeVersionsContext";
 import { useMerodStatusChanged } from "../hooks/useMerodStatusChanged";
 import { useVisiblePoll } from "../hooks/useVisiblePoll";
 import "./NodeManagement.css";
-
-/**
- * Strip trailing slashes and expand a leading `~` so home-dir strings from
- * different sources (a user-typed default vs. a process's resolved argv)
- * compare equal instead of silently mismatching.
- */
-export function normalizeHomeDir(dir?: string | null, osHomeDir?: string): string {
-  if (!dir) return "";
-  let normalized = dir.trim().replace(/[\\/]+$/, "");
-  if (osHomeDir && (normalized === "~" || normalized.startsWith("~/"))) {
-    normalized = osHomeDir.replace(/[\\/]+$/, "") + normalized.slice(1);
-  }
-  return normalized;
-}
-
-export function homeDirsMatch(a?: string | null, b?: string | null, osHomeDir?: string): boolean {
-  const na = normalizeHomeDir(a, osHomeDir);
-  const nb = normalizeHomeDir(b, osHomeDir);
-  return na !== "" && na === nb;
-}
 
 /**
  * The running process, if any, for this exact home+node pair. Matching on

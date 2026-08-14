@@ -9,7 +9,9 @@ vi.mock('@tauri-apps/api/path', () => ({ homeDir: (...a: unknown[]) => homeDir(.
 const detectRunningMerodNodes = vi.fn();
 const stopMerodByPid = vi.fn();
 const deleteCalimeroDataDir = vi.fn();
-vi.mock('./merod', () => ({
+vi.mock('./merod', async (importOriginal) => ({
+  // normalizeHomeDir is pure and used internally by hardReset.ts - keep the real one.
+  ...(await importOriginal<typeof import('./merod')>()),
   detectRunningMerodNodes: (...a: unknown[]) => detectRunningMerodNodes(...a),
   stopMerodByPid: (...a: unknown[]) => stopMerodByPid(...a),
   deleteCalimeroDataDir: (...a: unknown[]) => deleteCalimeroDataDir(...a),

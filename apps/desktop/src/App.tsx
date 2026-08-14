@@ -13,7 +13,7 @@ import {
   DEFAULT_EMBEDDED_SWARM_PORT,
 } from "./utils/settings";
 import { clearOnboardingProgress } from "./utils/onboardingProgress";
-import { startMerod, detectRunningMerodNodes, waitForNodeHealthy, type RunningMerodNode } from "./utils/merod";
+import { startMerod, detectRunningMerodNodes, waitForNodeHealthy, homeDirsMatch, type RunningMerodNode } from "./utils/merod";
 import { homeDir } from "@tauri-apps/api/path";
 import { useToast } from "./contexts/ToastContext";
 import { checkOnboardingState } from "./utils/onboarding";
@@ -50,54 +50,23 @@ const ConfirmAction = lazy(() => import("./pages/ConfirmAction"));
 // Kept as pure functions so the ownership decision is unit-testable without
 // mounting the app.
 
-/** Normalize a home-dir path for comparison: trims a trailing slash and
- *  expands a leading `~` against the OS home dir, so a literal `~/.calimero`
- *  compares equal to the already-resolved absolute path merod runs under. */
-function normalizeHomeDir(path: string | undefined | null, osHomeDir: string): string {
-  if (!path) return '';
-  const trimmed = path.trim().replace(/\/+$/, '');
-  const home = osHomeDir.replace(/\/+$/, '');
-  if (trimmed === '~') return home;
-  if (trimmed.startsWith('~/')) return home + trimmed.slice(1);
-  return trimmed;
-}
-
 /** Running nodes whose home_dir resolves to the home this app manages. */
 function nodesInManagedHome(
   nodes: RunningMerodNode[],
   managedHomeDir: string,
   osHomeDir: string
 ): RunningMerodNode[] {
-  const managed = normalizeHomeDir(managedHomeDir, osHomeDir);
-  return nodes.filter((n) => normalizeHomeDir(n.home_dir, osHomeDir) === managed);
+  return nodes.filter((n) => homeDirsMatch(n.home_dir, managedHomeDir, osHomeDir));
 }
 
-export interface ManagedNodesDecision {
-  /** True when no node from this app's managed home is currently running. */
-  shouldAutoStart: boolean;
-  /** The managed-home node to adopt as settings.nodeUrl, if any. */
-  adopt?: RunningMerodNode;
-}
-
-/** Decide startup behaviour from the nodes currently detected on the system.
- *  Only nodes in the app's managed home count toward either decision. */
+/** The managed-home node to adopt as settings.nodeUrl, if any is currently
+ *  running. Only nodes in the app's managed home are considered. */
 export function decideManagedNodes(
   nodes: RunningMerodNode[],
   managedHomeDir: string,
   osHomeDir: string
-): ManagedNodesDecision {
-  const managed = nodesInManagedHome(nodes, managedHomeDir, osHomeDir);
-  return { shouldAutoStart: managed.length === 0, adopt: managed[0] };
-}
-
-/** Whether the init effect (and Restart) should call startMerod for the
- *  user's configured embedded node. The backend is the single decision point
- *  for adopting an already-running node vs spawning a new one, so this must
- *  not skip the call just because a managed-home node is already up -
- *  skipping it left that node outside the backend's tracked state, so
- *  quitting the app could never stop it. */
-export function shouldStartMerod(embeddedNodeName: string | undefined): boolean {
-  return !!embeddedNodeName;
+): RunningMerodNode | undefined {
+  return nodesInManagedHome(nodes, managedHomeDir, osHomeDir)[0];
 }
 
 export type RestartAction = 'reconnect' | 'start' | 'manage';
@@ -306,14 +275,14 @@ function App() {
         // managed node under '~/...' stop matching, which risks the double-spawn
         // this guard exists to prevent - safer to abort via the outer catch.
         const osHomeDir = await homeDir();
-        let managedDecision = decideManagedNodes(runningNodes, managedHomeDir, osHomeDir);
+        let adoptableNode = decideManagedNodes(runningNodes, managedHomeDir, osHomeDir);
 
         // Call startMerod whenever an embedded node is configured, even if one is
         // already running in the managed home - start_merod adopts a live node
         // instead of double-spawning, and adoption is what lets the app stop it on
         // quit. A node on some other home - e.g. a developer's own
         // `merod --home ~/dev-nodes` - is never touched by this at all.
-        if (shouldStartMerod(settings.embeddedNodeName)) {
+        if (settings.embeddedNodeName) {
           const serverPort = settings.embeddedNodePort ?? DEFAULT_EMBEDDED_NODE_PORT;
           // Must come from settings: start_merod rewrites config.toml with whatever it
           // gets, so a hardcoded default here silently reverted a node the user had
@@ -325,7 +294,7 @@ function App() {
             await waitForNodeHealthy(`http://localhost:${serverPort}/auth`, 15000).catch(() => {});
             runningNodes = normalizeRunningNodes(await detectRunningMerodNodes());
             setRunningNodes(runningNodes);
-            managedDecision = decideManagedNodes(runningNodes, managedHomeDir, osHomeDir);
+            adoptableNode = decideManagedNodes(runningNodes, managedHomeDir, osHomeDir);
           } catch (startErr) {
             console.warn('Auto-start merod failed:', startErr);
           }
@@ -337,8 +306,8 @@ function App() {
         // node to connect to (via NodeManagement or the dropdown). Auto-overriding here
         // races with the reload from NodeManagement and silently reverts the user's
         // selection.
-        if (managedDecision.adopt && !settings.developerMode) {
-          const node = managedDecision.adopt;
+        if (adoptableNode && !settings.developerMode) {
+          const node = adoptableNode;
           const nodeUrl = `http://localhost:${node.port}`;
           const currentUrl = settings.nodeUrl;
           const isLocalhostUrl = currentUrl && (
@@ -474,9 +443,6 @@ function App() {
     const settings = getSettings();
     if (settings.embeddedNodeName) {
       try {
-        // No fallback on failure: a wrong osHomeDir (e.g. '') could make a real
-        // managed node under '~/...' stop matching, which risks the double-spawn
-        // this guard exists to prevent - safer to abort via the outer catch.
         const osHomeDir = await homeDir();
         const nodes = await detectRunningMerodNodes().catch(() => []);
         const action = decideRestartAction(Array.isArray(nodes) ? nodes : [], settings, osHomeDir);

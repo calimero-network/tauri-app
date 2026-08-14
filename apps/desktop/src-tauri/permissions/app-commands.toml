@@ -97,11 +97,6 @@ description = "Enables the stop_merod_by_pid_command command."
 commands.allow = ["stop_merod_by_pid_command"]
 
 [[permission]]
-identifier = "allow-get-merod-status"
-description = "Enables the get_merod_status command."
-commands.allow = ["get_merod_status"]
-
-[[permission]]
 identifier = "allow-list-merod-nodes"
 description = "Enables the list_merod_nodes command."
 commands.allow = ["list_merod_nodes"]
@@ -289,7 +284,6 @@ permissions = [
   "allow-start-merod",
   "allow-stop-merod",
   "allow-stop-merod-by-pid-command",
-  "allow-get-merod-status",
   "allow-list-merod-nodes",
   "allow-check-merod-health",
   "allow-pick-directory",

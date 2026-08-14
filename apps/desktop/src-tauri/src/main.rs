@@ -2907,12 +2907,22 @@ async fn stop_merod(
     };
     #[cfg(unix)]
     let pids: Vec<u32> = {
-        let state = merod_state.lock_unpoisoned();
-        let target = match (&home, &node_name) {
-            (Some(home), Some(node)) => Some((home.as_path(), node.as_str())),
-            _ => None,
+        let tracked = {
+            let state = merod_state.lock_unpoisoned();
+            let target = match (&home, &node_name) {
+                (Some(home), Some(node)) => Some((home.as_path(), node.as_str())),
+                _ => None,
+            };
+            tracked_pids_for(&state, target)
         };
-        tracked_pids_for(&state, target)
+        // Tracked state can outlive a node - nothing reaps it while the app runs -
+        // so confirm each PID is still a node before signalling it. Otherwise a
+        // recycled PID sends the user's Stop button at an unrelated process.
+        let running = discover_nodes();
+        tracked
+            .into_iter()
+            .filter(|pid| is_signalable(*pid, &running))
+            .collect()
     };
     #[cfg(not(unix))]
     let pids: Vec<u32> = {
@@ -3018,18 +3028,13 @@ async fn stop_merod_by_pid_command(
     app_handle: tauri::AppHandle,
     merod_state: tauri::State<'_, MerodState>,
 ) -> Result<String, TauriError> {
-    // The PID arrives as a bare number from the webview. Signal it only if the app
-    // can account for it as a node - it started it, or the OS reports it as one.
-    // Anything else is some other program, possibly on a recycled PID.
+    // The PID arrives as a bare number from the webview. Signal it only if the OS
+    // reports it as a node right now; anything else is some other program,
+    // possibly whatever inherited a recycled PID.
     #[cfg(unix)]
     {
-        let tracked: Vec<u32> = merod_state
-            .lock_unpoisoned()
-            .iter()
-            .map(|p| p.pid)
-            .collect();
-        if !is_signalable(pid, &discover_nodes(), &tracked) {
-            warn!("[Merod] Refusing to stop PID {}: not a known node", pid);
+        if !is_signalable(pid, &discover_nodes()) {
+            warn!("[Merod] Refusing to stop PID {}: not a running node", pid);
             return Err(TauriError::new(
                 TauriErrorCode::InvalidInput,
                 format!("PID {} is not a node this app can account for", pid),
@@ -3152,51 +3157,6 @@ fn is_process_running(pid: u32) -> bool {
             false
         }
     }
-}
-
-/// The reap probes every tracked node for liveness while holding the state lock,
-/// and this command is polled - too much to leave on a runtime worker.
-#[tauri::command]
-async fn get_merod_status(
-    app_handle: tauri::AppHandle,
-    merod_state: tauri::State<'_, MerodState>,
-) -> Result<serde_json::Value, TauriError> {
-    let merod_state = merod_state.inner().clone();
-    tokio::task::spawn_blocking(move || {
-        let mut state = merod_state.lock_unpoisoned();
-        if state.is_empty() {
-            return serde_json::json!({ "running": false, "nodes": [] });
-        }
-        // Filter out dead processes. Only announce when this reap actually dropped
-        // one, or a polling caller would emit on every tick.
-        let before = state.len();
-        state.retain(|p| is_process_running(p.pid));
-        if state.len() != before {
-            emit_merod_status_changed(&app_handle);
-        }
-        if state.is_empty() {
-            return serde_json::json!({ "running": false, "nodes": [] });
-        }
-        let nodes: Vec<_> = state
-            .iter()
-            .map(|p| serde_json::json!({ "pid": p.pid, "port": p.port }))
-            .collect();
-        let first = &state[0];
-        serde_json::json!({
-            "running": true,
-            "nodes": nodes,
-            "pid": first.pid,
-            "port": first.port
-        })
-    })
-    .await
-    .map_err(|e| {
-        TauriError::with_details(
-            TauriErrorCode::InternalError,
-            "Status task failed",
-            e.to_string(),
-        )
-    })
 }
 
 #[tauri::command]
@@ -5074,7 +5034,6 @@ fn main() {
             start_merod,
             stop_merod,
             stop_merod_by_pid_command,
-            get_merod_status,
             list_merod_nodes,
             check_merod_health,
             pick_directory,

@@ -197,11 +197,6 @@ description = "Enables the remove_app_launchers command."
 commands.allow = ["remove_app_launchers"]
 
 [[permission]]
-identifier = "allow-kill-all-merod-processes"
-description = "Enables the kill_all_merod_processes command."
-commands.allow = ["kill_all_merod_processes"]
-
-[[permission]]
 identifier = "allow-autostart-enable"
 description = "Enables the autostart_enable command."
 commands.allow = ["autostart_enable"]
@@ -314,7 +309,6 @@ permissions = [
   "allow-delete-calimero-data-dir",
   "allow-clear-app-sessions",
   "allow-remove-app-launchers",
-  "allow-kill-all-merod-processes",
   "allow-autostart-enable",
   "allow-autostart-disable",
   "allow-autostart-is-enabled",

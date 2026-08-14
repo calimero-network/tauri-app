@@ -70,7 +70,7 @@ beforeEach(() => {
   homeDir.mockResolvedValue(HOME);
   detectRunningMerodNodes.mockResolvedValue([]);
   stopMerodByPid.mockResolvedValue('stopped');
-  deleteCalimeroDataDir.mockResolvedValue('Directory did not exist (nothing to delete)');
+  deleteCalimeroDataDir.mockResolvedValue({ deleted: false, path: '~/.calimero' });
   invoke.mockResolvedValue('ok');
 });
 
@@ -227,7 +227,7 @@ describe('hardReset', () => {
       if (deleteCalls === 1) {
         detectRunningMerodNodes.mockResolvedValue([{ ...node, home_dir: HOME + '/.calimero' }]);
       }
-      return 'Directory did not exist (nothing to delete)';
+      return { deleted: false, path: '~/.calimero' };
     });
 
     await expect(hardReset()).rejects.toThrow(/late-starter/);
@@ -238,7 +238,7 @@ describe('hardReset', () => {
   });
 
   it('aborts when a wiped path is not actually gone (delete silently failed)', async () => {
-    deleteCalimeroDataDir.mockResolvedValue('Deleted /Users/alice/.calimero');
+    deleteCalimeroDataDir.mockResolvedValue({ deleted: true, path: '/Users/alice/.calimero' });
 
     await expect(hardReset()).rejects.toThrow(/still|reappeared/i);
   });
@@ -249,7 +249,9 @@ describe('hardReset', () => {
       calls += 1;
       // The delete reports gone; the recheck after the settle finds a 10MB file
       // has reappeared - exactly what a surviving writer did in the real incident.
-      return calls === 1 ? 'Directory did not exist (nothing to delete)' : 'Deleted /Users/alice/.calimero';
+      return calls === 1
+        ? { deleted: false, path: '~/.calimero' }
+        : { deleted: true, path: '/Users/alice/.calimero' };
     });
 
     await expect(hardReset()).rejects.toThrow(/reappeared/i);

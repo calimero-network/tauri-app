@@ -148,13 +148,6 @@ export async function previewHardReset(): Promise<HardResetPreview> {
   return { dirsToDelete, nodesToStop };
 }
 
-/** Deletes `dir` and reports whether there was anything there. There is no
- *  read-only "does this exist" op, so repeating the delete doubles as the check. */
-async function deleteAndReportWhetherAnythingWasThere(dir: string): Promise<boolean> {
-  const result = await deleteCalimeroDataDir(dir);
-  return !/did not exist/i.test(result);
-}
-
 /** Full reset: stop every node under a target path, delete the data directories,
  *  then wipe client state - never deletes under a live writer. */
 export async function hardReset({
@@ -207,7 +200,9 @@ export async function hardReset({
     // One check, after a settle - the delay is what gives a repopulating writer
     // time to show up before the second check runs.
     await new Promise((r) => setTimeout(r, FILE_HANDLE_SETTLE_MS));
-    if (await deleteAndReportWhetherAnythingWasThere(dir)) {
+    // Deleting again doubles as the check: a writer that repopulated the directory
+    // is removed a second time, and `deleted` says it happened.
+    if ((await deleteCalimeroDataDir(dir)).deleted) {
       throw new Error(`${dir} reappeared after being deleted - a live writer is repopulating it.`);
     }
   }

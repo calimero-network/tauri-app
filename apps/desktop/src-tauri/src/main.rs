@@ -2480,35 +2480,19 @@ async fn start_merod(
     let swarm_port = swarm_port.unwrap_or(2428);
 
     // Only stop a process that uses the same server_port (port conflict)
-    let existing_on_port: Option<u32> = {
+    // Evict only a node this app started. An adopted entry can be one it merely
+    // connected to, and killing that is what the rest of this change exists to stop.
+    let evictable: Option<u32> = {
         let state = merod_state.lock_unpoisoned();
-        state.iter().find(|p| p.port == server_port).map(|p| p.pid)
+        state
+            .iter()
+            .find(|p| p.port == server_port && p.owned)
+            .map(|p| p.pid)
     };
 
-    if let Some(pid) = existing_on_port {
-        info!(
-            "[Merod] Stopping existing process on port {} (PID: {}) before starting new one",
-            server_port, pid
-        );
-        #[cfg(unix)]
-        {
-            use std::process::Command;
-            let _ = Command::new("kill")
-                .arg("-TERM")
-                .arg(pid.to_string())
-                .output();
-            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-            let _ = Command::new("kill").arg("-9").arg(pid.to_string()).output();
-        }
-        #[cfg(windows)]
-        {
-            use std::process::Command;
-            let _ = Command::new("taskkill")
-                .arg("/PID")
-                .arg(pid.to_string())
-                .arg("/F")
-                .output();
-        }
+    if let Some(pid) = evictable {
+        info!("[Merod] Stopping our node on port {server_port} (PID {pid}) before starting");
+        kill_pids(&[pid], TermPatience::Wait).await;
         merod_state
             .lock_unpoisoned()
             .retain(|p| p.pid != pid);
@@ -4242,8 +4226,16 @@ async fn open_url_in_browser(url: String, app_handle: tauri::AppHandle) -> Resul
         .map_err(|e| TauriError::new(TauriErrorCode::InternalError, e.to_string()))
 }
 
+/// Whether the delete removed anything. Structured because the reset flow uses it
+/// to decide whether a writer repopulated a directory.
+#[derive(Serialize)]
+struct DeleteOutcome {
+    deleted: bool,
+    path: String,
+}
+
 #[tauri::command]
-async fn delete_calimero_data_dir(data_dir: String) -> Result<String, TauriError> {
+async fn delete_calimero_data_dir(data_dir: String) -> Result<DeleteOutcome, TauriError> {
     let expanded = if data_dir.starts_with("~") {
         if let Some(home) = dirs::home_dir() {
             data_dir.replacen("~", &home.to_string_lossy(), 1)
@@ -4261,7 +4253,7 @@ async fn delete_calimero_data_dir(data_dir: String) -> Result<String, TauriError
 
     // If path doesn't exist, nothing to delete
     if !path.exists() {
-        return Ok("Directory did not exist (nothing to delete)".to_string());
+        return Ok(DeleteOutcome { deleted: false, path: expanded });
     }
 
     let path_canonical = path.canonicalize().map_err(|e| {
@@ -4330,7 +4322,10 @@ async fn delete_calimero_data_dir(data_dir: String) -> Result<String, TauriError
     })?;
 
     info!("[Calimero] Deleted data directory: {:?}", path_canonical);
-    Ok(format!("Deleted {}", path_canonical.display()))
+    Ok(DeleteOutcome {
+        deleted: true,
+        path: path_canonical.display().to_string(),
+    })
 }
 
 /// True if `bundle` is a launcher `.app` we generated and may remove: it must be

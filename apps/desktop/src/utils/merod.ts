@@ -160,11 +160,14 @@ export async function exportMerodLogs(
   return await invoke('export_merod_logs', { nodeName, homeDir, defaultFileName });
 }
 
-/**
- * Delete the Calimero data directory and all its contents (total nuke).
- * Path must be under the user's home directory.
- */
-export async function deleteCalimeroDataDir(dataDir: string): Promise<string> {
+/** Whether the delete removed anything, so callers never read prose to decide. */
+export interface DeleteOutcome {
+  deleted: boolean;
+  path: string;
+}
+
+/** Total nuke; the path must be under the user's home directory. */
+export async function deleteCalimeroDataDir(dataDir: string): Promise<DeleteOutcome> {
   return await invoke('delete_calimero_data_dir', { dataDir });
 }
 

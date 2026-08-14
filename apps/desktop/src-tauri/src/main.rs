@@ -2916,10 +2916,21 @@ async fn stop_merod(
     #[cfg(unix)]
     let pids: Vec<u32> = {
         let running = discover_nodes();
-        tracked
+        let (alive, dead): (Vec<u32>, Vec<u32>) = tracked
             .into_iter()
-            .filter(|pid| is_signalable(*pid, &running))
-            .collect()
+            .partition(|pid| is_signalable(*pid, &running));
+        // Forget the dead ones here, before the early return below. An adopted node
+        // has no monitor task to notice it exited, so this is the only place a
+        // stale entry gets dropped - and left in place it would keep the UI
+        // reporting a node that is gone.
+        if !dead.is_empty() {
+            info!("[Merod] Dropping {} stale tracked node(s): {:?}", dead.len(), dead);
+            merod_state
+                .lock_unpoisoned()
+                .retain(|p| !dead.contains(&p.pid));
+            emit_merod_status_changed(&app_handle);
+        }
+        alive
     };
     #[cfg(not(unix))]
     let pids: Vec<u32> = tracked;

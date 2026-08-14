@@ -36,6 +36,24 @@ describe('decideManagedNodes', () => {
     expect(decideManagedNodes([ours], MANAGED_HOME, OS_HOME)).toBe(ours);
   });
 
+  it('adopts the app\'s own node, not a sibling sharing the same home', () => {
+    // ~/.calimero is also merod's own default home, so a hand-started node sits
+    // beside the app's. Matching on the home alone adopted whichever the scan
+    // listed first, silently pointing the UI at the wrong node.
+    const handStarted = node({ node_name: 'mydev', port: 3001 });
+    const ours = node({ node_name: 'node1', port: 2528 });
+
+    expect(decideManagedNodes([handStarted, ours], MANAGED_HOME, OS_HOME, 'node1')).toBe(ours);
+  });
+
+  it('adopts nothing when no node in the managed home has the configured name', () => {
+    const handStarted = node({ node_name: 'mydev', port: 3001 });
+
+    expect(
+      decideManagedNodes([handStarted], MANAGED_HOME, OS_HOME, 'node1')
+    ).toBeUndefined();
+  });
+
   it('matches a literal ~ managed home against the already-resolved absolute home_dir', () => {
     // start_merod resolves `~` before spawning, so the running node's home_dir
     // is absolute even though settings still holds the literal '~/.calimero'.

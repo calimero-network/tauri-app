@@ -51,22 +51,25 @@ const ConfirmAction = lazy(() => import("./pages/ConfirmAction"));
 // mounting the app.
 
 /** Running nodes whose home_dir resolves to the home this app manages. */
-function nodesInManagedHome(
-  nodes: RunningMerodNode[],
-  managedHomeDir: string,
-  osHomeDir: string
-): RunningMerodNode[] {
-  return nodes.filter((n) => homeDirsMatch(n.home_dir, managedHomeDir, osHomeDir));
-}
-
-/** The managed-home node to adopt as settings.nodeUrl, if any is currently
- *  running. Only nodes in the app's managed home are considered. */
+/**
+ * The node to adopt as settings.nodeUrl, if it is currently running.
+ *
+ * Matched on the node NAME as well as the home directory. One home can hold
+ * several nodes - `~/.calimero` is also merod's own default, so a hand-started
+ * `mydev` sits beside the app's `default` - and picking the first in the home
+ * would silently point the UI at whichever the scan happened to list first.
+ */
 export function decideManagedNodes(
   nodes: RunningMerodNode[],
   managedHomeDir: string,
-  osHomeDir: string
+  osHomeDir: string,
+  managedNodeName?: string
 ): RunningMerodNode | undefined {
-  return nodesInManagedHome(nodes, managedHomeDir, osHomeDir)[0];
+  return nodes.find(
+    (n) =>
+      homeDirsMatch(n.home_dir, managedHomeDir, osHomeDir) &&
+      (managedNodeName === undefined || n.node_name === managedNodeName)
+  );
 }
 
 export type RestartAction = 'reconnect' | 'start' | 'manage';
@@ -83,8 +86,13 @@ export function decideRestartAction(
 ): RestartAction {
   if (!settings.embeddedNodeName) return 'manage';
   const managedHomeDir = settings.embeddedNodeDataDir || '~/.calimero';
-  const alreadyRunning = nodesInManagedHome(nodes, managedHomeDir, osHomeDir).some(
-    (n) => n.node_name === settings.embeddedNodeName
+  // Same question as adoption - "is the app's own node running?" - so the same
+  // answer. These were two matches, and only one of them checked the node name.
+  const alreadyRunning = decideManagedNodes(
+    nodes,
+    managedHomeDir,
+    osHomeDir,
+    settings.embeddedNodeName
   );
   return alreadyRunning ? 'reconnect' : 'start';
 }
@@ -275,7 +283,7 @@ function App() {
         // managed node under '~/...' stop matching, which risks the double-spawn
         // this guard exists to prevent - safer to abort via the outer catch.
         const osHomeDir = await homeDir();
-        let adoptableNode = decideManagedNodes(runningNodes, managedHomeDir, osHomeDir);
+        let adoptableNode = decideManagedNodes(runningNodes, managedHomeDir, osHomeDir, settings.embeddedNodeName);
 
         // Call startMerod whenever an embedded node is configured, even if one is
         // already running in the managed home - start_merod adopts a live node
@@ -294,7 +302,7 @@ function App() {
             await waitForNodeHealthy(`http://localhost:${serverPort}/auth`, 15000).catch(() => {});
             runningNodes = normalizeRunningNodes(await detectRunningMerodNodes());
             setRunningNodes(runningNodes);
-            adoptableNode = decideManagedNodes(runningNodes, managedHomeDir, osHomeDir);
+            adoptableNode = decideManagedNodes(runningNodes, managedHomeDir, osHomeDir, settings.embeddedNodeName);
           } catch (startErr) {
             console.warn('Auto-start merod failed:', startErr);
           }

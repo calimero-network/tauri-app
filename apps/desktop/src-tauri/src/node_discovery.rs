@@ -21,12 +21,12 @@ pub fn resolved(path: &Path) -> PathBuf {
 /// isolated by whitespace position: a flag's value runs to the next flag.
 #[cfg(unix)]
 fn parse_node_listing(listing: &str) -> Vec<DiscoveredNode> {
-    fn flag_value<'a>(command: &'a str, flag: &str) -> Option<&'a str> {
+    // A flag's value runs to the next flag, never to the next space: both the
+    // executable path and `--home` can contain them.
+    fn flag_value<'a>(flags: &'a str, flag: &str) -> Option<&'a str> {
         let needle = format!("{flag} ");
-        let rest = &command[command.find(&needle)? + needle.len()..];
-        let value = rest[..rest.find(" --").unwrap_or(rest.len())].trim_end();
-        // merod takes its subcommand after the flags: `--node <name> run`.
-        Some(value.strip_suffix(" run").unwrap_or(value))
+        let rest = &flags[flags.find(&needle)? + needle.len()..];
+        Some(rest[..rest.find(" --").unwrap_or(rest.len())].trim_end())
     }
 
     listing
@@ -34,18 +34,21 @@ fn parse_node_listing(listing: &str) -> Vec<DiscoveredNode> {
         .filter_map(|line| {
             let (pid, command) = line.trim_start().split_once(char::is_whitespace)?;
             let pid = pid.parse::<u32>().ok()?;
-            let command = command.trim_start();
+            let command = command.trim();
             let exe = command.split(" --").next().unwrap_or(command).trim_end();
             if exe.rsplit('/').next() != Some("merod") {
                 return None;
             }
-            if !command.split_whitespace().any(|token| token == "run") {
+            // merod's shape is `<exe> [flags] <subcommand>`, so the subcommand is
+            // the final token - not any token, which a path ending in "run" matches.
+            let (flags, subcommand) = command.rsplit_once(char::is_whitespace)?;
+            if subcommand != "run" {
                 return None;
             }
             Some(DiscoveredNode {
                 pid,
-                home: flag_value(command, "--home")?.to_string(),
-                node: flag_value(command, "--node")?.to_string(),
+                home: flag_value(flags, "--home")?.to_string(),
+                node: flag_value(flags, "--node")?.to_string(),
             })
         })
         .collect()
@@ -232,6 +235,22 @@ mod tests {
         assert_eq!(
             discovered(listing),
             vec![(4711, "/Users/x/dev".into(), "alice".into())]
+        );
+    }
+
+    /// A home directory can end in a folder named "run", which is not a subcommand.
+    #[test]
+    fn a_run_inside_a_home_path_is_not_the_subcommand() {
+        let listing = "88 /usr/local/bin/merod --home /Users/x/last run --node n1 init";
+        assert_eq!(discovered(listing), vec![]);
+    }
+
+    #[test]
+    fn a_node_whose_home_ends_in_run_is_still_found() {
+        let listing = "89 /usr/local/bin/merod --home /Users/x/last run --node n1 run";
+        assert_eq!(
+            discovered(listing),
+            vec![(89, "/Users/x/last run".into(), "n1".into())]
         );
     }
 

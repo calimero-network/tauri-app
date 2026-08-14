@@ -7,6 +7,7 @@ use std::sync::OnceLock;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, Manager};
+use tokio::process::Command;
 use thiserror::Error;
 
 /// Chain-style poison recovery: every mutex here guards a plain collection with
@@ -2114,7 +2115,6 @@ fn error_lines_from_log(body: &str) -> Option<String> {
     (!frames.is_empty()).then(|| frames.join(" "))
 }
 
-use tokio::process::Command;
 
 /// Tracked PIDs for one specific node, or every tracked PID when none is named.
 fn tracked_pids_for(state: &[MerodProcess], target: Option<(&std::path::Path, &str)>) -> Vec<u32> {

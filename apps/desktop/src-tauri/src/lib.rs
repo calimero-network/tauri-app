@@ -27,7 +27,6 @@ pub mod errors;
 pub mod proxy;
 pub mod webview;
 
-#[cfg(unix)]
 pub mod node_discovery;
 
 #[cfg(target_os = "macos")]

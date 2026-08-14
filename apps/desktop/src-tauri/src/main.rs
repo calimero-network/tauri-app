@@ -2072,32 +2072,34 @@ fn strip_ansi(text: &str) -> String {
 }
 
 /// The error a node reported as it died, pulled from its log so the UI can show
-/// the actual cause instead of telling the user to go and read a file. In the
-/// incident this would have named the missing SST on the first failure.
+/// the actual cause instead of telling the user to go and read a file.
+///
+/// The *last* matching lines, not the first: a failing start logs its context
+/// before its cause, so the lines nearest the end are the ones that explain it.
 fn error_lines_from_log(body: &str) -> Option<String> {
-    let lines: Vec<String> = body
+    const KEEP: usize = 3;
+    let matches: Vec<String> = body
         .lines()
-        .rev()
-        .take(80)
         .map(strip_ansi)
         .filter(|line| {
-            let l = line.trim();
-            !l.is_empty()
-                && (l.starts_with("Error")
-                    || l.contains("error:")
-                    || l.contains("Corruption")
-                    || l.contains("Storage error"))
+            let line = line.trim();
+            !line.is_empty()
+                && (line.starts_with("Error")
+                    || line.contains("error:")
+                    || line.contains("Corruption")
+                    || line.contains("Storage error"))
         })
         .collect();
-    let mut lines: Vec<String> = lines.into_iter().rev().collect();
-    lines.truncate(3);
-    (!lines.is_empty()).then(|| {
-        lines
+    if matches.is_empty() {
+        return None;
+    }
+    Some(
+        matches[matches.len().saturating_sub(KEEP)..]
             .iter()
-            .map(|l| l.trim())
+            .map(|line| line.trim())
             .collect::<Vec<_>>()
-            .join(" ")
-    })
+            .join(" "),
+    )
 }
 
 /// How long a node gets to shut down on its own before it is killed outright.
@@ -2105,27 +2107,6 @@ fn error_lines_from_log(body: &str) -> Option<String> {
 /// quick exit costs nothing.
 const PROCESS_TERM_MAX_WAIT_SECS: u64 = 30;
 
-/// Whether a process still exists. Existence only - see `is_signalable` for
-/// whether the app has any business signalling it.
-fn process_is_alive(pid: u32) -> bool {
-    #[cfg(unix)]
-    {
-        std::process::Command::new("ps")
-            .arg("-p")
-            .arg(pid.to_string())
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
-    }
-    #[cfg(windows)]
-    {
-        std::process::Command::new("tasklist")
-            .args(["/FI", &format!("PID eq {}", pid), "/FO", "CSV", "/NH"])
-            .output()
-            .map(|o| String::from_utf8_lossy(&o.stdout).contains(&pid.to_string()))
-            .unwrap_or(false)
-    }
-}
 use tokio::process::Command;
 
 /// Tracked PIDs for one specific node, or every tracked PID when none is named.
@@ -2206,7 +2187,7 @@ async fn kill_pids(pids: &[u32], patience: TermPatience) {
         let deadline =
             std::time::Instant::now() + std::time::Duration::from_secs(PROCESS_TERM_MAX_WAIT_SECS);
         while std::time::Instant::now() < deadline {
-            if !pids_owned.iter().any(|pid| process_is_alive(*pid)) {
+            if !pids_owned.iter().any(|pid| is_process_running(*pid)) {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(100));
@@ -2900,24 +2881,24 @@ async fn stop_merod(
 ) -> Result<String, TauriError> {
     // Naming a node stops only that node. Without one this still stops every
     // node the app started, which is what the callers that pass nothing expect.
-    #[cfg(unix)]
     let home = match &node_name {
         Some(_) => Some(resolve_home_dir(data_dir)?),
         None => None,
     };
+    let tracked: Vec<u32> = {
+        let state = merod_state.lock_unpoisoned();
+        let target = match (&home, &node_name) {
+            (Some(home), Some(node)) => Some((home.as_path(), node.as_str())),
+            _ => None,
+        };
+        tracked_pids_for(&state, target)
+    };
+    // Tracked state can outlive a node - nothing reaps it while the app runs - so
+    // confirm each PID is still a node before signalling it, or a recycled PID
+    // sends the user's Stop button at an unrelated process. Windows has no process
+    // discovery, so there the tracked entry is all there is to go on.
     #[cfg(unix)]
     let pids: Vec<u32> = {
-        let tracked = {
-            let state = merod_state.lock_unpoisoned();
-            let target = match (&home, &node_name) {
-                (Some(home), Some(node)) => Some((home.as_path(), node.as_str())),
-                _ => None,
-            };
-            tracked_pids_for(&state, target)
-        };
-        // Tracked state can outlive a node - nothing reaps it while the app runs -
-        // so confirm each PID is still a node before signalling it. Otherwise a
-        // recycled PID sends the user's Stop button at an unrelated process.
         let running = discover_nodes();
         tracked
             .into_iter()
@@ -2925,11 +2906,7 @@ async fn stop_merod(
             .collect()
     };
     #[cfg(not(unix))]
-    let pids: Vec<u32> = {
-        let _ = (&node_name, &data_dir);
-        let state = merod_state.lock_unpoisoned();
-        state.iter().map(|p| p.pid).collect()
-    };
+    let pids: Vec<u32> = tracked;
 
     if pids.is_empty() {
         return Err(TauriError::new(
@@ -3028,18 +3005,26 @@ async fn stop_merod_by_pid_command(
     app_handle: tauri::AppHandle,
     merod_state: tauri::State<'_, MerodState>,
 ) -> Result<String, TauriError> {
-    // The PID arrives as a bare number from the webview. Signal it only if the OS
-    // reports it as a node right now; anything else is some other program,
-    // possibly whatever inherited a recycled PID.
+    // The PID arrives as a bare number from the webview. Signal it only if the app
+    // can account for it as a node; anything else is some other program, possibly
+    // whatever inherited a recycled PID.
+    //
+    // Unix asks the process table. Windows has no discovery, so the app's own
+    // tracked state is the only account available there - weaker, but it still
+    // refuses a PID the webview invented.
     #[cfg(unix)]
-    {
-        if !is_signalable(pid, &discover_nodes()) {
-            warn!("[Merod] Refusing to stop PID {}: not a running node", pid);
-            return Err(TauriError::new(
-                TauriErrorCode::InvalidInput,
-                format!("PID {} is not a node this app can account for", pid),
-            ));
-        }
+    let accountable = is_signalable(pid, &discover_nodes());
+    #[cfg(not(unix))]
+    let accountable = merod_state
+        .lock_unpoisoned()
+        .iter()
+        .any(|p| p.pid == pid);
+    if !accountable {
+        warn!("[Merod] Refusing to stop PID {}: not a known node", pid);
+        return Err(TauriError::new(
+            TauriErrorCode::InvalidInput,
+            format!("PID {} is not a node this app can account for", pid),
+        ));
     }
 
     #[cfg(unix)]
@@ -5529,6 +5514,27 @@ listen = ["/ip4/0.0.0.0/udp/4001/quic-v1", "/ip4/0.0.0.0/tcp/4002"]
         assert!(found.contains("Corruption"), "got: {found}");
         assert!(found.contains("000178.sst"), "got: {found}");
         assert!(!found.contains('\u{1b}'), "colour codes must be stripped: {found}");
+    }
+
+    /// A node logs its context before its cause, so the lines nearest the end are
+    /// the ones that explain the failure. Keeping the earliest matches instead
+    /// surfaced a stale error from a previous run.
+    #[test]
+    fn a_failed_start_surfaces_the_last_error_not_the_first() {
+        let body = "Error: an earlier failure that has since been retried\n\
+                    INFO some progress\n\
+                    Error: another old one\n\
+                    Error: and another\n\
+                    Error: the one that actually stopped the node\n";
+        let found = super::error_lines_from_log(body).expect("should surface an error");
+        assert!(
+            found.contains("actually stopped the node"),
+            "must include the last error, got: {found}"
+        );
+        assert!(
+            !found.contains("an earlier failure"),
+            "must not surface the oldest error, got: {found}"
+        );
     }
 
     #[test]

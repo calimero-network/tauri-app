@@ -27,6 +27,7 @@ pub fn resolved(path: &Path) -> PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
+#[cfg(unix)]
 /// Parses `ps ax -o pid,command` output into the node processes it describes.
 ///
 /// The executable path and the `--home` value can both contain spaces, so
@@ -65,6 +66,7 @@ fn parse_node_listing(listing: &str) -> Vec<DiscoveredNode> {
         .collect()
 }
 
+#[cfg(unix)]
 /// Node processes currently running on this machine.
 pub fn discover_nodes() -> Vec<DiscoveredNode> {
     std::process::Command::new("ps")
@@ -98,6 +100,7 @@ pub fn nodes_under_path<'a>(
         .collect()
 }
 
+#[cfg(unix)]
 /// PIDs of shell processes running from `install_dir` - the directory this app
 /// extracted its shell into.
 ///
@@ -106,7 +109,9 @@ pub fn nodes_under_path<'a>(
 /// app's own shells, because the installed path contains a space and the old parse
 /// isolated the executable by whitespace position.
 pub fn parse_shell_pids(listing: &str, install_dir: &Path) -> Vec<u32> {
-    let prefix = install_dir.to_string_lossy().to_string();
+    // Trailing separator so the prefix cannot match a sibling whose name merely
+    // starts the same way - a leftover `shell-backup/` is not the shell directory.
+    let prefix = format!("{}/", install_dir.to_string_lossy().trim_end_matches('/'));
     let mut pids: Vec<u32> = Vec::new();
     for line in listing.lines() {
         let Some((pid, command)) = line.trim_start().split_once(char::is_whitespace) else {
@@ -130,6 +135,7 @@ fn claim_path(home: &Path, node: &str) -> PathBuf {
     home.join(node).join(".desktop-owner")
 }
 
+#[cfg(unix)]
 /// A process's start time, as the OS reports it. Paired with the PID this
 /// identifies a process: PIDs are recycled, start times are not.
 fn process_start_time(pid: u32) -> Option<String> {
@@ -141,6 +147,7 @@ fn process_start_time(pid: u32) -> Option<String> {
     (!text.is_empty()).then_some(text)
 }
 
+#[cfg(unix)]
 /// Records that this app started the node, so a later launch can tell its own
 /// orphan - which it should adopt and shut down - from a node someone started by
 /// hand, which it must leave alone.
@@ -149,6 +156,7 @@ pub fn write_claim(home: &Path, node: &str, pid: u32) -> std::io::Result<()> {
     std::fs::write(claim_path(home, node), format!("{pid}\n{started}\n"))
 }
 
+#[cfg(unix)]
 /// True when the claim names exactly this live process. A dead PID, a recycled
 /// one, or a node this app never started all read as "not mine".
 pub fn claim_matches(home: &Path, node: &str, pid: u32) -> bool {
@@ -371,6 +379,17 @@ mod tests {
     fn a_shell_from_a_checkout_is_left_alone() {
         let install = Path::new("/Users/x/Library/Application Support/network.calimero.desktop/shell");
         let listing = "502 /Users/x/code/tauri-app/target/debug/calimero-shell --app-id abc";
+        assert!(parse_shell_pids(listing, install).is_empty());
+    }
+
+    /// A sibling directory whose name merely starts the same way is not ours.
+    #[test]
+    fn a_shell_in_a_sibling_directory_is_not_ours() {
+        let install = Path::new("/Users/x/Library/Application Support/network.calimero.desktop/shell");
+        let listing = concat!(
+            "504 /Users/x/Library/Application Support/network.calimero.desktop/shell-backup/CalimeroShell\n",
+            "505 /Users/x/Library/Application Support/network.calimero.desktop/shell2/CalimeroShell\n",
+        );
         assert!(parse_shell_pids(listing, install).is_empty());
     }
 

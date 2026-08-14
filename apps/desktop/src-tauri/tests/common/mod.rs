@@ -3,6 +3,9 @@
 //! Every node these start lives in a scratch directory whose path contains a
 //! space, because the shipped binary does and that is what the parser used to get
 //! wrong. Nothing here touches `~/.calimero`.
+//!
+//! Compiled into every integration binary, so not every suite uses every helper.
+#![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};

@@ -248,9 +248,9 @@ describe('hardReset', () => {
     let calls = 0;
     deleteCalimeroDataDir.mockImplementation(async () => {
       calls += 1;
-      // Delete itself, and the immediate recheck, report gone; the delayed
-      // recheck finds a 10MB file has reappeared - exactly the real incident.
-      return calls <= 2 ? 'Directory did not exist (nothing to delete)' : 'Deleted /Users/alice/.calimero';
+      // The delete reports gone; the recheck after the settle finds a 10MB file
+      // has reappeared - exactly what a surviving writer did in the real incident.
+      return calls === 1 ? 'Directory did not exist (nothing to delete)' : 'Deleted /Users/alice/.calimero';
     });
 
     await expect(hardReset()).rejects.toThrow(/reappeared/i);

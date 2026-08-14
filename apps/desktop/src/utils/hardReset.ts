@@ -159,12 +159,17 @@ export async function previewHardReset(): Promise<HardResetPreview> {
   return { dirsToDelete, nodesToStop };
 }
 
-/** A directory is gone when deleting it again reports nothing was there. Reusing
- *  the delete call is also the fix: if a writer repopulated it, this removes it
- *  again while telling us that happened. */
-async function isDirGone(dir: string): Promise<boolean> {
+/**
+ * Deletes `dir` and reports whether there was anything left to delete.
+ *
+ * Named for the delete, not for the answer: there is no read-only "does this
+ * path exist" command, and adding one to reach the same conclusion would be more
+ * surface for no gain. Repeating the delete is also the remedy — if a surviving
+ * writer repopulated the directory, this removes it again and says so.
+ */
+async function deleteAndReportWhetherAnythingWasThere(dir: string): Promise<boolean> {
   const result = await deleteCalimeroDataDir(dir);
-  return /did not exist/i.test(result);
+  return !/did not exist/i.test(result);
 }
 
 /**
@@ -223,11 +228,11 @@ export async function hardReset({
     }
 
     await deleteCalimeroDataDir(dir);
-    if (!(await isDirGone(dir))) {
-      throw new Error(`${dir} still has data immediately after delete - a live writer may be repopulating it.`);
-    }
+    // One check, after a settle. A writer repopulates by absolute path, and the
+    // delay is what gives that time to show up - an immediate second check only
+    // repeated the same call without telling us anything the delayed one does not.
     await new Promise((r) => setTimeout(r, FILE_HANDLE_SETTLE_MS));
-    if (!(await isDirGone(dir))) {
+    if (await deleteAndReportWhetherAnythingWasThere(dir)) {
       throw new Error(`${dir} reappeared after being deleted - a live writer is repopulating it.`);
     }
   }

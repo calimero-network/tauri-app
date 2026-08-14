@@ -42,17 +42,27 @@ use merod_versions::{
 // with the `calimero-shell` binary via the crate's lib target.
 #[cfg(target_os = "macos")]
 use calimero_tauri_app::{app_registry, host_socket_path, launcher, token_broker_ipc};
+use calimero_tauri_app::node_discovery::resolved;
 #[cfg(unix)]
 use calimero_tauri_app::node_discovery::{
-    claim_matches, parse_shell_pids, remove_claim, write_claim,
-    discover_nodes, existing_node_for, is_signalable, nodes_under_path, resolved,
+    claim_matches, discover_nodes, existing_node_for, is_signalable, nodes_under_path, remove_claim,
+    write_claim,
 };
+#[cfg(target_os = "macos")]
+use calimero_tauri_app::node_discovery::parse_shell_pids;
 
 static HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 static SSE_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 /// Serialises starting a node against deleting a node home; unguarded they
 /// interleave into a delete unlinking a store a start just opened.
 static NODE_LIFECYCLE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+/// Set by the first quit path to reach teardown; the others then do nothing.
+static SHUTDOWN_CLAIMED: AtomicBool = AtomicBool::new(false);
+
+/// How long in-flight proxy requests get to finish before the node is stopped.
+const REQUEST_DRAIN_TIMEOUT_SECS: u64 = 10;
+/// How long a node gets to flush and exit before it is killed outright.
+const PROCESS_TERM_MAX_WAIT_SECS: u64 = 30;
 
 /// Version of the merod binary this build expects, embedded at compile time from merod-config.json.
 const MEROD_CONFIG_VERSION: &str = match option_env!("MEROD_CONFIG_VERSION") {
@@ -2054,11 +2064,6 @@ impl Drop for InFlightGuard {
     }
 }
 
-/// How long in-flight proxy requests get to finish before the node is stopped.
-const REQUEST_DRAIN_TIMEOUT_SECS: u64 = 10;
-/// How long a node gets to flush and exit before it is killed outright.
-const PROCESS_TERM_MAX_WAIT_SECS: u64 = 30;
-
 /// Removes terminal colour codes, so a node's own error reads cleanly in the UI.
 fn strip_ansi(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
@@ -2112,11 +2117,7 @@ fn error_lines_from_log(body: &str) -> Option<String> {
 use tokio::process::Command;
 
 /// Tracked PIDs for one specific node, or every tracked PID when none is named.
-#[cfg(unix)]
-fn tracked_pids_for(
-    state: &[MerodProcess],
-    target: Option<(&std::path::Path, &str)>,
-) -> Vec<u32> {
+fn tracked_pids_for(state: &[MerodProcess], target: Option<(&std::path::Path, &str)>) -> Vec<u32> {
     let Some((home, node)) = target else {
         return state.iter().map(|p| p.pid).collect();
     };
@@ -2128,14 +2129,10 @@ fn tracked_pids_for(
         .collect()
 }
 
-/// PIDs of running per-app shell processes. Each launcher `.app` trampoline execs
-/// the shared loose shell binary, so the process shows up under the shell's own
-/// name — never as the host. Used by the total nuke: a live shell keeps an
-/// authenticated app webview (and would re-flush its localStorage after a wipe).
+/// PIDs of running per-app shell processes. Used by the total nuke: a live shell
+/// keeps an authenticated app webview, and re-flushes its localStorage after a wipe.
 #[cfg(target_os = "macos")]
 fn collect_shell_pids() -> Vec<u32> {
-    // Matched by where they run from, not by name: a `cargo run -p calimero-shell`
-    // from a checkout is not this app's to kill.
     let Some(install_dir) = launcher::shell_install_path().parent().map(|p| p.to_path_buf()) else {
         return Vec::new();
     };
@@ -2148,13 +2145,38 @@ fn collect_shell_pids() -> Vec<u32> {
     parse_shell_pids(&String::from_utf8_lossy(&output.stdout), &install_dir)
 }
 
-/// Sends SIGTERM to all pids, waits, then force-kills any survivors.
 /// `SignalOnly` is for app exit: waiting there hangs quit for the whole flush.
 enum TermPatience {
     Wait,
     SignalOnly,
 }
 
+/// Stops nodes the user asked to stop, and reports one that outlived the kill -
+/// a node belonging to another user refuses our signals.
+async fn stop_pids(pids: &[u32]) -> Result<(), TauriError> {
+    kill_pids(pids, TermPatience::Wait).await;
+    let mut survivors: Vec<u32> = pids
+        .iter()
+        .copied()
+        .filter(|pid| is_process_running(*pid))
+        .collect();
+    if !survivors.is_empty() {
+        // A killed child lingers as a zombie until its monitor task reaps it, so
+        // give that a moment before calling a PID a survivor.
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        survivors.retain(|pid| is_process_running(*pid));
+    }
+    if !survivors.is_empty() {
+        return Err(TauriError::new(
+            TauriErrorCode::MerodStopFailed,
+            format!("Failed to stop merod process(es): {survivors:?}"),
+        ));
+    }
+    info!("[Merod] Stopped process(es): {pids:?}");
+    Ok(())
+}
+
+/// Sends SIGTERM to all pids, waits for them to go, then force-kills any survivors.
 async fn kill_pids(pids: &[u32], patience: TermPatience) {
     if pids.is_empty() {
         return;
@@ -2222,23 +2244,16 @@ async fn kill_pids(pids: &[u32], patience: TermPatience) {
 struct MerodProcess {
     pid: u32,
     port: u16,
-    /// The data directory this node owns. Recorded so the app can tell its own
-    /// nodes from any other node on the machine without matching on a name.
+    /// The data directory this node owns, which identifies it without a name match.
     home: std::path::PathBuf,
     node: Option<String>,
-    /// Tracked either way so the UI reflects reality, but only owned nodes are
-    /// stopped automatically.
+    /// False for a node the app merely adopted: tracked, but never stopped for us.
     owned: bool,
 }
 
 /// PIDs the app may stop without being asked - the nodes it started itself.
-#[cfg(unix)]
 fn owned_pids(state: &[MerodProcess]) -> Vec<u32> {
-    state
-        .iter()
-        .filter(|p| p.owned)
-        .map(|p| p.pid)
-        .collect()
+    state.iter().filter(|p| p.owned).map(|p| p.pid).collect()
 }
 
 type MerodState = Arc<Mutex<Vec<MerodProcess>>>;
@@ -2479,9 +2494,8 @@ async fn start_merod(
     let server_port = server_port.unwrap_or(2528);
     let swarm_port = swarm_port.unwrap_or(2428);
 
-    // Only stop a process that uses the same server_port (port conflict)
-    // Evict only a node this app started. An adopted entry can be one it merely
-    // connected to, and killing that is what the rest of this change exists to stop.
+    // Only a node this app started on this port is evictable. An adopted entry can
+    // be one it merely connected to, and killing that is the data loss we fixed.
     let evictable: Option<u32> = {
         let state = merod_state.lock_unpoisoned();
         state
@@ -2875,14 +2889,8 @@ async fn stop_merod(
         Some(_) => Some(resolve_home_dir(data_dir)?),
         None => None,
     };
-    let tracked: Vec<u32> = {
-        let state = merod_state.lock_unpoisoned();
-        let target = match (&home, &node_name) {
-            (Some(home), Some(node)) => Some((home.as_path(), node.as_str())),
-            _ => None,
-        };
-        tracked_pids_for(&state, target)
-    };
+    let target = home.as_deref().zip(node_name.as_deref());
+    let tracked: Vec<u32> = tracked_pids_for(&merod_state.lock_unpoisoned(), target);
     // A recycled PID would send Stop at an unrelated process. Windows has no
     // discovery, so there the tracked entry is all there is to go on.
     #[cfg(unix)]
@@ -2897,79 +2905,7 @@ async fn stop_merod(
         ));
     }
 
-    for pid in &pids {
-        #[cfg(unix)]
-        {
-            use std::process::Command;
-
-            let check_output = Command::new("ps").arg("-p").arg(pid.to_string()).output();
-
-            let process_exists = if let Ok(output) = &check_output {
-                output.status.success()
-            } else {
-                false
-            };
-
-            if !process_exists {
-                info!("[Merod] Process with PID {} already stopped", pid);
-            } else {
-                let _ = Command::new("kill")
-                    .arg("-TERM")
-                    .arg(pid.to_string())
-                    .output();
-
-                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-
-                let check_output = Command::new("ps").arg("-p").arg(pid.to_string()).output();
-
-                let still_running = if let Ok(output) = &check_output {
-                    output.status.success()
-                } else {
-                    false
-                };
-
-                if still_running {
-                    let output = Command::new("kill").arg("-9").arg(pid.to_string()).output();
-
-                    if let Ok(output) = output {
-                        if !output.status.success() {
-                            let stderr = String::from_utf8_lossy(&output.stderr);
-                            if !stderr.contains("No such process") {
-                                return Err(TauriError::new(
-                                    TauriErrorCode::MerodStopFailed,
-                                    format!("Failed to stop merod process: {}", stderr),
-                                ));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        #[cfg(windows)]
-        {
-            use std::process::Command;
-            let output = Command::new("taskkill")
-                .arg("/PID")
-                .arg(pid.to_string())
-                .arg("/F")
-                .output();
-
-            if let Ok(output) = output {
-                if !output.status.success() {
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    if !stderr.contains("not found") && !stderr.contains("does not exist") {
-                        return Err(TauriError::new(
-                            TauriErrorCode::MerodStopFailed,
-                            format!("Failed to stop merod process: {}", stderr),
-                        ));
-                    }
-                }
-            }
-        }
-
-        info!("[Merod] Stopped process with PID: {}", pid);
-    }
+    stop_pids(&pids).await?;
 
     // Drop only what was actually stopped, so stopping one node does not make the
     // app forget the others it is still running.
@@ -3004,83 +2940,7 @@ async fn stop_merod_by_pid_command(
         ));
     }
 
-    #[cfg(unix)]
-    {
-        use std::process::Command;
-
-        // Check if process exists first
-        let check_output = Command::new("ps").arg("-p").arg(pid.to_string()).output();
-
-        let process_exists = if let Ok(output) = &check_output {
-            output.status.success()
-        } else {
-            false
-        };
-
-        if !process_exists {
-            // Process doesn't exist, already stopped
-            info!("[Merod] Process with PID {} already stopped", pid);
-        } else {
-            // Try graceful shutdown first (SIGTERM)
-            let _ = Command::new("kill")
-                .arg("-TERM")
-                .arg(pid.to_string())
-                .output();
-
-            // Wait a bit
-            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-
-            // Check if still running before force kill
-            let check_output = Command::new("ps").arg("-p").arg(pid.to_string()).output();
-
-            let still_running = if let Ok(output) = &check_output {
-                output.status.success()
-            } else {
-                false
-            };
-
-            if still_running {
-                // Force kill if still running (SIGKILL)
-                let output = Command::new("kill").arg("-9").arg(pid.to_string()).output();
-
-                if let Ok(output) = output {
-                    if !output.status.success() {
-                        let stderr = String::from_utf8_lossy(&output.stderr);
-                        // If process doesn't exist, that's fine - it's already stopped
-                        if !stderr.contains("No such process") {
-                            return Err(TauriError::new(
-                                TauriErrorCode::MerodStopFailed,
-                                format!("Failed to stop merod process: {}", stderr),
-                            ));
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    #[cfg(windows)]
-    {
-        use std::process::Command;
-        let output = Command::new("taskkill")
-            .arg("/PID")
-            .arg(pid.to_string())
-            .arg("/F")
-            .output();
-
-        if let Ok(output) = output {
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                // If process doesn't exist, that's fine - it's already stopped
-                if !stderr.contains("not found") && !stderr.contains("does not exist") {
-                    return Err(TauriError::new(
-                        TauriErrorCode::MerodStopFailed,
-                        format!("Failed to stop merod process: {}", stderr),
-                    ));
-                }
-            }
-        }
-    }
+    stop_pids(&[pid]).await?;
 
     // Remove this process from state
     merod_state
@@ -3088,7 +2948,6 @@ async fn stop_merod_by_pid_command(
         .retain(|p| p.pid != pid);
     emit_merod_status_changed(&app_handle);
 
-    info!("[Merod] Stopped process with PID: {}", pid);
     Ok(format!("Merod stopped successfully (PID: {})", pid))
 }
 
@@ -4482,18 +4341,13 @@ async fn remove_app_launchers(app_handle: tauri::AppHandle) -> Result<String, Ta
     }
 }
 
-/// Both the tray's Quit item and the run loop's exit event request shutdown, and
-/// some quit paths fire both.
-static SHUTDOWN_CLAIMED: AtomicBool = AtomicBool::new(false);
-
+/// True for the first caller only: the tray's Quit item and the run loop's exit
+/// event both request shutdown, and some quit paths fire both.
 fn claim_shutdown() -> bool {
     !SHUTDOWN_CLAIMED.swap(true, Ordering::SeqCst)
 }
 
-/// Performs graceful shutdown:
-/// 1. Drain in-flight proxy requests up to REQUEST_DRAIN_TIMEOUT_SECS
-/// 2. SIGTERM all managed (and detected) merod processes
-/// 3. Poll for exit up to PROCESS_TERM_MAX_WAIT_SECS, then SIGKILL survivors
+/// Drains in-flight proxy requests, then asks the nodes this app started to stop.
 fn graceful_shutdown(app_handle: &tauri::AppHandle, merod_state: &MerodState) {
     if !claim_shutdown() {
         info!("[Shutdown] Already shut down; nothing to do");
@@ -5045,13 +4899,14 @@ fn main() {
         // Both events: closing the last window requests an exit, while Cmd-Q and the
         // Quit menu terminate and emit only `Exit`. Without this a node is orphaned.
         .run(|app_handle, event| {
-            if matches!(
+            if !matches!(
                 event,
                 tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
             ) {
-                if let Some(merod_state) = app_handle.try_state::<MerodState>() {
-                    graceful_shutdown(app_handle, &merod_state);
-                }
+                return;
+            }
+            if let Some(merod_state) = app_handle.try_state::<MerodState>() {
+                graceful_shutdown(app_handle, &merod_state);
             }
         });
 }
@@ -5079,6 +4934,10 @@ mod tests {
     };
     use base64::Engine as _;
     use std::path::Path;
+
+    /// Two node homes that differ, for the tests that match tracked state on one.
+    const HOME_A: &str = "/tmp/calimero-test-home-a";
+    const HOME_B: &str = "/tmp/calimero-test-home-b";
 
     #[test]
     fn multiaddr_port_is_replaced_in_place() {
@@ -5468,12 +5327,6 @@ listen = ["/ip4/0.0.0.0/udp/4001/quic-v1", "/ip4/0.0.0.0/tcp/4002"]
         assert!(triple.contains('-'), "triple should be dash-separated");
     }
 
-    #[cfg(unix)]
-    const HOME_A: &str = "/tmp/calimero-test-home-a";
-    #[cfg(unix)]
-    const HOME_B: &str = "/tmp/calimero-test-home-b";
-
-    #[cfg(unix)]
     fn tracked(pid: u32, home: &str, node: &str) -> super::MerodProcess {
         super::MerodProcess {
             pid,
@@ -5543,10 +5396,11 @@ listen = ["/ip4/0.0.0.0/udp/4001/quic-v1", "/ip4/0.0.0.0/tcp/4002"]
     fn a_healthy_log_surfaces_nothing() {
         let body = " INFO merod::cli::run: TEE not configured\n INFO node: Peer ID: 12D3Koo\n";
         assert_eq!(super::error_lines_from_log(body), None);
+        // A header with no frames says nothing; the exit code is the better message.
+        assert_eq!(super::error_lines_from_log("Error: \n"), None);
     }
 
     /// Quitting stops what the app started, and leaves a node it merely adopted.
-    #[cfg(unix)]
     #[test]
     fn quitting_stops_only_the_nodes_this_app_started() {
         let mine = tracked(11, HOME_A, "default");
@@ -5556,37 +5410,25 @@ listen = ["/ip4/0.0.0.0/udp/4001/quic-v1", "/ip4/0.0.0.0/tcp/4002"]
     }
 
     /// Stopping one node must not take its siblings down with it.
-    #[cfg(unix)]
     #[test]
     fn stopping_a_named_node_leaves_its_siblings_running() {
-        let state = [
-            tracked(11, HOME_A, "default"),
-            tracked(22, HOME_A, "mydev"),
-        ];
+        let state = [tracked(11, HOME_A, "default"), tracked(22, HOME_A, "mydev")];
         assert_eq!(
-            super::tracked_pids_for(&state, Some((std::path::Path::new(HOME_A), "mydev"))),
+            super::tracked_pids_for(&state, Some((Path::new(HOME_A), "mydev"))),
             vec![22]
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn stopping_without_naming_a_node_stops_every_tracked_node() {
-        let state = [
-            tracked(11, HOME_A, "default"),
-            tracked(22, HOME_A, "mydev"),
-        ];
+        let state = [tracked(11, HOME_A, "default"), tracked(22, HOME_A, "mydev")];
         assert_eq!(super::tracked_pids_for(&state, None), vec![11, 22]);
     }
 
-    #[cfg(unix)]
     #[test]
     fn stopping_a_node_of_the_same_name_on_another_home_matches_nothing() {
         let state = [tracked(11, HOME_A, "default")];
-        assert!(
-            super::tracked_pids_for(&state, Some((std::path::Path::new(HOME_B), "default")))
-                .is_empty()
-        );
+        assert!(super::tracked_pids_for(&state, Some((Path::new(HOME_B), "default"))).is_empty());
     }
 
     /// Wiring a second shutdown path must not run the teardown twice.
@@ -5595,6 +5437,75 @@ listen = ["/ip4/0.0.0.0/udp/4001/quic-v1", "/ip4/0.0.0.0/tcp/4002"]
         assert!(super::claim_shutdown(), "the first request must win");
         assert!(!super::claim_shutdown(), "a second request must be a no-op");
         assert!(!super::claim_shutdown());
+    }
+
+    /// Stopping returns when the node is actually gone, not when a fixed sleep is up.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_stop_returns_as_soon_as_the_process_is_gone() {
+        let mut child = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .expect("spawn a stand-in node");
+        let pid = child.id();
+        // Reaped off-thread, as the real node's monitor task does; an unreaped child
+        // stays a PID the process table still answers for.
+        let reaper = std::thread::spawn(move || child.wait());
+        let started = std::time::Instant::now();
+        super::stop_pids(&[pid]).await.expect("must stop cleanly");
+        let _ = reaper.join();
+        assert!(!super::is_process_running(pid), "pid {pid} outlived the stop");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(2),
+            "stopping sat on a timer for {:?}",
+            started.elapsed()
+        );
+    }
+
+    /// Quit signals and moves on: merod's flush takes about ten seconds, and no
+    /// user waits that long for the window to go away.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn quitting_does_not_wait_for_a_node_that_ignores_sigterm() {
+        let mut child = std::process::Command::new("sh")
+            .args(["-c", "trap '' TERM; sleep 30"])
+            .spawn()
+            .expect("spawn a stand-in mid-flush node");
+        let started = std::time::Instant::now();
+        super::kill_pids(&[child.id()], super::TermPatience::SignalOnly).await;
+        let elapsed = started.elapsed();
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(
+            elapsed < std::time::Duration::from_secs(2),
+            "quit blocked for {elapsed:?} on a node that was still flushing"
+        );
+    }
+
+    /// Nothing to delete is not a failure, and the reset flow keys on the difference.
+    #[tokio::test]
+    async fn deleting_a_missing_directory_reports_nothing_deleted() {
+        let missing =
+            std::env::temp_dir().join(format!("calimero-absent-{}", std::process::id()));
+        let outcome = super::delete_calimero_data_dir(missing.to_string_lossy().to_string())
+            .await
+            .expect("a missing directory is not an error");
+        assert!(!outcome.deleted, "nothing was there to delete");
+        assert_eq!(outcome.path, missing.to_string_lossy());
+    }
+
+    /// A real delete reports true, and the directory is gone with it.
+    #[tokio::test]
+    async fn deleting_a_directory_reports_that_it_went() {
+        let dir = dirs::home_dir()
+            .expect("home directory")
+            .join(format!(".calimero-delete-test-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("nested")).expect("create scratch dir");
+        let outcome = super::delete_calimero_data_dir(dir.to_string_lossy().to_string())
+            .await
+            .expect("delete a scratch dir under home");
+        assert!(outcome.deleted, "a directory that existed must report deleted");
+        assert!(!dir.exists(), "{} survived the delete", dir.display());
     }
 
     #[test]

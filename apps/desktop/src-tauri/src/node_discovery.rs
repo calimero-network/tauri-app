@@ -17,9 +17,9 @@ pub fn resolved(path: &Path) -> PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
-#[cfg(unix)]
 /// The executable path and `--home` can both contain spaces, so nothing is
 /// isolated by whitespace position: a flag's value runs to the next flag.
+#[cfg(unix)]
 fn parse_node_listing(listing: &str) -> Vec<DiscoveredNode> {
     fn flag_value<'a>(command: &'a str, flag: &str) -> Option<&'a str> {
         let needle = format!("{flag} ");
@@ -51,8 +51,10 @@ fn parse_node_listing(listing: &str) -> Vec<DiscoveredNode> {
         .collect()
 }
 
-#[cfg(unix)]
 /// Node processes currently running on this machine.
+// TODO: no Windows implementation, so every guard keyed on discovery is unix-only.
+// A `tasklist`/WMI command-line scan here would restore all of them at once.
+#[cfg(unix)]
 pub fn discover_nodes() -> Vec<DiscoveredNode> {
     std::process::Command::new("ps")
         .args(["ax", "-o", "pid,command"])
@@ -84,28 +86,23 @@ pub fn nodes_under_path<'a>(
         .collect()
 }
 
-#[cfg(unix)]
 /// Matched by install path, not binary name: a `cargo run -p calimero-shell` from
 /// a checkout is not this app's to kill.
+#[cfg(unix)]
 pub fn parse_shell_pids(listing: &str, install_dir: &Path) -> Vec<u32> {
     // Trailing separator so the prefix cannot match a sibling whose name merely
     // starts the same way - a leftover `shell-backup/` is not the shell directory.
     let prefix = format!("{}/", install_dir.to_string_lossy().trim_end_matches('/'));
-    let mut pids: Vec<u32> = Vec::new();
-    for line in listing.lines() {
-        let Some((pid, command)) = line.trim_start().split_once(char::is_whitespace) else {
-            continue;
-        };
-        if !command.starts_with(prefix.as_str()) {
-            continue;
-        }
-        if let Ok(pid) = pid.parse::<u32>() {
-            if !pids.contains(&pid) {
-                pids.push(pid);
+    listing
+        .lines()
+        .filter_map(|line| {
+            let (pid, command) = line.trim_start().split_once(char::is_whitespace)?;
+            if !command.starts_with(prefix.as_str()) {
+                return None;
             }
-        }
-    }
-    pids
+            pid.parse().ok()
+        })
+        .collect()
 }
 
 /// Where a node records that this app started it. Lives beside the node's `logs/`
@@ -114,9 +111,9 @@ fn claim_path(home: &Path, node: &str) -> PathBuf {
     home.join(node).join(".desktop-owner")
 }
 
-#[cfg(unix)]
 /// A process's start time, as the OS reports it. Paired with the PID this
 /// identifies a process: PIDs are recycled, start times are not.
+#[cfg(unix)]
 fn process_start_time(pid: u32) -> Option<String> {
     let out = std::process::Command::new("ps")
         .args(["-o", "lstart=", "-p", &pid.to_string()])
@@ -126,17 +123,17 @@ fn process_start_time(pid: u32) -> Option<String> {
     (!text.is_empty()).then_some(text)
 }
 
-#[cfg(unix)]
 /// Lets a later launch tell its own orphan, which it may adopt and stop, from a
 /// node started by hand, which it must leave alone.
+#[cfg(unix)]
 pub fn write_claim(home: &Path, node: &str, pid: u32) -> std::io::Result<()> {
     let started = process_start_time(pid).unwrap_or_default();
     std::fs::write(claim_path(home, node), format!("{pid}\n{started}\n"))
 }
 
-#[cfg(unix)]
 /// A dead PID, a recycled one, or a node this app never started all read as
 /// "not mine".
+#[cfg(unix)]
 pub fn claim_matches(home: &Path, node: &str, pid: u32) -> bool {
     let Ok(body) = std::fs::read_to_string(claim_path(home, node)) else {
         return false;
@@ -332,14 +329,12 @@ mod tests {
         assert_eq!(nodes_under_path(&running, &node_dir).len(), 1);
     }
 
-
-
-
     /// The installed shell lives under "Application Support" - a path with a space,
     /// which is exactly what the old name-based match got wrong.
     #[test]
     fn shells_are_matched_by_install_path_including_spaces() {
-        let install = Path::new("/Users/x/Library/Application Support/network.calimero.desktop/shell");
+        let install =
+            Path::new("/Users/x/Library/Application Support/network.calimero.desktop/shell");
         let listing = concat!(
             "  PID COMMAND\n",
             " 501 /Users/x/Library/Application Support/network.calimero.desktop/shell/CalimeroShell --app-id abc\n",
@@ -350,7 +345,8 @@ mod tests {
     /// A developer's own shell build is not the app's to kill.
     #[test]
     fn a_shell_from_a_checkout_is_left_alone() {
-        let install = Path::new("/Users/x/Library/Application Support/network.calimero.desktop/shell");
+        let install =
+            Path::new("/Users/x/Library/Application Support/network.calimero.desktop/shell");
         let listing = "502 /Users/x/code/tauri-app/target/debug/calimero-shell --app-id abc";
         assert!(parse_shell_pids(listing, install).is_empty());
     }
@@ -358,7 +354,8 @@ mod tests {
     /// A sibling directory whose name merely starts the same way is not ours.
     #[test]
     fn a_shell_in_a_sibling_directory_is_not_ours() {
-        let install = Path::new("/Users/x/Library/Application Support/network.calimero.desktop/shell");
+        let install =
+            Path::new("/Users/x/Library/Application Support/network.calimero.desktop/shell");
         let listing = concat!(
             "504 /Users/x/Library/Application Support/network.calimero.desktop/shell-backup/CalimeroShell\n",
             "505 /Users/x/Library/Application Support/network.calimero.desktop/shell2/CalimeroShell\n",
@@ -369,7 +366,8 @@ mod tests {
     /// Same binary name, elsewhere on disk: still not ours.
     #[test]
     fn a_same_named_binary_elsewhere_is_not_ours() {
-        let install = Path::new("/Users/x/Library/Application Support/network.calimero.desktop/shell");
+        let install =
+            Path::new("/Users/x/Library/Application Support/network.calimero.desktop/shell");
         let listing = "503 /tmp/evil/CalimeroShell";
         assert!(parse_shell_pids(listing, install).is_empty());
     }
@@ -398,7 +396,11 @@ mod tests {
         let (_cleanup, home, _other) = two_homes("claim-stale");
         std::fs::create_dir_all(home.join("n1")).unwrap();
         let me = std::process::id();
-        std::fs::write(claim_path(&home, "n1"), format!("{me}\nWed Jan  1 00:00:00 2020\n")).unwrap();
+        std::fs::write(
+            claim_path(&home, "n1"),
+            format!("{me}\nWed Jan  1 00:00:00 2020\n"),
+        )
+        .unwrap();
         assert!(
             !claim_matches(&home, "n1", me),
             "a recycled PID must not inherit the old claim"

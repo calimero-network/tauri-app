@@ -19,10 +19,9 @@ pub fn app_dir_name() -> &'static str {
 }
 
 pub mod errors;
+pub mod node_discovery;
 pub mod proxy;
 pub mod webview;
-
-pub mod node_discovery;
 
 #[cfg(target_os = "macos")]
 pub mod token_broker_ipc;

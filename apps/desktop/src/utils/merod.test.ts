@@ -28,9 +28,8 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-// Regression coverage for the double-writer incident: a second merod on a data dir
-// another node already had open let two RocksDB writers destroy one store. Every
-// "is this node ours?" decision routes through these three functions.
+// Every "is this node ours?" decision routes through these, and getting it wrong
+// put two RocksDB writers on one store.
 describe('normalizeHomeDir', () => {
   it('strips a trailing separator', () => {
     expect(normalizeHomeDir('/Users/dev/.calimero/')).toBe('/Users/dev/.calimero');

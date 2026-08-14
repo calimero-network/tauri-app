@@ -2521,13 +2521,23 @@ async fn start_merod(
         validate_node_name(name).map_err(|e| TauriError::new(TauriErrorCode::InvalidInput, e))?;
     }
 
+    // The node's pin is the only source of truth: an override here could start a
+    // node on a binary that every "used by" listing still attributes elsewhere.
+    let version_id = match &node_name {
+        Some(name) => merod_versions::read_pin(&home_dir_path, name)?,
+        None => merod_versions::VersionId::Bundled,
+    };
+    let merod_binary = merod_versions::resolve_binary(&app_handle, &version_id).await?;
+
     // Never put a second writer on one data directory. RocksDB's own lock stops
     // that only while the directory it was taken on still exists at that path, so
     // once the home has been replaced both processes purge the files the other's
     // manifest does not list. Checked before the config rewrite below, which
     // would otherwise re-point a live node's listen addresses.
-    // Held until this function returns, so a delete cannot land between the check
-    // below and the spawn further down.
+    // Taken after the binary is resolved above, because that may download a
+    // release, and released when this function returns - so it covers the check
+    // below through the spawn, and nothing longer. Two concurrent starts serialise
+    // here too, which is what stops both of them passing the check.
     let _lifecycle = NODE_LIFECYCLE.lock().await;
 
     #[cfg(unix)]
@@ -2565,14 +2575,6 @@ async fn start_merod(
             return Ok(format!("Merod already running with PID: {}", pid));
         }
     }
-
-    // The node's pin is the only source of truth: an override here could start a
-    // node on a binary that every "used by" listing still attributes elsewhere.
-    let version_id = match &node_name {
-        Some(name) => merod_versions::read_pin(&home_dir_path, name)?,
-        None => merod_versions::VersionId::Bundled,
-    };
-    let merod_binary = merod_versions::resolve_binary(&app_handle, &version_id).await?;
 
     // Update config.toml with the specified ports if node_name is provided
     if let Some(name) = &node_name {

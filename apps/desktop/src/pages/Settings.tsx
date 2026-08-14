@@ -55,6 +55,7 @@ function Settings({ onBack }: SettingsProps) {
   const [nuking, setNuking] = useState(false);
   const [nukeStatus, setNukeStatus] = useState('');
   const [nukePreview, setNukePreview] = useState<HardResetPreview | null>(null);
+  const [nukePreviewError, setNukePreviewError] = useState('');
   const [startAtLogin, setStartAtLogin] = useState(false);
   const [startAtLoginLoading, setStartAtLoginLoading] = useState(true);
   const [startAtLoginAvailable, setStartAtLoginAvailable] = useState(true);
@@ -539,9 +540,13 @@ function Settings({ onBack }: SettingsProps) {
                     onClick={() => {
                       setShowNukeConfirm(true);
                       setNukePreview(null);
+                      setNukePreviewError('');
                       previewHardReset()
                         .then(setNukePreview)
-                        .catch((err) => console.error('[Settings] previewHardReset failed:', err));
+                        .catch((err) => {
+                          console.error('[Settings] previewHardReset failed:', err);
+                          setNukePreviewError(parseTauriError(err));
+                        });
                     }}
                     className="button button-danger"
                   >
@@ -559,7 +564,26 @@ function Settings({ onBack }: SettingsProps) {
                         <code key={dir} style={{ display: 'block' }}>{dir}</code>
                       ))}
                     </p>
-                    {nukePreview === null ? (
+                    {nukePreviewError ? (
+                      // Without the preview we cannot say what would be stopped, so
+                      // the confirm stays blocked - but say why, and offer a retry
+                      // rather than leaving the dialog stuck on "Checking...".
+                      <p className="reset-confirm-warning">
+                        Could not check for running nodes: {nukePreviewError}{' '}
+                        <button
+                          type="button"
+                          className="button button-secondary"
+                          onClick={() => {
+                            setNukePreviewError('');
+                            previewHardReset()
+                              .then(setNukePreview)
+                              .catch((err) => setNukePreviewError(parseTauriError(err)));
+                          }}
+                        >
+                          Retry
+                        </button>
+                      </p>
+                    ) : nukePreview === null ? (
                       <p className="reset-confirm-warning">Checking for running nodes...</p>
                     ) : nukePreview.nodesToStop.length > 0 ? (
                       <>

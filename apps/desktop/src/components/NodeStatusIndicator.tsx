@@ -86,7 +86,7 @@ export function NodeStatusIndicator({
       onClick={handleToggle}
       title={
         hasError
-          ? `${error} Click to restart node.`
+          ? `${error} Click to reconnect.`
           : connected
           ? "Node connected"
           : "Node disconnected"
@@ -102,7 +102,7 @@ export function NodeStatusIndicator({
           {currentNode.node_name} &middot; {versionOf(currentNode)}
         </span>
       )}
-      {hasError && <span className="node-status-action">Restart Node →</span>}
+      {hasError && <span className="node-status-action">Reconnect →</span>}
       {showDropdown && <ChevronDown size={14} className="node-status-chevron" />}
     </button>
   );

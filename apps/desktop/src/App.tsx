@@ -14,6 +14,7 @@ import {
 } from "./utils/settings";
 import { clearOnboardingProgress } from "./utils/onboardingProgress";
 import { startMerod, detectRunningMerodNodes, waitForNodeHealthy, type RunningMerodNode } from "./utils/merod";
+import { homeDir } from "@tauri-apps/api/path";
 import { useToast } from "./contexts/ToastContext";
 import { checkOnboardingState } from "./utils/onboarding";
 import { decodeMetadata, openAppFrontend, parseTauriError } from "./utils/appUtils";
@@ -39,6 +40,85 @@ const InstalledApps = lazy(() => import("./pages/InstalledApps"));
 const Namespaces = lazy(() => import("./pages/Namespaces"));
 const NodeManagement = lazy(() => import("./pages/NodeManagement"));
 const ConfirmAction = lazy(() => import("./pages/ConfirmAction"));
+
+// --- Node ownership guards -------------------------------------------------
+//
+// A node running on a home this app didn't create (e.g. a developer's own
+// `merod --home ~/dev-nodes --node alice run`) must never be auto-adopted as
+// settings.nodeUrl, and must never suppress this app's own auto-start - two
+// independent RocksDB writers on the same data directory corrupt each other.
+// Kept as pure functions so the ownership decision is unit-testable without
+// mounting the app.
+
+/** Normalize a home-dir path for comparison: trims a trailing slash and
+ *  expands a leading `~` against the OS home dir, so a literal `~/.calimero`
+ *  compares equal to the already-resolved absolute path merod runs under. */
+function normalizeHomeDir(path: string | undefined | null, osHomeDir: string): string {
+  if (!path) return '';
+  const trimmed = path.trim().replace(/\/+$/, '');
+  const home = osHomeDir.replace(/\/+$/, '');
+  if (trimmed === '~') return home;
+  if (trimmed.startsWith('~/')) return home + trimmed.slice(1);
+  return trimmed;
+}
+
+/** Running nodes whose home_dir resolves to the home this app manages. */
+function nodesInManagedHome(
+  nodes: RunningMerodNode[],
+  managedHomeDir: string,
+  osHomeDir: string
+): RunningMerodNode[] {
+  const managed = normalizeHomeDir(managedHomeDir, osHomeDir);
+  return nodes.filter((n) => normalizeHomeDir(n.home_dir, osHomeDir) === managed);
+}
+
+export interface ManagedNodesDecision {
+  /** True when no node from this app's managed home is currently running. */
+  shouldAutoStart: boolean;
+  /** The managed-home node to adopt as settings.nodeUrl, if any. */
+  adopt?: RunningMerodNode;
+}
+
+/** Decide startup behaviour from the nodes currently detected on the system.
+ *  Only nodes in the app's managed home count toward either decision. */
+export function decideManagedNodes(
+  nodes: RunningMerodNode[],
+  managedHomeDir: string,
+  osHomeDir: string
+): ManagedNodesDecision {
+  const managed = nodesInManagedHome(nodes, managedHomeDir, osHomeDir);
+  return { shouldAutoStart: managed.length === 0, adopt: managed[0] };
+}
+
+/** Whether the init effect (and Restart) should call startMerod for the
+ *  user's configured embedded node. The backend is the single decision point
+ *  for adopting an already-running node vs spawning a new one, so this must
+ *  not skip the call just because a managed-home node is already up -
+ *  skipping it left that node outside the backend's tracked state, so
+ *  quitting the app could never stop it. */
+export function shouldStartMerod(embeddedNodeName: string | undefined): boolean {
+  return !!embeddedNodeName;
+}
+
+export type RestartAction = 'reconnect' | 'start' | 'manage';
+
+/** Decide what clicking "Restart"/"Reconnect" should do. A node already
+ *  running for this app's home+node name is reconnected to, never
+ *  double-spawned. This is process-list based, not HTTP-status based, so an
+ *  unauthenticated (401) node - alive, just not logged in - never reads as
+ *  dead. */
+export function decideRestartAction(
+  nodes: RunningMerodNode[],
+  settings: { embeddedNodeName?: string; embeddedNodeDataDir?: string },
+  osHomeDir: string
+): RestartAction {
+  if (!settings.embeddedNodeName) return 'manage';
+  const managedHomeDir = settings.embeddedNodeDataDir || '~/.calimero';
+  const alreadyRunning = nodesInManagedHome(nodes, managedHomeDir, osHomeDir).some(
+    (n) => n.node_name === settings.embeddedNodeName
+  );
+  return alreadyRunning ? 'reconnect' : 'start';
+}
 
 function App() {
   const toast = useToast();
@@ -221,35 +301,44 @@ function App() {
         let runningNodes = normalizeRunningNodes(await detectRunningMerodNodes());
         setRunningNodes(runningNodes);
 
-        // Auto-start merod if user has embedded node configured and no node is running
-        // (embeddedNodeName indicates they set up a node via our app; useEmbeddedNode may not be set)
-        if (
-          settings.embeddedNodeName &&
-          runningNodes.length === 0
-        ) {
-          const dataDir = settings.embeddedNodeDataDir || '~/.calimero';
+        const managedHomeDir = settings.embeddedNodeDataDir || '~/.calimero';
+        // No fallback on failure: a wrong osHomeDir (e.g. '') could make a real
+        // managed node under '~/...' stop matching, which risks the double-spawn
+        // this guard exists to prevent - safer to abort via the outer catch.
+        const osHomeDir = await homeDir();
+        let managedDecision = decideManagedNodes(runningNodes, managedHomeDir, osHomeDir);
+
+        // Call startMerod whenever an embedded node is configured, even if one is
+        // already running in the managed home - start_merod adopts a live node
+        // instead of double-spawning, and adoption is what lets the app stop it on
+        // quit. A node on some other home - e.g. a developer's own
+        // `merod --home ~/dev-nodes` - is never touched by this at all.
+        if (shouldStartMerod(settings.embeddedNodeName)) {
           const serverPort = settings.embeddedNodePort ?? DEFAULT_EMBEDDED_NODE_PORT;
           // Must come from settings: start_merod rewrites config.toml with whatever it
           // gets, so a hardcoded default here silently reverted a node the user had
           // created on a different swarm port.
           const swarmPort = settings.embeddedNodeSwarmPort ?? DEFAULT_EMBEDDED_SWARM_PORT;
           try {
-            await startMerod(serverPort, swarmPort, dataDir, settings.embeddedNodeName, settings.debugLogs);
+            await startMerod(serverPort, swarmPort, managedHomeDir, settings.embeddedNodeName, settings.debugLogs);
             // Non-fatal on timeout: the health check below is what decides connected state.
             await waitForNodeHealthy(`http://localhost:${serverPort}/auth`, 15000).catch(() => {});
             runningNodes = normalizeRunningNodes(await detectRunningMerodNodes());
             setRunningNodes(runningNodes);
+            managedDecision = decideManagedNodes(runningNodes, managedHomeDir, osHomeDir);
           } catch (startErr) {
             console.warn('Auto-start merod failed:', startErr);
           }
         }
 
-        // Auto-update nodeUrl if we detect a running local node and user has no URL set.
-        // In developer mode, never auto-override — the user explicitly manages which node
-        // to connect to (via NodeManagement or the dropdown). Auto-overriding here races
-        // with the reload from NodeManagement and silently reverts the user's selection.
-        if (runningNodes.length > 0 && !settings.developerMode) {
-          const node = runningNodes[0];
+        // Auto-update nodeUrl if we detect our own running node and user has no URL set.
+        // Never adopts a node on a different home - that node isn't ours to hand the UI
+        // to. In developer mode, never auto-override — the user explicitly manages which
+        // node to connect to (via NodeManagement or the dropdown). Auto-overriding here
+        // races with the reload from NodeManagement and silently reverts the user's
+        // selection.
+        if (managedDecision.adopt && !settings.developerMode) {
+          const node = managedDecision.adopt;
           const nodeUrl = `http://localhost:${node.port}`;
           const currentUrl = settings.nodeUrl;
           const isLocalhostUrl = currentUrl && (
@@ -385,12 +474,25 @@ function App() {
     const settings = getSettings();
     if (settings.embeddedNodeName) {
       try {
+        // No fallback on failure: a wrong osHomeDir (e.g. '') could make a real
+        // managed node under '~/...' stop matching, which risks the double-spawn
+        // this guard exists to prevent - safer to abort via the outer catch.
+        const osHomeDir = await homeDir();
+        const nodes = await detectRunningMerodNodes().catch(() => []);
+        const action = decideRestartAction(Array.isArray(nodes) ? nodes : [], settings, osHomeDir);
+        toast.success(
+          action === 'reconnect' ? "Node is already running - reconnecting..." : "Starting node..."
+        );
         const dataDir = settings.embeddedNodeDataDir || '~/.calimero';
         const serverPort = settings.embeddedNodePort ?? DEFAULT_EMBEDDED_NODE_PORT;
         const swarmPort = settings.embeddedNodeSwarmPort ?? DEFAULT_EMBEDDED_SWARM_PORT;
+        // Route through startMerod either way - it adopts an already-running node
+        // instead of double-spawning, which is what keeps the backend's tracked
+        // state (used to stop nodes on quit) accurate for a reconnect too.
         await startMerod(serverPort, swarmPort, dataDir, settings.embeddedNodeName, settings.debugLogs);
-        toast.success("Starting node...");
-        await new Promise((r) => setTimeout(r, 3000));
+        if (action === 'start') {
+          await new Promise((r) => setTimeout(r, 3000));
+        }
         await checkConnection();
       } catch (err) {
         toast.error(`Failed to start node: ${parseTauriError(err)}`);
@@ -926,13 +1028,13 @@ function App() {
               <div className="status-error-block">
                 <p className="status-error">{error}</p>
                 <p className="status-error-hint">
-                  Your node may have stopped (e.g. after your computer slept). Click Restart Node to start it again.
+                  Can't reach your node right now (e.g. after your computer slept). Click Reconnect to check its status again.
                 </p>
                 <button
                   onClick={handleRestartNode}
                   className="button button-primary button-small"
                 >
-                  Restart Node
+                  Reconnect
                 </button>
               </div>
             )}

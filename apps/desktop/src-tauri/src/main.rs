@@ -2606,6 +2606,23 @@ fn node_started_by_us(home: &std::path::Path, node: &str, pid: u32, state: &Mero
     }
 }
 
+/// A start that fails after the stop succeeded leaves nothing running, and a bare
+/// start error would read as though the original node were still serving.
+fn restart_start_failure(node: &str, was_running: bool, e: TauriError) -> TauriError {
+    if !was_running {
+        return e;
+    }
+    let cause = match e.details {
+        Some(details) => format!("{}: {}", e.message, details),
+        None => e.message,
+    };
+    TauriError::with_details(
+        e.code,
+        format!("Node \"{node}\" was stopped but did not start again"),
+        cause,
+    )
+}
+
 /// Stops the node serving this directory and starts it again, holding
 /// `NODE_LIFECYCLE` across both so nothing starts a second writer in between.
 #[tauri::command]
@@ -2667,7 +2684,8 @@ async fn restart_merod(
         log_writers,
         LifecycleLock::AlreadyHeld,
     )
-    .await?;
+    .await
+    .map_err(|e| restart_start_failure(&node, was_running.is_some(), e))?;
 
     let pid = tracked_node_for(&state.lock_unpoisoned(), &home, &node);
     if pid.is_none() {
@@ -5161,6 +5179,35 @@ listen = ["/ip4/0.0.0.0/udp/4001/quic-v1", "/ip4/0.0.0.0/tcp/4002"]
         // Anything unusable falls back rather than reporting a wrong port.
         assert_eq!(parse_node_ports("[server]\n"), DEFAULT_NODE_PORTS);
         assert_eq!(parse_node_ports("not toml ["), DEFAULT_NODE_PORTS);
+    }
+
+    /// A restart that stops the node and then fails to start it leaves nothing
+    /// running, which a bare start error reads as "nothing changed".
+    #[test]
+    fn a_start_that_fails_after_the_stop_says_the_node_is_down() {
+        let inner = super::TauriError::with_details(
+            super::TauriErrorCode::MerodStartFailed,
+            "Failed to start merod",
+            "address already in use",
+        );
+        let wrapped = super::restart_start_failure("work", true, inner);
+        assert!(
+            wrapped.message.contains("was stopped but did not start again"),
+            "got: {}",
+            wrapped.message
+        );
+        assert!(
+            wrapped.details.unwrap().contains("address already in use"),
+            "merod's own error must survive the rewording"
+        );
+
+        // Nothing was stopped, so the original error is the whole story.
+        let untouched = super::restart_start_failure(
+            "work",
+            false,
+            super::TauriError::new(super::TauriErrorCode::MerodStartFailed, "Failed to start merod"),
+        );
+        assert_eq!(untouched.message, "Failed to start merod");
     }
 
     /// A node the app never started is stopped only on the caller's say-so, and

@@ -6,9 +6,6 @@ on:
       - main
       - master
   pull_request:
-    branches:
-      - main
-      - master
 
 concurrency:
   # Key by event_name + ref so push runs on master and pull_request runs

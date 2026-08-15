@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { resolveStartPorts } from "./NodeManagement";
+import { resolveStartPorts, restartWarning } from "./NodeManagement";
 import type { RunningMerodNode } from "../utils/merod";
 
 function node(overrides: Partial<RunningMerodNode>): RunningMerodNode {
@@ -56,4 +56,35 @@ describe("resolveStartPorts", () => {
     expect(result.serverPort).toBe(2528);
     expect(result.swarmPort).toBe(2428);
   });
+});
+
+// Regression coverage: restarting a node this app never started must warn first,
+// since it silently replaces whatever merod version the user launched it with.
+describe("restartWarning", () => {
+  it("returns null for an owned node", () => {
+    expect(restartWarning(node({ owned: true }))).toBeNull();
+  });
+
+  it("returns null for undefined", () => {
+    expect(restartWarning(undefined)).toBeNull();
+  });
+
+  it("includes the exe path for an unowned node that has one", () => {
+    const warning = restartWarning(node({ owned: false, node_name: "default", exe: "/usr/local/bin/merod" }));
+    expect(warning).toContain('"default" is running from /usr/local/bin/merod.');
+  });
+
+  it("omits the exe sentence when exe is absent", () => {
+    const warning = restartWarning(node({ owned: false, exe: undefined }));
+    expect(warning).not.toContain("is running from");
+    expect(warning).toContain("Restarting runs this node's pinned merod version");
+  });
+  // Windows reports no owner at all, and silently reading that as "ours" is how
+  // the confirmation would be skipped on the platform with the weakest guards.
+  it("warns when ownership is unknown rather than assuming it is ours", () => {
+    expect(restartWarning({ pid: 7, node_name: "n1", port: 2528 })).toContain(
+      "Calimero Desktop will stop the node when you quit"
+    );
+  });
+
 });

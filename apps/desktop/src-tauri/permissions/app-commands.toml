@@ -87,6 +87,11 @@ description = "Enables the start_merod command."
 commands.allow = ["start_merod"]
 
 [[permission]]
+identifier = "allow-restart-merod"
+description = "Enables the restart_merod command."
+commands.allow = ["restart_merod"]
+
+[[permission]]
 identifier = "allow-stop-merod"
 description = "Enables the stop_merod command."
 commands.allow = ["stop_merod"]
@@ -282,6 +287,7 @@ permissions = [
   "allow-broker-token-refresh",
   "allow-resolve-token-request",
   "allow-start-merod",
+  "allow-restart-merod",
   "allow-stop-merod",
   "allow-stop-merod-by-pid-command",
   "allow-list-merod-nodes",

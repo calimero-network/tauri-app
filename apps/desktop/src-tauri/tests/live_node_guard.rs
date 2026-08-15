@@ -6,7 +6,7 @@ mod common;
 use calimero_tauri_app::node_discovery::{
     discover_nodes, existing_node_for, is_signalable, nodes_under_path,
 };
-use common::{init, scratch_home, start_node, Scratch};
+use common::{init, scratch_home, spawn_node, start_node, wait_until_store_open, Scratch};
 
 /// A live node is visible to the check `start_merod` runs, so the app adopts it
 /// instead of putting a second writer on its store.
@@ -103,5 +103,47 @@ fn a_live_node_blocks_deleting_its_directory_and_is_signalable() {
     assert!(
         !is_signalable(u32::MAX, &running),
         "an unaccountable pid must not be"
+    );
+}
+
+/// Spawning before the old node exits leaves the new one dead on the store lock,
+/// so a restart has to verify the exit rather than assume the kill worked.
+#[test]
+#[ignore = "drives a real merod; run explicitly"]
+fn a_restart_leaves_the_new_node_serving_the_home() {
+    use std::time::{Duration, Instant};
+
+    let home = scratch_home("restart");
+    let _cleanup = Scratch(home.clone());
+
+    init(&home, "n1", "36728", "36628");
+    let first = spawn_node(&home, "n1");
+    wait_until_store_open(&home, "n1");
+    let old_pid = first.pid();
+
+    std::process::Command::new("kill")
+        .args(["-TERM", &old_pid.to_string()])
+        .output()
+        .expect("signal the node");
+    let deadline = Instant::now() + Duration::from_secs(40);
+    loop {
+        let running = discover_nodes().expect("the process table must be readable");
+        if existing_node_for(&running, &home, "n1").is_none() {
+            break;
+        }
+        assert!(Instant::now() < deadline, "the node never exited");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    let second = spawn_node(&home, "n1");
+    wait_until_store_open(&home, "n1");
+
+    let running = discover_nodes().expect("the process table must be readable");
+    let serving = nodes_under_path(&running, &home);
+    assert_eq!(serving.len(), 1, "one node serves the home after a restart");
+    assert_eq!(
+        serving[0].pid,
+        second.pid(),
+        "the restarted node must be the one serving the home, not the one it replaced"
     );
 }

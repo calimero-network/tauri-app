@@ -34,6 +34,19 @@ export async function stopMerod(): Promise<string> {
   return await invoke('stop_merod');
 }
 
+export interface RestartOutcome {
+  restarted: boolean;
+  /** null when the node started but the app could not re-confirm which pid it is. */
+  pid: number | null;
+}
+
+/**
+ * Restart the embedded merod node, stopping it first if already running.
+ */
+export async function restartMerod(serverPort?: number, swarmPort?: number, dataDir?: string, nodeName?: string, debugLogs?: boolean, allowUnowned?: boolean): Promise<RestartOutcome> {
+  return await invoke('restart_merod', { serverPort, swarmPort, dataDir, nodeName, debugLogs, allowUnowned });
+}
+
 /**
  * Stop a merod node by PID
  */
@@ -62,8 +75,27 @@ export async function waitForNodeHealthy(nodeUrl: string, timeoutMs: number): Pr
     await new Promise((r) => setTimeout(r, HEALTH_POLL_INTERVAL_MS));
   }
   throw new Error(
-    'Node did not become healthy in time. The node process may have crashed—check the logs.'
+    'Node did not become healthy in time. The node process may have crashed - check the logs.'
   );
+}
+
+const RESTART_READY_POLL_INTERVAL_MS = 250;
+const RESTART_READY_DEADLINE_MS = 15000;
+
+/** Poll a health check until the node answers, up to a deadline. A 401 means the
+ *  node is up but unauthenticated, so it counts as ready rather than a failure. */
+export async function pollUntilNodeReady(
+  healthCheck: () => Promise<{ error?: { code?: string } }>,
+  deadlineMs = RESTART_READY_DEADLINE_MS,
+  intervalMs = RESTART_READY_POLL_INTERVAL_MS
+): Promise<boolean> {
+  const start = Date.now();
+  while (Date.now() - start < deadlineMs) {
+    const result = await healthCheck().catch(() => ({ error: { code: undefined as string | undefined } }));
+    if (!result.error || result.error.code === '401') return true;
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+  return false;
 }
 
 export interface RunningMerodNode {
@@ -72,6 +104,8 @@ export interface RunningMerodNode {
   port: number; // Server port
   swarm_port?: number; // Swarm port
   home_dir?: string; // Data directory the node runs under, parsed from its argv
+  exe?: string; // Executable path the running node was launched from
+  owned?: boolean; // Whether this app started it
 }
 
 /** Normalize a home-dir path for comparison: strips a trailing separator and

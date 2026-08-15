@@ -2449,6 +2449,13 @@ fn replace_multiaddr_port(addr: &str, proto: &str, port: u16) -> String {
     format!("{}{}{}{}", &addr[..start], needle, port, tail)
 }
 
+/// The app's own record of a node, for platforms with no process discovery.
+/// Weaker than the process table - it cannot see a node this app did not start,
+/// and it does not survive a restart - but it catches the common case.
+fn tracked_node_for(state: &[MerodProcess], home: &std::path::Path, node: &str) -> Option<u32> {
+    tracked_pids_for(state, Some((home, node))).first().copied()
+}
+
 /// A guard that could not run is not a guard: callers refuse instead of proceeding.
 fn discovery_failed(e: std::io::Error) -> TauriError {
     TauriError::with_details(
@@ -2554,6 +2561,17 @@ async fn start_merod(
 
     // Refuse rather than guess: an unreadable process table would otherwise read as
     // "nothing is running" and put a second writer on this store.
+    // No process discovery on Windows, so the app's own tracked state is the only
+    // account available - a weaker guard than none is still worth having.
+    #[cfg(not(unix))]
+    if let Some(node) = node_name.as_deref() {
+        let tracked = tracked_node_for(&merod_state.lock_unpoisoned(), &home_dir_path, node);
+        if let Some(pid) = tracked {
+            info!("[Merod] Node '{node}' is already tracked as running (PID {pid}); reusing it");
+            return Ok(format!("Merod already running with PID: {pid}"));
+        }
+    }
+
     #[cfg(unix)]
     {
         let running = discover_nodes().map_err(discovery_failed)?;
@@ -5421,6 +5439,21 @@ listen = ["/ip4/0.0.0.0/udp/4001/quic-v1", "/ip4/0.0.0.0/tcp/4002"]
         assert_eq!(super::error_lines_from_log(body), None);
         // A header with no frames says nothing; the exit code is the better message.
         assert_eq!(super::error_lines_from_log("Error: \n"), None);
+    }
+
+    /// The Windows fallback: tracked state is all there is, so it must at least
+    /// recognise a node this app started on the same home and name.
+    #[test]
+    fn the_tracked_fallback_finds_this_apps_own_node() {
+        let state = [tracked(11, HOME_A, "default"), tracked(22, HOME_A, "mydev")];
+        let home = std::path::Path::new(HOME_A);
+        assert_eq!(super::tracked_node_for(&state, home, "mydev"), Some(22));
+        assert_eq!(super::tracked_node_for(&state, home, "absent"), None);
+        assert_eq!(
+            super::tracked_node_for(&state, std::path::Path::new(HOME_B), "default"),
+            None,
+            "a node on another home is not ours to reuse"
+        );
     }
 
     /// Quitting stops what the app started, and leaves a node it merely adopted.

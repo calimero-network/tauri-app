@@ -2922,6 +2922,15 @@ async fn start_node(
     let pid = child.id().unwrap();
     info!("[Merod] Started with PID: {}", pid);
 
+    // Claimed before the liveness check below, not after: dying in that window
+    // leaves a running node this app can never recognise as its own again.
+    #[cfg(unix)]
+    if let Some(name) = &node_name {
+        if let Err(e) = write_claim(&home_dir_path, name, pid) {
+            warn!("[Merod] could not record node ownership: {}", e);
+        }
+    }
+
     // Drain stdout+stderr into the rotating writer. Taken before the child is moved
     // into the monitor task below.
     if let Some(out) = child.stdout.take() {
@@ -2942,6 +2951,10 @@ async fn start_node(
             let error_msg = start_failure_message(code, log.as_deref());
             warn!("[Merod] {}", error_msg);
             unregister_writer();
+            #[cfg(unix)]
+            if let Some(name) = &node_name {
+                remove_claim(&home_dir_path, name);
+            }
             return Err(TauriError::new(TauriErrorCode::MerodProcessExited, error_msg));
         }
     }
@@ -2956,14 +2969,6 @@ async fn start_node(
             node: node_name.clone(),
             owned: true,
         });
-    }
-    // Records that this app started the node, so a later launch can tell its own
-    // orphan from a node started outside the app.
-    #[cfg(unix)]
-    if let Some(name) = &node_name {
-        if let Err(e) = write_claim(&home_dir_path, name, pid) {
-            warn!("[Merod] could not record node ownership: {}", e);
-        }
     }
     emit_merod_status_changed(&app_handle);
 

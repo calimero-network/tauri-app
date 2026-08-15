@@ -40,7 +40,7 @@ pub fn validate_app_id(id: &str) -> Result<(), LauncherError> {
 pub fn shell_install_path() -> PathBuf {
     let dir = dirs::data_dir()
         .unwrap_or_else(std::env::temp_dir)
-        .join("network.calimero.desktop")
+        .join(crate::app_dir_name())
         .join("shell");
     let _ = std::fs::create_dir_all(&dir);
     dir.join("CalimeroShell")

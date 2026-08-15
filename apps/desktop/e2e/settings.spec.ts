@@ -273,10 +273,10 @@ describeAfter35("Reset and Nuke sections", () => {
   test("Reset section shows initial button", async ({ page }) => {
     await scrollSettingsControlIntoView(
       page,
-      page.getByRole("button", { name: "Reset node and all settings" }),
+      page.getByRole("button", { name: "Reset settings" }),
     );
     await expect(
-      page.locator("button", { hasText: "Reset node and all settings" }),
+      page.locator("button", { hasText: "Reset settings" }),
     ).toBeVisible();
   });
 
@@ -285,10 +285,10 @@ describeAfter35("Reset and Nuke sections", () => {
   }) => {
     await scrollSettingsControlIntoView(
       page,
-      page.getByRole("button", { name: "Reset node and all settings" }),
+      page.getByRole("button", { name: "Reset settings" }),
     );
     await page
-      .locator("button", { hasText: "Reset node and all settings" })
+      .locator("button", { hasText: "Reset settings" })
       .click();
     await expect(
       page.locator("text=I understand this cannot be undone"),

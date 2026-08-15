@@ -1,16 +1,22 @@
 import { useState, useEffect, useRef, memo } from "react";
-import { getSettings, saveSettings } from "../utils/settings";
+import {
+  getSettings,
+  saveSettings,
+  DEFAULT_EMBEDDED_NODE_PORT,
+  DEFAULT_EMBEDDED_SWARM_PORT,
+  DEFAULT_NODE_HOME_DIR,
+} from "../utils/settings";
 import { clearAccessToken, clearRefreshToken } from "../lib/token-storage";
 import {
   listMerodNodes,
   initMerodNode,
   startMerod,
-  stopMerod,
   stopMerodByPid,
   detectRunningMerodNodes,
   getMerodLogs,
   clearMerodLogs,
   exportMerodLogs,
+  findRunningNode,
   type RunningMerodNode,
 } from "../utils/merod";
 import {
@@ -21,6 +27,7 @@ import {
   type ReleaseInfo,
 } from "../utils/merodVersions";
 import { invoke } from "@tauri-apps/api/core";
+import { homeDir as getOsHomeDir } from "@tauri-apps/api/path";
 import { useToast } from "../contexts/ToastContext";
 import { Play, Square, RefreshCw, Check, FileText, ChevronDown } from "lucide-react";
 import { LogsViewer } from "../components/LogsViewer";
@@ -31,21 +38,57 @@ import { useMerodStatusChanged } from "../hooks/useMerodStatusChanged";
 import { useVisiblePoll } from "../hooks/useVisiblePoll";
 import "./NodeManagement.css";
 
+export interface StartPortsResult {
+  /** Set when this exact home+node is already running - must not start or bump. */
+  alreadyRunning?: RunningMerodNode;
+  serverPort: number;
+  swarmPort: number;
+}
+
+/** Decide the ports to start a node on. Bumping around a conflict from the SAME
+ *  home+node already running is how two RocksDB writers ended up on one store. */
+export function resolveStartPorts(
+  runningNodes: RunningMerodNode[],
+  homeDir: string,
+  nodeName: string,
+  requestedServerPort: number,
+  requestedSwarmPort: number,
+  osHomeDir?: string
+): StartPortsResult {
+  const alreadyRunning = findRunningNode(runningNodes, homeDir, nodeName, osHomeDir);
+  if (alreadyRunning) {
+    return { alreadyRunning, serverPort: requestedServerPort, swarmPort: requestedSwarmPort };
+  }
+
+  const usedServerPorts = runningNodes.map((n) => n.port ?? DEFAULT_EMBEDDED_NODE_PORT);
+  const usedSwarmPorts = runningNodes.map((n) => n.swarm_port ?? DEFAULT_EMBEDDED_SWARM_PORT);
+  const serverPort = usedServerPorts.includes(requestedServerPort)
+    ? Math.max(DEFAULT_EMBEDDED_NODE_PORT, ...usedServerPorts) + 1
+    : requestedServerPort;
+  const swarmPort = usedSwarmPorts.includes(requestedSwarmPort)
+    ? Math.max(DEFAULT_EMBEDDED_SWARM_PORT, ...usedSwarmPorts) + 1
+    : requestedSwarmPort;
+  return { serverPort, swarmPort };
+}
+
 function NodeManagement() {
   const toast = useToast();
   
   // Node management state
   const [availableNodes, setAvailableNodes] = useState<string[]>([]);
   const [runningNodes, setRunningNodes] = useState<RunningMerodNode[]>([]);
-  const [homeDir, setHomeDir] = useState("~/.calimero");
+  const [homeDir, setHomeDir] = useState(DEFAULT_NODE_HOME_DIR);
   const [selectedNode, setSelectedNode] = useState<string>("");
   const [newNodeName, setNewNodeName] = useState("");
   const [newAdminUser, setNewAdminUser] = useState("");
   const [newAdminPassword, setNewAdminPassword] = useState("");
   const [loading, setLoading] = useState(false);
-  const [serverPort, setServerPort] = useState<number>(2528);
-  const [swarmPort, setSwarmPort] = useState<number>(2428);
-  
+  const [serverPort, setServerPort] = useState<number>(DEFAULT_EMBEDDED_NODE_PORT);
+  const [swarmPort, setSwarmPort] = useState<number>(DEFAULT_EMBEDDED_SWARM_PORT);
+  // Needed to compare a "~/..." home dir against an already-running node's
+  // resolved absolute argv path - otherwise the two spellings look unrelated.
+  const [osHomeDir, setOsHomeDir] = useState<string>("");
+
   // Node configuration state
   const [nodeUrl, setNodeUrl] = useState("");
   const [authUrl, setAuthUrl] = useState("");
@@ -84,9 +127,17 @@ function NodeManagement() {
 
   useEffect(() => {
     const settings = getSettings();
-    setHomeDir(settings.embeddedNodeDataDir || "~/.calimero");
+    setHomeDir(settings.embeddedNodeDataDir || DEFAULT_NODE_HOME_DIR);
     setNodeUrl(settings.nodeUrl || "");
     setAuthUrl(settings.authUrl || "");
+  }, []);
+
+  useEffect(() => {
+    getOsHomeDir()
+      .then(setOsHomeDir)
+      // Left empty, "~/..." never matches a running node's absolute path, so the
+      // handlers resolve it themselves rather than trusting this.
+      .catch((err) => console.warn("[NodeManagement] could not resolve the home dir:", err));
   }, []);
 
   useEffect(() => {
@@ -107,10 +158,12 @@ function NodeManagement() {
     loadNodes();
   }, [homeDir]);
 
-  // When selected node is not running and current ports conflict with running nodes, auto-assign next free ports
+  // An empty selection must match nothing: findRunningNode without a name would
+  // report whichever node shares the home dir.
   const getRunningNodeInfo = (nodeName: string): { running: boolean; port?: number } => {
-    if (!nodeName) return { running: false };
-    const runningNode = safeRunningNodes.find(n => n.node_name === nodeName);
+    const runningNode = nodeName
+      ? findRunningNode(safeRunningNodes, homeDir, nodeName, osHomeDir)
+      : undefined;
     return runningNode ? { running: true, port: runningNode.port } : { running: false };
   };
 
@@ -129,18 +182,13 @@ function NodeManagement() {
 
   useEffect(() => {
     if (!selectedNode || safeRunningNodes.length === 0) return;
-    const nodeInfo = getRunningNodeInfo(selectedNode);
-    if (nodeInfo.running) return;
-
-    const serverPortInUse = safeRunningNodes.some(n => n.port === serverPort);
-    const swarmPortInUse = safeRunningNodes.some(n => (n.swarm_port ?? 2428) === swarmPort);
-    if (!serverPortInUse && !swarmPortInUse) return;
-
-    const maxServerPort = Math.max(2528, ...safeRunningNodes.map(n => n.port));
-    const maxSwarmPort = Math.max(2428, ...safeRunningNodes.map(n => n.swarm_port ?? 2428));
-    setServerPort(maxServerPort + 1);
-    setSwarmPort(maxSwarmPort + 1);
-  }, [selectedNode, runningNodes, serverPort, swarmPort]);
+    // Bumping only makes sense for a genuinely different node; if this exact
+    // home+node is already running, leave the ports alone (start is disabled).
+    const result = resolveStartPorts(safeRunningNodes, homeDir, selectedNode, serverPort, swarmPort, osHomeDir);
+    if (result.alreadyRunning) return;
+    if (result.serverPort !== serverPort) setServerPort(result.serverPort);
+    if (result.swarmPort !== swarmPort) setSwarmPort(result.swarmPort);
+  }, [selectedNode, runningNodes, homeDir, serverPort, swarmPort, osHomeDir]);
 
   useEffect(() => {
     if (!nodeDropdownOpen) return;
@@ -239,20 +287,20 @@ function NodeManagement() {
       return;
     }
 
-    // Compute port at click time to avoid race with port-bump effect.
-    // If current serverPort is already in use by another node, pick next free port.
-    let portToUse = serverPort;
-    let swarmToUse = swarmPort;
-    const usedServerPorts = safeRunningNodes.map((n) => n.port ?? 2528);
-    const usedSwarmPorts = safeRunningNodes.map((n) => n.swarm_port ?? 2428);
-    if (usedServerPorts.includes(serverPort)) {
-      portToUse = Math.max(2528, ...usedServerPorts) + 1;
-      setServerPort(portToUse);
+    // Compute at click time: the port-bump effect races this, and osHomeDir is
+    // empty until its IPC lands, which makes a running node look stopped.
+    const home = osHomeDir || (await getOsHomeDir());
+    const result = resolveStartPorts(safeRunningNodes, homeDir, selectedNode, serverPort, swarmPort, home);
+    if (result.alreadyRunning) {
+      // Never route around this with a port bump - that is how two writers end
+      // up on one store. Surface it and stop.
+      toast.error(`Node "${selectedNode}" is already running (PID ${result.alreadyRunning.pid}). Stop it before starting again.`);
+      return;
     }
-    if (usedSwarmPorts.includes(swarmPort)) {
-      swarmToUse = Math.max(2428, ...usedSwarmPorts) + 1;
-      setSwarmPort(swarmToUse);
-    }
+    const portToUse = result.serverPort;
+    const swarmToUse = result.swarmPort;
+    if (portToUse !== serverPort) setServerPort(portToUse);
+    if (swarmToUse !== swarmPort) setSwarmPort(swarmToUse);
 
     setLoading(true);
     try {
@@ -294,18 +342,23 @@ function NodeManagement() {
       return;
     }
 
+    // Only ever stop the PID running under this home+node: falling back to "the
+    // embedded node" can take down a different node than the selected one.
+    const runningNode = findRunningNode(
+      safeRunningNodes,
+      homeDir,
+      selectedNode,
+      osHomeDir || (await getOsHomeDir())
+    );
+    if (!runningNode?.pid) {
+      toast.error(`Node "${selectedNode}" is not running`);
+      return;
+    }
+
     setLoading(true);
     try {
-      // Try to stop by PID if we have it
-      const runningNode = safeRunningNodes.find(n => n.node_name === selectedNode);
-      if (runningNode && runningNode.pid) {
-        await stopMerodByPid(runningNode.pid);
-        toast.success(`Node "${selectedNode}" stopped successfully`);
-      } else {
-        // Fallback to stopping the embedded node
-        await stopMerod();
-        toast.success(`Node "${selectedNode}" stopped successfully`);
-      }
+      await stopMerodByPid(runningNode.pid);
+      toast.success(`Node "${selectedNode}" stopped successfully`);
       await detectRunning();
     } catch (error: any) {
       console.error("Failed to stop node:", error);

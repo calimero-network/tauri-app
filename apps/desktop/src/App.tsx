@@ -11,9 +11,11 @@ import {
   saveSettings,
   DEFAULT_EMBEDDED_NODE_PORT,
   DEFAULT_EMBEDDED_SWARM_PORT,
+  DEFAULT_NODE_HOME_DIR,
 } from "./utils/settings";
 import { clearOnboardingProgress } from "./utils/onboardingProgress";
-import { startMerod, detectRunningMerodNodes, waitForNodeHealthy, type RunningMerodNode } from "./utils/merod";
+import { startMerod, detectRunningMerodNodes, waitForNodeHealthy, findRunningNode, type RunningMerodNode } from "./utils/merod";
+import { homeDir } from "@tauri-apps/api/path";
 import { useToast } from "./contexts/ToastContext";
 import { checkOnboardingState } from "./utils/onboarding";
 import { decodeMetadata, openAppFrontend, parseTauriError } from "./utils/appUtils";
@@ -216,40 +218,39 @@ function App() {
       }
 
       try {
-        const normalizeRunningNodes = (n: unknown): RunningMerodNode[] =>
-          Array.isArray(n) ? n : [];
-        let runningNodes = normalizeRunningNodes(await detectRunningMerodNodes());
+        let runningNodes = await detectRunningMerodNodes();
         setRunningNodes(runningNodes);
 
-        // Auto-start merod if user has embedded node configured and no node is running
-        // (embeddedNodeName indicates they set up a node via our app; useEmbeddedNode may not be set)
-        if (
-          settings.embeddedNodeName &&
-          runningNodes.length === 0
-        ) {
-          const dataDir = settings.embeddedNodeDataDir || '~/.calimero';
+        const managedHomeDir = settings.embeddedNodeDataDir || DEFAULT_NODE_HOME_DIR;
+        // No fallback here: a wrong osHomeDir risks the double-spawn this guard
+        // exists to prevent, so a failure aborts via the outer catch instead of guessing.
+        const osHomeDir = await homeDir();
+        let adoptableNode = findRunningNode(runningNodes, managedHomeDir, settings.embeddedNodeName ?? '', osHomeDir);
+
+        // Called even if a node is already running in the managed home: start_merod
+        // adopts it rather than double-spawning, which is what lets the app stop it on quit.
+        if (settings.embeddedNodeName) {
           const serverPort = settings.embeddedNodePort ?? DEFAULT_EMBEDDED_NODE_PORT;
           // Must come from settings: start_merod rewrites config.toml with whatever it
           // gets, so a hardcoded default here silently reverted a node the user had
           // created on a different swarm port.
           const swarmPort = settings.embeddedNodeSwarmPort ?? DEFAULT_EMBEDDED_SWARM_PORT;
           try {
-            await startMerod(serverPort, swarmPort, dataDir, settings.embeddedNodeName, settings.debugLogs);
+            await startMerod(serverPort, swarmPort, managedHomeDir, settings.embeddedNodeName, settings.debugLogs);
             // Non-fatal on timeout: the health check below is what decides connected state.
             await waitForNodeHealthy(`http://localhost:${serverPort}/auth`, 15000).catch(() => {});
-            runningNodes = normalizeRunningNodes(await detectRunningMerodNodes());
+            runningNodes = await detectRunningMerodNodes();
             setRunningNodes(runningNodes);
+            adoptableNode = findRunningNode(runningNodes, managedHomeDir, settings.embeddedNodeName ?? '', osHomeDir);
           } catch (startErr) {
             console.warn('Auto-start merod failed:', startErr);
           }
         }
 
-        // Auto-update nodeUrl if we detect a running local node and user has no URL set.
-        // In developer mode, never auto-override — the user explicitly manages which node
-        // to connect to (via NodeManagement or the dropdown). Auto-overriding here races
-        // with the reload from NodeManagement and silently reverts the user's selection.
-        if (runningNodes.length > 0 && !settings.developerMode) {
-          const node = runningNodes[0];
+        // Never adopts a node on a different home - that node isn't ours to hand the UI to.
+        // In developer mode, never auto-override: the user manages the connection explicitly.
+        if (adoptableNode && !settings.developerMode) {
+          const node = adoptableNode;
           const nodeUrl = `http://localhost:${node.port}`;
           const currentUrl = settings.nodeUrl;
           const isLocalhostUrl = currentUrl && (
@@ -383,20 +384,35 @@ function App() {
 
   const handleRestartNode = useCallback(async () => {
     const settings = getSettings();
-    if (settings.embeddedNodeName) {
-      try {
-        const dataDir = settings.embeddedNodeDataDir || '~/.calimero';
-        const serverPort = settings.embeddedNodePort ?? DEFAULT_EMBEDDED_NODE_PORT;
-        const swarmPort = settings.embeddedNodeSwarmPort ?? DEFAULT_EMBEDDED_SWARM_PORT;
-        await startMerod(serverPort, swarmPort, dataDir, settings.embeddedNodeName, settings.debugLogs);
-        toast.success("Starting node...");
-        await new Promise((r) => setTimeout(r, 3000));
-        await checkConnection();
-      } catch (err) {
-        toast.error(`Failed to start node: ${parseTauriError(err)}`);
-      }
-    } else {
+    if (!settings.embeddedNodeName) {
       setCurrentPage('nodes');
+      return;
+    }
+    try {
+      const dataDir = settings.embeddedNodeDataDir || DEFAULT_NODE_HOME_DIR;
+      const osHomeDir = await homeDir();
+      // Decided from the process list, not the health check: an unauthenticated node
+      // answers 401, which reads as dead even though it is running.
+      const alreadyRunning = findRunningNode(
+        await detectRunningMerodNodes().catch(() => []),
+        dataDir,
+        settings.embeddedNodeName ?? '',
+        osHomeDir
+      );
+      toast.success(
+        alreadyRunning ? "Node is already running - reconnecting..." : "Starting node..."
+      );
+      const serverPort = settings.embeddedNodePort ?? DEFAULT_EMBEDDED_NODE_PORT;
+      const swarmPort = settings.embeddedNodeSwarmPort ?? DEFAULT_EMBEDDED_SWARM_PORT;
+      // Route through startMerod either way - it adopts a live node instead of
+      // double-spawning, keeping the backend's quit-time tracking accurate too.
+      await startMerod(serverPort, swarmPort, dataDir, settings.embeddedNodeName, settings.debugLogs);
+      if (!alreadyRunning) {
+        await new Promise((r) => setTimeout(r, 3000));
+      }
+      await checkConnection();
+    } catch (err) {
+      toast.error(`Failed to start node: ${parseTauriError(err)}`);
     }
   }, [checkConnection, toast]);
 
@@ -926,13 +942,13 @@ function App() {
               <div className="status-error-block">
                 <p className="status-error">{error}</p>
                 <p className="status-error-hint">
-                  Your node may have stopped (e.g. after your computer slept). Click Restart Node to start it again.
+                  Can't reach your node right now (e.g. after your computer slept). Click Reconnect to check its status again.
                 </p>
                 <button
                   onClick={handleRestartNode}
                   className="button button-primary button-small"
                 >
-                  Restart Node
+                  Reconnect
                 </button>
               </div>
             )}

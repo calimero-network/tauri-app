@@ -1,10 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
 
-export interface MerodStatus {
-  running: boolean;
-  exit_code?: number;
-}
-
 export interface MerodHealth {
   status: number;
   healthy: boolean;
@@ -47,13 +42,6 @@ export async function stopMerodByPid(pid: number): Promise<string> {
 }
 
 /**
- * Get the current status of the embedded merod node
- */
-export async function getMerodStatus(): Promise<MerodStatus> {
-  return await invoke('get_merod_status');
-}
-
-/**
  * Check the health of a merod node at the given URL
  */
 export async function checkMerodHealth(nodeUrl: string): Promise<MerodHealth> {
@@ -86,6 +74,34 @@ export interface RunningMerodNode {
   home_dir?: string; // Data directory the node runs under, parsed from its argv
 }
 
+/** Normalize a home-dir path for comparison: strips a trailing separator and
+ *  expands a leading `~`, so it compares equal to merod's resolved absolute path. */
+export function normalizeHomeDir(dir: string | undefined | null, osHomeDir?: string): string {
+  if (!dir) return '';
+  let normalized = dir.trim().replace(/[\\/]+$/, '');
+  if (osHomeDir && (normalized === '~' || normalized.startsWith('~/'))) {
+    normalized = osHomeDir.replace(/[\\/]+$/, '') + normalized.slice(1);
+  }
+  return normalized;
+}
+
+/** The running node under `homeDir`, narrowed to `nodeName` when one is given. A name
+ *  alone is ambiguous: one home holds several nodes, and another home can repeat a name. */
+export function findRunningNode(
+  nodes: RunningMerodNode[],
+  homeDir: string,
+  nodeName: string,
+  osHomeDir?: string
+): RunningMerodNode | undefined {
+  const target = normalizeHomeDir(homeDir, osHomeDir);
+  // Neither an unresolved home nor an unnamed node identifies one: `~/.calimero`
+  // is merod's own default, so the home alone can match several nodes.
+  if (!target || !nodeName) return undefined;
+  return nodes.find(
+    (n) => normalizeHomeDir(n.home_dir, osHomeDir) === target && n.node_name === nodeName
+  );
+}
+
 /**
  * Initialize/create a new merod node.
  *
@@ -106,10 +122,12 @@ export async function initMerodNode(
 }
 
 /**
- * Detect running merod nodes on the system
+ * Detect running merod nodes on the system. Always an array: a stubbed or
+ * unavailable command resolves to null, which every caller used to re-check.
  */
 export async function detectRunningMerodNodes(): Promise<RunningMerodNode[]> {
-  return await invoke('detect_running_merod_nodes');
+  const nodes = await invoke<RunningMerodNode[] | null>('detect_running_merod_nodes');
+  return Array.isArray(nodes) ? nodes : [];
 }
 
 /**
@@ -153,19 +171,14 @@ export async function exportMerodLogs(
   return await invoke('export_merod_logs', { nodeName, homeDir, defaultFileName });
 }
 
-/**
- * Kill all merod processes on the system. Call before total nuke.
- */
-export async function killAllMerodProcesses(): Promise<string> {
-  return await invoke('kill_all_merod_processes');
+/** Whether the delete removed anything, so callers never read prose to decide. */
+export interface DeleteOutcome {
+  deleted: boolean;
+  path: string;
 }
 
-/**
- * Delete the Calimero data directory and all its contents (total nuke).
- * Path must be under the user's home directory.
- * Call killAllMerodProcesses() first.
- */
-export async function deleteCalimeroDataDir(dataDir: string): Promise<string> {
+/** Total nuke; the path must be under the user's home directory. */
+export async function deleteCalimeroDataDir(dataDir: string): Promise<DeleteOutcome> {
   return await invoke('delete_calimero_data_dir', { dataDir });
 }
 

@@ -7,6 +7,7 @@ use std::sync::OnceLock;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, Manager};
+use tokio::process::Command;
 use thiserror::Error;
 
 /// Chain-style poison recovery: every mutex here guards a plain collection with
@@ -42,9 +43,27 @@ use merod_versions::{
 // with the `calimero-shell` binary via the crate's lib target.
 #[cfg(target_os = "macos")]
 use calimero_tauri_app::{app_registry, host_socket_path, launcher, token_broker_ipc};
+use calimero_tauri_app::node_discovery::resolved;
+#[cfg(unix)]
+use calimero_tauri_app::node_discovery::{
+    claim_matches, discover_nodes, existing_node_for, is_signalable, nodes_under_path, remove_claim,
+    write_claim, DiscoveredNode,
+};
+#[cfg(target_os = "macos")]
+use calimero_tauri_app::node_discovery::parse_shell_pids;
 
 static HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 static SSE_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+/// Serialises starting a node against deleting a node home; unguarded they
+/// interleave into a delete unlinking a store a start just opened.
+static NODE_LIFECYCLE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+/// Set by the first quit path to reach teardown; the others then do nothing.
+static SHUTDOWN_CLAIMED: AtomicBool = AtomicBool::new(false);
+
+/// How long in-flight proxy requests get to finish before the node is stopped.
+const REQUEST_DRAIN_TIMEOUT_SECS: u64 = 10;
+/// How long a node gets to flush and exit before it is killed outright.
+const PROCESS_TERM_MAX_WAIT_SECS: u64 = 30;
 
 /// Version of the merod binary this build expects, embedded at compile time from merod-config.json.
 const MEROD_CONFIG_VERSION: &str = match option_env!("MEROD_CONFIG_VERSION") {
@@ -1125,7 +1144,7 @@ fn focus_window(app_handle: tauri::AppHandle, window_label: String) -> Result<()
 fn caps_store_path() -> std::path::PathBuf {
     let base = dirs::data_dir()
         .unwrap_or_else(std::env::temp_dir)
-        .join("network.calimero.desktop");
+        .join(calimero_tauri_app::app_dir_name());
     let _ = std::fs::create_dir_all(&base);
     base.join("caps.json")
 }
@@ -1157,7 +1176,7 @@ fn bundled_resource(app_handle: &tauri::AppHandle, rel: &str) -> Option<std::pat
 fn app_icon_cache_path(app_id: &str) -> std::path::PathBuf {
     let dir = dirs::data_dir()
         .unwrap_or_else(std::env::temp_dir)
-        .join("network.calimero.desktop")
+        .join(calimero_tauri_app::app_dir_name())
         .join("app-icons");
     let _ = std::fs::create_dir_all(&dir);
     dir.join(format!("{app_id}.icns"))
@@ -2026,7 +2045,7 @@ async fn open_devtools(_window_label: String, _app_handle: tauri::AppHandle) {
 
 // Merod process management using bundled resource
 use std::process::Stdio;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 /// Tracks the number of in-flight HTTP proxy requests.
@@ -2046,100 +2065,119 @@ impl Drop for InFlightGuard {
     }
 }
 
-const REQUEST_DRAIN_TIMEOUT_SECS: u64 = 10;
-const PROCESS_TERM_WAIT_SECS: u64 = 3;
-use tokio::process::Command;
-
-/// Returns PIDs of running merod processes, merging tracked state with OS-level discovery.
-fn collect_merod_pids(tracked: &[u32]) -> Vec<u32> {
-    let mut pids: Vec<u32> = tracked.to_vec();
-    #[cfg(unix)]
-    {
-        if let Ok(output) = std::process::Command::new("ps")
-            .args(["ax", "-o", "pid,command"])
-            .output()
-        {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            for line in stdout.lines() {
-                let mut parts = line.split_whitespace();
-                let pid_str = match parts.next() {
-                    Some(p) => p,
-                    None => continue,
-                };
-                let exe = match parts.next() {
-                    Some(e) => e,
-                    None => continue,
-                };
-                let args: Vec<&str> = parts.collect();
-                let basename = exe.split('/').last().unwrap_or(exe);
-                if basename == "merod" && args.iter().any(|a| *a == "run") {
-                    if let Ok(pid) = pid_str.parse::<u32>() {
-                        if !pids.contains(&pid) {
-                            pids.push(pid);
-                        }
-                    }
-                }
+/// Removes terminal colour codes, so a node's own error reads cleanly in the UI.
+fn strip_ansi(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        if c != '\u{1b}' {
+            out.push(c);
+            continue;
+        }
+        // CSI sequences run until a letter; that is all merod emits.
+        for skipped in chars.by_ref() {
+            if skipped.is_ascii_alphabetic() {
+                break;
             }
         }
     }
-    #[cfg(windows)]
-    {
-        if let Ok(output) = std::process::Command::new("tasklist")
-            .args(["/FO", "CSV"])
-            .output()
-        {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            for line in stdout.lines().skip(1) {
-                if line.to_lowercase().starts_with("\"merod.exe\"") {
-                    let parts: Vec<&str> = line.split(',').collect();
-                    if parts.len() >= 2 {
-                        if let Ok(pid) = parts[1].trim_matches('"').parse::<u32>() {
-                            if !pids.contains(&pid) {
-                                pids.push(pid);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    pids
+    out
 }
 
-/// PIDs of running per-app shell processes. Each launcher `.app` trampoline execs
-/// the shared loose shell binary, so the process shows up under the shell's own
-/// name — never as the host. Used by the total nuke: a live shell keeps an
-/// authenticated app webview (and would re-flush its localStorage after a wipe).
+/// What to tell the user when a node dies on startup: its own error if the log
+/// carried one, else the bare exit code.
+fn start_failure_message(code: i32, log: Option<&str>) -> String {
+    match log.and_then(error_lines_from_log) {
+        Some(reason) => format!("The node stopped immediately: {reason}"),
+        None => format!(
+            "Merod process exited immediately with code: {code}. Check merod logs for details."
+        ),
+    }
+}
+
+/// Parses the shape merod prints - an `Error:` line then indented numbered frames.
+/// The last block wins: a start logs its context before its cause.
+fn error_lines_from_log(body: &str) -> Option<String> {
+    let lines: Vec<String> = body.lines().map(strip_ansi).collect();
+    let header = lines.iter().rposition(|line| line.trim() == "Error:")?;
+    let frames: Vec<String> = lines[header + 1..]
+        .iter()
+        // Frames are indented; the next unindented line ends the block.
+        .take_while(|line| line.starts_with([' ', '\t']) && !line.trim().is_empty())
+        .map(|line| {
+            line.trim()
+                // Drop the frame number, e.g. "0: ".
+                .trim_start_matches(|c: char| c.is_ascii_digit() || c == ':')
+                .trim()
+                .to_string()
+        })
+        .collect();
+    (!frames.is_empty()).then(|| frames.join(" "))
+}
+
+
+/// Tracked PIDs for one specific node, or every tracked PID when none is named.
+fn tracked_pids_for(state: &[MerodProcess], target: Option<(&std::path::Path, &str)>) -> Vec<u32> {
+    let Some((home, node)) = target else {
+        return state.iter().map(|p| p.pid).collect();
+    };
+    let home = resolved(home);
+    state
+        .iter()
+        .filter(|p| p.node.as_deref() == Some(node) && resolved(&p.home) == home)
+        .map(|p| p.pid)
+        .collect()
+}
+
+/// PIDs of running per-app shell processes. Used by the total nuke: a live shell
+/// keeps an authenticated app webview, and re-flushes its localStorage after a wipe.
 #[cfg(target_os = "macos")]
 fn collect_shell_pids() -> Vec<u32> {
-    // Installed name (extract_shell's dest) plus the cargo binary name used in dev.
-    const SHELL_BINARY_NAMES: [&str; 2] = ["CalimeroShell", "calimero-shell"];
-    let mut pids: Vec<u32> = Vec::new();
-    if let Ok(output) = std::process::Command::new("ps")
+    let Some(install_dir) = launcher::shell_install_path().parent().map(|p| p.to_path_buf()) else {
+        return Vec::new();
+    };
+    let Ok(output) = std::process::Command::new("ps")
         .args(["ax", "-o", "pid,command"])
         .output()
-    {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        for line in stdout.lines() {
-            let mut parts = line.split_whitespace();
-            let (Some(pid_str), Some(exe)) = (parts.next(), parts.next()) else {
-                continue;
-            };
-            let basename = exe.split('/').last().unwrap_or(exe);
-            if SHELL_BINARY_NAMES.contains(&basename) {
-                if let Ok(pid) = pid_str.parse::<u32>() {
-                    if !pids.contains(&pid) {
-                        pids.push(pid);
-                    }
-                }
-            }
-        }
-    }
-    pids
+    else {
+        return Vec::new();
+    };
+    parse_shell_pids(&String::from_utf8_lossy(&output.stdout), &install_dir)
 }
 
-/// Sends SIGTERM to all pids, waits, then force-kills any survivors.
-async fn kill_pids(pids: &[u32]) {
+/// `SignalOnly` is for app exit: waiting there hangs quit for the whole flush.
+enum TermPatience {
+    Wait,
+    SignalOnly,
+}
+
+/// Stops nodes the user asked to stop, and reports one that outlived the kill -
+/// a node belonging to another user refuses our signals.
+async fn stop_pids(pids: &[u32]) -> Result<(), TauriError> {
+    kill_pids(pids, TermPatience::Wait).await;
+    let mut survivors: Vec<u32> = pids
+        .iter()
+        .copied()
+        .filter(|pid| is_process_running(*pid))
+        .collect();
+    if !survivors.is_empty() {
+        // A killed child lingers as a zombie until its monitor task reaps it, so
+        // give that a moment before calling a PID a survivor.
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        survivors.retain(|pid| is_process_running(*pid));
+    }
+    if !survivors.is_empty() {
+        return Err(TauriError::new(
+            TauriErrorCode::MerodStopFailed,
+            format!("Failed to stop merod process(es): {survivors:?}"),
+        ));
+    }
+    info!("[Merod] Stopped process(es): {pids:?}");
+    Ok(())
+}
+
+/// Sends SIGTERM to all pids, waits for them to go, then force-kills any survivors.
+async fn kill_pids(pids: &[u32], patience: TermPatience) {
     if pids.is_empty() {
         return;
     }
@@ -2155,7 +2193,19 @@ async fn kill_pids(pids: &[u32]) {
                 .args(["/PID", &pid.to_string()])
                 .output();
         }
-        std::thread::sleep(std::time::Duration::from_secs(PROCESS_TERM_WAIT_SECS));
+        if matches!(patience, TermPatience::SignalOnly) {
+            return;
+        }
+        // Poll, never a fixed sleep: merod takes about ten seconds to flush, so a
+        // three-second sleep hard-killed it on every shutdown.
+        let deadline =
+            std::time::Instant::now() + std::time::Duration::from_secs(PROCESS_TERM_MAX_WAIT_SECS);
+        while std::time::Instant::now() < deadline {
+            if !pids_owned.iter().any(|pid| is_process_running(*pid)) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
         for pid in &pids_owned {
             #[cfg(unix)]
             {
@@ -2194,6 +2244,16 @@ async fn kill_pids(pids: &[u32]) {
 struct MerodProcess {
     pid: u32,
     port: u16,
+    /// The data directory this node owns, which identifies it without a name match.
+    home: std::path::PathBuf,
+    node: Option<String>,
+    /// False for a node the app merely adopted: tracked, but never stopped for us.
+    owned: bool,
+}
+
+/// PIDs the app may stop without being asked - the nodes it started itself.
+fn owned_pids(state: &[MerodProcess]) -> Vec<u32> {
+    state.iter().filter(|p| p.owned).map(|p| p.pid).collect()
 }
 
 type MerodState = Arc<Mutex<Vec<MerodProcess>>>;
@@ -2389,6 +2449,54 @@ fn replace_multiaddr_port(addr: &str, proto: &str, port: u16) -> String {
     format!("{}{}{}{}", &addr[..start], needle, port, tail)
 }
 
+/// The app's own record of a node, for platforms with no process discovery.
+/// Weaker than the process table - it cannot see a node this app did not start,
+/// and it does not survive a restart - but it catches the common case.
+fn tracked_node_for(state: &[MerodProcess], home: &std::path::Path, node: &str) -> Option<u32> {
+    tracked_pids_for(state, Some((home, node))).first().copied()
+}
+
+/// A guard that could not run is not a guard: callers refuse instead of proceeding.
+fn discovery_failed(e: std::io::Error) -> TauriError {
+    TauriError::with_details(
+        TauriErrorCode::InternalError,
+        "Could not check which nodes are running",
+        e.to_string(),
+    )
+}
+
+/// Takes over a node already serving `(home, node)` instead of starting a second
+/// writer, which RocksDB's lock stops only while its directory still exists there.
+#[cfg(unix)]
+fn adopt_running_node(
+    running: &[DiscoveredNode],
+    home: &std::path::Path,
+    node: &str,
+    merod_state: &MerodState,
+    app_handle: &tauri::AppHandle,
+) -> Option<u32> {
+    let pid = existing_node_for(running, home, node)?;
+    let (port, _) = node_ports(&home.join(node).join("config.toml"));
+    // Only a node this app started is the app's to shut down on quit.
+    let owned = claim_matches(home, node, pid);
+    let origin = if owned { "started by this app" } else { "started elsewhere" };
+    info!("[Merod] Node '{node}' already running on port {port} (PID {pid}); reusing it ({origin})");
+
+    let mut state = merod_state.lock_unpoisoned();
+    if !state.iter().any(|p| p.pid == pid) {
+        state.push(MerodProcess {
+            pid,
+            port,
+            home: home.to_path_buf(),
+            node: Some(node.to_string()),
+            owned,
+        });
+    }
+    drop(state);
+    emit_merod_status_changed(app_handle);
+    Some(pid)
+}
+
 #[tauri::command]
 async fn start_merod(
     server_port: Option<u16>,
@@ -2403,36 +2511,19 @@ async fn start_merod(
     let server_port = server_port.unwrap_or(2528);
     let swarm_port = swarm_port.unwrap_or(2428);
 
-    // Only stop a process that uses the same server_port (port conflict)
-    let existing_on_port: Option<u32> = {
+    // Only a node this app started on this port is evictable. An adopted entry can
+    // be one it merely connected to, and killing that is the data loss we fixed.
+    let evictable: Option<u32> = {
         let state = merod_state.lock_unpoisoned();
-        state.iter().find(|p| p.port == server_port).map(|p| p.pid)
+        state
+            .iter()
+            .find(|p| p.port == server_port && p.owned)
+            .map(|p| p.pid)
     };
 
-    if let Some(pid) = existing_on_port {
-        info!(
-            "[Merod] Stopping existing process on port {} (PID: {}) before starting new one",
-            server_port, pid
-        );
-        #[cfg(unix)]
-        {
-            use std::process::Command;
-            let _ = Command::new("kill")
-                .arg("-TERM")
-                .arg(pid.to_string())
-                .output();
-            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-            let _ = Command::new("kill").arg("-9").arg(pid.to_string()).output();
-        }
-        #[cfg(windows)]
-        {
-            use std::process::Command;
-            let _ = Command::new("taskkill")
-                .arg("/PID")
-                .arg(pid.to_string())
-                .arg("/F")
-                .output();
-        }
+    if let Some(pid) = evictable {
+        info!("[Merod] Stopping our node on port {server_port} (PID {pid}) before starting");
+        kill_pids(&[pid], TermPatience::Wait).await;
         merod_state
             .lock_unpoisoned()
             .retain(|p| p.pid != pid);
@@ -2464,6 +2555,33 @@ async fn start_merod(
         None => merod_versions::VersionId::Bundled,
     };
     let merod_binary = merod_versions::resolve_binary(&app_handle, &version_id).await?;
+
+    // Taken after the download above, so it spans only the check through the spawn.
+    let _lifecycle = NODE_LIFECYCLE.lock().await;
+
+    // Refuse rather than guess: an unreadable process table would otherwise read as
+    // "nothing is running" and put a second writer on this store.
+    // No process discovery on Windows, so the app's own tracked state is the only
+    // account available - a weaker guard than none is still worth having.
+    #[cfg(not(unix))]
+    if let Some(node) = node_name.as_deref() {
+        let tracked = tracked_node_for(&merod_state.lock_unpoisoned(), &home_dir_path, node);
+        if let Some(pid) = tracked {
+            info!("[Merod] Node '{node}' is already tracked as running (PID {pid}); reusing it");
+            return Ok(format!("Merod already running with PID: {pid}"));
+        }
+    }
+
+    #[cfg(unix)]
+    {
+        let running = discover_nodes().map_err(discovery_failed)?;
+        if let Some(pid) = node_name
+            .as_deref()
+            .and_then(|node| adopt_running_node(&running, &home_dir_path, node, &merod_state, &app_handle))
+        {
+            return Ok(format!("Merod already running with PID: {pid}"));
+        }
+    }
 
     // Update config.toml with the specified ports if node_name is provided
     if let Some(name) = &node_name {
@@ -2695,10 +2813,9 @@ async fn start_merod(
     // Check if process already exited
     if let Ok(Some(status)) = child.try_wait() {
         if let Some(code) = status.code() {
-            let error_msg = format!(
-                "Merod process exited immediately with code: {}. Check merod logs for details.",
-                code
-            );
+            // Quote the node's own error rather than sending the user to a log file.
+            let log = std::fs::read_to_string(log_dir.join("merod.log")).ok();
+            let error_msg = start_failure_message(code, log.as_deref());
             warn!("[Merod] {}", error_msg);
             unregister_writer();
             return Err(TauriError::new(TauriErrorCode::MerodProcessExited, error_msg));
@@ -2711,7 +2828,18 @@ async fn start_merod(
         state.push(MerodProcess {
             pid,
             port: server_port,
+            home: home_dir_path.clone(),
+            node: node_name.clone(),
+            owned: true,
         });
+    }
+    // Records that this app started the node, so a later launch can tell its own
+    // orphan from a node started outside the app.
+    #[cfg(unix)]
+    if let Some(name) = &node_name {
+        if let Err(e) = write_claim(&home_dir_path, name, pid) {
+            warn!("[Merod] could not record node ownership: {}", e);
+        }
     }
     emit_merod_status_changed(&app_handle);
 
@@ -2721,6 +2849,8 @@ async fn start_merod(
     let exit_log_key = log_key.clone();
     let monitored_pid = pid; // Capture PID for verification
     let exit_app_handle = app_handle.clone();
+    let exit_home = home_dir_path.clone();
+    let exit_node_name = node_name.clone();
     tokio::spawn(async move {
         let status = child.wait().await;
         {
@@ -2731,6 +2861,12 @@ async fn start_merod(
                 }
             }
             state.retain(|p| p.pid != monitored_pid);
+        }
+        // The node is gone, so its ownership record is spent. A stale one is
+        // already read as "not mine", but leaving it behind is just litter.
+        #[cfg(unix)]
+        if let Some(name) = &exit_node_name {
+            remove_claim(&exit_home, name);
         }
         emit_merod_status_changed(&exit_app_handle);
         // Drop one reference to this node's writer; remove the registration only
@@ -2751,100 +2887,72 @@ async fn start_merod(
     Ok(format!("Merod started successfully with PID: {}", pid))
 }
 
+/// Tracked PIDs the OS still reports as nodes, forgetting any that have died -
+/// an adopted node has no monitor task, so this is the only place they are dropped.
+#[cfg(unix)]
+fn live_tracked_pids(
+    tracked: Vec<u32>,
+    merod_state: &MerodState,
+    app_handle: &tauri::AppHandle,
+) -> Vec<u32> {
+    let Ok(running) = discover_nodes() else {
+        warn!("[Merod] could not read the process table; keeping every tracked node");
+        return tracked;
+    };
+    let (alive, dead): (Vec<u32>, Vec<u32>) = tracked
+        .into_iter()
+        .partition(|pid| is_signalable(*pid, &running));
+    if !dead.is_empty() {
+        info!("[Merod] Dropping {} stale tracked node(s): {dead:?}", dead.len());
+        merod_state
+            .lock_unpoisoned()
+            .retain(|p| !dead.contains(&p.pid));
+        emit_merod_status_changed(app_handle);
+    }
+    alive
+}
+
 #[tauri::command]
 async fn stop_merod(
+    node_name: Option<String>,
+    data_dir: Option<String>,
     app_handle: tauri::AppHandle,
     merod_state: tauri::State<'_, MerodState>,
 ) -> Result<String, TauriError> {
-    let pids: Vec<u32> = {
-        let state = merod_state.lock_unpoisoned();
-        state.iter().map(|p| p.pid).collect()
+    // Naming a node stops only that node. Without one this still stops every
+    // node the app started, which is what the callers that pass nothing expect.
+    let home = match &node_name {
+        Some(_) => Some(resolve_home_dir(data_dir)?),
+        None => None,
     };
+    let target = home.as_deref().zip(node_name.as_deref());
+    let tracked: Vec<u32> = tracked_pids_for(&merod_state.lock_unpoisoned(), target);
+    // A recycled PID would send Stop at an unrelated process. Windows has no
+    // discovery, so there the tracked entry is all there is to go on.
+    #[cfg(unix)]
+    let pids = live_tracked_pids(tracked, &merod_state, &app_handle);
+    #[cfg(not(unix))]
+    let pids = tracked;
 
     if pids.is_empty() {
+        // Name the node when one was asked for: "not running" about a specific node
+        // means something different from "nothing is running".
         return Err(TauriError::new(
             TauriErrorCode::MerodNotRunning,
-            "Merod is not running",
+            match &node_name {
+                Some(node) => format!("Node '{node}' is not running"),
+                None => "Merod is not running".to_string(),
+            },
         ));
     }
 
-    for pid in &pids {
-        #[cfg(unix)]
-        {
-            use std::process::Command;
+    stop_pids(&pids).await?;
 
-            let check_output = Command::new("ps").arg("-p").arg(pid.to_string()).output();
-
-            let process_exists = if let Ok(output) = &check_output {
-                output.status.success()
-            } else {
-                false
-            };
-
-            if !process_exists {
-                info!("[Merod] Process with PID {} already stopped", pid);
-            } else {
-                let _ = Command::new("kill")
-                    .arg("-TERM")
-                    .arg(pid.to_string())
-                    .output();
-
-                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-
-                let check_output = Command::new("ps").arg("-p").arg(pid.to_string()).output();
-
-                let still_running = if let Ok(output) = &check_output {
-                    output.status.success()
-                } else {
-                    false
-                };
-
-                if still_running {
-                    let output = Command::new("kill").arg("-9").arg(pid.to_string()).output();
-
-                    if let Ok(output) = output {
-                        if !output.status.success() {
-                            let stderr = String::from_utf8_lossy(&output.stderr);
-                            if !stderr.contains("No such process") {
-                                return Err(TauriError::new(
-                                    TauriErrorCode::MerodStopFailed,
-                                    format!("Failed to stop merod process: {}", stderr),
-                                ));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        #[cfg(windows)]
-        {
-            use std::process::Command;
-            let output = Command::new("taskkill")
-                .arg("/PID")
-                .arg(pid.to_string())
-                .arg("/F")
-                .output();
-
-            if let Ok(output) = output {
-                if !output.status.success() {
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    if !stderr.contains("not found") && !stderr.contains("does not exist") {
-                        return Err(TauriError::new(
-                            TauriErrorCode::MerodStopFailed,
-                            format!("Failed to stop merod process: {}", stderr),
-                        ));
-                    }
-                }
-            }
-        }
-
-        info!("[Merod] Stopped process with PID: {}", pid);
-    }
-
+    // Drop only what was actually stopped, so stopping one node does not make the
+    // app forget the others it is still running.
     merod_state
         .lock_unpoisoned()
-        .clear();
+        .retain(|p| !pids.contains(&p.pid));
     emit_merod_status_changed(&app_handle);
 
     Ok("Merod stopped successfully".to_string())
@@ -2856,83 +2964,24 @@ async fn stop_merod_by_pid_command(
     app_handle: tauri::AppHandle,
     merod_state: tauri::State<'_, MerodState>,
 ) -> Result<String, TauriError> {
+    // A bare number from the webview, so account for it as a node first. Unix asks
+    // the process table; Windows has only tracked state, which is weaker.
     #[cfg(unix)]
-    {
-        use std::process::Command;
-
-        // Check if process exists first
-        let check_output = Command::new("ps").arg("-p").arg(pid.to_string()).output();
-
-        let process_exists = if let Ok(output) = &check_output {
-            output.status.success()
-        } else {
-            false
-        };
-
-        if !process_exists {
-            // Process doesn't exist, already stopped
-            info!("[Merod] Process with PID {} already stopped", pid);
-        } else {
-            // Try graceful shutdown first (SIGTERM)
-            let _ = Command::new("kill")
-                .arg("-TERM")
-                .arg(pid.to_string())
-                .output();
-
-            // Wait a bit
-            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-
-            // Check if still running before force kill
-            let check_output = Command::new("ps").arg("-p").arg(pid.to_string()).output();
-
-            let still_running = if let Ok(output) = &check_output {
-                output.status.success()
-            } else {
-                false
-            };
-
-            if still_running {
-                // Force kill if still running (SIGKILL)
-                let output = Command::new("kill").arg("-9").arg(pid.to_string()).output();
-
-                if let Ok(output) = output {
-                    if !output.status.success() {
-                        let stderr = String::from_utf8_lossy(&output.stderr);
-                        // If process doesn't exist, that's fine - it's already stopped
-                        if !stderr.contains("No such process") {
-                            return Err(TauriError::new(
-                                TauriErrorCode::MerodStopFailed,
-                                format!("Failed to stop merod process: {}", stderr),
-                            ));
-                        }
-                    }
-                }
-            }
-        }
+    let accountable = is_signalable(pid, &discover_nodes().map_err(discovery_failed)?);
+    #[cfg(not(unix))]
+    let accountable = merod_state
+        .lock_unpoisoned()
+        .iter()
+        .any(|p| p.pid == pid);
+    if !accountable {
+        warn!("[Merod] Refusing to stop PID {}: not a known node", pid);
+        return Err(TauriError::new(
+            TauriErrorCode::InvalidInput,
+            format!("PID {} is not a node this app can account for", pid),
+        ));
     }
 
-    #[cfg(windows)]
-    {
-        use std::process::Command;
-        let output = Command::new("taskkill")
-            .arg("/PID")
-            .arg(pid.to_string())
-            .arg("/F")
-            .output();
-
-        if let Ok(output) = output {
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                // If process doesn't exist, that's fine - it's already stopped
-                if !stderr.contains("not found") && !stderr.contains("does not exist") {
-                    return Err(TauriError::new(
-                        TauriErrorCode::MerodStopFailed,
-                        format!("Failed to stop merod process: {}", stderr),
-                    ));
-                }
-            }
-        }
-    }
+    stop_pids(&[pid]).await?;
 
     // Remove this process from state
     merod_state
@@ -2940,7 +2989,6 @@ async fn stop_merod_by_pid_command(
         .retain(|p| p.pid != pid);
     emit_merod_status_changed(&app_handle);
 
-    info!("[Merod] Stopped process with PID: {}", pid);
     Ok(format!("Merod stopped successfully (PID: {})", pid))
 }
 
@@ -2971,51 +3019,6 @@ fn is_process_running(pid: u32) -> bool {
             false
         }
     }
-}
-
-/// The reap probes every tracked node for liveness while holding the state lock,
-/// and this command is polled - too much to leave on a runtime worker.
-#[tauri::command]
-async fn get_merod_status(
-    app_handle: tauri::AppHandle,
-    merod_state: tauri::State<'_, MerodState>,
-) -> Result<serde_json::Value, TauriError> {
-    let merod_state = merod_state.inner().clone();
-    tokio::task::spawn_blocking(move || {
-        let mut state = merod_state.lock_unpoisoned();
-        if state.is_empty() {
-            return serde_json::json!({ "running": false, "nodes": [] });
-        }
-        // Filter out dead processes. Only announce when this reap actually dropped
-        // one, or a polling caller would emit on every tick.
-        let before = state.len();
-        state.retain(|p| is_process_running(p.pid));
-        if state.len() != before {
-            emit_merod_status_changed(&app_handle);
-        }
-        if state.is_empty() {
-            return serde_json::json!({ "running": false, "nodes": [] });
-        }
-        let nodes: Vec<_> = state
-            .iter()
-            .map(|p| serde_json::json!({ "pid": p.pid, "port": p.port }))
-            .collect();
-        let first = &state[0];
-        serde_json::json!({
-            "running": true,
-            "nodes": nodes,
-            "pid": first.pid,
-            "port": first.port
-        })
-    })
-    .await
-    .map_err(|e| {
-        TauriError::with_details(
-            TauriErrorCode::InternalError,
-            "Status task failed",
-            e.to_string(),
-        )
-    })
 }
 
 #[tauri::command]
@@ -4107,34 +4110,6 @@ async fn autostart_is_enabled(_app: tauri::AppHandle) -> Result<bool, TauriError
     Ok(false)
 }
 
-/// Kill all merod processes on the system. Used before total nuke to ensure no process
-/// has the data directory open. Clears MerodState and waits for processes to fully exit.
-#[tauri::command]
-async fn kill_all_merod_processes(
-    app_handle: tauri::AppHandle,
-    merod_state: tauri::State<'_, MerodState>,
-) -> Result<String, TauriError> {
-    let tracked: Vec<u32> = merod_state
-        .lock_unpoisoned()
-        .iter()
-        .map(|p| p.pid)
-        .collect();
-    let pids = collect_merod_pids(&tracked);
-
-    kill_pids(&pids).await;
-
-    merod_state
-        .lock_unpoisoned()
-        .clear();
-    emit_merod_status_changed(&app_handle);
-
-    info!("[Calimero] Killed {} merod process(es)", pids.len());
-    Ok(format!("Stopped {} merod process(es)", pids.len()))
-}
-
-/// Delete the Calimero data directory and all its contents. Used for "total nuke" reset.
-/// Path must be under the user's home directory for safety.
-/// Call kill_all_merod_processes first to ensure no process has the directory open.
 #[tauri::command]
 async fn close_current_window(window: tauri::Window) -> Result<(), TauriError> {
     window
@@ -4151,8 +4126,16 @@ async fn open_url_in_browser(url: String, app_handle: tauri::AppHandle) -> Resul
         .map_err(|e| TauriError::new(TauriErrorCode::InternalError, e.to_string()))
 }
 
+/// Whether the delete removed anything. Structured because the reset flow uses it
+/// to decide whether a writer repopulated a directory.
+#[derive(Serialize)]
+struct DeleteOutcome {
+    deleted: bool,
+    path: String,
+}
+
 #[tauri::command]
-async fn delete_calimero_data_dir(data_dir: String) -> Result<String, TauriError> {
+async fn delete_calimero_data_dir(data_dir: String) -> Result<DeleteOutcome, TauriError> {
     let expanded = if data_dir.starts_with("~") {
         if let Some(home) = dirs::home_dir() {
             data_dir.replacen("~", &home.to_string_lossy(), 1)
@@ -4170,7 +4153,7 @@ async fn delete_calimero_data_dir(data_dir: String) -> Result<String, TauriError
 
     // If path doesn't exist, nothing to delete
     if !path.exists() {
-        return Ok("Directory did not exist (nothing to delete)".to_string());
+        return Ok(DeleteOutcome { deleted: false, path: expanded });
     }
 
     let path_canonical = path.canonicalize().map_err(|e| {
@@ -4200,6 +4183,36 @@ async fn delete_calimero_data_dir(data_dir: String) -> Result<String, TauriError
         ));
     }
 
+    // Deleting a directory does not stop the node holding it; it writes on by
+    // absolute path. Unix-only: Windows locks open files, so the delete just fails.
+    let _lifecycle = NODE_LIFECYCLE.lock().await;
+
+    #[cfg(unix)]
+    {
+        let running = discover_nodes().map_err(discovery_failed)?;
+        let blocking = nodes_under_path(&running, &path_canonical);
+        if let Some(first) = blocking.first() {
+            let detail = blocking
+                .iter()
+                .map(|n| format!("{} (node '{}', PID {})", n.home, n.node, n.pid))
+                .collect::<Vec<_>>()
+                .join(", ");
+            warn!(
+                "[Calimero] Refusing to delete {:?}: {} node(s) still running",
+                path_canonical,
+                blocking.len()
+            );
+            return Err(TauriError::with_details(
+                TauriErrorCode::DirectoryError,
+                format!(
+                    "A node is still running from this directory (PID {}). Stop it before deleting.",
+                    first.pid
+                ),
+                detail,
+            ));
+        }
+    }
+
     std::fs::remove_dir_all(&path_canonical).map_err(|e| {
         TauriError::with_details(
             TauriErrorCode::DirectoryError,
@@ -4209,7 +4222,10 @@ async fn delete_calimero_data_dir(data_dir: String) -> Result<String, TauriError
     })?;
 
     info!("[Calimero] Deleted data directory: {:?}", path_canonical);
-    Ok(format!("Deleted {}", path_canonical.display()))
+    Ok(DeleteOutcome {
+        deleted: true,
+        path: path_canonical.display().to_string(),
+    })
 }
 
 /// True if `bundle` is a launcher `.app` we generated and may remove: it must be
@@ -4259,7 +4275,7 @@ async fn clear_app_sessions(app_handle: tauri::AppHandle) -> Result<String, Taur
     {
         let pids = collect_shell_pids();
         if !pids.is_empty() {
-            kill_pids(&pids).await;
+            kill_pids(&pids, TermPatience::Wait).await;
             done.push(format!("{} launcher process(es)", pids.len()));
         }
     }
@@ -4366,11 +4382,18 @@ async fn remove_app_launchers(app_handle: tauri::AppHandle) -> Result<String, Ta
     }
 }
 
-/// Performs graceful shutdown:
-/// 1. Drain in-flight proxy requests up to REQUEST_DRAIN_TIMEOUT_SECS
-/// 2. SIGTERM all managed (and detected) merod processes
-/// 3. Wait up to PROCESS_TERM_WAIT_SECS, then SIGKILL survivors
+/// True for the first caller only: the tray's Quit item and the run loop's exit
+/// event both request shutdown, and some quit paths fire both.
+fn claim_shutdown() -> bool {
+    !SHUTDOWN_CLAIMED.swap(true, Ordering::SeqCst)
+}
+
+/// Drains in-flight proxy requests, then asks the nodes this app started to stop.
 fn graceful_shutdown(app_handle: &tauri::AppHandle, merod_state: &MerodState) {
+    if !claim_shutdown() {
+        info!("[Shutdown] Already shut down; nothing to do");
+        return;
+    }
     info!("[Shutdown] Starting graceful shutdown...");
 
     // Drain in-flight proxy requests before killing merod so they can complete
@@ -4399,16 +4422,13 @@ fn graceful_shutdown(app_handle: &tauri::AppHandle, merod_state: &MerodState) {
         info!("[Shutdown] No in-flight proxy requests to drain");
     }
 
-    let tracked: Vec<u32> = merod_state
-        .lock_unpoisoned()
-        .iter()
-        .map(|p| p.pid)
-        .collect();
-    let pids = collect_merod_pids(&tracked);
+    // Only this app's own: a machine-wide scan would take down a node started from
+    // a terminal, and orphans are adopted at start rather than reaped here.
+    let pids: Vec<u32> = owned_pids(&merod_state.lock_unpoisoned());
 
     if !pids.is_empty() {
         info!(
-            "[Shutdown] Terminating {} merod process(es): {:?}",
+            "[Shutdown] Terminating {} merod process(es) started by this app: {:?}",
             pids.len(),
             pids
         );
@@ -4416,8 +4436,8 @@ fn graceful_shutdown(app_handle: &tauri::AppHandle, merod_state: &MerodState) {
             .enable_all()
             .build()
             .unwrap()
-            .block_on(kill_pids(&pids));
-        info!("[Shutdown] All merod processes terminated");
+            .block_on(kill_pids(&pids, TermPatience::SignalOnly));
+        info!("[Shutdown] Asked {} node(s) to stop; they finish flushing on their own", pids.len());
     } else {
         info!("[Shutdown] No merod processes to terminate");
     }
@@ -4881,7 +4901,6 @@ fn main() {
             start_merod,
             stop_merod,
             stop_merod_by_pid_command,
-            get_merod_status,
             list_merod_nodes,
             check_merod_health,
             pick_directory,
@@ -4901,7 +4920,6 @@ fn main() {
             delete_calimero_data_dir,
             clear_app_sessions,
             remove_app_launchers,
-            kill_all_merod_processes,
             autostart_enable,
             autostart_disable,
             autostart_is_enabled,
@@ -4917,8 +4935,21 @@ fn main() {
             clear_pending_app_deep_link,
             get_current_app_deep_link
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        // Both events: closing the last window requests an exit, while Cmd-Q and the
+        // Quit menu terminate and emit only `Exit`. Without this a node is orphaned.
+        .run(|app_handle, event| {
+            if !matches!(
+                event,
+                tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
+            ) {
+                return;
+            }
+            if let Some(merod_state) = app_handle.try_state::<MerodState>() {
+                graceful_shutdown(app_handle, &merod_state);
+            }
+        });
 }
 
 #[cfg(test)]
@@ -4944,6 +4975,10 @@ mod tests {
     };
     use base64::Engine as _;
     use std::path::Path;
+
+    /// Two node homes that differ, for the tests that match tracked state on one.
+    const HOME_A: &str = "/tmp/calimero-test-home-a";
+    const HOME_B: &str = "/tmp/calimero-test-home-b";
 
     #[test]
     fn multiaddr_port_is_replaced_in_place() {
@@ -5331,6 +5366,202 @@ listen = ["/ip4/0.0.0.0/udp/4001/quic-v1", "/ip4/0.0.0.0/tcp/4002"]
         );
         // Must contain OS and arch info
         assert!(triple.contains('-'), "triple should be dash-separated");
+    }
+
+    fn tracked(pid: u32, home: &str, node: &str) -> super::MerodProcess {
+        super::MerodProcess {
+            pid,
+            port: 2528,
+            home: std::path::PathBuf::from(home),
+            node: Some(node.to_string()),
+            owned: true,
+        }
+    }
+
+    /// Faithful merod output: an `Error:` line, indented numbered frames, then an
+    /// unindented `Location:` block that must not be swallowed.
+    #[test]
+    fn a_failed_start_surfaces_the_stores_own_error() {
+        let body = concat!(
+            "\u{1b}[32m INFO\u{1b}[0m merod::cli::run: TEE not configured\n",
+            "Error: \n",
+            "   0: \u{1b}[91mCorruption: IO error: No such file or directory: ",
+            "/Users/x/.calimero/default/data/000178.sst\u{1b}[0m\n",
+            "\n",
+            "Location:\n",
+            "   crates/store/impl/rocksdb/src/lib.rs:137\n",
+        );
+        let found = super::error_lines_from_log(body).expect("should surface an error");
+        assert!(found.starts_with("Corruption:"), "frame number dropped: {found}");
+        assert!(found.contains("000178.sst"), "got: {found}");
+        assert!(!found.contains('\u{1b}'), "colour codes must be stripped: {found}");
+        assert!(!found.contains("Location"), "must stop at the frames: {found}");
+    }
+
+    /// A start logs its context before its cause, so the last report is the one
+    /// that explains the failure - an earlier retry's error is stale.
+    #[test]
+    fn a_failed_start_surfaces_the_last_report_not_the_first() {
+        let body = concat!(
+            "Error: \n",
+            "   0: an earlier failure that was retried\n",
+            "\n",
+            "INFO some progress\n",
+            "Error: \n",
+            "   0: the one that actually stopped the node\n",
+        );
+        let found = super::error_lines_from_log(body).expect("should surface an error");
+        assert_eq!(found, "the one that actually stopped the node");
+    }
+
+    #[test]
+    fn a_start_failure_quotes_the_nodes_error_when_the_log_has_one() {
+        let log = "Error: \n   0: Corruption: the store is unopenable\n";
+        assert_eq!(
+            super::start_failure_message(1, Some(log)),
+            "The node stopped immediately: Corruption: the store is unopenable"
+        );
+    }
+
+    /// No parseable error: the exit code is all the user has, so it must survive.
+    #[test]
+    fn a_start_failure_falls_back_to_the_exit_code() {
+        for log in [None, Some(" INFO merod::cli::run: nothing wrong here\n")] {
+            let msg = super::start_failure_message(101, log);
+            assert!(msg.contains("101"), "exit code lost: {msg}");
+            assert!(msg.contains("Check merod logs"), "got: {msg}");
+        }
+    }
+
+    #[test]
+    fn a_healthy_log_surfaces_nothing() {
+        let body = " INFO merod::cli::run: TEE not configured\n INFO node: Peer ID: 12D3Koo\n";
+        assert_eq!(super::error_lines_from_log(body), None);
+        // A header with no frames says nothing; the exit code is the better message.
+        assert_eq!(super::error_lines_from_log("Error: \n"), None);
+    }
+
+    /// The Windows fallback: tracked state is all there is, so it must at least
+    /// recognise a node this app started on the same home and name.
+    #[test]
+    fn the_tracked_fallback_finds_this_apps_own_node() {
+        let state = [tracked(11, HOME_A, "default"), tracked(22, HOME_A, "mydev")];
+        let home = std::path::Path::new(HOME_A);
+        assert_eq!(super::tracked_node_for(&state, home, "mydev"), Some(22));
+        assert_eq!(super::tracked_node_for(&state, home, "absent"), None);
+        assert_eq!(
+            super::tracked_node_for(&state, std::path::Path::new(HOME_B), "default"),
+            None,
+            "a node on another home is not ours to reuse"
+        );
+    }
+
+    /// Quitting stops what the app started, and leaves a node it merely adopted.
+    #[test]
+    fn quitting_stops_only_the_nodes_this_app_started() {
+        let mine = tracked(11, HOME_A, "default");
+        let mut theirs = tracked(22, HOME_A, "mydev");
+        theirs.owned = false;
+        assert_eq!(super::owned_pids(&[mine, theirs]), vec![11]);
+    }
+
+    /// Stopping one node must not take its siblings down with it.
+    #[test]
+    fn stopping_a_named_node_leaves_its_siblings_running() {
+        let state = [tracked(11, HOME_A, "default"), tracked(22, HOME_A, "mydev")];
+        assert_eq!(
+            super::tracked_pids_for(&state, Some((Path::new(HOME_A), "mydev"))),
+            vec![22]
+        );
+    }
+
+    #[test]
+    fn stopping_without_naming_a_node_stops_every_tracked_node() {
+        let state = [tracked(11, HOME_A, "default"), tracked(22, HOME_A, "mydev")];
+        assert_eq!(super::tracked_pids_for(&state, None), vec![11, 22]);
+    }
+
+    #[test]
+    fn stopping_a_node_of_the_same_name_on_another_home_matches_nothing() {
+        let state = [tracked(11, HOME_A, "default")];
+        assert!(super::tracked_pids_for(&state, Some((Path::new(HOME_B), "default"))).is_empty());
+    }
+
+    /// Wiring a second shutdown path must not run the teardown twice.
+    #[test]
+    fn only_the_first_shutdown_request_does_the_work() {
+        assert!(super::claim_shutdown(), "the first request must win");
+        assert!(!super::claim_shutdown(), "a second request must be a no-op");
+        assert!(!super::claim_shutdown());
+    }
+
+    /// Stopping returns when the node is actually gone, not when a fixed sleep is up.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_stop_returns_as_soon_as_the_process_is_gone() {
+        let mut child = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .expect("spawn a stand-in node");
+        let pid = child.id();
+        // Reaped off-thread, as the real node's monitor task does; an unreaped child
+        // stays a PID the process table still answers for.
+        let reaper = std::thread::spawn(move || child.wait());
+        let started = std::time::Instant::now();
+        super::stop_pids(&[pid]).await.expect("must stop cleanly");
+        let _ = reaper.join();
+        assert!(!super::is_process_running(pid), "pid {pid} outlived the stop");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(2),
+            "stopping sat on a timer for {:?}",
+            started.elapsed()
+        );
+    }
+
+    /// Quit signals and moves on: merod's flush takes about ten seconds, and no
+    /// user waits that long for the window to go away.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn quitting_does_not_wait_for_a_node_that_ignores_sigterm() {
+        let mut child = std::process::Command::new("sh")
+            .args(["-c", "trap '' TERM; sleep 30"])
+            .spawn()
+            .expect("spawn a stand-in mid-flush node");
+        let started = std::time::Instant::now();
+        super::kill_pids(&[child.id()], super::TermPatience::SignalOnly).await;
+        let elapsed = started.elapsed();
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(
+            elapsed < std::time::Duration::from_secs(2),
+            "quit blocked for {elapsed:?} on a node that was still flushing"
+        );
+    }
+
+    /// Nothing to delete is not a failure, and the reset flow keys on the difference.
+    #[tokio::test]
+    async fn deleting_a_missing_directory_reports_nothing_deleted() {
+        let missing =
+            std::env::temp_dir().join(format!("calimero-absent-{}", std::process::id()));
+        let outcome = super::delete_calimero_data_dir(missing.to_string_lossy().to_string())
+            .await
+            .expect("a missing directory is not an error");
+        assert!(!outcome.deleted, "nothing was there to delete");
+        assert_eq!(outcome.path, missing.to_string_lossy());
+    }
+
+    /// A real delete reports true, and the directory is gone with it.
+    #[tokio::test]
+    async fn deleting_a_directory_reports_that_it_went() {
+        let dir = dirs::home_dir()
+            .expect("home directory")
+            .join(format!(".calimero-delete-test-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("nested")).expect("create scratch dir");
+        let outcome = super::delete_calimero_data_dir(dir.to_string_lossy().to_string())
+            .await
+            .expect("delete a scratch dir under home");
+        assert!(outcome.deleted, "a directory that existed must report deleted");
+        assert!(!dir.exists(), "{} survived the delete", dir.display());
     }
 
     #[test]

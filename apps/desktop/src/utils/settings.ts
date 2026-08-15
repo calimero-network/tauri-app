@@ -33,6 +33,8 @@ const DEFAULT_NODE_URL = 'http://localhost:2528';
  *  out from the UI. */
 export const DEFAULT_EMBEDDED_NODE_PORT = 2528;
 export const DEFAULT_EMBEDDED_SWARM_PORT = 2428;
+/** Home dir the app manages when settings say nothing; also merod's own default. */
+export const DEFAULT_NODE_HOME_DIR = '~/.calimero';
 const DEFAULT_REGISTRY_URL = 'https://apps.calimero.network/';
 const OLD_DEFAULT_REGISTRY_URL = 'http://localhost:8080';
 

@@ -4,7 +4,7 @@
  */
 
 import type { Update } from '@tauri-apps/plugin-updater';
-import { stopMerod, killAllMerodProcesses, downloadAndReplaceMerod } from './merod';
+import { stopMerod, downloadAndReplaceMerod } from './merod';
 import { compareSemverDesc } from './registry';
 
 // The Update handle from the most recent checkForUpdates(). installUpdate()
@@ -77,7 +77,8 @@ export async function checkForUpdates(): Promise<UpdateStatus> {
 
 /**
  * Full update sequence:
- *   1. Stop the embedded merod node (graceful + force-kill)
+ *   1. Stop this app's own tracked node(s) - never a machine-wide kill, which
+ *      would also tear down an unrelated node someone else is running.
  *   2. Download the correct merod binary from GitHub and replace the bundled one
  *   3. Verify the binary version matches the build-time config
  *   4. Install the Tauri app update (new frontend + Rust shell)
@@ -90,10 +91,9 @@ export async function installUpdate(onStatus: (status: string) => void = () => {
     throw new Error('Not running in Tauri environment');
   }
 
-  // 1. Stop node
+  // 1. Stop node - stopMerod() only ever touches this app's own tracked node(s).
   onStatus('Stopping nodes...');
   try { await stopMerod(); } catch (e) { console.warn('[updater] stopMerod failed (node may not be running):', e); }
-  try { await killAllMerodProcesses(); } catch (e) { console.warn('[updater] killAllMerodProcesses failed:', e); }
 
   // 2. Download + replace merod binary
   onStatus('Downloading merod binary...');

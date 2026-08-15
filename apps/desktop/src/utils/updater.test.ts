@@ -8,7 +8,6 @@ const {
   mockCheck,
   mockGetVersion,
   mockStopMerod,
-  mockKillAll,
   mockDownloadAndReplace,
 } = vi.hoisted(() => ({
   mockDownloadAndInstall: vi.fn().mockResolvedValue(undefined),
@@ -17,7 +16,6 @@ const {
   mockCheck: vi.fn(),
   mockGetVersion: vi.fn().mockResolvedValue('0.0.39'),
   mockStopMerod: vi.fn().mockResolvedValue('stopped'),
-  mockKillAll: vi.fn().mockResolvedValue('killed'),
   mockDownloadAndReplace: vi.fn().mockResolvedValue({
     replaced: true,
     expected_version: '0.10.1-rc.43',
@@ -43,7 +41,6 @@ vi.mock('@tauri-apps/plugin-process', () => ({ relaunch: mockRelaunch }));
 vi.mock('@tauri-apps/api/app', () => ({ getVersion: mockGetVersion }));
 vi.mock('./merod', () => ({
   stopMerod: mockStopMerod,
-  killAllMerodProcesses: mockKillAll,
   downloadAndReplaceMerod: mockDownloadAndReplace,
 }));
 
@@ -62,7 +59,6 @@ beforeEach(() => {
   mockCheck.mockResolvedValue(makeUpdate());
   mockGetVersion.mockResolvedValue('0.0.39');
   mockStopMerod.mockResolvedValue('stopped');
-  mockKillAll.mockResolvedValue('killed');
   mockDownloadAndReplace.mockResolvedValue({
     replaced: true,
     expected_version: '0.10.1-rc.43',
@@ -75,7 +71,6 @@ describe('installUpdate', () => {
   it('runs the full sequence in order: stop → download merod → install app → relaunch', async () => {
     const callOrder: string[] = [];
     mockStopMerod.mockImplementation(async () => { callOrder.push('stopMerod'); });
-    mockKillAll.mockImplementation(async () => { callOrder.push('killAll'); });
     mockDownloadAndReplace.mockImplementation(async () => {
       callOrder.push('downloadAndReplace');
       return { replaced: true, expected_version: '0.10.1-rc.43', current_version: 'merod 0.10.1-rc.43', message: '' };
@@ -85,7 +80,15 @@ describe('installUpdate', () => {
 
     await installUpdate();
 
-    expect(callOrder).toEqual(['stopMerod', 'killAll', 'downloadAndReplace', 'downloadAndInstall', 'relaunch']);
+    expect(callOrder).toEqual(['stopMerod', 'downloadAndReplace', 'downloadAndInstall', 'relaunch']);
+  });
+
+  it('stops only the app\'s own tracked node(s), never every merod on the machine', async () => {
+    // Regression: installUpdate force-killed every merod on the machine; it must
+    // stop only the nodes this app tracks.
+    await installUpdate();
+
+    expect(mockStopMerod).toHaveBeenCalledOnce();
   });
 
   it('calls onStatus with each step label', async () => {
@@ -100,13 +103,6 @@ describe('installUpdate', () => {
 
   it('proceeds even when stopMerod throws (node not running)', async () => {
     mockStopMerod.mockRejectedValue(new Error('not running'));
-    await expect(installUpdate()).resolves.toBeUndefined();
-    expect(mockDownloadAndReplace).toHaveBeenCalledOnce();
-    expect(mockRelaunch).toHaveBeenCalledOnce();
-  });
-
-  it('proceeds even when killAllMerodProcesses throws', async () => {
-    mockKillAll.mockRejectedValue(new Error('kill failed'));
     await expect(installUpdate()).resolves.toBeUndefined();
     expect(mockDownloadAndReplace).toHaveBeenCalledOnce();
     expect(mockRelaunch).toHaveBeenCalledOnce();

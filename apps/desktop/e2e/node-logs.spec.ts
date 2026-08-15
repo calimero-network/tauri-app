@@ -34,7 +34,6 @@ describeAfter35("Nodes – logs viewer", () => {
     await stubTauriInvoke(page, {
       list_merod_nodes: [NODE],
       detect_running_merod_nodes: [],
-      get_merod_status: null,
       get_merod_binary_version: "0.11.0-rc.20",
       // Every command whose result the page treats as an array has to be
       // stubbed: unstubbed commands resolve to null, and the Nodes page feeds

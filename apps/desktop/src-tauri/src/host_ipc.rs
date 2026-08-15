@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 pub fn host_socket_path() -> PathBuf {
     let base = dirs::data_dir()
         .unwrap_or_else(std::env::temp_dir)
-        .join("network.calimero.desktop");
+        .join(crate::app_dir_name());
     let _ = std::fs::create_dir_all(&base);
     {
         use std::os::unix::fs::PermissionsExt;

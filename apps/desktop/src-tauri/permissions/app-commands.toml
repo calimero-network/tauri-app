@@ -97,11 +97,6 @@ description = "Enables the stop_merod_by_pid_command command."
 commands.allow = ["stop_merod_by_pid_command"]
 
 [[permission]]
-identifier = "allow-get-merod-status"
-description = "Enables the get_merod_status command."
-commands.allow = ["get_merod_status"]
-
-[[permission]]
 identifier = "allow-list-merod-nodes"
 description = "Enables the list_merod_nodes command."
 commands.allow = ["list_merod_nodes"]
@@ -197,11 +192,6 @@ description = "Enables the remove_app_launchers command."
 commands.allow = ["remove_app_launchers"]
 
 [[permission]]
-identifier = "allow-kill-all-merod-processes"
-description = "Enables the kill_all_merod_processes command."
-commands.allow = ["kill_all_merod_processes"]
-
-[[permission]]
 identifier = "allow-autostart-enable"
 description = "Enables the autostart_enable command."
 commands.allow = ["autostart_enable"]
@@ -294,7 +284,6 @@ permissions = [
   "allow-start-merod",
   "allow-stop-merod",
   "allow-stop-merod-by-pid-command",
-  "allow-get-merod-status",
   "allow-list-merod-nodes",
   "allow-check-merod-health",
   "allow-pick-directory",
@@ -314,7 +303,6 @@ permissions = [
   "allow-delete-calimero-data-dir",
   "allow-clear-app-sessions",
   "allow-remove-app-launchers",
-  "allow-kill-all-merod-processes",
   "allow-autostart-enable",
   "allow-autostart-disable",
   "allow-autostart-is-enabled",

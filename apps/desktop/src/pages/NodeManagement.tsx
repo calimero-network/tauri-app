@@ -12,6 +12,7 @@ import {
   initMerodNode,
   startMerod,
   stopMerodByPid,
+  restartMerod,
   detectRunningMerodNodes,
   getMerodLogs,
   clearMerodLogs,
@@ -29,7 +30,7 @@ import {
 import { invoke } from "@tauri-apps/api/core";
 import { homeDir as getOsHomeDir } from "@tauri-apps/api/path";
 import { useToast } from "../contexts/ToastContext";
-import { Play, Square, RefreshCw, Check, FileText, ChevronDown } from "lucide-react";
+import { Play, Square, RefreshCw, RotateCw, Check, FileText, ChevronDown } from "lucide-react";
 import { LogsViewer } from "../components/LogsViewer";
 import { ScrollHint } from "../components/ScrollHint";
 import { VersionsPanel } from "../components/VersionsPanel";
@@ -71,6 +72,14 @@ export function resolveStartPorts(
   return { serverPort, swarmPort };
 }
 
+/** Warning body for restarting a node this app didn't start, or null when no
+ *  warning is needed - restarting replaces whatever merod version launched it. */
+export function restartWarning(node: RunningMerodNode | undefined): string | null {
+  if (!node || node.owned !== false) return null;
+  const exeLine = node.exe ? `"${node.node_name}" is running from ${node.exe}.\n` : '';
+  return `${exeLine}Restarting runs this node's pinned merod version, and Calimero Desktop will stop the node when you quit.`;
+}
+
 function NodeManagement() {
   const toast = useToast();
   
@@ -83,6 +92,7 @@ function NodeManagement() {
   const [newAdminUser, setNewAdminUser] = useState("");
   const [newAdminPassword, setNewAdminPassword] = useState("");
   const [loading, setLoading] = useState(false);
+  const [restartConfirmNode, setRestartConfirmNode] = useState<RunningMerodNode | null>(null);
   const [serverPort, setServerPort] = useState<number>(DEFAULT_EMBEDDED_NODE_PORT);
   const [swarmPort, setSwarmPort] = useState<number>(DEFAULT_EMBEDDED_SWARM_PORT);
   // Needed to compare a "~/..." home dir against an already-running node's
@@ -366,6 +376,51 @@ function NodeManagement() {
     } finally {
       setLoading(false);
     }
+  };
+
+  // The node's own ports, not the form's: a restart must not silently move a
+  // running node to whatever the port fields happen to show.
+  const performRestart = async (node: RunningMerodNode) => {
+    setLoading(true);
+    try {
+      const result = await restartMerod(node.port, node.swarm_port ?? swarmPort, homeDir, selectedNode, getSettings().debugLogs);
+      toast.success(
+        result.restarted
+          ? `Node "${selectedNode}" restarted`
+          : `Node "${selectedNode}" wasn't running - started it`
+      );
+      await detectRunning();
+    } catch (error: any) {
+      console.error("Failed to restart node:", error);
+      toast.error(`Failed to restart node: ${error.message || error}`);
+    } finally {
+      setLoading(false);
+      setRestartConfirmNode(null);
+    }
+  };
+
+  const handleRestartNode = async () => {
+    if (!selectedNode) {
+      toast.error("Please select a node");
+      return;
+    }
+
+    const runningNode = findRunningNode(
+      safeRunningNodes,
+      homeDir,
+      selectedNode,
+      osHomeDir || (await getOsHomeDir())
+    );
+    if (!runningNode?.pid) {
+      toast.error(`Node "${selectedNode}" is not running`);
+      return;
+    }
+
+    if (restartWarning(runningNode) !== null) {
+      setRestartConfirmNode(runningNode);
+      return;
+    }
+    await performRestart(runningNode);
   };
 
   const handleViewLogs = async () => {
@@ -752,6 +807,16 @@ function NodeManagement() {
                   <Square size={16} />
                   Stop Node
                 </button>
+                {getRunningNodeInfo(selectedNode).running && (
+                  <button
+                    onClick={handleRestartNode}
+                    className="button button-secondary"
+                    disabled={loading || !selectedNode}
+                  >
+                    <RotateCw size={16} />
+                    Restart
+                  </button>
+                )}
                 <button
                   onClick={() => { loadNodes(); detectRunning(); }}
                   className="button button-secondary"
@@ -772,6 +837,34 @@ function NodeManagement() {
                   </button>
                 )}
               </div>
+              {restartConfirmNode && (
+                <div className="reset-confirm-form">
+                  <p className="reset-confirm-warning">
+                    Restart a node Calimero Desktop didn't start?
+                  </p>
+                  {restartWarning(restartConfirmNode)?.split('\n').map((line) => (
+                    <p className="reset-confirm-warning" key={line}>{line}</p>
+                  ))}
+                  <div className="reset-confirm-actions">
+                    <button
+                      type="button"
+                      onClick={() => setRestartConfirmNode(null)}
+                      className="button button-secondary"
+                      disabled={loading}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => performRestart(restartConfirmNode)}
+                      className="button button-primary"
+                      disabled={loading}
+                    >
+                      Restart
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 

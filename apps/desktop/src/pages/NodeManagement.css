@@ -530,3 +530,24 @@
   margin-top: -16px;
   margin-bottom: 24px;
 }
+
+.reset-confirm-form {
+  margin-top: 12px;
+  padding: 16px;
+  background: var(--surface-glass-soft);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-color);
+}
+
+.reset-confirm-warning {
+  margin: 0 0 16px 0;
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.reset-confirm-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+}

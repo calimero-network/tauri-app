@@ -9,6 +9,8 @@ pub struct DiscoveredNode {
     pub pid: u32,
     pub home: String,
     pub node: String,
+    /// What the node is running now, which a restart would replace with its pin.
+    pub exe: String,
 }
 
 /// Canonical form where possible, so paths that differ only in spelling compare
@@ -49,6 +51,7 @@ fn parse_node_listing(listing: &str) -> Vec<DiscoveredNode> {
                 pid,
                 home: flag_value(flags, "--home")?.to_string(),
                 node: flag_value(flags, "--node")?.to_string(),
+                exe: exe.to_string(),
             })
         })
         .collect()
@@ -176,6 +179,7 @@ mod tests {
             pid,
             home: home.to_string_lossy().to_string(),
             node: node.to_string(),
+            exe: "/usr/local/bin/merod".to_string(),
         }
     }
 
@@ -268,6 +272,17 @@ mod tests {
                        92 awk /merod/ && /run/\n\
                        93 /bin/sh -c sleep 20; : merod --node w run";
         assert_eq!(discovered(listing), vec![]);
+    }
+
+    /// A restart replaces the running binary with the node's pinned one, so the
+    /// warning can only name what changes if discovery keeps the path.
+    #[test]
+    fn keeps_the_executable_path() {
+        let listing = "4711 /Users/x/core/target/debug/merod --home /Users/x/dev --node alice run";
+        assert_eq!(
+            parse_node_listing(listing)[0].exe,
+            "/Users/x/core/target/debug/merod"
+        );
     }
 
     #[test]

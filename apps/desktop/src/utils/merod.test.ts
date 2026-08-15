@@ -7,6 +7,8 @@ import {
   normalizeHomeDir,
   findRunningNode,
   detectRunningMerodNodes,
+  restartMerod,
+  pollUntilNodeReady,
   type RunningMerodNode,
 } from './merod';
 
@@ -153,5 +155,52 @@ describe('detectRunningMerodNodes', () => {
     invoke.mockResolvedValue(running);
 
     await expect(detectRunningMerodNodes()).resolves.toEqual(running);
+  });
+});
+
+describe('restartMerod', () => {
+  it('passes its arguments through and returns the outcome', async () => {
+    invoke.mockResolvedValue({ restarted: true, pid: 999 });
+
+    const result = await restartMerod(2528, 2428, '/Users/dev/.calimero', 'default', true);
+
+    expect(invoke).toHaveBeenCalledWith('restart_merod', {
+      serverPort: 2528,
+      swarmPort: 2428,
+      dataDir: '/Users/dev/.calimero',
+      nodeName: 'default',
+      debugLogs: true,
+    });
+    expect(result).toEqual({ restarted: true, pid: 999 });
+  });
+});
+
+describe('pollUntilNodeReady', () => {
+  it('resolves true as soon as health returns ok', async () => {
+    const healthCheck = vi.fn().mockResolvedValue({});
+
+    await expect(pollUntilNodeReady(healthCheck)).resolves.toBe(true);
+    expect(healthCheck).toHaveBeenCalledOnce();
+  });
+
+  it('treats a 401 as ready, not a failure', async () => {
+    const healthCheck = vi.fn().mockResolvedValue({ error: { code: '401' } });
+
+    await expect(pollUntilNodeReady(healthCheck)).resolves.toBe(true);
+    expect(healthCheck).toHaveBeenCalledOnce();
+  });
+
+  it('gives up after the deadline when the node never answers', async () => {
+    vi.useFakeTimers();
+    try {
+      const healthCheck = vi.fn().mockResolvedValue({ error: { code: '500' } });
+
+      const pending = pollUntilNodeReady(healthCheck, 1000, 250);
+      const assertion = expect(pending).resolves.toBe(false);
+      await vi.advanceTimersByTimeAsync(1000);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

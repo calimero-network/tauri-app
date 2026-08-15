@@ -2465,6 +2465,26 @@ fn discovery_failed(e: std::io::Error) -> TauriError {
     )
 }
 
+/// A different node already listening on this port. Naming it lets the caller
+/// decide, where evicting it silently stopped nodes the user still needed.
+#[cfg(unix)]
+fn port_taken_by(
+    running: &[DiscoveredNode],
+    port: u16,
+    home: &std::path::Path,
+    node: &str,
+) -> Option<String> {
+    let home = resolved(home);
+    running
+        .iter()
+        .find(|found| {
+            let found_home = std::path::Path::new(&found.home);
+            let same_node = found.node == node && resolved(found_home) == home;
+            !same_node && node_ports(&found_home.join(&found.node).join("config.toml")).0 == port
+        })
+        .map(|found| found.node.clone())
+}
+
 /// Takes over a node already serving `(home, node)` instead of starting a second
 /// writer, which RocksDB's lock stops only while its directory still exists there.
 #[cfg(unix)]
@@ -2497,6 +2517,13 @@ fn adopt_running_node(
     Some(pid)
 }
 
+/// Whether the caller already holds `NODE_LIFECYCLE`. A restart has to span its
+/// stop and its start, or something else can start the node in between.
+enum LifecycleLock {
+    Acquire,
+    AlreadyHeld,
+}
+
 #[tauri::command]
 async fn start_merod(
     server_port: Option<u16>,
@@ -2508,27 +2535,112 @@ async fn start_merod(
     merod_state: tauri::State<'_, MerodState>,
     log_writers: tauri::State<'_, MerodLogWriters>,
 ) -> Result<String, TauriError> {
+    start_node(
+        server_port,
+        swarm_port,
+        data_dir,
+        node_name,
+        debug_logs,
+        app_handle,
+        merod_state,
+        log_writers,
+        LifecycleLock::Acquire,
+    )
+    .await
+}
+
+/// What serves `(home, node)` right now: the process table on unix, and on Windows
+/// the app's own tracked state, which is all that platform can account for.
+fn live_node_pid(
+    home: &std::path::Path,
+    node: &str,
+    merod_state: &MerodState,
+) -> Result<Option<u32>, TauriError> {
+    #[cfg(unix)]
+    {
+        let _ = merod_state;
+        let running = discover_nodes().map_err(discovery_failed)?;
+        Ok(existing_node_for(&running, home, node))
+    }
+    #[cfg(not(unix))]
+    {
+        Ok(tracked_node_for(&merod_state.lock_unpoisoned(), home, node))
+    }
+}
+
+/// Stops the node serving this directory and starts it again, holding
+/// `NODE_LIFECYCLE` across both so nothing starts a second writer in between.
+#[tauri::command]
+async fn restart_merod(
+    server_port: Option<u16>,
+    swarm_port: Option<u16>,
+    data_dir: Option<String>,
+    node_name: Option<String>,
+    debug_logs: Option<bool>,
+    app_handle: tauri::AppHandle,
+    merod_state: tauri::State<'_, MerodState>,
+    log_writers: tauri::State<'_, MerodLogWriters>,
+) -> Result<serde_json::Value, TauriError> {
+    let node = node_name.clone().ok_or_else(|| {
+        TauriError::new(TauriErrorCode::InvalidInput, "Restart needs a node name")
+    })?;
+    let home = resolve_home_dir(data_dir.clone())?;
+    let state = (*merod_state).clone();
+
+    let _lifecycle = NODE_LIFECYCLE.lock().await;
+
+    let was_running = live_node_pid(&home, &node, &state)?;
+    if let Some(pid) = was_running {
+        info!("[Merod] Restarting node '{node}' (PID {pid})");
+        stop_pids(&[pid]).await?;
+        merod_state.lock_unpoisoned().retain(|p| p.pid != pid);
+        #[cfg(unix)]
+        remove_claim(&home, &node);
+        emit_merod_status_changed(&app_handle);
+        // A returned kill is not an exited process, and spawning beside one that
+        // still holds the directory is the double writer itself.
+        if let Some(alive) = live_node_pid(&home, &node, &state)? {
+            return Err(TauriError::new(
+                TauriErrorCode::MerodStopFailed,
+                format!("Node \"{node}\" is still running (PID {alive}); not starting another"),
+            ));
+        }
+    }
+
+    start_node(
+        server_port,
+        swarm_port,
+        data_dir,
+        node_name,
+        debug_logs,
+        app_handle,
+        merod_state,
+        log_writers,
+        LifecycleLock::AlreadyHeld,
+    )
+    .await?;
+
+    Ok(serde_json::json!({
+        "restarted": was_running.is_some(),
+        "pid": live_node_pid(&home, &node, &state)?.unwrap_or_default(),
+    }))
+}
+
+/// Starts a node, or takes over the one already serving this directory. Never
+/// stops anything: an unasked-for stop is what `restart_merod` exists to make explicit.
+async fn start_node(
+    server_port: Option<u16>,
+    swarm_port: Option<u16>,
+    data_dir: Option<String>,
+    node_name: Option<String>,
+    debug_logs: Option<bool>,
+    app_handle: tauri::AppHandle,
+    merod_state: tauri::State<'_, MerodState>,
+    log_writers: tauri::State<'_, MerodLogWriters>,
+    lifecycle: LifecycleLock,
+) -> Result<String, TauriError> {
     let server_port = server_port.unwrap_or(2528);
     let swarm_port = swarm_port.unwrap_or(2428);
-
-    // Only a node this app started on this port is evictable. An adopted entry can
-    // be one it merely connected to, and killing that is the data loss we fixed.
-    let evictable: Option<u32> = {
-        let state = merod_state.lock_unpoisoned();
-        state
-            .iter()
-            .find(|p| p.port == server_port && p.owned)
-            .map(|p| p.pid)
-    };
-
-    if let Some(pid) = evictable {
-        info!("[Merod] Stopping our node on port {server_port} (PID {pid}) before starting");
-        kill_pids(&[pid], TermPatience::Wait).await;
-        merod_state
-            .lock_unpoisoned()
-            .retain(|p| p.pid != pid);
-        emit_merod_status_changed(&app_handle);
-    }
 
     // Prepare home directory (where .calimero folder is, e.g., ~/.calimero)
     // Same resolver as get_merod_logs/clear_merod_logs, so a node writes logs at
@@ -2557,7 +2669,10 @@ async fn start_merod(
     let merod_binary = merod_versions::resolve_binary(&app_handle, &version_id).await?;
 
     // Taken after the download above, so it spans only the check through the spawn.
-    let _lifecycle = NODE_LIFECYCLE.lock().await;
+    let _lifecycle = match lifecycle {
+        LifecycleLock::Acquire => Some(NODE_LIFECYCLE.lock().await),
+        LifecycleLock::AlreadyHeld => None,
+    };
 
     // Refuse rather than guess: an unreadable process table would otherwise read as
     // "nothing is running" and put a second writer on this store.
@@ -2580,6 +2695,15 @@ async fn start_merod(
             .and_then(|node| adopt_running_node(&running, &home_dir_path, node, &merod_state, &app_handle))
         {
             return Ok(format!("Merod already running with PID: {pid}"));
+        }
+        if let Some(other) = node_name
+            .as_deref()
+            .and_then(|node| port_taken_by(&running, server_port, &home_dir_path, node))
+        {
+            return Err(TauriError::new(
+                TauriErrorCode::InvalidInput,
+                format!("Port {server_port} is in use by node \"{other}\". Stop it first."),
+            ));
         }
     }
 
@@ -3342,69 +3466,31 @@ fn node_ports(config_path: &std::path::Path) -> (u16, u16) {
         .unwrap_or(DEFAULT_NODE_PORTS)
 }
 
+/// The UI's row for a running node: ports come from the node's own config, and
+/// `owned` says whether this app started it and may stop it on quit.
+#[cfg(unix)]
+fn running_node_json(node: &DiscoveredNode) -> serde_json::Value {
+    let home = std::path::PathBuf::from(&node.home);
+    let (port, swarm_port) = node_ports(&home.join(&node.node).join("config.toml"));
+    serde_json::json!({
+        "pid": node.pid,
+        "node_name": node.node,
+        "port": port,
+        "swarm_port": swarm_port,
+        "home_dir": node.home,
+        "exe": node.exe,
+        "owned": claim_matches(&home, &node.node, node.pid),
+    })
+}
+
 #[tauri::command]
 async fn detect_running_merod_nodes() -> Result<Vec<serde_json::Value>, TauriError> {
     #[cfg(unix)]
     {
-        // Use ps to find merod processes
-        let output = tokio::process::Command::new("ps")
-            .arg("ax")
-            .arg("-o")
-            .arg("pid,command")
-            .output()
-            .await
-            .map_err(|e| {
-                TauriError::with_details(
-                    TauriErrorCode::InternalError,
-                    "Failed to run ps",
-                    e.to_string(),
-                )
-            })?;
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let mut running_nodes = Vec::new();
-
-        for line in stdout.lines() {
-            if line.contains("merod") && line.contains("run") {
-                // Parse PID and extract node name and home directory from command
-                let parts: Vec<&str> = line.split_whitespace().collect();
-                if let Some(pid_str) = parts.first() {
-                    if let Ok(pid) = pid_str.parse::<u32>() {
-                        // Try to extract node name and home directory from arguments
-                        let mut node_name = None;
-                        let mut home_dir = None;
-
-                        for (i, part) in parts.iter().enumerate() {
-                            if (part == &"--node" || part == &"-n") && i + 1 < parts.len() {
-                                node_name = Some(parts[i + 1].to_string());
-                            }
-                            if part == &"--home" && i + 1 < parts.len() {
-                                home_dir = Some(parts[i + 1].to_string());
-                            }
-                        }
-
-                        let (server_port, swarm_port) = match (&node_name, &home_dir) {
-                            (Some(name), Some(home)) => node_ports(
-                                &std::path::PathBuf::from(home)
-                                    .join(name)
-                                    .join("config.toml"),
-                            ),
-                            _ => DEFAULT_NODE_PORTS,
-                        };
-
-                        running_nodes.push(serde_json::json!({
-                            "pid": pid,
-                            "node_name": node_name.unwrap_or_else(|| format!("node_{}", pid)),
-                            "port": server_port,
-                            "swarm_port": swarm_port,
-                            "home_dir": home_dir.unwrap_or_else(|| "unknown".to_string())
-                        }));
-                    }
-                }
-            }
-        }
-
-        Ok(running_nodes)
+        // The same parser the guards use: a node the backend refuses to start twice
+        // must never display as stopped, which two parsers cannot guarantee.
+        let running = discover_nodes().map_err(discovery_failed)?;
+        Ok(running.iter().map(running_node_json).collect())
     }
 
     #[cfg(windows)]
@@ -4899,6 +4985,7 @@ fn main() {
             broker_token_refresh,
             resolve_token_request,
             start_merod,
+            restart_merod,
             stop_merod,
             stop_merod_by_pid_command,
             list_merod_nodes,
@@ -5019,6 +5106,38 @@ listen = ["/ip4/0.0.0.0/udp/4001/quic-v1", "/ip4/0.0.0.0/tcp/4002"]
         // Anything unusable falls back rather than reporting a wrong port.
         assert_eq!(parse_node_ports("[server]\n"), DEFAULT_NODE_PORTS);
         assert_eq!(parse_node_ports("not toml ["), DEFAULT_NODE_PORTS);
+    }
+
+    /// Silently killing whatever holds the port is how a node the user still
+    /// needed got stopped, so the caller is told which node to stop instead.
+    #[cfg(unix)]
+    #[test]
+    fn a_port_held_by_another_node_names_it_rather_than_evicting_it() {
+        let base = std::env::temp_dir().join(format!("calimero-port-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        for (node, port) in [("alpha", 3001), ("beta", 3002)] {
+            std::fs::create_dir_all(base.join(node)).unwrap();
+            std::fs::write(
+                base.join(node).join("config.toml"),
+                format!("[server]\nlisten = [\"/ip4/127.0.0.1/tcp/{port}\"]\n"),
+            )
+            .unwrap();
+        }
+        let running = vec![super::DiscoveredNode {
+            pid: 7,
+            home: base.to_string_lossy().to_string(),
+            node: "alpha".to_string(),
+            exe: "/usr/local/bin/merod".to_string(),
+        }];
+
+        assert_eq!(
+            super::port_taken_by(&running, 3001, &base, "beta").as_deref(),
+            Some("alpha")
+        );
+        // Its own port is not a conflict: that node is the one being started.
+        assert_eq!(super::port_taken_by(&running, 3001, &base, "alpha"), None);
+        assert_eq!(super::port_taken_by(&running, 3002, &base, "beta"), None);
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[cfg(target_os = "macos")]

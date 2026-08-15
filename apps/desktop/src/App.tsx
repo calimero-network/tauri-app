@@ -14,7 +14,7 @@ import {
   DEFAULT_NODE_HOME_DIR,
 } from "./utils/settings";
 import { clearOnboardingProgress } from "./utils/onboardingProgress";
-import { startMerod, detectRunningMerodNodes, waitForNodeHealthy, findRunningNode, type RunningMerodNode } from "./utils/merod";
+import { startMerod, detectRunningMerodNodes, waitForNodeHealthy, findRunningNode, pollUntilNodeReady, type RunningMerodNode } from "./utils/merod";
 import { homeDir } from "@tauri-apps/api/path";
 import { useToast } from "./contexts/ToastContext";
 import { checkOnboardingState } from "./utils/onboarding";
@@ -408,7 +408,7 @@ function App() {
       // double-spawning, keeping the backend's quit-time tracking accurate too.
       await startMerod(serverPort, swarmPort, dataDir, settings.embeddedNodeName, settings.debugLogs);
       if (!alreadyRunning) {
-        await new Promise((r) => setTimeout(r, 3000));
+        await pollUntilNodeReady(() => apiClient.node.healthCheck());
       }
       await checkConnection();
     } catch (err) {

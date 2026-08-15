@@ -123,6 +123,15 @@ describe('findRunningNode', () => {
     expect(findRunningNode([unplaceable], `${OS_HOME}/.calimero`, 'default')).toBeUndefined();
   });
 
+  it('cannot match a ~ home until the OS home dir is known', () => {
+    // Why the callers resolve it before deciding: a running node reports an
+    // absolute path, so an unexpanded "~" reads as "nothing is running".
+    const ours = node({ home_dir: `${OS_HOME}/.calimero` });
+
+    expect(findRunningNode([ours], MANAGED_HOME, ours.node_name, '')).toBeUndefined();
+    expect(findRunningNode([ours], MANAGED_HOME, ours.node_name, OS_HOME)).toBe(ours);
+  });
+
   it('matches nothing when no node is configured, rather than any node in the home', () => {
     // The home alone can match several nodes, so an unnamed lookup would adopt
     // whichever the scan listed first and hand the UI a node the user never chose.

@@ -133,7 +133,11 @@ function NodeManagement() {
   }, []);
 
   useEffect(() => {
-    getOsHomeDir().then(setOsHomeDir).catch(() => {});
+    getOsHomeDir()
+      .then(setOsHomeDir)
+      // Left empty, "~/..." never matches a running node's absolute path, so the
+      // handlers resolve it themselves rather than trusting this.
+      .catch((err) => console.warn("[NodeManagement] could not resolve the home dir:", err));
   }, []);
 
   useEffect(() => {
@@ -283,8 +287,10 @@ function NodeManagement() {
       return;
     }
 
-    // Compute port at click time to avoid race with port-bump effect.
-    const result = resolveStartPorts(safeRunningNodes, homeDir, selectedNode, serverPort, swarmPort, osHomeDir);
+    // Compute at click time: the port-bump effect races this, and osHomeDir is
+    // empty until its IPC lands, which makes a running node look stopped.
+    const home = osHomeDir || (await getOsHomeDir());
+    const result = resolveStartPorts(safeRunningNodes, homeDir, selectedNode, serverPort, swarmPort, home);
     if (result.alreadyRunning) {
       // Never route around this with a port bump - that is how two writers end
       // up on one store. Surface it and stop.
@@ -338,7 +344,12 @@ function NodeManagement() {
 
     // Only ever stop the PID running under this home+node: falling back to "the
     // embedded node" can take down a different node than the selected one.
-    const runningNode = findRunningNode(safeRunningNodes, homeDir, selectedNode, osHomeDir);
+    const runningNode = findRunningNode(
+      safeRunningNodes,
+      homeDir,
+      selectedNode,
+      osHomeDir || (await getOsHomeDir())
+    );
     if (!runningNode?.pid) {
       toast.error(`Node "${selectedNode}" is not running`);
       return;

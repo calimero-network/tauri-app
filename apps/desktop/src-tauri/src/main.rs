@@ -2584,6 +2584,8 @@ async fn restart_merod(
     let node = node_name.clone().ok_or_else(|| {
         TauriError::new(TauriErrorCode::InvalidInput, "Restart needs a node name")
     })?;
+    // Before the name reaches remove_claim, which deletes a path built from it.
+    validate_node_name(&node).map_err(|e| TauriError::new(TauriErrorCode::InvalidInput, e))?;
     let home = resolve_home_dir(data_dir.clone())?;
     let state = (*merod_state).clone();
 
@@ -2622,7 +2624,7 @@ async fn restart_merod(
 
     Ok(serde_json::json!({
         "restarted": was_running.is_some(),
-        "pid": live_node_pid(&home, &node, &state)?.unwrap_or_default(),
+        "pid": tracked_node_for(&state.lock_unpoisoned(), &home, &node).unwrap_or_default(),
     }))
 }
 

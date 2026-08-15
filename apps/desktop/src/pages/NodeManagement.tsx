@@ -383,11 +383,11 @@ function NodeManagement() {
   const performRestart = async (node: RunningMerodNode) => {
     setLoading(true);
     try {
-      const result = await restartMerod(node.port, node.swarm_port ?? swarmPort, homeDir, selectedNode, getSettings().debugLogs);
+      const result = await restartMerod(node.port, node.swarm_port ?? swarmPort, homeDir, node.node_name, getSettings().debugLogs);
       toast.success(
         result.restarted
-          ? `Node "${selectedNode}" restarted`
-          : `Node "${selectedNode}" wasn't running - started it`
+          ? `Node "${node.node_name}" restarted`
+          : `Node "${node.node_name}" wasn't running - started it`
       );
       await detectRunning();
     } catch (error: any) {

@@ -72,10 +72,10 @@ export function resolveStartPorts(
   return { serverPort, swarmPort };
 }
 
-/** Warning body for restarting a node this app didn't start, or null when no
- *  warning is needed - restarting replaces whatever merod version launched it. */
+/** Null only for a node this app is known to have started: unknown ownership
+ *  warns too, since restarting replaces whatever merod version launched it. */
 export function restartWarning(node: RunningMerodNode | undefined): string | null {
-  if (!node || node.owned !== false) return null;
+  if (!node || node.owned === true) return null;
   const exeLine = node.exe ? `"${node.node_name}" is running from ${node.exe}.\n` : '';
   return `${exeLine}Restarting runs this node's pinned merod version, and Calimero Desktop will stop the node when you quit.`;
 }
@@ -383,7 +383,7 @@ function NodeManagement() {
   const performRestart = async (node: RunningMerodNode) => {
     setLoading(true);
     try {
-      const result = await restartMerod(node.port, node.swarm_port ?? swarmPort, homeDir, node.node_name, getSettings().debugLogs);
+      const result = await restartMerod(node.port, node.swarm_port ?? DEFAULT_EMBEDDED_SWARM_PORT, homeDir, node.node_name, getSettings().debugLogs, restartWarning(node) !== null);
       toast.success(
         result.restarted
           ? `Node "${node.node_name}" restarted`

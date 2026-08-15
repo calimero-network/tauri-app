@@ -2568,6 +2568,44 @@ fn live_node_pid(
     }
 }
 
+/// Whatever still serves this directory after a stop. The process table on unix;
+/// on Windows only the stopped pid can be asked, which is the weaker guarantee.
+fn still_serving(
+    home: &std::path::Path,
+    node: &str,
+    stopped: u32,
+) -> Result<Option<u32>, TauriError> {
+    #[cfg(unix)]
+    {
+        let _ = stopped;
+        let running = discover_nodes().map_err(discovery_failed)?;
+        Ok(existing_node_for(&running, home, node))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (home, node);
+        Ok(is_process_running(stopped).then_some(stopped))
+    }
+}
+
+/// Whether this app started the node now serving `(home, node)`. The claim file
+/// outlives the session that wrote it; tracked state is all Windows can offer.
+fn node_started_by_us(home: &std::path::Path, node: &str, pid: u32, state: &MerodState) -> bool {
+    #[cfg(unix)]
+    {
+        let _ = state;
+        claim_matches(home, node, pid)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (home, node);
+        state
+            .lock_unpoisoned()
+            .iter()
+            .any(|p| p.pid == pid && p.owned)
+    }
+}
+
 /// Stops the node serving this directory and starts it again, holding
 /// `NODE_LIFECYCLE` across both so nothing starts a second writer in between.
 #[tauri::command]
@@ -2577,6 +2615,7 @@ async fn restart_merod(
     data_dir: Option<String>,
     node_name: Option<String>,
     debug_logs: Option<bool>,
+    allow_unowned: Option<bool>,
     app_handle: tauri::AppHandle,
     merod_state: tauri::State<'_, MerodState>,
     log_writers: tauri::State<'_, MerodLogWriters>,
@@ -2593,20 +2632,28 @@ async fn restart_merod(
 
     let was_running = live_node_pid(&home, &node, &state)?;
     if let Some(pid) = was_running {
+        // The dialog is not the guard: a node the app never started is stopped only
+        // when the caller says the user agreed to it.
+        if !node_started_by_us(&home, &node, pid, &state) && !allow_unowned.unwrap_or(false) {
+            return Err(TauriError::new(
+                TauriErrorCode::InvalidInput,
+                format!("Node \"{node}\" was not started by Calimero Desktop"),
+            ));
+        }
         info!("[Merod] Restarting node '{node}' (PID {pid})");
         stop_pids(&[pid]).await?;
-        merod_state.lock_unpoisoned().retain(|p| p.pid != pid);
-        #[cfg(unix)]
-        remove_claim(&home, &node);
-        emit_merod_status_changed(&app_handle);
-        // A returned kill is not an exited process, and spawning beside one that
-        // still holds the directory is the double writer itself.
-        if let Some(alive) = live_node_pid(&home, &node, &state)? {
+        // Asked of the OS, never of the state cleared just below: a check that reads
+        // its own bookkeeping answers itself, which on Windows made it a no-op.
+        if let Some(alive) = still_serving(&home, &node, pid)? {
             return Err(TauriError::new(
                 TauriErrorCode::MerodStopFailed,
                 format!("Node \"{node}\" is still running (PID {alive}); not starting another"),
             ));
         }
+        merod_state.lock_unpoisoned().retain(|p| p.pid != pid);
+        #[cfg(unix)]
+        remove_claim(&home, &node);
+        emit_merod_status_changed(&app_handle);
     }
 
     start_node(
@@ -2622,10 +2669,11 @@ async fn restart_merod(
     )
     .await?;
 
-    Ok(serde_json::json!({
-        "restarted": was_running.is_some(),
-        "pid": tracked_node_for(&state.lock_unpoisoned(), &home, &node).unwrap_or_default(),
-    }))
+    let pid = tracked_node_for(&state.lock_unpoisoned(), &home, &node);
+    if pid.is_none() {
+        warn!("[Merod] node '{node}' started but could not be re-confirmed");
+    }
+    Ok(serde_json::json!({ "restarted": was_running.is_some(), "pid": pid }))
 }
 
 /// Starts a node, or takes over the one already serving this directory. Never
@@ -5113,6 +5161,29 @@ listen = ["/ip4/0.0.0.0/udp/4001/quic-v1", "/ip4/0.0.0.0/tcp/4002"]
         // Anything unusable falls back rather than reporting a wrong port.
         assert_eq!(parse_node_ports("[server]\n"), DEFAULT_NODE_PORTS);
         assert_eq!(parse_node_ports("not toml ["), DEFAULT_NODE_PORTS);
+    }
+
+    /// A node the app never started is stopped only on the caller's say-so, and
+    /// the claim the spawn wrote is the only evidence of who started it.
+    #[cfg(unix)]
+    #[test]
+    fn a_node_without_a_claim_is_not_ours() {
+        let base = std::env::temp_dir().join(format!("calimero-own-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("n1")).unwrap();
+        let state: super::MerodState = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let me = std::process::id();
+
+        assert!(
+            !super::node_started_by_us(&base, "n1", me, &state),
+            "a node with no claim is not the app's to restart unasked"
+        );
+        super::write_claim(&base, "n1", me).unwrap();
+        assert!(
+            super::node_started_by_us(&base, "n1", me, &state),
+            "the claim the spawn wrote names this process"
+        );
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     /// Silently killing whatever holds the port is how a node the user still

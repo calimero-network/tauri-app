@@ -79,4 +79,12 @@ describe("restartWarning", () => {
     expect(warning).not.toContain("is running from");
     expect(warning).toContain("Restarting runs this node's pinned merod version");
   });
+  // Windows reports no owner at all, and silently reading that as "ours" is how
+  // the confirmation would be skipped on the platform with the weakest guards.
+  it("warns when ownership is unknown rather than assuming it is ours", () => {
+    expect(restartWarning({ pid: 7, node_name: "n1", port: 2528 })).toContain(
+      "Calimero Desktop will stop the node when you quit"
+    );
+  });
+
 });

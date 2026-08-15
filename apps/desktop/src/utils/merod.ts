@@ -36,14 +36,15 @@ export async function stopMerod(): Promise<string> {
 
 export interface RestartOutcome {
   restarted: boolean;
-  pid: number;
+  /** null when the node started but the app could not re-confirm which pid it is. */
+  pid: number | null;
 }
 
 /**
  * Restart the embedded merod node, stopping it first if already running.
  */
-export async function restartMerod(serverPort?: number, swarmPort?: number, dataDir?: string, nodeName?: string, debugLogs?: boolean): Promise<RestartOutcome> {
-  return await invoke('restart_merod', { serverPort, swarmPort, dataDir, nodeName, debugLogs });
+export async function restartMerod(serverPort?: number, swarmPort?: number, dataDir?: string, nodeName?: string, debugLogs?: boolean, allowUnowned?: boolean): Promise<RestartOutcome> {
+  return await invoke('restart_merod', { serverPort, swarmPort, dataDir, nodeName, debugLogs, allowUnowned });
 }
 
 /**

@@ -47,7 +47,7 @@ use calimero_tauri_app::node_discovery::resolved;
 #[cfg(unix)]
 use calimero_tauri_app::node_discovery::{
     claim_matches, discover_nodes, existing_node_for, is_signalable, nodes_under_path, remove_claim,
-    write_claim,
+    write_claim, DiscoveredNode,
 };
 #[cfg(target_os = "macos")]
 use calimero_tauri_app::node_discovery::parse_shell_pids;
@@ -2449,16 +2449,26 @@ fn replace_multiaddr_port(addr: &str, proto: &str, port: u16) -> String {
     format!("{}{}{}{}", &addr[..start], needle, port, tail)
 }
 
+/// A guard that could not run is not a guard: callers refuse instead of proceeding.
+fn discovery_failed(e: std::io::Error) -> TauriError {
+    TauriError::with_details(
+        TauriErrorCode::InternalError,
+        "Could not check which nodes are running",
+        e.to_string(),
+    )
+}
+
 /// Takes over a node already serving `(home, node)` instead of starting a second
 /// writer, which RocksDB's lock stops only while its directory still exists there.
 #[cfg(unix)]
 fn adopt_running_node(
+    running: &[DiscoveredNode],
     home: &std::path::Path,
     node: &str,
     merod_state: &MerodState,
     app_handle: &tauri::AppHandle,
 ) -> Option<u32> {
-    let pid = existing_node_for(&discover_nodes(), home, node)?;
+    let pid = existing_node_for(running, home, node)?;
     let (port, _) = node_ports(&home.join(node).join("config.toml"));
     // Only a node this app started is the app's to shut down on quit.
     let owned = claim_matches(home, node, pid);
@@ -2542,12 +2552,17 @@ async fn start_merod(
     // Taken after the download above, so it spans only the check through the spawn.
     let _lifecycle = NODE_LIFECYCLE.lock().await;
 
+    // Refuse rather than guess: an unreadable process table would otherwise read as
+    // "nothing is running" and put a second writer on this store.
     #[cfg(unix)]
-    if let Some(pid) = node_name
-        .as_deref()
-        .and_then(|node| adopt_running_node(&home_dir_path, node, &merod_state, &app_handle))
     {
-        return Ok(format!("Merod already running with PID: {pid}"));
+        let running = discover_nodes().map_err(discovery_failed)?;
+        if let Some(pid) = node_name
+            .as_deref()
+            .and_then(|node| adopt_running_node(&running, &home_dir_path, node, &merod_state, &app_handle))
+        {
+            return Ok(format!("Merod already running with PID: {pid}"));
+        }
     }
 
     // Update config.toml with the specified ports if node_name is provided
@@ -2862,7 +2877,10 @@ fn live_tracked_pids(
     merod_state: &MerodState,
     app_handle: &tauri::AppHandle,
 ) -> Vec<u32> {
-    let running = discover_nodes();
+    let Ok(running) = discover_nodes() else {
+        warn!("[Merod] could not read the process table; keeping every tracked node");
+        return tracked;
+    };
     let (alive, dead): (Vec<u32>, Vec<u32>) = tracked
         .into_iter()
         .partition(|pid| is_signalable(*pid, &running));
@@ -2899,9 +2917,14 @@ async fn stop_merod(
     let pids = tracked;
 
     if pids.is_empty() {
+        // Name the node when one was asked for: "not running" about a specific node
+        // means something different from "nothing is running".
         return Err(TauriError::new(
             TauriErrorCode::MerodNotRunning,
-            "Merod is not running",
+            match &node_name {
+                Some(node) => format!("Node '{node}' is not running"),
+                None => "Merod is not running".to_string(),
+            },
         ));
     }
 
@@ -2926,7 +2949,7 @@ async fn stop_merod_by_pid_command(
     // A bare number from the webview, so account for it as a node first. Unix asks
     // the process table; Windows has only tracked state, which is weaker.
     #[cfg(unix)]
-    let accountable = is_signalable(pid, &discover_nodes());
+    let accountable = is_signalable(pid, &discover_nodes().map_err(discovery_failed)?);
     #[cfg(not(unix))]
     let accountable = merod_state
         .lock_unpoisoned()
@@ -4148,7 +4171,7 @@ async fn delete_calimero_data_dir(data_dir: String) -> Result<DeleteOutcome, Tau
 
     #[cfg(unix)]
     {
-        let running = discover_nodes();
+        let running = discover_nodes().map_err(discovery_failed)?;
         let blocking = nodes_under_path(&running, &path_canonical);
         if let Some(first) = blocking.first() {
             let detail = blocking

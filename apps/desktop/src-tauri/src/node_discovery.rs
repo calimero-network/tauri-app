@@ -54,16 +54,16 @@ fn parse_node_listing(listing: &str) -> Vec<DiscoveredNode> {
         .collect()
 }
 
-/// Node processes currently running on this machine.
+/// `Err` when the process table could not be read. Returned rather than swallowed:
+/// "could not check" must never be mistaken for "nothing is running".
 // TODO: no Windows implementation, so every guard keyed on discovery is unix-only.
 // A `tasklist`/WMI command-line scan here would restore all of them at once.
 #[cfg(unix)]
-pub fn discover_nodes() -> Vec<DiscoveredNode> {
-    std::process::Command::new("ps")
+pub fn discover_nodes() -> std::io::Result<Vec<DiscoveredNode>> {
+    let out = std::process::Command::new("ps")
         .args(["ax", "-o", "pid,command"])
-        .output()
-        .map(|out| parse_node_listing(&String::from_utf8_lossy(&out.stdout)))
-        .unwrap_or_default()
+        .output()?;
+    Ok(parse_node_listing(&String::from_utf8_lossy(&out.stdout)))
 }
 
 /// Keyed on the data directory, not the port: the directory is the resource two

@@ -17,7 +17,7 @@ fn a_live_node_is_found_by_the_guard_that_prevents_a_second_writer() {
     let _cleanup = Scratch(home.clone());
 
     let node = start_node(&home, "n1", "36528", "36428");
-    let running = discover_nodes();
+    let running = discover_nodes().expect("the process table must be readable");
 
     let found = running
         .iter()
@@ -56,7 +56,7 @@ fn a_node_on_another_home_is_not_mistaken_for_ours() {
     let foreign = start_node(&theirs, "alice", "36628", "36528");
     init(&ours, "n1", "36828", "36728");
 
-    let running = discover_nodes();
+    let running = discover_nodes().expect("the process table must be readable");
     assert!(
         running.iter().any(|n| n.pid == foreign.pid()),
         "the foreign node should still be discoverable"
@@ -85,7 +85,7 @@ fn a_live_node_blocks_deleting_its_directory_and_is_signalable() {
     let _cleanup = Scratch(home.clone());
 
     let node = start_node(&home, "n1", "36728", "36628");
-    let running = discover_nodes();
+    let running = discover_nodes().expect("the process table must be readable");
 
     for target in [home.clone(), home.join("n1")] {
         let blocking = nodes_under_path(&running, &target);

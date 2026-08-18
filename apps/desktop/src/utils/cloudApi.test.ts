@@ -192,7 +192,15 @@ describe('enableHaForNamespace', () => {
     init: RequestInit | undefined,
     handlers: Record<string, () => Response>,
   ): Response {
-    for (const [pattern, h] of Object.entries(handlers)) {
+    // `getSelfRoleInGroup` asks the node who it is, because rc.23 removed
+    // `selfIdentity` from the member listing (#3522). Defaulted here so each
+    // test keeps stating only the thing it is about; a test that cares about
+    // the identity lookup overrides it.
+    const withDefaults: Record<string, () => Response> = {
+      '/admin-api/identity': () => jsonResponse({ accountId: 'me' }),
+      ...handlers,
+    };
+    for (const [pattern, h] of Object.entries(withDefaults)) {
       if (url.includes(pattern)) return h();
     }
     return new Response(`unmatched: ${url} ${init?.method ?? 'GET'}`, {
@@ -206,7 +214,6 @@ describe('enableHaForNamespace', () => {
         '/admin-api/groups/ns-root/members': () =>
           jsonResponse({
             members: [{ identity: 'me', role: 'Member' }],
-            selfIdentity: 'me',
           }),
       }),
     );
@@ -222,7 +229,6 @@ describe('enableHaForNamespace', () => {
         '/admin-api/groups/ns-root/members': () =>
           jsonResponse({
             members: [{ identity: 'someone-else', role: 'Admin' }],
-            selfIdentity: 'me',
           }),
       }),
     );
@@ -239,7 +245,7 @@ describe('enableHaForNamespace', () => {
       route(url, init, {
         '/admin-api/groups/ns-root/members': () =>
           jsonResponse({
-            data: { data: [{ identity: 'me', role: 'Admin' }], selfIdentity: 'me' },
+            data: { data: [{ identity: 'me', role: 'Admin' }] },
           }),
       }),
     );
@@ -290,7 +296,6 @@ describe('enableHaForNamespace', () => {
         '/admin-api/groups/ns-root/members': () =>
           jsonResponse({
             members: [{ identity: 'me', role: 'Admin' }],
-            selfIdentity: 'me',
           }),
         '/admin-api/groups/ns-root/issue-namespace-ownership-proof': () =>
           jsonResponse({
@@ -374,7 +379,6 @@ describe('enableHaForNamespace', () => {
         '/admin-api/groups/ns-root/members': () =>
           jsonResponse({
             members: [{ identity: 'me', role: 'Admin' }],
-            selfIdentity: 'me',
           }),
         '/admin-api/groups/ns-root/issue-namespace-ownership-proof': () =>
           jsonResponse({
@@ -448,7 +452,7 @@ describe('enableHaForNamespace', () => {
     const { restore: r } = installFetch((url, init) =>
       route(url, init, {
         '/admin-api/groups/ns-root/members': () =>
-          jsonResponse({ members: [null], selfIdentity: 'me' }),
+          jsonResponse({ members: [null] }),
       }),
     );
     restore = r;
@@ -463,9 +467,9 @@ describe('ensureTeeAdmissionPolicy', () => {
   afterEach(() => restore?.());
 
   const membersAdmin = () =>
-    jsonResponse({ members: [{ identity: 'me', role: 'Admin' }], selfIdentity: 'me' });
+    jsonResponse({ members: [{ identity: 'me', role: 'Admin' }] });
   const membersMember = () =>
-    jsonResponse({ members: [{ identity: 'me', role: 'Member' }], selfIdentity: 'me' });
+    jsonResponse({ members: [{ identity: 'me', role: 'Member' }] });
   const measurements = (mrtd: string[]) =>
     jsonResponse({
       release_tag: 'v1',

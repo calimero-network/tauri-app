@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures/test";
 import {
   MOCK_REGISTRY_APPS,
   MOCK_INSTALLED_APPS,

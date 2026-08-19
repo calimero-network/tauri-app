@@ -8,7 +8,6 @@ import {
   useGroupContexts,
   useSubgroups,
   useCreateNamespace,
-  useNamespaceIdentity,
   type Namespace,
 } from "@calimero-network/mero-react";
 import type { GroupInfo, MetadataRecord } from "@calimero-network/mero-js";
@@ -27,6 +26,7 @@ import {
 } from "../utils/cloudApi";
 import { getCloudIdToken } from "../utils/cloudAuth";
 import { getAccessToken } from "../lib/token-storage";
+import { fetchNodeIdentity, type NodeIdentity } from "../utils/nodeIdentity";
 import { parseJwtPayload } from "../utils/jwt";
 import {
   buildEvictionDeps,
@@ -195,9 +195,21 @@ function Namespaces() {
   const groupInfo = groupInfoRaw as GroupInfoExt | null;
   const nsRootGroupInfo = nsRootGroupInfoRaw as GroupInfoExt | null;
   const { members: groupMembers, refetch: refetchGroupMembers } = useGroupMembers(activeGroupId) as any;
-  // My identity on the active namespace — used to find my ROLE in the member
-  // list (admin → may Delete; member → may only Leave) and to self-remove.
-  const { identity: myNsIdentity } = useNamespaceIdentity(activeNsRootId);
+  // Who this NODE is — used to find my ROLE in the member list (admin → may
+  // Delete; member → may only Leave) and to self-remove.
+  //
+  // NOT per-namespace. rc.23 deleted `GET /namespaces/:id/identity` (#3522),
+  // which `useNamespaceIdentity` calls, because every namespace on a node
+  // resolves to the same account: the route took a namespace and answered with
+  // the node's account whichever one you passed.
+  const [myNodeIdentity, setMyNodeIdentity] = useState<NodeIdentity | null>(null);
+  useEffect(() => {
+    const controller = new AbortController();
+    void fetchNodeIdentity(controller.signal)
+      .then(setMyNodeIdentity)
+      .catch(() => setMyNodeIdentity(null));
+    return () => controller.abort();
+  }, []);
   const [nsMembers, setNsMembers] = useState<any[]>([]);
   const [nsMembersLoading, setNsMembersLoading] = useState(false);
   const [nsMembersVersion, setNsMembersVersion] = useState(0);
@@ -226,8 +238,12 @@ function Namespaces() {
   // My role on the active namespace, resolved from the member list. Drives
   // whether the actions menu offers Delete (admin) or Leave (plain member) —
   // the node rejects a non-admin delete, so don't offer a dead-end action.
-  const myNsRole: string | undefined = myNsIdentity?.publicKey
-    ? (nsMembers.find((m: any) => m?.identity === myNsIdentity.publicKey)?.role as
+  // Matched on the ACCOUNT. rc.23 made the member listing answer with accounts
+  // (#3522) — `identity` is 64 hex, not the base58 a key renders as — so
+  // comparing against a device public key never matches and every row looked
+  // like somebody else's.
+  const myNsRole: string | undefined = myNodeIdentity?.accountId
+    ? (nsMembers.find((m: any) => m?.identity === myNodeIdentity.accountId)?.role as
         | string
         | undefined)
     : undefined;
@@ -239,7 +255,7 @@ function Namespaces() {
   // toast — never a wrong destructive action).
   const showNsLeave =
     !nsMembersLoading &&
-    myNsIdentity?.publicKey !== undefined &&
+    myNodeIdentity?.accountId !== undefined &&
     myNsRole !== undefined &&
     !isNsAdmin;
 
@@ -503,14 +519,17 @@ function Namespaces() {
   // node ("identity is not an admin on namespace/group …"), which previously
   // left members with NO way to get rid of a namespace from their view.
   const handleLeaveNamespace = async (ns: Namespace) => {
-    if (!mero || !myNsIdentity?.publicKey) {
-      toast.error('Could not resolve your identity on this namespace');
+    if (!mero || !myNodeIdentity?.accountId) {
+      toast.error('Could not resolve this node’s identity');
       return;
     }
     setActionLoading(true);
     try {
+      // By ACCOUNT: rc.23 made `remove` name members by account (the principal
+      // the membership rows are keyed by), not by the key they sign with.
+      // Passing a device key here removes nobody and still returns 200.
       await mero.admin.removeGroupMembers(ns.namespaceId, {
-        members: [myNsIdentity.publicKey],
+        members: [myNodeIdentity.accountId],
       });
       toast.success('Left namespace');
       setLeaveNsTarget(null);

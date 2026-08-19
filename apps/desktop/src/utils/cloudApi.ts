@@ -1,4 +1,5 @@
 import { getAccessToken } from '../lib/token-storage';
+import { fetchNodeIdentity } from './nodeIdentity';
 import { getSettings, saveSettings } from './settings';
 import { isMdmaSessionToken, isTokenExpired, parseJwtPayload } from './jwt';
 
@@ -409,7 +410,6 @@ interface GroupMemberEntry {
 
 interface ListGroupMembersResponse {
   members: GroupMemberEntry[];
-  selfIdentity?: string;
 }
 
 /**
@@ -443,12 +443,19 @@ const PROOF_AUDIENCE_ENABLE_HA_NAMESPACE = 'mdma:enable-ha-namespace';
  * Throws on auth failure, a non-2xx response (core's actor bails with
  * an error when the node isn't a member of the group, so "not a
  * member" surfaces here as a thrown error, not `null`), or a 200 whose
- * body doesn't match the expected `{ members, selfIdentity }` shape —
- * a silent `null` on a malformed body would later masquerade as "not
- * the namespace admin", which is exactly the failure mode that masked
- * the earlier `{data}`-envelope bug. Returns `null` only for the
- * degenerate case of a well-formed response with no member entry
- * matching `selfIdentity`.
+ * body doesn't match the expected `{ members }` shape — a silent `null`
+ * on a malformed body would later masquerade as "not the namespace
+ * admin", which is exactly the failure mode that masked the earlier
+ * `{data}`-envelope bug. Returns `null` only for the degenerate case of
+ * a well-formed response with no member entry for this node's account.
+ *
+ * `selfIdentity` used to come back on this response and is gone as of
+ * core 0.11.0-rc.23 (#3522) — "who am I" is a node-level question, and the
+ * member list of one group was a strange place to answer it. Requiring it
+ * here made this throw the "incompatible version" error against every
+ * rc.23 node, which took the TEE eviction path down with it. The answer
+ * now comes from `GET /admin-api/identity`, and the match is on the
+ * ACCOUNT, which is what the rows are keyed by.
  *
  * Co-located here rather than in a dedicated admin-api module because
  * this is the only consumer right now — the moment a second caller
@@ -479,8 +486,7 @@ async function getSelfRoleInGroup(
   // no `{ data: ... }` envelope (see ApiResponse::into_response in
   // calimero-network/core crates/server/src/admin/service.rs, with its
   // `//TODO add data to response`). The members payload is
-  // `{ members, selfIdentity }`; selfIdentity is camelCase because
-  // ListGroupMembersApiResponse has #[serde(rename_all = "camelCase")].
+  // `{ members }` — rc.23 removed `selfIdentity` from it (#3522).
   // A non-JSON body parses to null here (not a throw), so the shapeOk
   // check below produces the descriptive error rather than a raw
   // SyntaxError escaping as an unhandled rejection.
@@ -495,8 +501,6 @@ async function getSelfRoleInGroup(
   if (
     !body ||
     !Array.isArray(body.members) ||
-    typeof body.selfIdentity !== 'string' ||
-    !body.selfIdentity ||
     !body.members.every(
       (m) =>
         m != null &&
@@ -506,11 +510,21 @@ async function getSelfRoleInGroup(
   ) {
     throw new Error(
       'Unexpected response from local node members endpoint — ' +
-        'expected { members: [{ identity, role }], selfIdentity }. ' +
+        'expected { members: [{ identity, role }] }. ' +
         'The node may be an incompatible version.',
     );
   }
-  const me = body.members.find((m) => m.identity === body.selfIdentity);
+
+  // Deliberately after the shape check, so a malformed member list still
+  // reports itself rather than being blamed on the identity lookup.
+  const identity = await fetchNodeIdentity();
+  if (!identity?.accountId) {
+    throw new Error(
+      'Could not resolve this node’s account from /admin-api/identity — ' +
+        'cannot tell which member row is this node.',
+    );
+  }
+  const me = body.members.find((m) => m.identity === identity.accountId);
   return me?.role ?? null;
 }
 

@@ -67,6 +67,27 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
+function route(
+  url: string,
+  init: RequestInit | undefined,
+  handlers: Record<string, () => Response>,
+): Response {
+  // `getSelfRoleInGroup` asks the node who it is, because rc.23 removed
+  // `selfIdentity` from the member listing (#3522). Defaulted here so each
+  // test keeps stating only the thing it is about; a test that cares about
+  // the identity lookup overrides it.
+  const withDefaults: Record<string, () => Response> = {
+    '/admin-api/identity': () => jsonResponse({ accountId: 'me' }),
+    ...handlers,
+  };
+  for (const [pattern, h] of Object.entries(withDefaults)) {
+    if (url.includes(pattern)) return h();
+  }
+  return new Response(`unmatched: ${url} ${init?.method ?? 'GET'}`, {
+    status: 500,
+  });
+}
+
 describe('requestOwnershipProof', () => {
   let restore: () => void;
   afterEach(() => restore?.());
@@ -187,26 +208,12 @@ describe('enableHaForNamespace', () => {
     vi.restoreAllMocks();
   });
 
-  function route(
-    url: string,
-    init: RequestInit | undefined,
-    handlers: Record<string, () => Response>,
-  ): Response {
-    for (const [pattern, h] of Object.entries(handlers)) {
-      if (url.includes(pattern)) return h();
-    }
-    return new Response(`unmatched: ${url} ${init?.method ?? 'GET'}`, {
-      status: 500,
-    });
-  }
-
   it('fails closed when the caller is not the namespace admin', async () => {
     const { restore: r } = installFetch((url, init) =>
       route(url, init, {
         '/admin-api/groups/ns-root/members': () =>
           jsonResponse({
             members: [{ identity: 'me', role: 'Member' }],
-            selfIdentity: 'me',
           }),
       }),
     );
@@ -222,7 +229,6 @@ describe('enableHaForNamespace', () => {
         '/admin-api/groups/ns-root/members': () =>
           jsonResponse({
             members: [{ identity: 'someone-else', role: 'Admin' }],
-            selfIdentity: 'me',
           }),
       }),
     );
@@ -239,7 +245,7 @@ describe('enableHaForNamespace', () => {
       route(url, init, {
         '/admin-api/groups/ns-root/members': () =>
           jsonResponse({
-            data: { data: [{ identity: 'me', role: 'Admin' }], selfIdentity: 'me' },
+            data: { data: [{ identity: 'me', role: 'Admin' }] },
           }),
       }),
     );
@@ -290,7 +296,6 @@ describe('enableHaForNamespace', () => {
         '/admin-api/groups/ns-root/members': () =>
           jsonResponse({
             members: [{ identity: 'me', role: 'Admin' }],
-            selfIdentity: 'me',
           }),
         '/admin-api/groups/ns-root/issue-namespace-ownership-proof': () =>
           jsonResponse({
@@ -374,7 +379,6 @@ describe('enableHaForNamespace', () => {
         '/admin-api/groups/ns-root/members': () =>
           jsonResponse({
             members: [{ identity: 'me', role: 'Admin' }],
-            selfIdentity: 'me',
           }),
         '/admin-api/groups/ns-root/issue-namespace-ownership-proof': () =>
           jsonResponse({
@@ -448,7 +452,7 @@ describe('enableHaForNamespace', () => {
     const { restore: r } = installFetch((url, init) =>
       route(url, init, {
         '/admin-api/groups/ns-root/members': () =>
-          jsonResponse({ members: [null], selfIdentity: 'me' }),
+          jsonResponse({ members: [null] }),
       }),
     );
     restore = r;
@@ -463,9 +467,9 @@ describe('ensureTeeAdmissionPolicy', () => {
   afterEach(() => restore?.());
 
   const membersAdmin = () =>
-    jsonResponse({ members: [{ identity: 'me', role: 'Admin' }], selfIdentity: 'me' });
+    jsonResponse({ members: [{ identity: 'me', role: 'Admin' }] });
   const membersMember = () =>
-    jsonResponse({ members: [{ identity: 'me', role: 'Member' }], selfIdentity: 'me' });
+    jsonResponse({ members: [{ identity: 'me', role: 'Member' }] });
   const measurements = (mrtd: string[]) =>
     jsonResponse({
       release_tag: 'v1',
@@ -478,38 +482,57 @@ describe('ensureTeeAdmissionPolicy', () => {
   const idToken = () => makeJwt({ iss: 'mdma', email: 'u@e' });
 
   it('skips (no measurements, no PUT) when the node is not the namespace admin', async () => {
-    const calls: string[] = [];
-    const { restore: r } = installFetch((url, init) => {
-      calls.push(`${init?.method ?? 'GET'} ${url}`);
-      if (url.includes('/members')) return membersMember();
-      return jsonResponse({});
-    });
+    const { calls, restore: r } = installFetch((url, init) =>
+      route(url, init, { '/members': membersMember }),
+    );
     restore = r;
     await expect(
       ensureTeeAdmissionPolicy('http://node', idToken(), 'ns-root'),
     ).resolves.toBe('skipped');
     // A member must never fetch measurements or PUT a policy it cannot sign.
-    expect(calls.some((c) => c.includes('/fleet/measurements'))).toBe(false);
-    expect(calls.some((c) => c.includes('/tee-admission-policy'))).toBe(false);
+    expect(calls.some((c) => c.url.includes('/fleet/measurements'))).toBe(false);
+    expect(calls.some((c) => c.url.includes('/tee-admission-policy'))).toBe(
+      false,
+    );
   });
 
   it('skips when the node is not a member of the namespace root (role lookup throws)', async () => {
-    const { restore: r } = installFetch((url) => {
-      if (url.includes('/members')) return new Response('not a member', { status: 404 });
-      return jsonResponse({});
-    });
+    const { restore: r } = installFetch((url, init) =>
+      route(url, init, {
+        '/members': () => new Response('not a member', { status: 404 }),
+      }),
+    );
     restore = r;
     await expect(
       ensureTeeAdmissionPolicy('http://node', idToken(), 'ns-root'),
     ).resolves.toBe('skipped');
   });
 
+  it('skips when the node account cannot be resolved from /admin-api/identity', async () => {
+    // rc.23 answers "who am I" node-level; a node that cannot say so leaves
+    // us unable to tell which member row is us — a skip, never a blind PUT.
+    const { calls, restore: r } = installFetch((url, init) =>
+      route(url, init, {
+        '/members': membersAdmin,
+        '/admin-api/identity': () => jsonResponse({}),
+      }),
+    );
+    restore = r;
+    await expect(
+      ensureTeeAdmissionPolicy('http://node', idToken(), 'ns-root'),
+    ).resolves.toBe('skipped');
+    expect(calls.some((c) => c.url.includes('/tee-admission-policy'))).toBe(
+      false,
+    );
+  });
+
   it('skips when there are no fleet MRTD measurements', async () => {
-    const { restore: r } = installFetch((url) => {
-      if (url.includes('/members')) return membersAdmin();
-      if (url.includes('/fleet/measurements')) return measurements([]);
-      return jsonResponse({});
-    });
+    const { restore: r } = installFetch((url, init) =>
+      route(url, init, {
+        '/members': membersAdmin,
+        '/fleet/measurements': () => measurements([]),
+      }),
+    );
     restore = r;
     await expect(
       ensureTeeAdmissionPolicy('http://node', idToken(), 'ns-root'),
@@ -517,40 +540,41 @@ describe('ensureTeeAdmissionPolicy', () => {
   });
 
   it("is a no-op ('ok', no PUT) when the on-node policy already covers the desired MRTDs", async () => {
-    const calls: { method: string; url: string }[] = [];
-    const { restore: r } = installFetch((url, init) => {
-      const method = init?.method ?? 'GET';
-      calls.push({ method, url });
-      if (url.includes('/members')) return membersAdmin();
-      if (url.includes('/fleet/measurements')) return measurements(['mrtd-1']);
-      if (url.includes('/tee-admission-policy'))
-        return jsonResponse({ enabled: true, allowedMrtd: ['mrtd-1'] });
-      return jsonResponse({});
-    });
+    const { calls, restore: r } = installFetch((url, init) =>
+      route(url, init, {
+        '/members': membersAdmin,
+        '/fleet/measurements': () => measurements(['mrtd-1']),
+        '/tee-admission-policy': () =>
+          jsonResponse({ enabled: true, allowedMrtd: ['mrtd-1'] }),
+      }),
+    );
     restore = r;
     await expect(
       ensureTeeAdmissionPolicy('http://node', idToken(), 'ns-root'),
     ).resolves.toBe('ok');
     expect(
-      calls.some((c) => c.method === 'PUT' && c.url.includes('/tee-admission-policy')),
+      calls.some(
+        (c) =>
+          c.init?.method === 'PUT' && c.url.includes('/tee-admission-policy'),
+      ),
     ).toBe(false);
   });
 
   it("re-authors ('reasserted') when no policy is set (enabled:false) — the stuck-node case", async () => {
     let putBody: { allowedMrtd?: unknown } | undefined;
-    const { restore: r } = installFetch((url, init) => {
-      const method = init?.method ?? 'GET';
-      if (url.includes('/members')) return membersAdmin();
-      if (url.includes('/fleet/measurements')) return measurements(['mrtd-1']);
-      if (url.includes('/tee-admission-policy')) {
-        if (method === 'PUT') {
-          putBody = JSON.parse(String(init?.body));
-          return new Response('{}', { status: 200 });
-        }
-        return jsonResponse({ enabled: false, allowedMrtd: [] });
-      }
-      return jsonResponse({});
-    });
+    const { restore: r } = installFetch((url, init) =>
+      route(url, init, {
+        '/members': membersAdmin,
+        '/fleet/measurements': () => measurements(['mrtd-1']),
+        '/tee-admission-policy': () => {
+          if (init?.method === 'PUT') {
+            putBody = JSON.parse(String(init.body));
+            return new Response('{}', { status: 200 });
+          }
+          return jsonResponse({ enabled: false, allowedMrtd: [] });
+        },
+      }),
+    );
     restore = r;
     await expect(
       ensureTeeAdmissionPolicy('http://node', idToken(), 'ns-root'),
@@ -561,19 +585,19 @@ describe('ensureTeeAdmissionPolicy', () => {
 
   it('re-authors when the policy is stale (MRTD rotated — different set)', async () => {
     let putBody: { allowedMrtd?: unknown } | undefined;
-    const { restore: r } = installFetch((url, init) => {
-      const method = init?.method ?? 'GET';
-      if (url.includes('/members')) return membersAdmin();
-      if (url.includes('/fleet/measurements')) return measurements(['mrtd-NEW']);
-      if (url.includes('/tee-admission-policy')) {
-        if (method === 'PUT') {
-          putBody = JSON.parse(String(init?.body));
-          return new Response('{}', { status: 200 });
-        }
-        return jsonResponse({ enabled: true, allowedMrtd: ['mrtd-OLD'] });
-      }
-      return jsonResponse({});
-    });
+    const { restore: r } = installFetch((url, init) =>
+      route(url, init, {
+        '/members': membersAdmin,
+        '/fleet/measurements': () => measurements(['mrtd-NEW']),
+        '/tee-admission-policy': () => {
+          if (init?.method === 'PUT') {
+            putBody = JSON.parse(String(init.body));
+            return new Response('{}', { status: 200 });
+          }
+          return jsonResponse({ enabled: true, allowedMrtd: ['mrtd-OLD'] });
+        },
+      }),
+    );
     restore = r;
     await expect(
       ensureTeeAdmissionPolicy('http://node', idToken(), 'ns-root'),

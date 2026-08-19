@@ -165,19 +165,27 @@ class AuthApi {
     }
   }
 
+  // NOTE: mero-js's generateClientKey now issues a token (access_token/
+  // refresh_token), not a bare key id — the request fields are also
+  // snake_case (context_id/context_identity) rather than keyId/clientName.
+  // See @calimero-network/mero-js auth-types.ts GenerateClientKeyRequest/TokenResponse.
   async generateClientKey(payload: {
     context_id: string;
     context_identity: string;
     permissions: string[];
-  }): Promise<ApiResponse<{ keyId: string; permissions: string[] }>> {
+  }): Promise<ApiResponse<TokenResponse>> {
     try {
       const r = await this.meroJs.auth.generateClientKey({
-        keyId: payload.context_id,
-        clientName: payload.context_identity,
+        context_id: payload.context_id,
+        context_identity: payload.context_identity,
         permissions: payload.permissions,
       });
-      const data = (r as any).data ?? r;
-      return { data: { keyId: data.keyId ?? data.key_id ?? '', permissions: data.permissions ?? [] } };
+      const at = r.data?.access_token;
+      const rt = r.data?.refresh_token;
+      if (!at || !rt) {
+        return { error: { message: r.error ?? r.data?.error ?? 'Failed to generate client key' } };
+      }
+      return { data: { access_token: at, refresh_token: rt } };
     } catch (e) {
       return { error: { message: e instanceof Error ? e.message : 'Failed to generate client key' } };
     }

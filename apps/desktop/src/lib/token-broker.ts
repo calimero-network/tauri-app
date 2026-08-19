@@ -33,7 +33,7 @@
  *
  * mero-js's own single-flight and `navigator.locks` serialization (mero-js#67)
  * only coordinate holders *within one origin* and *one instance tree*, so they
- * cannot solve either case for us; the desktop pins mero-js 2.x regardless.
+ * cannot solve either case for us regardless of the mero-js version pinned here.
  *
  * Apps need no changes: an unmodified mero-js/mero-react app still just calls
  * `/auth/refresh` and gets a well-formed reply.

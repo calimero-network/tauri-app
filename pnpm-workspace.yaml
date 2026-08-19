@@ -9,3 +9,7 @@ overrides:
 allowBuilds:
   esbuild: true
   sharp: true
+
+minimumReleaseAgeExclude:
+  - '@calimero-network/mero-js@13.1.0'
+  - '@calimero-network/mero-react@6.0.0'

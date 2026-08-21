@@ -1,5 +1,9 @@
 /**
- * Thin adapter around MeroJs from @calimero-network/mero-js@1.4.0.
+ * Thin adapter around MeroJs from @calimero-network/mero-js.
+ *
+ * Intentionally unversioned: this line read "@1.4.0" while the app was pinned
+ * at 2.2.1, and then at 13.x. package.json is the only place a version is
+ * worth stating, because it is the only one anything checks.
  *
  * Provides the same apiClient.auth.* / apiClient.node.* surface the desktop
  * app relies on, while the Namespaces page uses mero-react hooks directly.
@@ -169,6 +173,11 @@ class AuthApi {
   // refresh_token), not a bare key id — the request fields are also
   // snake_case (context_id/context_identity) rather than keyId/clientName.
   // See @calimero-network/mero-js auth-types.ts GenerateClientKeyRequest/TokenResponse.
+  //
+  // UNCALLED as of this writing: kept because issuing a per-context client key
+  // is a capability the desktop will want, and re-deriving the wire shape later
+  // is the expensive part. It is therefore not covered by any test — if you wire
+  // it up, verify it against a real node first rather than trusting these types.
   async generateClientKey(payload: {
     context_id: string;
     context_identity: string;
@@ -192,7 +201,7 @@ class AuthApi {
   }
 }
 
-// ─── Node API wrapper (flat admin API in mero-js 1.4.0) ────────────────────
+// ─── Node API wrapper (flat admin API surface) ──────────────────────────────
 
 class NodeApi {
   constructor(private meroJs: MeroJs) {}
@@ -218,21 +227,6 @@ class NodeApi {
     } catch (e: any) {
       if (e?.status === 401) return { error: { message: 'Unauthorized', code: '401' } };
       return { error: { message: e instanceof Error ? e.message : 'Failed to get contexts' } };
-    }
-  }
-
-  async createContext(request: {
-    protocol: string;
-    applicationId: string;
-    contextSeed?: string;
-    initializationParams: number[];
-  }): Promise<ApiResponse<{ contextId: string; memberPublicKey: string }>> {
-    try {
-      const r = await this.meroJs.admin.createContext(request as any);
-      return { data: { contextId: (r as any).contextId, memberPublicKey: (r as any).memberPublicKey } };
-    } catch (e: any) {
-      if (e?.status === 401) return { error: { message: 'Unauthorized', code: '401' } };
-      return { error: { message: e instanceof Error ? e.message : 'Failed to create context' } };
     }
   }
 

@@ -11,7 +11,7 @@
   },
   "dependencies": {
     "@calimero-network/mero-icons": "^0.0.6",
-    "@calimero-network/mero-ui": "1.5.0",
+    "@calimero-network/mero-ui": "1.5.1",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
   },

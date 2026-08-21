@@ -9,3 +9,6 @@ overrides:
 allowBuilds:
   esbuild: true
   sharp: true
+
+minimumReleaseAgeExclude:
+  - '@calimero-network/mero-ui@1.5.1'

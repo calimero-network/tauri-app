@@ -1993,8 +1993,27 @@ function CreateContextModal({ namespaceId, applicationId, loading, onClose, onSu
           </div>
           <label className="ns-modal-field">
             <span>Service name <span className="ns-optional">(optional)</span></span>
-            <input type="text" value={serviceName} onChange={(e) => setServiceName(e.target.value)} placeholder="e.g. lobby" />
+            <input type="text" value={serviceName} onChange={(e) => setServiceName(e.target.value)} placeholder="only for multi-service bundles" />
           </label>
+          {/* NOT a free-text label. Core resolves this against the `services` list in
+              the app's .mpk manifest, and BOTH directions fail with a bare 500
+              ("Internal server error") whose real reason reaches the node log only:
+                - single-wasm bundle (most apps) + any value
+                    -> `service '<x>' not found in bundle manifest`
+                - multi-service bundle + omitted
+                    -> `bundle manifest declares no top-level wasm`
+              So it is neither optional nor free-form; it depends on the bundle. The
+              placeholder used to read "e.g. lobby", a value that can never succeed.
+              Verified against merod 0.11.0-rc.24: merocalendar (no services) needs
+              it blank, mero-issue-tracker requires exactly "issue-tracker".
+              Proper fix is to read `services` from the bundle manifest and offer a
+              select (blank when the app has none) — needs the manifest plumbed to
+              this modal, so it is not done here. */}
+          <p className="ns-modal-hint">
+            Leave blank for most apps. Bundles that ship several services require the
+            exact service name — a wrong value, or a missing one, fails with an
+            unhelpful server error.
+          </p>
           <label className="ns-modal-field">
             <span>Alias <span className="ns-optional">(optional)</span></span>
             <input type="text" value={alias} onChange={(e) => setAlias(e.target.value)} placeholder="e.g. main-lobby" />

@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures/test";
 import { mockCoreAPIs, setupAuthenticatedPage } from "./fixtures/helpers";
 import { AUTHENTICATED_SETTINGS, STORAGE_KEYS } from "./fixtures/mock-data";
 

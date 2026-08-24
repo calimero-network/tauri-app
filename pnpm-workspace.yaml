@@ -12,3 +12,4 @@ allowBuilds:
 
 minimumReleaseAgeExclude:
   - '@calimero-network/mero-ui@1.5.1'
+  - '@calimero-network/mero-js@13.2.1'

@@ -18,8 +18,8 @@ importers:
   apps/desktop:
     dependencies:
       '@calimero-network/mero-js':
-        specifier: ^13.1.0
-        version: 13.1.0
+        specifier: ^13.2.1
+        version: 13.2.1
       '@calimero-network/mero-react':
         specifier: ^6.0.0
         version: 6.0.0(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
@@ -209,8 +209,12 @@ packages:
     peerDependencies:
       react: ^18.3.1
 
-  '@calimero-network/mero-js@13.1.0':
-    resolution: {integrity: sha512-P9N2KJFAnwWqweMD9VsjULs8Cd7P14B8UZ2+WD5VBf1RoZaPARtbA/5jLi50qHafBaXxVeeECBsY0yRSkHOEnw==}
+  '@calimero-network/mero-js@13.2.0':
+    resolution: {integrity: sha512-qr9UZzsBxPzTyszeytCxOO3wNlI8ae271Fwx0koscOFWVFKgfKxmewG/P2L+sJZzORy7o+TZlXNTWlPaCP9OFQ==}
+    engines: {node: '>=18.0.0'}
+
+  '@calimero-network/mero-js@13.2.1':
+    resolution: {integrity: sha512-Cx8rRR6DI5hXTc5fsAT3heV37DAVU7/KCmsLdoapdf+GuYvxLoWZKj5Eu/BeUDJBldg79hpm9NzJWovNv72rgg==}
     engines: {node: '>=18.0.0'}
 
   '@calimero-network/mero-react@6.0.0':
@@ -1823,11 +1827,13 @@ snapshots:
     dependencies:
       react: 19.2.3
 
-  '@calimero-network/mero-js@13.1.0': {}
+  '@calimero-network/mero-js@13.2.0': {}
+
+  '@calimero-network/mero-js@13.2.1': {}
 
   '@calimero-network/mero-react@6.0.0(react-dom@19.2.3(react@19.2.3))(react@19.2.3)':
     dependencies:
-      '@calimero-network/mero-js': 13.1.0
+      '@calimero-network/mero-js': 13.2.0
       react: 19.2.3
       react-dom: 19.2.3(react@19.2.3)
 

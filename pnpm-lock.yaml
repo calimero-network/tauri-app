@@ -21,8 +21,8 @@ importers:
         specifier: ^13.1.0
         version: 13.1.0
       '@calimero-network/mero-react':
-        specifier: ^6.0.0
-        version: 6.0.0(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
+        specifier: ^6.0.3
+        version: 6.0.3(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
       '@tauri-apps/api':
         specifier: ^2.11.1
         version: 2.11.1
@@ -213,8 +213,8 @@ packages:
     resolution: {integrity: sha512-P9N2KJFAnwWqweMD9VsjULs8Cd7P14B8UZ2+WD5VBf1RoZaPARtbA/5jLi50qHafBaXxVeeECBsY0yRSkHOEnw==}
     engines: {node: '>=18.0.0'}
 
-  '@calimero-network/mero-react@6.0.0':
-    resolution: {integrity: sha512-iWFdvETet7/4hzJlvzkl2grm4MRILtnFLB7TDXJ/SH7s/je1OFf7x1wNOyaPPYv6pXcTV7r5N5WHc8BCRJK1uA==}
+  '@calimero-network/mero-react@6.0.3':
+    resolution: {integrity: sha512-e7KsHeYvv4zQ36Hyct3Nku7DXzKuZK2PISkLECymU7Q+IDUnn+fqyXhfBhpAKeIkt2Ha5Mveay2te+kU2kpAcg==}
     peerDependencies:
       react: ^18.0.0 || ^19.0.0
       react-dom: ^18.0.0 || ^19.0.0
@@ -1825,7 +1825,7 @@ snapshots:
 
   '@calimero-network/mero-js@13.1.0': {}
 
-  '@calimero-network/mero-react@6.0.0(react-dom@19.2.3(react@19.2.3))(react@19.2.3)':
+  '@calimero-network/mero-react@6.0.3(react-dom@19.2.3(react@19.2.3))(react@19.2.3)':
     dependencies:
       '@calimero-network/mero-js': 13.1.0
       react: 19.2.3

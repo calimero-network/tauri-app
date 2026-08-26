@@ -25,7 +25,7 @@
     "test:e2e:install": "playwright install chromium"
   },
   "dependencies": {
-    "@calimero-network/mero-js": "^13.1.0",
+    "@calimero-network/mero-js": "^13.2.5",
     "@calimero-network/mero-react": "^6.0.0",
     "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/plugin-autostart": "^2.5.1",

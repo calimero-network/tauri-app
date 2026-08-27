@@ -31,6 +31,8 @@ export interface NodeIdentity {
   deviceId?: string;
   /** The key this node signs ops with, base58 — the DEVICE key. */
   publicKey?: string;
+  /** Epoch-0 account ROOT public key, 64 hex - what a second device pairs into. Absent at or below 0.11.0-rc.22. */
+  accountRootPublicKey?: string;
 }
 
 /**

@@ -698,6 +698,9 @@ function App() {
   if (showSettings) {
     return (
       <ErrorBoundary componentName="Settings" onReset={() => setShowSettings(true)}>
+        {/* Settings short-circuits the page shells, which are where every other
+            ToastContainer is mounted, so it needs its own or its toasts never render. */}
+        <ToastContainer />
         <Settings onBack={handleSettingsBack} />
       </ErrorBoundary>
     );

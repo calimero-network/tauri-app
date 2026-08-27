@@ -17,7 +17,8 @@ import { truncateText } from "../utils/string";
 import { checkForUpdates, installUpdate, getCurrentVersion } from "../utils/updater";
 import { useTheme } from "../contexts/ThemeContext";
 import { useToast } from "../contexts/ToastContext";
-import { ArrowLeft, RotateCcw, Trash2, Cloud, Bot, Copy, Check, RefreshCw, Download } from "lucide-react";
+import { ArrowLeft, RotateCcw, Trash2, Cloud, Bot, Copy, Check, RefreshCw, Download, MonitorSmartphone } from "lucide-react";
+import AccountPanel from "../components/AccountPanel";
 import "./Settings.css";
 
 interface SettingsProps {
@@ -59,7 +60,7 @@ function Settings({ onBack }: SettingsProps) {
   const [newRegistryUrl, setNewRegistryUrl] = useState("");
   
   // Node management state (removed - now in NodeManagement page)
-  const [activeTab, setActiveTab] = useState<'general' | 'registries' | 'agent' | 'cloud'>('general');
+  const [activeTab, setActiveTab] = useState<'general' | 'registries' | 'agent' | 'account' | 'cloud'>('general');
   const [developerMode, setDeveloperMode] = useState(false);
   const [debugLogs, setDebugLogs] = useState(false);
   const [cloudEnabled, setCloudEnabled] = useState(false);
@@ -338,6 +339,14 @@ function Settings({ onBack }: SettingsProps) {
           >
             <Bot size={14} style={{ marginRight: '4px', verticalAlign: 'middle' }} />
             AI Agent
+          </button>
+          <button
+            id="settings-tab-account"
+            className={`settings-tab ${activeTab === 'account' ? 'active' : ''}`}
+            onClick={() => setActiveTab('account')}
+          >
+            <MonitorSmartphone size={14} style={{ marginRight: '4px', verticalAlign: 'middle' }} />
+            Account
           </button>
           {isCloudEnabled() && (
             <button
@@ -766,6 +775,12 @@ function Settings({ onBack }: SettingsProps) {
                 </div>
               )}
             </div>
+          </div>
+        )}
+
+        {activeTab === 'account' && (
+          <div className="settings-content">
+            <AccountPanel />
           </div>
         )}
 

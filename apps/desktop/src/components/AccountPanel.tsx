@@ -1,0 +1,387 @@
+import { useState, useEffect } from "react";
+import { MonitorSmartphone, Plus, RefreshCw, Trash2 } from "lucide-react";
+import DataTable, { type Column } from "./DataTable";
+import CopyButton from "./CopyButton";
+import { DevicePairWizard, DevicePairResponder } from "./DevicePairing";
+import { SkeletonText, SkeletonTable } from "./Skeleton";
+import {
+  listAccountDevices,
+  relinkDevice,
+  revokeDevice,
+  type AccountDevice,
+  type RelinkResult,
+} from "../lib/device-link";
+import { fetchNodeIdentity, type NodeIdentity } from "../utils/nodeIdentity";
+import { getSettings } from "../utils/settings";
+import { parseTauriError } from "../utils/appUtils";
+import { truncateText } from "../utils/string";
+
+const IDENTITY_FIELDS: { id: string; label: string; key: keyof NodeIdentity }[] = [
+  { id: "account-id", label: "Account ID", key: "accountId" },
+  { id: "device-id", label: "Device ID", key: "deviceId" },
+  { id: "public-key", label: "Device public key", key: "publicKey" },
+  { id: "account-root-public-key", label: "Account root public key", key: "accountRootPublicKey" },
+];
+
+/** The account-level pairing API is not in the bundled merod, so the feature
+ *  stays gated until a release carries it and a developer points at their own build. */
+const PAIRING_UNAVAILABLE =
+  "Pairing needs a newer node than the bundled one. Turn on developer mode and point the app at your own build.";
+
+/** `syncing` marks a device we linked but have not yet seen in the listing. */
+type DeviceRow = AccountDevice & { syncing?: boolean };
+
+/** What the panel is saying about one row after an action on it. */
+interface RowNote {
+  deviceId: string;
+  text: string;
+  error?: boolean;
+}
+
+const namespaceWord = (n: number) => (n === 1 ? "namespace" : "namespaces");
+
+/** Core's empty `applications` means every application, not none. */
+export function deviceScope(device: AccountDevice): string {
+  const count = device.applications.length;
+  if (!count) return "All apps";
+  return `${count} ${count === 1 ? "app" : "apps"}`;
+}
+
+/** Relinking this node's own device, or a withdrawn one, is defined but can
+ *  never publish anything, so neither is offered the action. */
+export function canSync(device: AccountDevice): boolean {
+  return !device.isSelf && !device.revoked;
+}
+
+/** Revocation is terminal, and its route names a namespace, so a device bound
+ *  nowhere has nothing to revoke in. */
+export function canRevoke(device: AccountDevice): boolean {
+  return !device.isSelf && !device.revoked && device.namespaces.length > 0;
+}
+
+export function relinkSummary({ linkedIn, skipped }: RelinkResult): string {
+  if (!linkedIn.length && !skipped.length) return "Nothing to repair.";
+  return `Repaired ${linkedIn.length} ${namespaceWord(linkedIn.length)}, skipped ${skipped.length}.`;
+}
+
+export default function AccountPanel() {
+  const developerMode = getSettings().developerMode ?? false;
+  const [identity, setIdentity] = useState<NodeIdentity | null>(null);
+  const [identityLoading, setIdentityLoading] = useState(true);
+  const [identityError, setIdentityError] = useState("");
+  const [devices, setDevices] = useState<DeviceRow[]>([]);
+  const [devicesLoading, setDevicesLoading] = useState(false);
+  const [devicesError, setDevicesError] = useState("");
+  const [wizardOpen, setWizardOpen] = useState(false);
+  const [reloads, setReloads] = useState(0);
+  const [deviceReloads, setDeviceReloads] = useState(0);
+  const [busyDevice, setBusyDevice] = useState("");
+  const [confirmRevoke, setConfirmRevoke] = useState("");
+  const [rowNote, setRowNote] = useState<RowNote | null>(null);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setIdentityLoading(true);
+    setIdentityError("");
+    fetchNodeIdentity(controller.signal)
+      .then(setIdentity)
+      .catch((err: unknown) => {
+        if (controller.signal.aborted) return;
+        setIdentityError(parseTauriError(err, "Could not read this device's identity"));
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setIdentityLoading(false);
+      });
+    return () => controller.abort();
+  }, [reloads]);
+
+  // Kept apart from the identity fetch: a device listing that fails must not
+  // take the account and key fields off the screen with it.
+  const accountId = identity?.accountId;
+  useEffect(() => {
+    if (!accountId) {
+      setDevices([]);
+      return;
+    }
+    const controller = new AbortController();
+    setDevicesLoading(true);
+    setDevicesError("");
+    listAccountDevices(controller.signal)
+      .then(setDevices)
+      .catch((err: unknown) => {
+        if (controller.signal.aborted) return;
+        setDevicesError(parseTauriError(err, "Could not list the devices on this account"));
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setDevicesLoading(false);
+      });
+    return () => controller.abort();
+  }, [accountId, reloads, deviceReloads]);
+
+  // A device we linked but never saw converge is not in the listing yet, so
+  // refetching would drop it: show it as syncing instead.
+  const handleLinked = (deviceId: string, converged: boolean) => {
+    if (converged) {
+      setDeviceReloads((n) => n + 1);
+      return;
+    }
+    setDevices((prev) =>
+      prev.some((d) => d.deviceId === deviceId)
+        ? prev
+        : [
+            ...prev,
+            {
+              deviceId,
+              signingKey: "",
+              isSelf: false,
+              revoked: false,
+              applications: [],
+              namespaces: [],
+              syncing: true,
+            },
+          ],
+    );
+  };
+
+  const runRowAction = async (deviceId: string, action: () => Promise<string>) => {
+    setBusyDevice(deviceId);
+    setRowNote(null);
+    try {
+      setRowNote({ deviceId, text: await action() });
+      setDeviceReloads((n) => n + 1);
+    } catch (err: unknown) {
+      setRowNote({
+        deviceId,
+        text: parseTauriError(err, "That did not work"),
+        error: true,
+      });
+    } finally {
+      setBusyDevice("");
+    }
+  };
+
+  const sync = (device: DeviceRow) =>
+    runRowAction(device.deviceId, async () => relinkSummary(await relinkDevice(device.deviceId)));
+
+  const revoke = (device: DeviceRow) => {
+    setConfirmRevoke("");
+    // A revocation reaches every namespace the device is in whichever one the
+    // route names, so the first is as good as any.
+    return runRowAction(device.deviceId, async () => {
+      const { revokedIn } = await revokeDevice(device.namespaces[0], device.deviceId);
+      return `Withdrawn from ${revokedIn.length} ${namespaceWord(revokedIn.length)}.`;
+    });
+  };
+
+  const columns: Column<DeviceRow>[] = [
+    {
+      key: "deviceId",
+      label: "Device",
+      render: (device) => (
+        <span className="account-device-cell">
+          <MonitorSmartphone size={14} />
+          <code className="account-mono">{truncateText(device.deviceId, 8)}</code>
+        </span>
+      ),
+    },
+    {
+      key: "applications",
+      label: "Scope",
+      render: (device) => (
+        <span className="account-mono" title={device.applications.join(", ") || undefined}>
+          {device.syncing ? "-" : deviceScope(device)}
+        </span>
+      ),
+    },
+    {
+      key: "namespaces",
+      label: "Namespaces",
+      render: (device) => (
+        <span className="account-mono">{device.syncing ? "-" : device.namespaces.length}</span>
+      ),
+    },
+    {
+      key: "status",
+      label: "Status",
+      render: (device) =>
+        device.syncing ? (
+          <span className="account-syncing">Syncing</span>
+        ) : device.isSelf ? (
+          <span className="account-this-device">This device</span>
+        ) : device.revoked ? (
+          <span className="account-revoked">Revoked</span>
+        ) : (
+          <span className="account-active">Active</span>
+        ),
+    },
+    {
+      key: "actions",
+      label: "",
+      render: (device) => {
+        if (device.syncing) return null;
+        const note = rowNote?.deviceId === device.deviceId ? rowNote : null;
+        return (
+          <div className="account-row-actions">
+            {confirmRevoke === device.deviceId ? (
+              <>
+                <span className="account-row-note">Withdraw it for good?</span>
+                <button
+                  type="button"
+                  id={`device-revoke-confirm-${device.deviceId}`}
+                  className="button button-danger button-small"
+                  disabled={busyDevice === device.deviceId}
+                  onClick={() => revoke(device)}
+                >
+                  Revoke
+                </button>
+                <button
+                  type="button"
+                  id={`device-revoke-cancel-${device.deviceId}`}
+                  className="button button-secondary button-small"
+                  onClick={() => setConfirmRevoke("")}
+                >
+                  Cancel
+                </button>
+              </>
+            ) : (
+              <>
+                {canSync(device) && (
+                  <button
+                    type="button"
+                    id={`device-sync-${device.deviceId}`}
+                    className="button button-secondary button-small"
+                    disabled={busyDevice === device.deviceId}
+                    onClick={() => sync(device)}
+                  >
+                    <RefreshCw size={12} />
+                    Sync
+                  </button>
+                )}
+                {canRevoke(device) && (
+                  <button
+                    type="button"
+                    id={`device-revoke-${device.deviceId}`}
+                    className="button button-secondary button-small"
+                    onClick={() => setConfirmRevoke(device.deviceId)}
+                  >
+                    <Trash2 size={12} />
+                    Revoke
+                  </button>
+                )}
+              </>
+            )}
+            {note && (
+              <span
+                className={note.error ? "field-error" : "account-row-note"}
+                id={`device-note-${device.deviceId}`}
+              >
+                {note.text}
+              </span>
+            )}
+          </div>
+        );
+      },
+    },
+  ];
+
+  return (
+    <>
+      <div className="settings-card">
+        <h2>This device</h2>
+        {identityLoading ? (
+          <SkeletonText lines={4} />
+        ) : identityError ? (
+          <>
+            <p className="field-error">{identityError}</p>
+            <button
+              type="button"
+              id="account-retry"
+              className="button button-secondary"
+              onClick={() => setReloads((n) => n + 1)}
+            >
+              Retry
+            </button>
+          </>
+        ) : !identity ? (
+          <p className="field-hint" id="account-no-identity">
+            This node has no account identity yet. It gets one the first time it takes part in
+            a namespace.
+          </p>
+        ) : (
+          IDENTITY_FIELDS.map(({ id, label, key }) => {
+            const value = identity[key];
+            return (
+              <div className="settings-field" key={id}>
+                <div className="agent-config-header">
+                  <span className="settings-field-label">{label}</span>
+                  {value && <CopyButton id={`copy-${id}`} value={value} />}
+                </div>
+                <code className="account-mono account-value" id={`value-${id}`}>
+                  {value || "Not set"}
+                </code>
+              </div>
+            );
+          })
+        )}
+      </div>
+
+      <div className="settings-card">
+        <div className="account-devices-header">
+          <h2>Devices on this account</h2>
+          <button
+            type="button"
+            id="add-device"
+            className="button button-primary"
+            disabled={!developerMode || wizardOpen}
+            title={developerMode ? undefined : PAIRING_UNAVAILABLE}
+            onClick={() => setWizardOpen(true)}
+          >
+            <Plus size={14} style={{ marginRight: "6px", verticalAlign: "middle" }} />
+            Add a device
+          </button>
+        </div>
+        {identityLoading || devicesLoading ? (
+          <SkeletonTable rows={2} columns={5} />
+        ) : devicesError ? (
+          <>
+            <p className="field-error">{devicesError}</p>
+            <button
+              type="button"
+              id="devices-retry"
+              className="button button-secondary"
+              onClick={() => setDeviceReloads((n) => n + 1)}
+            >
+              Retry
+            </button>
+          </>
+        ) : (
+          <DataTable
+            data={devices}
+            columns={columns}
+            keyExtractor={(device) => device.deviceId}
+            emptyMessage={
+              identity
+                ? "No devices found for this account."
+                : "This node is not part of an account yet."
+            }
+            compact
+          />
+        )}
+        {wizardOpen && (
+          <DevicePairWizard
+            rootKey={identity?.accountRootPublicKey}
+            onLinked={handleLinked}
+            onClose={() => setWizardOpen(false)}
+          />
+        )}
+      </div>
+
+      {developerMode && (
+        <div className="settings-card">
+          <h2>Pair this computer into an account</h2>
+          <DevicePairResponder enrolledDeviceId={identity?.deviceId} />
+        </div>
+      )}
+    </>
+  );
+}

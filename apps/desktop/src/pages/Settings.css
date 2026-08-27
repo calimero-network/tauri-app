@@ -668,3 +668,174 @@
   gap: 12px;
   justify-content: flex-end;
 }
+
+/* ─── Account tab ─────────────────────────────────────────────────────────── */
+
+.account-mono {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.account-value {
+  display: block;
+  /* Account ids and keys are one unbroken token wider than the card. */
+  word-break: break-all;
+  line-height: 1.6;
+}
+
+.account-devices-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.account-devices-header h2 {
+  margin-bottom: 0;
+}
+
+.account-device-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Matches .ns-me-badge, the app's existing "this one is you" marker. */
+.account-this-device {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: var(--accent-primary);
+  background: var(--accent-light);
+}
+
+.account-syncing {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: var(--text-tertiary);
+  background: var(--surface-glass-soft);
+}
+
+.account-wizard {
+  margin-top: 20px;
+  padding: 16px;
+  background: var(--surface-glass-soft);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+}
+
+.account-wizard-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.account-blob-input {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 12px;
+  resize: vertical;
+}
+
+.account-pair-answer {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-color);
+}
+
+.account-pair-code {
+  display: block;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  color: var(--accent-primary);
+}
+
+.account-wizard > .field-hint {
+  margin-bottom: 12px;
+}
+
+.account-wizard > .button,
+.account-wizard-actions {
+  margin-top: 16px;
+}
+
+.account-warning {
+  margin-bottom: 16px;
+  color: var(--warning);
+}
+
+/* A base64 blob is one unbroken token, so pre-wrap alone lets it escape the card. */
+.account-blob {
+  word-break: break-all;
+}
+
+/* Matches .account-this-device, differing only in what the colour says. */
+.account-active,
+.account-revoked {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+
+.account-active {
+  color: var(--success);
+  background: var(--surface-glass-soft);
+}
+
+.account-revoked {
+  color: var(--error);
+  background: var(--surface-glass-soft);
+}
+
+.account-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.account-row-actions .button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.account-row-note {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.account-scope-choice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.account-scope-apps {
+  margin: 4px 0 0 24px;
+  padding-left: 12px;
+  border-left: 1px solid var(--border-color);
+}

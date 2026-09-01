@@ -7,7 +7,15 @@ vi.mock("../lib/device-link", () => ({
   revokeDevice: vi.fn(),
 }));
 
-import { canRevoke, canSync, canWiden, deviceScope, relinkSummary, widenSummary } from "./AccountPanel";
+import {
+  canRevoke,
+  canSync,
+  canWiden,
+  deviceScope,
+  devicesEmptyMessage,
+  relinkSummary,
+  widenSummary,
+} from "./AccountPanel";
 
 function device(overrides: Partial<AccountDevice> = {}): AccountDevice {
   return {
@@ -120,5 +128,22 @@ describe("widenSummary", () => {
     expect(widenSummary({ linkedIn: [], skipped: ["ns-1"] }, 1)).toBe(
       "Added 1 app, reaching 0 more namespaces.",
     );
+  });
+});
+
+describe("devicesEmptyMessage", () => {
+  const identity = (deviceId: string | null) =>
+    ({ accountId: "acct", deviceId, publicKey: "pk", accountRootPublicKey: "root" }) as never;
+
+  it("says a paired device is on the account rather than that none were found", () => {
+    expect(devicesEmptyMessage(identity("dev-1"))).toContain("This device is on the account");
+  });
+
+  it("keeps the plain empty listing for a node holding no device row", () => {
+    expect(devicesEmptyMessage(identity(null))).toBe("No devices found for this account.");
+  });
+
+  it("says a node with no account at all is not part of one", () => {
+    expect(devicesEmptyMessage(null)).toBe("This node is not part of an account yet.");
   });
 });

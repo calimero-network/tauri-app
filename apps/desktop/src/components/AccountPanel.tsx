@@ -74,6 +74,16 @@ export function widenSummary({ linkedIn }: RelinkResult, added: number): string 
   return `Added ${added} ${appWord}, reaching ${linkedIn.length} more ${namespaceWord(linkedIn.length)}.`;
 }
 
+/** A device paired into an account holds a device id but may not have synced the
+ *  account's roster, and "none found" would read as a pairing that never landed. */
+export function devicesEmptyMessage(identity: NodeIdentity | null): string {
+  if (!identity) return "This node is not part of an account yet.";
+  if (identity.deviceId) {
+    return "This device is on the account. The account's other devices have not reached it yet.";
+  }
+  return "No devices found for this account.";
+}
+
 export function relinkSummary({ linkedIn, skipped }: RelinkResult): string {
   if (!linkedIn.length && !skipped.length) return "Nothing to repair.";
   return `Repaired ${linkedIn.length} ${namespaceWord(linkedIn.length)}, skipped ${skipped.length}.`;
@@ -428,11 +438,7 @@ export default function AccountPanel() {
             data={devices}
             columns={columns}
             keyExtractor={(device) => device.deviceId}
-            emptyMessage={
-              identity
-                ? "No devices found for this account."
-                : "This node is not part of an account yet."
-            }
+            emptyMessage={devicesEmptyMessage(identity)}
             compact
           />
         )}

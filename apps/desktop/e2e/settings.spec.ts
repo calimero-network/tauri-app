@@ -427,14 +427,16 @@ describeAfter35("Account tab", () => {
     await expect(page.locator("#account-retry")).toHaveCount(0);
   });
 
-  test("adding a device needs a node the bundle does not ship", async ({ page }) => {
+  test("adding a device is offered on the bundled node, with no developer mode", async ({
+    page,
+  }) => {
     await page.locator("#settings-tab-account").click();
     await scrollSettingsControlIntoView(page, "#add-device");
-    await expect(page.locator("#add-device")).toBeDisabled();
+    await expect(page.locator("#add-device")).toBeEnabled();
   });
 });
 
-// ─── Account tab - device pairing (developer mode) ──────────────────────────
+// ─── Account tab - device pairing ───────────────────────────────────────────
 
 /** This account's two devices and namespaces, plus every account-level route. */
 async function mockPairingAPIs(page: Page): Promise<void> {
@@ -470,28 +472,11 @@ async function inviteNamespacesOnScreen(page: Page): Promise<string[]> {
   return JSON.parse(atob(blob.replace("mero-pair:", ""))).namespaces;
 }
 
-describeAfter35("Account tab - pairing is gated on developer mode", () => {
-  test("without developer mode the add button says the node is too old", async ({
+describeAfter35("Account tab - pairing needs no developer mode", () => {
+  test("both halves of the exchange are offered on an ordinary session", async ({
     page,
   }) => {
     await setupAuthenticatedPage(page);
-    await mockPairingAPIs(page);
-    await page.click('button[title="Settings"]');
-    await page.locator("#settings-tab-account").click();
-
-    await scrollSettingsControlIntoView(page, "#add-device");
-    await expect(page.locator("#add-device")).toBeDisabled();
-    await expect(page.locator("#add-device")).toHaveAttribute(
-      "title",
-      /newer node/,
-    );
-    await expect(page.locator("#pair-invite-input")).toHaveCount(0);
-  });
-
-  test("developer mode enables the add button and the responder panel", async ({
-    page,
-  }) => {
-    await setupDeveloperPage(page);
     await mockPairingAPIs(page);
     await page.click('button[title="Settings"]');
     await page.locator("#settings-tab-account").click();

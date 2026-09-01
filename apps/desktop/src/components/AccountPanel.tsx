@@ -16,7 +16,6 @@ import {
   type RelinkResult,
 } from "../lib/device-link";
 import { fetchNodeIdentity, type NodeIdentity } from "../utils/nodeIdentity";
-import { getSettings } from "../utils/settings";
 import { parseTauriError } from "../utils/appUtils";
 import { truncateText } from "../utils/string";
 
@@ -26,11 +25,6 @@ const IDENTITY_FIELDS: { id: string; label: string; key: keyof NodeIdentity }[] 
   { id: "public-key", label: "Device public key", key: "publicKey" },
   { id: "account-root-public-key", label: "Account root public key", key: "accountRootPublicKey" },
 ];
-
-/** The account-level pairing API is not in the bundled merod, so the feature
- *  stays gated until a release carries it and a developer points at their own build. */
-const PAIRING_UNAVAILABLE =
-  "Pairing needs a newer node than the bundled one. Turn on developer mode and point the app at your own build.";
 
 /** `syncing` marks a device we linked but have not yet seen in the listing. */
 type DeviceRow = AccountDevice & { syncing?: boolean };
@@ -80,7 +74,6 @@ export function relinkSummary({ linkedIn, skipped }: RelinkResult): string {
 }
 
 export default function AccountPanel() {
-  const developerMode = getSettings().developerMode ?? false;
   const [identity, setIdentity] = useState<NodeIdentity | null>(null);
   const [identityLoading, setIdentityLoading] = useState(true);
   const [identityError, setIdentityError] = useState("");
@@ -395,8 +388,7 @@ export default function AccountPanel() {
             type="button"
             id="add-device"
             className="button button-primary"
-            disabled={!developerMode || wizardOpen}
-            title={developerMode ? undefined : PAIRING_UNAVAILABLE}
+            disabled={wizardOpen}
             onClick={() => setWizardOpen(true)}
           >
             <Plus size={14} style={{ marginRight: "6px", verticalAlign: "middle" }} />
@@ -496,12 +488,10 @@ export default function AccountPanel() {
         )}
       </div>
 
-      {developerMode && (
-        <div className="settings-card">
-          <h2>Pair this computer into an account</h2>
-          <DevicePairResponder enrolledDeviceId={identity?.deviceId} />
-        </div>
-      )}
+      <div className="settings-card">
+        <h2>Pair this computer into an account</h2>
+        <DevicePairResponder enrolledDeviceId={identity?.deviceId} />
+      </div>
     </>
   );
 }

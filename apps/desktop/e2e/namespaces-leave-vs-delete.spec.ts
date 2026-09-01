@@ -26,9 +26,10 @@
 import { test, expect } from "./fixtures/test";
 import { setupDeveloperPage, navigateVia } from "./fixtures/helpers";
 import {
+  GENUINE_FAULT,
   mockNamespaceGraph,
-  NOT_ADMIN_BODY,
-  NOT_PERMITTED_SUBGROUP_BODY,
+  NOT_ADMIN_403,
+  REASON_STRIPPED_500,
   type GraphFailures,
   type NamespaceGraph,
 } from "./fixtures/namespace-graph";
@@ -260,16 +261,20 @@ test.describe("Context – Delete vs Leave", () => {
   });
 });
 
-// ─── Failure reporting ──────────────────────────────────────────────────────
+// ─── Failure reporting ─────────────────────────────────────────────────────
 
+// The Delete path stays reachable even after the fix: the indeterminate window
+// keeps it on screen, a role can go stale after a demotion, and the role read
+// is only a guess (a CAN_DELETE_SUBGROUP holder is not an admin but may
+// delete). So how a refusal reads still matters.
+//
+// merod does not describe its refusals consistently, and the shapes below were
+// OBSERVED against a live merod:edge in merobox CI rather than inferred from
+// the handler source — which gets it wrong, because `parse_api_error`
+// reclassifies some and strips the rest.
 test.describe("A refused delete names the way out", () => {
-  // The indeterminate window (member list still loading, identity unresolved,
-  // role demoted since the fetch) keeps Delete on screen, so this path stays
-  // reachable and must not read as a node fault.
-  test("merod's NotAdmin refusal is reported as 'you can only leave it'", async ({ page }) => {
-    await openNamespace(page, graph("Admin", "Admin"), {
-      deleteNamespace: NOT_ADMIN_BODY,
-    });
+  test("a 403 that says 'not an admin' is reported as exactly that", async ({ page }) => {
+    await openNamespace(page, graph("Admin", "Admin"), { deleteNamespace: NOT_ADMIN_403 });
     await openActionsMenu(page);
     await page.locator(".ns-actions-menu").getByText("Delete", { exact: true }).click();
     await page.locator(".ns-delete-confirm-btn").click();
@@ -279,42 +284,64 @@ test.describe("A refused delete names the way out", () => {
     ).toBeVisible();
   });
 
-  test("an unrelated failure is still reported verbatim, not as a permission problem", async ({
+  // This is what EVERY refused delete looks like on 0.11.0-rc.28, the merod
+  // this app bundles, and what `delete_group` looks like even on master:
+  // `parse_api_error` classifies the error nowhere and deliberately does not
+  // echo its message back, so the body is just "Internal server error".
+  //
+  // The message must therefore name the likely fix WITHOUT asserting the
+  // cause — an admin whose delete failed for a real reason must not be told
+  // they are not an admin.
+  test("a reason-stripped 500 points at Leave without claiming to know why", async ({ page }) => {
+    await openNamespace(page, graph("Admin", "Admin"), { deleteGroup: REASON_STRIPPED_500 });
+    await page.locator(".ns-tree-row.ns-tree-subgroup").getByTitle("Delete subgroup").click();
+    await page.locator(".ns-delete-confirm-btn").click();
+
+    await expect(
+      page.getByText(/refused to delete this subgroup without saying why/),
+    ).toBeVisible();
+    await expect(page.getByText(/If you are not an admin of it, use Leave instead/)).toBeVisible();
+    // It must not assert the cause it cannot know.
+    await expect(page.getByText(/You are not an admin of this subgroup/)).toHaveCount(0);
+  });
+
+  test("the same treatment reaches a reason-stripped namespace and context delete", async ({
     page,
   }) => {
-    await openNamespace(page, graph("Admin", "Admin"), {
-      deleteNamespace: "namespace not found",
-    });
+    await openNamespace(page, graph("Admin", "Admin"), { deleteContext: REASON_STRIPPED_500 });
+    await page.locator(".ns-tree-row.ns-tree-context").first().getByTitle("Delete context").click();
+    await page.locator(".ns-delete-confirm-btn").click();
+
+    await expect(
+      page.getByText(/refused to delete this context without saying why/),
+    ).toBeVisible();
+  });
+
+  test("a genuine fault is still reported verbatim, not as a permission problem", async ({
+    page,
+  }) => {
+    await openNamespace(page, graph("Admin", "Admin"), { deleteNamespace: GENUINE_FAULT });
     await openActionsMenu(page);
     await page.locator(".ns-actions-menu").getByText("Delete", { exact: true }).click();
     await page.locator(".ns-delete-confirm-btn").click();
 
     await expect(page.getByText(/Failed to delete namespace/)).toBeVisible();
     await expect(page.getByText(/namespace not found/)).toBeVisible();
-  });
-
-  // delete_group refuses with CapabilitiesError::Unauthorized, not NotAdmin.
-  // A matcher that only knew the NotAdmin wording would surface this one raw.
-  test("delete_group's differently-worded refusal is recognised too", async ({ page }) => {
-    await openNamespace(page, graph("Admin", "Admin"), {
-      deleteGroup: NOT_PERMITTED_SUBGROUP_BODY,
-    });
-    await page.locator(".ns-tree-row.ns-tree-subgroup").getByTitle("Delete subgroup").click();
-    await page.locator(".ns-delete-confirm-btn").click();
-
-    await expect(
-      page.getByText(/not an admin of this subgroup — you can only leave it/),
-    ).toBeVisible();
+    await expect(page.getByText(/not an admin/)).toHaveCount(0);
   });
 
   // A member who joined an Open subgroup by inheritance holds no direct
   // membership row, so `leave_group` refuses — but `list_group_members` unions
   // the inherited set in, so the role read offers Leave anyway and cannot know
-  // better. The refusal has to be turned into the instruction merod is giving.
+  // better. merod DOES describe this one (MemberNotDirect is classified), so
+  // the refusal can be turned into the instruction it is really giving.
   test("an inherited subgroup membership is explained, not dumped raw", async ({ page }) => {
     await openNamespace(page, graph("Member", "Member"), {
-      leaveGroup:
-        "this node is not a direct member of ContextGroupId(0xabc); leave the parent group where the membership anchor lives instead",
+      leaveGroup: {
+        status: 409,
+        message:
+          "this node is not a direct member of ContextGroupId(0xabc); leave the parent group where the membership anchor lives instead",
+      },
     });
     await page.locator(".ns-tree-row.ns-tree-subgroup").getByTitle("Leave subgroup").click();
     await page.locator(".ns-delete-confirm-btn").click();
@@ -326,7 +353,7 @@ test.describe("A refused delete names the way out", () => {
 
   test("a failed leave does not claim success", async ({ page }) => {
     await openNamespace(page, graph("Member", "Member"), {
-      leaveNamespace: "gossip publish timed out",
+      leaveNamespace: { status: 500, message: "gossip publish timed out" },
     });
     await openActionsMenu(page);
     await page.locator(".ns-actions-menu").getByText("Leave", { exact: true }).click();

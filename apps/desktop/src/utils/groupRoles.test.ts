@@ -4,6 +4,7 @@ import {
   isAdminRole,
   isInheritedMembershipError,
   isPermissionError,
+  isReasonlessRefusal,
   resolveGroupAction,
   roleOf,
 } from './groupRoles';
@@ -140,5 +141,43 @@ describe('isInheritedMembershipError', () => {
     ).toBe(false);
     expect(isInheritedMembershipError('Failed to fetch')).toBe(false);
     expect(isInheritedMembershipError(null)).toBe(false);
+  });
+});
+
+describe('isReasonlessRefusal', () => {
+  // What core sends when `parse_api_error` classifies the error nowhere: it
+  // deliberately does not echo an unclassified message back (it can carry
+  // store paths or key material), so the body is `{"error":"Internal server
+  // error"}`. On 0.11.0-rc.28 — the merod this app bundles — that is EVERY
+  // refused delete; on master it is still every `delete_group`.
+  it('recognises core’s reason-stripped refusal', () => {
+    expect(isReasonlessRefusal('500: Internal server error')).toBe(true);
+    expect(isReasonlessRefusal('Internal server error')).toBe(true);
+  });
+
+  it('recognises a failure with no body at all', () => {
+    expect(isReasonlessRefusal('500: 500')).toBe(true);
+    expect(isReasonlessRefusal('503:')).toBe(true);
+  });
+
+  it('does not swallow a refusal that DID say why', () => {
+    expect(
+      isReasonlessRefusal(`403: identity ${ME} is not an admin of group 0xabc`),
+    ).toBe(false);
+    expect(isReasonlessRefusal('500: namespace not found')).toBe(false);
+    expect(isReasonlessRefusal('Failed to fetch')).toBe(false);
+    expect(isReasonlessRefusal(undefined)).toBe(false);
+  });
+
+  // The two matchers must not both claim the same message: `isPermissionError`
+  // asserts a cause, `isReasonlessRefusal` explicitly declines to.
+  it('is disjoint from isPermissionError', () => {
+    for (const m of [
+      `identity ${ME} is not an admin of group 0xabc`,
+      '500: Internal server error',
+      '500: namespace not found',
+    ]) {
+      expect(isPermissionError(m) && isReasonlessRefusal(m)).toBe(false);
+    }
   });
 });

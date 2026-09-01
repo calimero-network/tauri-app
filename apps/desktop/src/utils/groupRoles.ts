@@ -86,30 +86,55 @@ export function resolveGroupAction(opts: {
 }
 
 /**
- * Does this failure mean "you lack the role for that"?
+ * Does this failure SAY it was a permission refusal?
  *
- * The admin API answers a refusal with an untyped 500 carrying the eyre
- * message, so there is no code to match on — only the text. merod has TWO
- * wordings here and a matcher that knows one of them misreports the other as a
- * node fault:
+ * Only some of them do, and which ones depends on the merod version — measured
+ * against a live `merod:edge` in merobox CI, not assumed:
  *
- *   delete_namespace / delete_context → `MembershipError::NotAdmin`
- *     "identity {identity} is not an admin of group {group_id}"
+ *   delete_namespace / delete_context
+ *     core master → typed `403` carrying `MembershipError::NotAdmin`:
+ *       "identity {id} is not an admin of group {group}"
+ *     core 0.11.0-rc.28 → bare `500`, reason STRIPPED (see below)
  *
- *   delete_group → `CapabilitiesError::Unauthorized`, wrapped
- *     "deleting subgroup '{id}': requester lacks permission to delete
- *      subgroup (CAN_DELETE_SUBGROUP) in group {id} (or be its owner)"
+ *   delete_group → bare `500` on BOTH, reason stripped. It refuses with
+ *     `CapabilitiesError::Unauthorized`, which `parse_api_error` classifies
+ *     nowhere, because a subgroup delete does not go through `require_admin`
+ *     at all: it admits the subgroup's owner, an admin of the namespace root,
+ *     or a member holding `CAN_DELETE_SUBGROUP`.
  *
- * A subgroup delete does NOT go through `require_admin`: it admits the
- * subgroup's owner, an admin of the namespace root, or any namespace member
- * holding `CAN_DELETE_SUBGROUP` (crates/context/src/handlers/delete_group.rs).
- * Which is also why the Delete/Leave decision is only a best guess from the
- * member list — a capability holder who is not an admin CAN delete, and this
- * error path is what catches the cases the role read gets wrong.
+ * `parse_api_error` deliberately does not echo an unclassified error's message
+ * back to the caller — it can carry store paths or key material — so the body
+ * is literally `{"error":"Internal server error"}` and the reason exists only
+ * in the node log. core master added `membership_refusal_status` to classify
+ * the `MembershipError` family; `CapabilitiesError` has no equivalent yet, and
+ * rc.28 (which the desktop bundles) has neither.
+ *
+ * So this returns true for the cases that self-describe, and
+ * `isReasonlessRefusal` covers the rest. Both matter: the role read is only a
+ * best guess — a `CAN_DELETE_SUBGROUP` holder who is not an admin CAN delete —
+ * and these two are what catch the cases it gets wrong.
  */
 export function isPermissionError(message: string | undefined | null): boolean {
   if (typeof message !== 'string') return false;
   return /is not an admin/i.test(message) || /lacks permission/i.test(message);
+}
+
+/**
+ * Did the node refuse without saying why?
+ *
+ * On the merod the desktop bundles this is what EVERY refused delete looks
+ * like, so a message that asserts a cause here would be a guess dressed as a
+ * fact. Callers use it to name the likely fix ("if you are not an admin, use
+ * Leave") without claiming to know that is what happened.
+ */
+export function isReasonlessRefusal(message: string | undefined | null): boolean {
+  if (typeof message !== 'string') return false;
+  // `parseApiError` renders core's body as "500: Internal server error", and
+  // falls back to "500: 500" when there is no body at all.
+  return (
+    /internal server error/i.test(message) ||
+    /^\s*5\d\d:\s*\d*\s*$/.test(message)
+  );
 }
 
 /**

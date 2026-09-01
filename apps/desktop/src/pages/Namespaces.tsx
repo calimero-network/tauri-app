@@ -31,6 +31,7 @@ import {
   fetchGroupMembers,
   isInheritedMembershipError,
   isPermissionError,
+  isReasonlessRefusal,
   resolveGroupAction,
   roleOf,
   type GroupAction,
@@ -573,17 +574,35 @@ function Namespaces() {
   /**
    * Turn a failed destructive call into a message that names the way out.
    *
-   * merod answers an admin-gated delete with an untyped 500 whose body is
-   * `identity … is not an admin of group …`. Rendered raw that reads like a
-   * node fault; it is really "you were offered the wrong button", which
-   * happens whenever the member list had not resolved yet (the indeterminate
-   * window keeps Delete on screen) or went stale after somebody demoted us.
+   * A refused delete reads like a node fault when rendered raw; it is really
+   * "you were offered the wrong button", which happens whenever the member
+   * list had not resolved yet (the indeterminate window keeps Delete on
+   * screen), the role went stale after a demotion, or the guess was simply
+   * wrong (a `CAN_DELETE_SUBGROUP` holder is not an admin but may delete).
+   *
+   * Three cases, because merod does not describe its refusals consistently —
+   * see `isPermissionError` for which version says what:
+   *
+   *   1. It says so → say so.
+   *   2. It refused with the reason stripped (a bare `500`, which on the
+   *      bundled rc.28 is EVERY refused delete) → name the likely fix WITHOUT
+   *      asserting the cause. Claiming "you are not an admin" here would be a
+   *      guess dressed as a fact, and it would be wrong for an admin whose
+   *      delete failed for a real reason.
+   *   3. Anything else → verbatim; a genuine fault must not be dressed up as
+   *      a permission problem.
    */
   const reportActionError = (verb: string, subject: string, e: any) => {
     const detail = parseApiError(e);
     if (isPermissionError(detail)) {
       toast.error(
         `You are not an admin of this ${subject} — you can only leave it, not ${verb} it.`,
+      );
+      return;
+    }
+    if (isReasonlessRefusal(detail)) {
+      toast.error(
+        `The node refused to ${verb} this ${subject} without saying why. If you are not an admin of it, use Leave instead — the reason is only in the node log.`,
       );
       return;
     }

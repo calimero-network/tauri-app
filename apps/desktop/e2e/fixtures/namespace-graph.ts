@@ -73,31 +73,58 @@ export const OTHER_ACCOUNT_ID = "2".repeat(64);
  * Options for the endpoints under test. Each may fail so a spec can prove the
  * page reports the failure instead of a false "Left".
  */
+export interface GraphFailure {
+  /** HTTP status merod answers with. */
+  status: number;
+  /** The `error` field of merod's body — `{"error": message}`. */
+  message: string;
+}
+
 export interface GraphFailures {
-  deleteNamespace?: string;
-  leaveNamespace?: string;
-  deleteGroup?: string;
-  leaveGroup?: string;
-  deleteContext?: string;
-  leaveContext?: string;
+  deleteNamespace?: GraphFailure;
+  leaveNamespace?: GraphFailure;
+  deleteGroup?: GraphFailure;
+  leaveGroup?: GraphFailure;
+  deleteContext?: GraphFailure;
+  leaveContext?: GraphFailure;
 }
 
 /**
- * merod's `MembershipError::NotAdmin` — what `delete_namespace` and
- * `delete_context` refuse a non-admin with.
+ * The refusals merod actually sends. Every one of these was OBSERVED against a
+ * live `merod:edge` in merobox CI (calimero-network/merobox#393) — the shapes
+ * here are not inferred from the handler source, because the source alone gets
+ * them wrong: `parse_api_error` reclassifies some and strips the rest.
  */
-export const NOT_ADMIN_BODY = `identity ${MOCK_ACCOUNT_ID} is not an admin of group 0xdeadbeef`;
 
 /**
- * What `delete_group` refuses with instead. It does NOT run `require_admin`:
- * it admits the subgroup's owner, an admin of the namespace root, or a member
- * holding `CAN_DELETE_SUBGROUP`, so the refusal is
- * `CapabilitiesError::Unauthorized` wrapped by the handler — different wording
- * entirely (crates/context/src/handlers/delete_group.rs).
+ * `MembershipError::NotAdmin` from `delete_namespace` / `delete_context`, as
+ * core MASTER sends it — a typed 403 keeping its message, via
+ * `membership_refusal_status`.
  */
-export const NOT_PERMITTED_SUBGROUP_BODY =
-  "deleting subgroup '0xdeadbeef': requester lacks permission to delete subgroup " +
-  '(CAN_DELETE_SUBGROUP) in group 0xdeadbeef (or be its owner)';
+export const NOT_ADMIN_403: GraphFailure = {
+  status: 403,
+  message: `identity ${MOCK_ACCOUNT_ID} is not an admin of group 0xdeadbeef`,
+};
+
+/**
+ * What the SAME refusal looks like on 0.11.0-rc.28, the merod this app
+ * currently bundles: `membership_refusal_status` does not exist there, so it
+ * falls through to the generic arm and the reason is stripped on purpose (an
+ * unclassified error's message can carry store paths or key material).
+ *
+ * This is also what `delete_group` sends on BOTH versions: it refuses with
+ * `CapabilitiesError::Unauthorized`, which nothing classifies.
+ */
+export const REASON_STRIPPED_500: GraphFailure = {
+  status: 500,
+  message: 'Internal server error',
+};
+
+/** A genuine fault, to prove it is NOT dressed up as a permission problem. */
+export const GENUINE_FAULT: GraphFailure = {
+  status: 500,
+  message: 'namespace not found',
+};
 
 function flatten(graph: NamespaceGraph): Map<string, GraphGroup> {
   const byId = new Map<string, GraphGroup>();
@@ -131,9 +158,9 @@ export async function mockNamespaceGraph(
     body: JSON.stringify(body),
   });
 
-  // merod answers an admin-gated refusal with a bare 500 carrying the eyre
-  // message — no typed code — which is what `parseApiError` has to read.
-  const failure = (message: string) => json({ error: message }, 500);
+  // merod's ApiError renders as `{"error": message}` at its status
+  // (crates/server/src/admin/service.rs, `impl IntoResponse for ApiError`).
+  const failure = (f: GraphFailure) => json({ error: f.message }, f.status);
 
   const membersOf = (groupId: string) => {
     const g = groups.get(groupId);

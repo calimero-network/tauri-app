@@ -53,6 +53,19 @@ jobs:
       TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
       TAURI_PUBLIC_KEY: ${{ secrets.TAURI_PUBLIC_KEY }}
 
+  build-windows:
+    name: Build Windows
+    needs: prepare
+    uses: ./.github/workflows/build-windows.yml
+    with:
+      version: ${{ needs.prepare.outputs.version }}
+    secrets:
+      TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+      TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+      TAURI_PUBLIC_KEY: ${{ secrets.TAURI_PUBLIC_KEY }}
+      WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+      WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+
   build-linux:
     name: Build Linux
     needs: prepare
@@ -78,9 +91,9 @@ jobs:
   # Publish release with all platform artifacts
   publish:
     name: Publish Release
-    needs: [prepare, build-macos, build-linux, build-chromebook]
+    needs: [prepare, build-macos, build-windows, build-linux, build-chromebook]
     # Continue even if some platforms fail (partial release)
-    if: always() && needs.prepare.result == 'success' && (needs.build-macos.result == 'success' || needs.build-linux.result == 'success' || needs.build-chromebook.result == 'success')
+    if: always() && needs.prepare.result == 'success' && (needs.build-macos.result == 'success' || needs.build-windows.result == 'success' || needs.build-linux.result == 'success' || needs.build-chromebook.result == 'success')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -94,6 +107,13 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: macos-build
+          path: release-assets/
+
+      - name: Download Windows artifacts
+        if: needs.build-windows.result == 'success'
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-build
           path: release-assets/
 
       - name: Download Linux artifacts
@@ -152,6 +172,9 @@ jobs:
           PLATFORMS=""
           if [ "${{ needs.build-macos.result }}" = "success" ]; then
             PLATFORMS="${PLATFORMS}"$'\n'"- **macOS** (Universal): Download the DMG file"
+          fi
+          if [ "${{ needs.build-windows.result }}" = "success" ]; then
+            PLATFORMS="${PLATFORMS}"$'\n'"- **Windows** (64-bit): Download the installer"
           fi
           if [ "${{ needs.build-linux.result }}" = "success" ]; then
             PLATFORMS="${PLATFORMS}"$'\n'"- **Linux** (64-bit): Download AppImage, deb, or rpm"

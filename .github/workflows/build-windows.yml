@@ -24,6 +24,10 @@ on:
       artifact-name:
         description: "Name of the uploaded artifact"
         value: ${{ jobs.build.outputs.artifact-name }}
+  pull_request:
+    branches:
+      - master
+      - main
 
 env:
   CARGO_TERM_COLOR: always
@@ -116,55 +120,15 @@ jobs:
         working-directory: apps/desktop
         run: pnpm tauri icon src-tauri/icons/icon.png
 
-      - name: Read merod version
-        id: merod-version
-        shell: bash
-        run: |
-          VERSION="$(node -p "require('./merod-config.json').version")"
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-
-      - name: Cache merod binary (Windows)
-        id: cache-merod
-        uses: actions/cache@v4
-        with:
-          path: apps/desktop/src-tauri/merod/merod.exe
-          key: windows-merod-${{ steps.merod-version.outputs.version }}
-
-      # calimero-network/core does not publish merod_* Windows archives on GitHub Releases (only macOS/Linux).
-      # Build from source only when the cached binary is missing.
-      - name: Build merod from source (Windows)
-        if: steps.cache-merod.outputs.cache-hit != 'true'
-        shell: bash
-        env:
-          CARGO_INCREMENTAL: "0"
-        run: |
-          set -euo pipefail
-          VERSION="${{ steps.merod-version.outputs.version }}"
-          DEST="${GITHUB_WORKSPACE}/apps/desktop/src-tauri/merod/merod.exe"
-          mkdir -p "$(dirname "$DEST")"
-          CORE_TMP="${RUNNER_TEMP}/calimero-core-${VERSION}"
-          rm -rf "$CORE_TMP"
-          git clone --depth 1 --branch "${VERSION}" "https://github.com/calimero-network/core.git" "$CORE_TMP"
-          cd "$CORE_TMP"
-          cargo build --release -p merod
-          cp "target/release/merod.exe" "$DEST"
-          ls -la "$DEST"
-
-      - name: Verify merod binary exists
-        shell: bash
-        run: |
-          DEST="apps/desktop/src-tauri/merod/merod.exe"
-          if [ ! -f "$DEST" ]; then
-            echo "Error: merod.exe not found at $DEST"
-            exit 1
-          fi
-          echo "merod.exe ready ($(wc -c < "$DEST") bytes)"
-
+      # Downloads merod_x86_64-pc-windows-msvc.tar.gz from the core release
+      # pinned in merod-config.json, exactly as Linux and macOS do. This used
+      # to clone core and build merod from source on the runner, because core
+      # published no Windows archive; that step is what failed and got Windows
+      # builds disabled. core now publishes one, so the workaround is gone.
       - name: Prepare merod binary
         working-directory: apps/desktop
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          MEROD_SKIP_IF_EXISTS: "1"
         run: pnpm merod:prepare
 
       - name: Update version in tauri.conf.json
@@ -177,6 +141,20 @@ jobs:
             const fs = require('fs');
             const config = JSON.parse(fs.readFileSync('tauri.conf.json', 'utf8'));
             config.version = '$VERSION';
+            fs.writeFileSync('tauri.conf.json', JSON.stringify(config, null, 2));
+          "
+
+      - name: Skip updater artifacts for PR validation
+        # Dependabot and fork PRs receive no secrets, so the signing key arrives as an
+        # empty string, which Tauri treats as present and fails to decode.
+        if: steps.build-mode.outputs.mode == 'validation'
+        shell: bash
+        run: |
+          cd apps/desktop/src-tauri
+          node -e "
+            const fs = require('fs');
+            const config = JSON.parse(fs.readFileSync('tauri.conf.json', 'utf8'));
+            config.bundle.createUpdaterArtifacts = false;
             fs.writeFileSync('tauri.conf.json', JSON.stringify(config, null, 2));
           "
 

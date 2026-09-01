@@ -24,15 +24,7 @@ function shouldUseExistingMerodBinary() {
   if (!existsSync(merodBinaryPath)) {
     return false;
   }
-  if (envTruthy("MEROD_SKIP_IF_EXISTS")) {
-    return true;
-  }
-  // calimero-network/core does not ship Windows merod archives; CI builds from source first.
-  // If MEROD_SKIP_IF_EXISTS is missing (org env, old workflow), still skip when the binary is already there.
-  if (process.env.CI === "true" && process.platform === "win32") {
-    return true;
-  }
-  return false;
+  return envTruthy("MEROD_SKIP_IF_EXISTS");
 }
 
 function githubHeaders() {

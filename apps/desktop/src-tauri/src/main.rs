@@ -1730,8 +1730,10 @@ fn create_desktop_shortcut_blocking(
             exe_str.replace('\'', "''"),
             args.replace('\'', "''")
         );
+        use std::os::windows::process::CommandExt as _;
         let output = std::process::Command::new("powershell")
             .args(["-NoProfile", "-NonInteractive", "-Command", &ps])
+            .creation_flags(CREATE_NO_WINDOW)
             .output()
             .map_err(|e| {
                 TauriError::with_details(
@@ -2177,6 +2179,13 @@ async fn stop_pids(pids: &[u32]) -> Result<(), TauriError> {
 }
 
 /// Sends SIGTERM to all pids, waits for them to go, then force-kills any survivors.
+/// Windows starts a console window for every console child a GUI process spawns.
+/// merod runs for the whole session, so without this the app sits beside a black
+/// console window; the short-lived helpers below flash one each time they run.
+/// `CREATE_NO_WINDOW` from `winbase.h` — no `windows-sys` dependency for one u32.
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
 async fn kill_pids(pids: &[u32], patience: TermPatience) {
     if pids.is_empty() {
         return;
@@ -2189,9 +2198,13 @@ async fn kill_pids(pids: &[u32], patience: TermPatience) {
                 .args(["-TERM", &pid.to_string()])
                 .output();
             #[cfg(windows)]
-            let _ = std::process::Command::new("taskkill")
-                .args(["/PID", &pid.to_string()])
-                .output();
+            {
+                use std::os::windows::process::CommandExt as _;
+                let _ = std::process::Command::new("taskkill")
+                    .args(["/PID", &pid.to_string()])
+                    .creation_flags(CREATE_NO_WINDOW)
+                    .output();
+            }
         }
         if matches!(patience, TermPatience::SignalOnly) {
             return;
@@ -2223,14 +2236,17 @@ async fn kill_pids(pids: &[u32], patience: TermPatience) {
             }
             #[cfg(windows)]
             {
+                use std::os::windows::process::CommandExt as _;
                 let still_alive = std::process::Command::new("tasklist")
                     .args(["/FI", &format!("PID eq {}", pid), "/FO", "CSV", "/NH"])
+                    .creation_flags(CREATE_NO_WINDOW)
                     .output()
                     .map(|o| String::from_utf8_lossy(&o.stdout).contains(&pid.to_string()))
                     .unwrap_or(false);
                 if still_alive {
                     let _ = std::process::Command::new("taskkill")
                         .args(["/PID", &pid.to_string(), "/F"])
+                        .creation_flags(CREATE_NO_WINDOW)
                         .output();
                 }
             }
@@ -2946,6 +2962,11 @@ async fn start_node(
     // Build command - global options come BEFORE subcommand
     // Merod expects: merod --home ~/.calimero --node node1 run
     let mut cmd = Command::new(&merod_binary);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt as _;
+        let _ = cmd.creation_flags(CREATE_NO_WINDOW);
+    }
     // Force ANSI colors in output so the log viewer can display them
     cmd.env("CLICOLOR_FORCE", "1");
     cmd.env("FORCE_COLOR", "1");
@@ -3204,10 +3225,12 @@ fn is_process_running(pid: u32) -> bool {
     }
     #[cfg(windows)]
     {
+        use std::os::windows::process::CommandExt as _;
         use std::process::Command;
         let output = Command::new("tasklist")
             .arg("/FI")
             .arg(format!("PID eq {}", pid))
+            .creation_flags(CREATE_NO_WINDOW)
             .output();
         if let Ok(out) = output {
             let stdout = String::from_utf8_lossy(&out.stdout);
@@ -3404,6 +3427,11 @@ async fn init_merod_node(
     // Run merod init command - global options come BEFORE subcommand
     // Use --auth-mode embedded so merod creates the full embedded_auth config
     let mut cmd = Command::new(&merod_binary);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt as _;
+        let _ = cmd.creation_flags(CREATE_NO_WINDOW);
+    }
     cmd.arg("--home").arg(&home_dir_path);
     cmd.arg("--node").arg(&node_name);
     cmd.arg("init").arg("--auth-mode").arg("embedded");
@@ -3568,12 +3596,14 @@ async fn detect_running_merod_nodes() -> Result<Vec<serde_json::Value>, TauriErr
 
     #[cfg(windows)]
     {
+        use std::os::windows::process::CommandExt as _;
         use tokio::process::Command;
 
-        // Use tasklist and wmic on Windows
+        // Use tasklist on Windows; command lines come from CIM below.
         let output = Command::new("tasklist")
             .arg("/FO")
             .arg("CSV")
+            .creation_flags(CREATE_NO_WINDOW)
             .output()
             .await
             .map_err(|e| {
@@ -3594,13 +3624,22 @@ async fn detect_running_merod_nodes() -> Result<Vec<serde_json::Value>, TauriErr
                 let parts: Vec<&str> = line.split(',').collect();
                 if parts.len() >= 2 {
                     if let Ok(pid) = parts[1].trim_matches('"').parse::<u32>() {
-                        // Try to get command line using wmic
-                        let cmd_output = Command::new("wmic")
-                            .arg("process")
-                            .arg("where")
-                            .arg(format!("ProcessId={}", pid))
-                            .arg("get")
-                            .arg("CommandLine")
+                        // WMIC is deprecated since Windows 10 21H1 and REMOVED
+                        // from Windows 11 24H2 and Server 2025, where this
+                        // returned nothing and every node silently lost its name
+                        // and port. `Get-CimInstance` is the supported query and
+                        // is present on every Windows this app targets.
+                        let cmd_output = Command::new("powershell")
+                            .args([
+                                "-NoProfile",
+                                "-NonInteractive",
+                                "-Command",
+                                &format!(
+                                    "(Get-CimInstance Win32_Process -Filter \"ProcessId={}\").CommandLine",
+                                    pid
+                                ),
+                            ])
+                            .creation_flags(CREATE_NO_WINDOW)
                             .output()
                             .await;
 

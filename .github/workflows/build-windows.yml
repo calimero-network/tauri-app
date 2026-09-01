@@ -120,6 +120,22 @@ jobs:
         working-directory: apps/desktop
         run: pnpm tauri icon src-tauri/icons/icon.png
 
+      # TEMPORARY (remove before merge, together with the env line below).
+      #
+      # core does not publish a Windows merod archive until calimero-network/core#3747
+      # merges and a release is cut from it, so the download below cannot succeed
+      # yet. merod is a bundled *resource*: its bytes have no bearing on whether
+      # the bundle builds. Staging a placeholder therefore lets this run validate
+      # everything that DID drift over the three months Windows CI was off — the
+      # `.exe` resource names, the Tauri v2 config, the Rust build of the app,
+      # shell and trampoline, and NSIS/MSI bundling — instead of leaving all of
+      # it unproven until the release lands.
+      - name: Stage a placeholder merod (TEMPORARY)
+        shell: bash
+        run: |
+          mkdir -p apps/desktop/src-tauri/merod
+          printf 'placeholder' > apps/desktop/src-tauri/merod/merod.exe
+
       # Downloads merod_x86_64-pc-windows-msvc.tar.gz from the core release
       # pinned in merod-config.json, exactly as Linux and macOS do. This used
       # to clone core and build merod from source on the runner, because core
@@ -129,6 +145,8 @@ jobs:
         working-directory: apps/desktop
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # TEMPORARY (remove before merge): honours the placeholder staged above.
+          MEROD_SKIP_IF_EXISTS: "1"
         run: pnpm merod:prepare
 
       - name: Update version in tauri.conf.json

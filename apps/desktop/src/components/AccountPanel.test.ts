@@ -10,6 +10,7 @@ vi.mock("../lib/device-link", () => ({
 import {
   canRevoke,
   canSync,
+  canInviteDevices,
   canWiden,
   deviceScope,
   devicesEmptyMessage,
@@ -145,5 +146,33 @@ describe("devicesEmptyMessage", () => {
 
   it("says a node with no account at all is not part of one", () => {
     expect(devicesEmptyMessage(null)).toBe("This node is not part of an account yet.");
+  });
+});
+
+describe("canInviteDevices", () => {
+  const id = (extra: Record<string, unknown>) =>
+    ({ accountId: "acct", deviceId: "dev", ...extra }) as never;
+
+  it("offers the invite on the node holding the account's root", () => {
+    expect(canInviteDevices(id({ holdsAccountRoot: true }))).toBe(true);
+  });
+
+  it("withholds it from a device paired into an account held elsewhere", () => {
+    expect(canInviteDevices(id({ holdsAccountRoot: false }))).toBe(false);
+  });
+
+  it("keeps offering it against a node too old to report the field", () => {
+    expect(canInviteDevices(id({}))).toBe(true);
+  });
+
+  it("keeps offering it when there is no identity to judge by", () => {
+    expect(canInviteDevices(null)).toBe(true);
+  });
+});
+
+describe("devicesEmptyMessage on a device held elsewhere", () => {
+  it("says the account is managed on the other device", () => {
+    const identity = { accountId: "a", deviceId: "d", holdsAccountRoot: false } as never;
+    expect(devicesEmptyMessage(identity)).toContain("held on another device");
   });
 });

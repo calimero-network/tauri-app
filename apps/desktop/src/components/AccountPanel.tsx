@@ -25,7 +25,13 @@ import { parseTauriError } from "../utils/appUtils";
 import { listInstalledApps } from "../utils/installedAppsCache";
 import { truncateText } from "../utils/string";
 
-const IDENTITY_FIELDS: { id: string; label: string; key: keyof NodeIdentity }[] = [
+/** The four the card prints. Named rather than `keyof`, which now also spans a
+ *  boolean these rows cannot render. */
+const IDENTITY_FIELDS: {
+  id: string;
+  label: string;
+  key: "accountId" | "deviceId" | "publicKey" | "accountRootPublicKey";
+}[] = [
   { id: "account-id", label: "Account ID", key: "accountId" },
   { id: "device-id", label: "Device ID", key: "deviceId" },
   { id: "public-key", label: "Device public key", key: "publicKey" },
@@ -74,10 +80,20 @@ export function widenSummary({ linkedIn }: RelinkResult, added: number): string 
   return `Added ${added} ${appWord}, reaching ${linkedIn.length} more ${namespaceWord(linkedIn.length)}.`;
 }
 
+/** Only the holder of an account's root can certify a device into it, so a node
+ *  paired into someone else's account is offered no invite. A node too old to say
+ *  keeps the offer: refusing on a missing field would withdraw a working feature. */
+export function canInviteDevices(identity: NodeIdentity | null): boolean {
+  return identity?.holdsAccountRoot !== false;
+}
+
 /** A device paired into an account holds a device id but may not have synced the
  *  account's roster, and "none found" would read as a pairing that never landed. */
 export function devicesEmptyMessage(identity: NodeIdentity | null): string {
   if (!identity) return "This node is not part of an account yet.";
+  if (identity.holdsAccountRoot === false) {
+    return "This device is linked to an account held on another device. Its devices are managed there.";
+  }
   if (identity.deviceId) {
     return "This device is on the account. The account's other devices have not reached it yet.";
   }
@@ -408,16 +424,18 @@ export default function AccountPanel() {
       <div className="settings-card">
         <div className="account-devices-header">
           <h2>Devices on this account</h2>
-          <button
-            type="button"
-            id="add-device"
-            className="button button-primary"
-            disabled={wizardOpen}
-            onClick={() => setWizardOpen(true)}
-          >
-            <Plus size={14} style={{ marginRight: "6px", verticalAlign: "middle" }} />
-            Add a device
-          </button>
+          {canInviteDevices(identity) && (
+            <button
+              type="button"
+              id="add-device"
+              className="button button-primary"
+              disabled={wizardOpen}
+              onClick={() => setWizardOpen(true)}
+            >
+              <Plus size={14} style={{ marginRight: "6px", verticalAlign: "middle" }} />
+              Add a device
+            </button>
+          )}
         </div>
         {identityLoading || devicesLoading ? (
           <SkeletonTable rows={2} columns={5} />

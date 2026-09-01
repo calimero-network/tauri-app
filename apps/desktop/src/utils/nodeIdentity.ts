@@ -33,6 +33,9 @@ export interface NodeIdentity {
   publicKey?: string;
   /** Epoch-0 account ROOT public key, 64 hex - what a second device pairs into. Absent at or below 0.11.0-rc.22. */
   accountRootPublicKey?: string;
+  /** Whether this node can certify another device into its account. Absent on a
+   *  node too old to report it, where the holder cannot be told from a paired device. */
+  holdsAccountRoot?: boolean;
 }
 
 /**

@@ -31,37 +31,36 @@ import {
 import { fetchNodeIdentity } from '../utils/nodeIdentity';
 
 const HEX_64 = /^[0-9a-fA-F]{64}$/;
-const BASE58 = /^[1-9A-HJ-NP-Za-km-z]+$/;
 
 describe.skipIf(!hasRealNode)('device-link against a real node', () => {
   let firstNamespace: string | undefined;
   let accountRootPublicKey: string | undefined;
 
-  it('lists namespaces with hex ids and base58 application targets', async () => {
+  it('lists namespaces with hex ids and hex application targets', async () => {
     const namespaces = await listNamespaces();
     expect(Array.isArray(namespaces)).toBe(true);
     for (const ns of namespaces) {
       expect(ns.namespaceId).toMatch(HEX_64);
-      expect(ns.targetApplicationId).toMatch(BASE58);
+      expect(ns.targetApplicationId).toMatch(HEX_64);
     }
     firstNamespace = namespaces[0]?.namespaceId;
   });
 
-  it('lists account devices with hex device ids and base58 signing keys', async () => {
+  it('lists account devices with hex device ids and hex signing keys', async () => {
     const devices = await listAccountDevices();
     expect(Array.isArray(devices)).toBe(true);
     for (const device of devices) {
       expect(device.deviceId).toMatch(HEX_64);
-      expect(device.signingKey).toMatch(BASE58);
+      expect(device.signingKey).toMatch(HEX_64);
       for (const nsId of device.namespaces) expect(nsId).toMatch(HEX_64);
     }
   });
 
-  it('lists account applications with base58 ids', async () => {
+  it('lists account applications with hex ids', async () => {
     const applications = await listAccountApplications();
     expect(Array.isArray(applications)).toBe(true);
     for (const app of applications) {
-      expect(app.applicationId).toMatch(BASE58);
+      expect(app.applicationId).toMatch(HEX_64);
       for (const nsId of app.namespaces) expect(nsId).toMatch(HEX_64);
     }
   });

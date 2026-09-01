@@ -592,7 +592,7 @@ describeAfter35("Account tab - pairing wizard", () => {
     expect(await inviteNamespacesOnScreen(page)).toEqual([MOCK_OTHER_NAMESPACE_ID]);
   });
 
-  test("the app picker is labelled by namespace, not by a bs58 id", async ({
+  test("the app picker is labelled by namespace, not by a raw id", async ({
     page,
   }) => {
     await page.locator("#pair-scope-apps").check();

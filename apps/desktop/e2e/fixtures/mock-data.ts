@@ -288,8 +288,8 @@ export const MOCK_NODE_IDENTITY = {
 
 export const MOCK_NAMESPACE_ID = "ns-1";
 export const MOCK_OTHER_NAMESPACE_ID = "ns-2";
-export const MOCK_APPLICATION_ID = "AppChatMockApplicationId";
-export const MOCK_OTHER_APPLICATION_ID = "AppDriveMockApplicationId";
+export const MOCK_APPLICATION_ID = "cafe111111111111111111111111111111111111111111111111111111111111";
+export const MOCK_OTHER_APPLICATION_ID = "face222222222222222222222222222222222222222222222222222222222222";
 
 /** Two namespaces targeting two different apps, so scoping can narrow an invite. */
 export const MOCK_NAMESPACES = [
@@ -331,7 +331,7 @@ export const MOCK_PAIR_COMPLETE = {
 export const MOCK_ACCOUNT_DEVICES = [
   {
     deviceId: MOCK_NODE_IDENTITY.deviceId,
-    signingKey: "EdThisDevice",
+    signingKey: "ed01333333333333333333333333333333333333333333333333333333333333",
     isSelf: true,
     revoked: false,
     applications: [],
@@ -339,7 +339,7 @@ export const MOCK_ACCOUNT_DEVICES = [
   },
   {
     deviceId: MOCK_PAIR_INIT.deviceId,
-    signingKey: "EdPairedDevice",
+    signingKey: "ed02444444444444444444444444444444444444444444444444444444444444",
     isSelf: false,
     revoked: false,
     applications: [MOCK_APPLICATION_ID],

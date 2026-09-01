@@ -34,11 +34,11 @@ export interface PairCompleteResult {
 export interface AccountDevice {
   /** 64 hex characters, the form `revokeDevice` and `relinkDevice` take. */
   deviceId: string;
-  /** base58, unlike the hex `signPublicKey` of a pairing payload. */
+  /** 64 hex characters, the same key `signPublicKey` carries in a pairing payload. */
   signingKey: string;
   isSelf: boolean;
   revoked: boolean;
-  /** base58 application ids. Empty means every application, not none. */
+  /** Hex application ids. Empty means every application, not none. */
   applications: string[];
   /** Hex ids of the namespaces holding a live binding for this device. */
   namespaces: string[];
@@ -58,7 +58,7 @@ export interface RelinkResult {
 export interface NamespaceSummary {
   namespaceId: string;
   name?: string;
-  /** base58. The application a device's scope is chosen in terms of. */
+  /** Hex. The application a device's scope is chosen in terms of. */
   targetApplicationId: string;
 }
 

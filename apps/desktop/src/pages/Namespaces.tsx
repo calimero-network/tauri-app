@@ -27,11 +27,18 @@ import {
 import { getCloudIdToken } from "../utils/cloudAuth";
 import { getAccessToken } from "../lib/token-storage";
 import { fetchNodeIdentity, type NodeIdentity } from "../utils/nodeIdentity";
+import {
+  fetchGroupMembers,
+  isInheritedMembershipError,
+  isPermissionError,
+  resolveGroupAction,
+  roleOf,
+  type GroupAction,
+} from "../utils/groupRoles";
 import { parseJwtPayload } from "../utils/jwt";
 import {
   buildEvictionDeps,
   evictTeeMembersFromTree,
-  extractMembersFromResponse,
   reconcileDisabledNamespaces,
   type EvictionResult,
 } from "../utils/teeEviction";
@@ -141,6 +148,20 @@ interface TreeSubgroup {
   name?: string;
   contexts: TreeContext[];
   subgroups: TreeSubgroup[];
+  /**
+   * This node's role in THIS subgroup, fetched alongside its contexts.
+   *
+   * Every row in the tree guards a different group, so one namespace-wide
+   * role cannot answer for all of them: a node can be Admin of the namespace
+   * root and a plain Member of a subgroup somebody else created under it (or
+   * the reverse — subgroup admin-ship is not inherited downward from the
+   * root's member list). Delete-vs-Leave is therefore decided per node in the
+   * tree, and a context leaf inherits the role of the group that OWNS it,
+   * because that is the group `delete_context` runs `require_admin` against.
+   *
+   * `undefined` = we could not tell (fetch failed, or no row for us).
+   */
+  myRole?: string;
 }
 interface NamespaceTree {
   rootContexts: TreeContext[];
@@ -217,47 +238,54 @@ function Namespaces() {
   useEffect(() => {
     if (view.type !== "namespace" || !activeNsRootId) { setNsMembers([]); return; }
     const controller = new AbortController();
-    const settings = getSettings();
-    const token = getAccessToken();
-    if (!settings.nodeUrl || !token) { setNsMembers([]); return; }
     setNsMembersLoading(true);
     // TODO: replace with mero.admin.listGroupMembers once mero-react hook parsing is fixed
-    fetch(`${settings.nodeUrl}/admin-api/groups/${encodeURIComponent(activeNsRootId)}/members`, {
-      headers: { Authorization: `Bearer ${token}` },
-      signal: controller.signal,
-    })
-      .then((r) => { if (!r.ok) throw new Error(`${r.status}`); return r.json(); })
-      .then((json) => {
-        setNsMembers(extractMembersFromResponse(json) ?? []);
-      })
-      .catch((e) => { if (e?.name !== 'AbortError') setNsMembers([]); })
-      .finally(() => setNsMembersLoading(false));
+    void fetchGroupMembers(activeNsRootId, controller.signal)
+      .then((members) => { if (!controller.signal.aborted) setNsMembers(members ?? []); })
+      .finally(() => { if (!controller.signal.aborted) setNsMembersLoading(false); });
     return () => controller.abort();
   }, [activeNsRootId, nsMembersVersion, view.type]);
 
-  // My role on the active namespace, resolved from the member list. Drives
-  // whether the actions menu offers Delete (admin) or Leave (plain member) —
-  // the node rejects a non-admin delete, so don't offer a dead-end action.
-  // Matched on the ACCOUNT. rc.23 made the member listing answer with accounts
-  // (#3522) — `identity` is 64 hex, not the base58 a key renders as — so
-  // comparing against a device public key never matches and every row looked
-  // like somebody else's.
-  const myNsRole: string | undefined = myNodeIdentity?.accountId
-    ? (nsMembers.find((m: any) => m?.identity === myNodeIdentity.accountId)?.role as
-        | string
-        | undefined)
-    : undefined;
-  const isNsAdmin = (myNsRole ?? '').toLowerCase() === 'admin';
-  // Only swap Delete → Leave when we POSITIVELY know we're not admin: members
-  // finished loading AND our identity resolved AND our role was found. While
-  // either async source is pending the menu keeps the old Delete (the node
-  // still enforces admin-ship, so the worst case is the pre-existing error
-  // toast — never a wrong destructive action).
-  const showNsLeave =
-    !nsMembersLoading &&
-    myNodeIdentity?.accountId !== undefined &&
-    myNsRole !== undefined &&
-    !isNsAdmin;
+  // Members of the subgroup currently open in the Group Detail view. Fetched
+  // separately from `useGroupMembers` (which feeds that view's Members list)
+  // for the same reason the namespace root's list is: the hook's parsing of
+  // this route is still wrong, and a role read wrong here silently offers the
+  // wrong destructive button.
+  const [activeGroupMembers, setActiveGroupMembers] = useState<any[]>([]);
+  const [activeGroupMembersLoading, setActiveGroupMembersLoading] = useState(false);
+
+  useEffect(() => {
+    if (view.type !== "group" || !activeGroupId) { setActiveGroupMembers([]); return; }
+    const controller = new AbortController();
+    setActiveGroupMembersLoading(true);
+    void fetchGroupMembers(activeGroupId, controller.signal)
+      .then((members) => { if (!controller.signal.aborted) setActiveGroupMembers(members ?? []); })
+      .finally(() => { if (!controller.signal.aborted) setActiveGroupMembersLoading(false); });
+    return () => controller.abort();
+  }, [activeGroupId, view.type]);
+
+  // My role on the active namespace, resolved from its member list, matched on
+  // the ACCOUNT. rc.23 made the member listing answer with accounts (#3522) —
+  // `identity` is 64 hex, not the base58 a key renders as — so comparing
+  // against a device public key never matches and every row looks like
+  // somebody else's.
+  const myNsRole = roleOf(nsMembers, myNodeIdentity?.accountId);
+  // Delete (admin) vs Leave (plain member) for the namespace ROOT. `'delete'`
+  // is also what an indeterminate answer yields — see `resolveGroupAction`.
+  const nsAction: GroupAction = resolveGroupAction({
+    loading: nsMembersLoading,
+    accountId: myNodeIdentity?.accountId,
+    role: myNsRole,
+  });
+
+  // Same decision for the subgroup open in the Group Detail view, and for the
+  // contexts it owns (`delete_context` gates on the OWNING group).
+  const myActiveGroupRole = roleOf(activeGroupMembers, myNodeIdentity?.accountId);
+  const groupAction: GroupAction = resolveGroupAction({
+    loading: activeGroupMembersLoading,
+    accountId: myNodeIdentity?.accountId,
+    role: myActiveGroupRole,
+  });
 
   const { contexts: groupContexts, refetch: refetchGroupContexts } = useGroupContexts(activeGroupId);
   const { contexts: nsRootContexts, refetch: refetchNsRootContexts } = useGroupContexts(
@@ -278,6 +306,35 @@ function Namespaces() {
   // subgroups and only the first load of a *new* namespace resets them.
   const expandedInitRef = useRef<string | null>(null);
   const refetchTree = useCallback(() => setTreeVersion((v) => v + 1), []);
+
+  // Read once per run so the whole tree resolves roles against a single
+  // account, and so the effect can list it as a dependency (the identity
+  // fetch resolves after the first tree build — without the re-run every row
+  // would keep the `undefined`-role fallback forever).
+  const myAccountId = myNodeIdentity?.accountId;
+
+  // Roles for the CHILD subgroups listed on the Group Detail view. Each row
+  // guards its own group, so one role per row — the parent's says nothing
+  // about a child a different member created.
+  const childSubgroupIds = (groupSubgroups as any[]).map((g: any) => g.groupId).join(",");
+  const [childGroupRoles, setChildGroupRoles] = useState<Record<string, string | undefined>>({});
+  const [childGroupRolesLoading, setChildGroupRolesLoading] = useState(false);
+
+  useEffect(() => {
+    const ids = childSubgroupIds ? childSubgroupIds.split(",") : [];
+    if (view.type !== "group" || ids.length === 0) { setChildGroupRoles({}); return; }
+    const controller = new AbortController();
+    setChildGroupRolesLoading(true);
+    void Promise.all(
+      ids.map(async (id) => [id, roleOf(await fetchGroupMembers(id, controller.signal), myAccountId)] as const),
+    )
+      .then((entries) => {
+        if (!controller.signal.aborted) setChildGroupRoles(Object.fromEntries(entries));
+      })
+      .finally(() => { if (!controller.signal.aborted) setChildGroupRolesLoading(false); });
+    return () => controller.abort();
+  }, [childSubgroupIds, view.type, myAccountId]);
+
 
   useEffect(() => {
     if (view.type !== "namespace" || !mero || !activeNsId) {
@@ -317,17 +374,30 @@ function Namespaces() {
       // methods take no AbortSignal); their results are simply discarded by the
       // `cancelled` guard in `.then`.
       if (cancelled) return { groupId, name, contexts: [], subgroups: [] };
-      const [contexts, subs] = await Promise.all([
+      // The member list rides along with the contexts/subgroups fetch: it is
+      // what decides Delete vs Leave for this subgroup AND for every context
+      // leaf under it, and fetching it here keeps the whole decision inside
+      // the one pass that already walks the tree. A failure is NOT counted as
+      // a tree fetch failure — `fetchGroupMembers` resolves `null` rather than
+      // throwing, and an unknown role just leaves the row on Delete.
+      const [contexts, subs, members] = await Promise.all([
         admin.listGroupContexts(groupId).catch(onFetchErr("listGroupContexts", groupId)),
         depth < MAX_TREE_DEPTH
           ? admin.listSubgroups(groupId).catch(onFetchErr("listSubgroups", groupId))
           : Promise.resolve([]),
+        fetchGroupMembers(groupId),
       ]);
       if (cancelled) return { groupId, name, contexts: [], subgroups: [] };
       const subgroups = await Promise.all(
         (subs as any[]).map((s) => buildSubgroup(s.groupId, s.name, depth + 1)),
       );
-      return { groupId, name, contexts: (contexts as TreeContext[]) ?? [], subgroups };
+      return {
+        groupId,
+        name,
+        contexts: (contexts as TreeContext[]) ?? [],
+        subgroups,
+        myRole: roleOf(members, myAccountId),
+      };
     };
 
     setTreeLoading(true);
@@ -371,7 +441,7 @@ function Namespaces() {
     return () => {
       cancelled = true;
     };
-  }, [view.type, activeNsId, mero, treeVersion]);
+  }, [view.type, activeNsId, mero, treeVersion, myAccountId]);
 
   const toggleNode = useCallback((id: string) => {
     setExpandedNodes((prev) => {
@@ -389,8 +459,10 @@ function Namespaces() {
   const [actionLoading, setActionLoading] = useState(false);
   const [deleteNsTarget, setDeleteNsTarget] = useState<Namespace | null>(null);
   const [leaveNsTarget, setLeaveNsTarget] = useState<Namespace | null>(null);
-  const [deleteGroupTarget, setDeleteGroupTarget] = useState<string | null>(null);
+  const [deleteGroupTarget, setDeleteGroupTarget] = useState<{ groupId: string; name: string } | null>(null);
+  const [leaveGroupTarget, setLeaveGroupTarget] = useState<{ groupId: string; name: string } | null>(null);
   const [deleteContextTarget, setDeleteContextTarget] = useState<{ contextId: string; name: string; refetch: () => void } | null>(null);
+  const [leaveContextTarget, setLeaveContextTarget] = useState<{ contextId: string; name: string; refetch: () => void } | null>(null);
   const [removeMemberTarget, setRemoveMemberTarget] = useState<{ groupId: string; identity: string; name: string; onSuccess: () => void } | null>(null);
   const [inviteModal, setInviteModal] = useState<{ groupId: string; isNamespace: boolean } | null>(null);
   const [actionsMenuOpen, setActionsMenuOpen] = useState(false);
@@ -498,6 +570,26 @@ function Namespaces() {
     }
   };
 
+  /**
+   * Turn a failed destructive call into a message that names the way out.
+   *
+   * merod answers an admin-gated delete with an untyped 500 whose body is
+   * `identity … is not an admin of group …`. Rendered raw that reads like a
+   * node fault; it is really "you were offered the wrong button", which
+   * happens whenever the member list had not resolved yet (the indeterminate
+   * window keeps Delete on screen) or went stale after somebody demoted us.
+   */
+  const reportActionError = (verb: string, subject: string, e: any) => {
+    const detail = parseApiError(e);
+    if (isPermissionError(detail)) {
+      toast.error(
+        `You are not an admin of this ${subject} — you can only leave it, not ${verb} it.`,
+      );
+      return;
+    }
+    toast.error(`Failed to ${verb} ${subject}: ${detail}`);
+  };
+
   const handleDeleteNamespace = async (ns: Namespace) => {
     if (!mero) return;
     setActionLoading(true);
@@ -508,29 +600,29 @@ function Namespaces() {
       setView({ type: 'list' });
       await refetchNamespaces();
     } catch (e: any) {
-      toast.error(`Failed to delete namespace: ${parseApiError(e)}`);
+      reportActionError('delete', 'namespace', e);
     } finally {
       setActionLoading(false);
     }
   };
 
-  // Leave = remove MY OWN identity from the namespace's member set. This is
-  // the cleanup path for non-admins: deleteNamespace is admin-gated on the
-  // node ("identity is not an admin on namespace/group …"), which previously
-  // left members with NO way to get rid of a namespace from their view.
+  /**
+   * Leave = `POST /admin-api/namespaces/:id/leave`, merod's self-service exit.
+   * It publishes `MemberLeft` at the root, cascades the row removal through
+   * every descendant we hold a direct row in, and unsubscribes this node from
+   * the namespace gossipsub topic.
+   *
+   * This used to call `removeGroupMembers(nsId, [myAccount])` instead, which
+   * could never work: `remove_group_members` runs
+   * `governance_preflight(group_id, require_admin = true)`, so the ONLY people
+   * ever shown the Leave button — non-admins — were the only ones the endpoint
+   * refuses. The button was a guaranteed `is not an admin` toast.
+   */
   const handleLeaveNamespace = async (ns: Namespace) => {
-    if (!mero || !myNodeIdentity?.accountId) {
-      toast.error('Could not resolve this node’s identity');
-      return;
-    }
+    if (!mero) return;
     setActionLoading(true);
     try {
-      // By ACCOUNT: rc.23 made `remove` name members by account (the principal
-      // the membership rows are keyed by), not by the key they sign with.
-      // Passing a device key here removes nobody and still returns 200.
-      await mero.admin.removeGroupMembers(ns.namespaceId, {
-        members: [myNodeIdentity.accountId],
-      });
+      await mero.admin.leaveNamespace(ns.namespaceId);
       toast.success('Left namespace');
       setLeaveNsTarget(null);
       setView({ type: 'list' });
@@ -556,7 +648,46 @@ function Namespaces() {
         refetchSubgroups?.(),
       ]);
     } catch (e: any) {
-      toast.error(`Failed to delete group: ${parseApiError(e)}`);
+      reportActionError('delete', 'subgroup', e);
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  /**
+   * `POST /admin-api/groups/:id/leave` — publishes `MemberLeft` for this node
+   * in ONE subgroup, leaving its namespace membership (and every sibling
+   * subgroup) untouched.
+   *
+   * Namespace roots are rejected by merod here with "use leave_namespace", so
+   * this is only ever wired to subgroup rows; the root's own menu routes to
+   * `handleLeaveNamespace`.
+   */
+  const handleLeaveGroup = async (groupId: string) => {
+    if (!mero) return;
+    setActionLoading(true);
+    try {
+      await mero.admin.leaveGroup(groupId);
+      toast.success('Left subgroup');
+      setLeaveGroupTarget(null);
+      if (view.type === 'group' && view.groupId === groupId) {
+        setView({ type: 'namespace', ns: view.ns });
+      }
+      refetchTree();
+      await Promise.all([
+        refetchNsGroups?.(),
+        refetchSubgroups?.(),
+      ]);
+    } catch (e: any) {
+      const detail = parseApiError(e);
+      // Inherited membership: we are in this subgroup only through the
+      // namespace, so there is no row here to leave. merod says so; say what
+      // it means.
+      toast.error(
+        isInheritedMembershipError(detail)
+          ? 'You are in this subgroup through your namespace membership, so there is nothing to leave here — leave the namespace instead.'
+          : `Failed to leave subgroup: ${detail}`,
+      );
     } finally {
       setActionLoading(false);
     }
@@ -576,7 +707,37 @@ function Namespaces() {
         refetchGroupContexts?.(),
       ]);
     } catch (e: any) {
-      toast.error(`Failed to delete context: ${parseApiError(e)}`);
+      reportActionError('delete', 'context', e);
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  /**
+   * `POST /admin-api/contexts/:id/leave` — a NODE-LOCAL opt-out. merod
+   * tombstones our `ContextIdentity` rows and unsubscribes from that one
+   * context's topic; no governance op is published, so nobody else sees it and
+   * a later `join_context` puts us back with full history.
+   *
+   * That is a different thing from Delete, which tears the context down for
+   * the group. Non-admins get this one because `delete_context` is gated on
+   * admin-ship of the context's owning group.
+   */
+  const handleLeaveContext = async (contextId: string, refetch: () => void) => {
+    if (!mero) return;
+    setActionLoading(true);
+    try {
+      await mero.admin.leaveContext(contextId);
+      toast.success('Left context');
+      setLeaveContextTarget(null);
+      refetchTree();
+      await Promise.all([
+        refetch(),
+        refetchNsRootContexts?.(),
+        refetchGroupContexts?.(),
+      ]);
+    } catch (e: any) {
+      toast.error(`Failed to leave context: ${parseApiError(e)}`);
     } finally {
       setActionLoading(false);
     }
@@ -1085,8 +1246,13 @@ function Namespaces() {
   };
 
   // ── Context row helper ──
-  const renderContextItem = (c: any, _applicationId: string, _refetch: () => void) => {
+  // Used by the Group Detail view's Contexts list, so `action` is the role
+  // decision for the subgroup that owns them. This row had NO destructive
+  // action at all before: a context created inside a subgroup could only be
+  // removed from the namespace tree, never from the group screen it lives on.
+  const renderContextItem = (c: any, _applicationId: string, refetch: () => void, action: GroupAction) => {
     const hasName = !!c.name;
+    const displayName = c.name || truncateId(c.contextId);
     return (
       <div key={c.contextId} className="ns-context-item">
         <Box size={14} />
@@ -1103,15 +1269,41 @@ function Namespaces() {
         <button className="copy-btn" onClick={() => copyToClipboard(c.contextId)} title="Copy ID">
           <Copy size={12} />
         </button>
+        {action === 'leave' ? (
+          <button
+            className="ns-danger-icon-btn"
+            title="Leave context"
+            onClick={() => setLeaveContextTarget({ contextId: c.contextId, name: displayName, refetch })}
+          >
+            <LogOut size={13} />
+          </button>
+        ) : (
+          <button
+            className="ns-danger-icon-btn"
+            title="Delete context"
+            onClick={() => setDeleteContextTarget({ contextId: c.contextId, name: displayName, refetch })}
+          >
+            <Trash2 size={13} />
+          </button>
+        )}
       </div>
     );
   };
 
   // ── Tree (folder structure) helpers ──
-  // A context leaf in the tree: copy + delete. `indent` is the nesting depth
-  // (0 = directly under the namespace root).
-  const renderTreeContext = (c: TreeContext, indent: number) => {
+  // A context leaf in the tree: copy + delete-or-leave. `indent` is the
+  // nesting depth (0 = directly under the namespace root). `ownerRole` is this
+  // node's role in the group that OWNS the context — the namespace root for a
+  // depth-0 leaf, the enclosing subgroup otherwise — because that is the group
+  // merod runs `require_admin` against for `delete_context`.
+  const renderTreeContext = (c: TreeContext, indent: number, ownerRole: string | undefined) => {
     const hasName = !!c.name;
+    const displayName = c.name || truncateId(c.contextId);
+    const action = resolveGroupAction({
+      loading: treeLoading,
+      accountId: myAccountId,
+      role: ownerRole,
+    });
     return (
       <div
         key={`ctx-${c.contextId}`}
@@ -1133,16 +1325,26 @@ function Namespaces() {
         <button className="copy-btn" onClick={() => copyToClipboard(c.contextId)} title="Copy ID">
           <Copy size={12} />
         </button>
-        {/* No-op refetch: handleDeleteContext already refreshes the tree
-            (refetchTree) plus the namespace/group context hooks, so a
-            per-target refetch would just bump treeVersion a second time. */}
-        <button
-          className="ns-danger-icon-btn"
-          title="Delete context"
-          onClick={() => setDeleteContextTarget({ contextId: c.contextId, name: c.name || truncateId(c.contextId), refetch: () => {} })}
-        >
-          <Trash2 size={13} />
-        </button>
+        {/* No-op refetch: the handlers already refresh the tree (refetchTree)
+            plus the namespace/group context hooks, so a per-target refetch
+            would just bump treeVersion a second time. */}
+        {action === 'leave' ? (
+          <button
+            className="ns-danger-icon-btn"
+            title="Leave context"
+            onClick={() => setLeaveContextTarget({ contextId: c.contextId, name: displayName, refetch: () => {} })}
+          >
+            <LogOut size={13} />
+          </button>
+        ) : (
+          <button
+            className="ns-danger-icon-btn"
+            title="Delete context"
+            onClick={() => setDeleteContextTarget({ contextId: c.contextId, name: displayName, refetch: () => {} })}
+          >
+            <Trash2 size={13} />
+          </button>
+        )}
       </div>
     );
   };
@@ -1153,6 +1355,14 @@ function Namespaces() {
     const isOpen = expandedNodes.has(sg.groupId);
     const childCount = sg.contexts.length + sg.subgroups.length;
     const gName = sg.name;
+    const displayName = gName || truncateId(sg.groupId);
+    // Decided from THIS subgroup's own member list, not the namespace root's:
+    // `delete_group` is gated on admin-ship of the subgroup itself.
+    const action = resolveGroupAction({
+      loading: treeLoading,
+      accountId: myAccountId,
+      role: sg.myRole,
+    });
     return (
       <div key={`sg-${sg.groupId}`} className="ns-tree-branch">
         <div
@@ -1183,13 +1393,23 @@ function Namespaces() {
             )}
           </div>
           <span className="ns-tree-count">{childCount}</span>
-          <button
-            className="ns-danger-icon-btn"
-            title="Delete group"
-            onClick={(e) => { e.stopPropagation(); setDeleteGroupTarget(sg.groupId); }}
-          >
-            <Trash2 size={13} />
-          </button>
+          {action === 'leave' ? (
+            <button
+              className="ns-danger-icon-btn"
+              title="Leave subgroup"
+              onClick={(e) => { e.stopPropagation(); setLeaveGroupTarget({ groupId: sg.groupId, name: displayName }); }}
+            >
+              <LogOut size={13} />
+            </button>
+          ) : (
+            <button
+              className="ns-danger-icon-btn"
+              title="Delete subgroup"
+              onClick={(e) => { e.stopPropagation(); setDeleteGroupTarget({ groupId: sg.groupId, name: displayName }); }}
+            >
+              <Trash2 size={13} />
+            </button>
+          )}
         </div>
         {isOpen && (
           <div className="ns-tree-children">
@@ -1199,7 +1419,7 @@ function Namespaces() {
               </div>
             ) : (
               <>
-                {sg.contexts.map((c) => renderTreeContext(c, indent + 1))}
+                {sg.contexts.map((c) => renderTreeContext(c, indent + 1, sg.myRole))}
                 {sg.subgroups.map((child) => renderTreeSubgroup(child, ns, indent + 1))}
               </>
             )}
@@ -1244,9 +1464,10 @@ function Namespaces() {
       {leaveNsTarget && (
         <DeleteConfirmModal
           title="Leave Namespace"
-          warning="You will lose access to this namespace, its subgroups and contexts. Rejoining requires a new invitation."
+          warning="You will lose access to this namespace, its subgroups and contexts. It stays up for everyone else. Rejoining requires a new invitation."
           name={nsDisplayName(leaveNsTarget)}
           confirmLabel="Leave"
+          busyLabel="Leaving..."
           loading={actionLoading}
           onClose={() => setLeaveNsTarget(null)}
           onConfirm={() => handleLeaveNamespace(leaveNsTarget)}
@@ -1254,12 +1475,25 @@ function Namespaces() {
       )}
       {deleteGroupTarget && (
         <DeleteConfirmModal
-          title="Delete Group"
+          title="Delete Subgroup"
           warning="Deleting will also remove all subgroups, contexts and members."
-          name={truncateId(deleteGroupTarget)}
+          name={deleteGroupTarget.name}
           loading={actionLoading}
           onClose={() => setDeleteGroupTarget(null)}
-          onConfirm={() => handleDeleteGroup(deleteGroupTarget)}
+          onConfirm={() => handleDeleteGroup(deleteGroupTarget.groupId)}
+        />
+      )}
+      {leaveGroupTarget && (
+        <DeleteConfirmModal
+          title="Leave Subgroup"
+          warning="You leave this subgroup only — your namespace membership and every other subgroup under it are untouched. The subgroup stays up for everyone else."
+          name={leaveGroupTarget.name}
+          confirmLabel="Leave"
+          busyLabel="Leaving..."
+          finalNote="Rejoining requires a new invitation, or an admin adding you back."
+          loading={actionLoading}
+          onClose={() => setLeaveGroupTarget(null)}
+          onConfirm={() => handleLeaveGroup(leaveGroupTarget.groupId)}
         />
       )}
       {deleteContextTarget && (
@@ -1270,6 +1504,19 @@ function Namespaces() {
           loading={actionLoading}
           onClose={() => setDeleteContextTarget(null)}
           onConfirm={() => handleDeleteContext(deleteContextTarget.contextId, deleteContextTarget.refetch)}
+        />
+      )}
+      {leaveContextTarget && (
+        <DeleteConfirmModal
+          title="Leave Context"
+          warning="This node stops following the context and drops its local copy. Nobody else sees the leave, and the context keeps running for the rest of the group."
+          name={leaveContextTarget.name}
+          confirmLabel="Leave"
+          busyLabel="Leaving..."
+          finalNote="You can rejoin later with Join Context and get the history back."
+          loading={actionLoading}
+          onClose={() => setLeaveContextTarget(null)}
+          onConfirm={() => handleLeaveContext(leaveContextTarget.contextId, leaveContextTarget.refetch)}
         />
       )}
       {removeMemberTarget && (
@@ -1451,7 +1698,7 @@ function Namespaces() {
                   <button className="ns-actions-menu-item" onClick={() => { setActionsMenuOpen(false); setInviteModal({ groupId: ns.namespaceId, isNamespace: true }); }}>
                     <Link size={13} /> Invite
                   </button>
-                  {showNsLeave ? (
+                  {nsAction === 'leave' ? (
                     <button className="ns-actions-menu-item ns-actions-menu-item-danger" onClick={() => { setActionsMenuOpen(false); setLeaveNsTarget(ns); }}>
                       <LogOut size={13} /> Leave
                     </button>
@@ -1547,7 +1794,9 @@ function Namespaces() {
                   </div>
                   {expandedNodes.has(`ns:${ns.namespaceId}`) && (
                     <div className="ns-tree-children">
-                      {tree.rootContexts.map((c) => renderTreeContext(c, 1))}
+                      {/* Root-level contexts are owned by the namespace root,
+                          so their Delete/Leave follows the root's role. */}
+                      {tree.rootContexts.map((c) => renderTreeContext(c, 1, myNsRole))}
                       {tree.subgroups.map((sg) => renderTreeSubgroup(sg, ns, 1))}
                     </div>
                   )}
@@ -1680,6 +1929,7 @@ function Namespaces() {
   if (view.type === "group") {
     const { ns, groupId } = view;
     const safeGroupMembers = Array.isArray(groupMembers) ? groupMembers : [];
+    const groupDisplayName = groupInfo?.metadata?.name || truncateId(groupId);
     return (
       <>
       <div className="ns-page">
@@ -1692,7 +1942,7 @@ function Namespaces() {
         <main className="ns-main">
           <div className="ns-page-top">
             <div className="ns-page-top-left">
-              <h1>{groupInfo?.metadata?.name || truncateId(groupId)}</h1>
+              <h1>{groupDisplayName}</h1>
               <div className="ns-header-id">
                 {truncateId(groupId)}
                 <button className="copy-btn" onClick={() => copyToClipboard(groupId)} title="Copy ID">
@@ -1716,9 +1966,15 @@ function Namespaces() {
                   <button className="ns-actions-menu-item" onClick={() => { setActionsMenuOpen(false); setInviteModal({ groupId, isNamespace: false }); }}>
                     <Link size={13} /> Invite
                   </button>
-                  <button className="ns-actions-menu-item ns-actions-menu-item-danger" onClick={() => { setActionsMenuOpen(false); setDeleteGroupTarget(groupId); }}>
-                    <Trash2 size={13} /> Delete
-                  </button>
+                  {groupAction === 'leave' ? (
+                    <button className="ns-actions-menu-item ns-actions-menu-item-danger" onClick={() => { setActionsMenuOpen(false); setLeaveGroupTarget({ groupId, name: groupDisplayName }); }}>
+                      <LogOut size={13} /> Leave
+                    </button>
+                  ) : (
+                    <button className="ns-actions-menu-item ns-actions-menu-item-danger" onClick={() => { setActionsMenuOpen(false); setDeleteGroupTarget({ groupId, name: groupDisplayName }); }}>
+                      <Trash2 size={13} /> Delete
+                    </button>
+                  )}
                 </div>
               )}
             </div>
@@ -1801,7 +2057,7 @@ function Namespaces() {
                   <p className="empty-hint">No contexts in this group</p>
                 ) : (
                   <div className="ns-context-list">
-                    {groupContexts.map((c: any) => renderContextItem(c, ns.targetApplicationId, () => refetchGroupContexts?.()))}
+                    {groupContexts.map((c: any) => renderContextItem(c, ns.targetApplicationId, () => refetchGroupContexts?.(), groupAction))}
                   </div>
                 )}
               </div>
@@ -1812,6 +2068,12 @@ function Namespaces() {
                   <div className="ns-group-list">
                     {groupSubgroups.map((g: any) => {
                       const gName = (g as any).name || (g as any).metadata?.name;
+                      const childName = gName || truncateId(g.groupId);
+                      const childAction = resolveGroupAction({
+                        loading: childGroupRolesLoading,
+                        accountId: myAccountId,
+                        role: childGroupRoles[g.groupId],
+                      });
                       return (
                         <div key={g.groupId} className="ns-group-item">
                           <Layers size={16} />
@@ -1829,13 +2091,23 @@ function Namespaces() {
                               <span className="ns-row-name mono">{truncateId(g.groupId)}</span>
                             )}
                           </div>
-                          <button
-                            className="ns-danger-icon-btn"
-                            title="Delete subgroup"
-                            onClick={() => setDeleteGroupTarget(g.groupId)}
-                          >
-                            <Trash2 size={13} />
-                          </button>
+                          {childAction === 'leave' ? (
+                            <button
+                              className="ns-danger-icon-btn"
+                              title="Leave subgroup"
+                              onClick={() => setLeaveGroupTarget({ groupId: g.groupId, name: childName })}
+                            >
+                              <LogOut size={13} />
+                            </button>
+                          ) : (
+                            <button
+                              className="ns-danger-icon-btn"
+                              title="Delete subgroup"
+                              onClick={() => setDeleteGroupTarget({ groupId: g.groupId, name: childName })}
+                            >
+                              <Trash2 size={13} />
+                            </button>
+                          )}
                           <ChevronRight size={14} className="ns-card-chevron" onClick={() => openGroup(ns, g.groupId)} style={{ cursor: 'pointer' }} />
                         </div>
                       );
@@ -2049,11 +2321,27 @@ interface DeleteConfirmModalProps {
   name: string;
   loading: boolean;
   confirmLabel?: string;
+  /** Shown in place of "This action cannot be undone." — a leave that merod
+   *  can undo (leaving a context is a node-local opt-out a rejoin reverses)
+   *  must not claim otherwise. Pass `null` to drop the line entirely. */
+  finalNote?: string | null;
+  /** Verb shown while the call is in flight; "Deleting..." is wrong on Leave. */
+  busyLabel?: string;
   onClose: () => void;
   onConfirm: () => void;
 }
 
-function DeleteConfirmModal({ title, warning, name, loading, confirmLabel = "Delete", onClose, onConfirm }: DeleteConfirmModalProps) {
+function DeleteConfirmModal({
+  title,
+  warning,
+  name,
+  loading,
+  confirmLabel = "Delete",
+  finalNote = "This action cannot be undone.",
+  busyLabel = "Deleting...",
+  onClose,
+  onConfirm,
+}: DeleteConfirmModalProps) {
   return (
     <div className="ns-modal-backdrop" onClick={onClose}>
       <div className="ns-modal" onClick={(e) => e.stopPropagation()} role="dialog">
@@ -2065,12 +2353,12 @@ function DeleteConfirmModal({ title, warning, name, loading, confirmLabel = "Del
           <div className="ns-delete-warning">
             <p className="ns-delete-name">{name}</p>
             <p className="ns-delete-msg">{warning}</p>
-            <p className="ns-delete-final">This action cannot be undone.</p>
+            {finalNote && <p className="ns-delete-final">{finalNote}</p>}
           </div>
           <div className="ns-modal-actions">
             <button className="ns-modal-cancel" onClick={onClose} disabled={loading}>Cancel</button>
             <button className="ns-delete-confirm-btn" onClick={onConfirm} disabled={loading}>
-              {loading ? 'Deleting...' : confirmLabel}
+              {loading ? busyLabel : confirmLabel}
             </button>
           </div>
         </div>

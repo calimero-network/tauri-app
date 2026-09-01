@@ -119,6 +119,18 @@ export function applicationNamespaces(
     .join(", ");
 }
 
+/** The lines one scope choice shows: its name, then the namespaces it covers
+ *  when those say something the name did not already. */
+export function scopeRow(
+  applicationId: string,
+  namespaces: NamespaceSummary[],
+  installed?: InstalledApp[],
+): string[] {
+  const name = applicationLabel(applicationId, namespaces, installed);
+  const covered = applicationNamespaces(applicationId, namespaces);
+  return covered && covered !== name ? [name, covered] : [name];
+}
+
 /** The application's own name where the node has one, since the question being
  *  answered is which app to trust. Namespaces naming it, then the id, fall back. */
 export function applicationLabel(
@@ -361,12 +373,14 @@ export function DevicePairWizard({ rootKey, onLinked, onClose }: WizardProps) {
                     onChange={() => toggleApp(app.applicationId)}
                   />
                   <span className="account-scope-app-text">
-                    <span className="account-scope-app-name">
-                      {applicationLabel(app.applicationId, namespaces, installed)}
-                    </span>
-                    <span className="account-scope-app-ns">
-                      {applicationNamespaces(app.applicationId, namespaces) || "no namespace yet"}
-                    </span>
+                    {scopeRow(app.applicationId, namespaces, installed).map((line, i) => (
+                        <span
+                          key={line}
+                          className={i === 0 ? "account-scope-app-name" : "account-scope-app-ns"}
+                        >
+                          {line}
+                        </span>
+                      ))}
                   </span>
                 </label>
               ))

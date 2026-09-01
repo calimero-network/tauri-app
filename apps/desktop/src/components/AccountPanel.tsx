@@ -5,8 +5,7 @@ import CopyButton from "./CopyButton";
 import {
   DevicePairWizard,
   DevicePairResponder,
-  applicationLabel,
-  applicationNamespaces,
+  scopeRow,
   type InstalledApp,
 } from "./DevicePairing";
 import { SkeletonText, SkeletonTable } from "./Skeleton";
@@ -472,13 +471,14 @@ export default function AccountPanel() {
                       }
                     />
                     <span className="account-scope-app-text">
-                      <span className="account-scope-app-name">
-                        {applicationLabel(app.applicationId, catalog.namespaces, catalog.installed)}
-                      </span>
-                      <span className="account-scope-app-ns">
-                        {applicationNamespaces(app.applicationId, catalog.namespaces) ||
-                          "no namespace yet"}
-                      </span>
+                      {scopeRow(app.applicationId, catalog.namespaces, catalog.installed).map((line, i) => (
+                        <span
+                          key={line}
+                          className={i === 0 ? "account-scope-app-name" : "account-scope-app-ns"}
+                        >
+                          {line}
+                        </span>
+                      ))}
                     </span>
                   </label>
                 ))}

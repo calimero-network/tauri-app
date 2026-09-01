@@ -12,6 +12,7 @@ const REVOKED_AUTH_ERRORS = ['token_reuse', 'token_revoked'];
 const LIST_LIMIT = 1000;
 
 const HEX_64 = /^[0-9a-fA-F]{64}$/;
+const ALL_ZERO = /^0{64}$/;
 const HEX_128 = /^[0-9a-fA-F]{128}$/;
 
 /** What the pairing device mints, to be read across to the account holder. */
@@ -115,7 +116,7 @@ export async function listAccountApplications(
   const body = await request<{ applications?: AccountApplication[] }>('/account/applications', {
     signal,
   });
-  return body?.applications ?? [];
+  return (body?.applications ?? []).filter((app) => !ALL_ZERO.test(app.applicationId));
 }
 
 export function pairInit(

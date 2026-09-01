@@ -457,3 +457,18 @@ describe('refusalStatus', () => {
     expect(refusalStatus('not an error at all')).toBeUndefined();
   });
 });
+
+describe('listAccountApplications on a device that syncs no namespace metadata', () => {
+  it('drops the all-zero placeholder a non-member is served, rather than offering it as an app', async () => {
+    installFetch(
+      json({
+        applications: [
+          { applicationId: '0'.repeat(64), namespaces: [HEX_64] },
+          { applicationId: 'ca'.repeat(32), namespaces: [HEX_64] },
+        ],
+      }),
+    );
+    const apps = await listAccountApplications();
+    expect(apps.map((a) => a.applicationId)).toEqual(['ca'.repeat(32)]);
+  });
+});

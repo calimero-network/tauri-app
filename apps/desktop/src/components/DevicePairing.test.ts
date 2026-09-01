@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import type { NamespaceSummary, PairInitResult } from "../lib/device-link";
 import {
   applicationLabel,
+  applicationNamespaces,
   decodeInvite,
   decodeReply,
   encodeInvite,
@@ -126,5 +127,50 @@ describe("applicationLabel", () => {
       { namespaceId: "ns-1", targetApplicationId: "AppLongIdentifierHere" },
     ];
     expect(applicationLabel("AppLongIdentifierHere", unnamed)).toBe("AppLongIdent…");
+  });
+});
+
+describe("applicationLabel with an installed application", () => {
+  const ns: NamespaceSummary[] = [
+    { namespaceId: "a".repeat(64), name: "Calimero", targetApplicationId: "app-1" },
+  ];
+
+  it("prefers the application's own name over the namespace that targets it", () => {
+    const installed = [{ id: "app-1", name: "Mero Chat", metadata: [] }];
+    expect(applicationLabel("app-1", ns, installed)).toBe("Mero Chat");
+  });
+
+  it("reads the name out of encoded metadata when the row carries none", () => {
+    const metadata = btoa(JSON.stringify({ name: "Mero Drive" }));
+    const installed = [{ id: "app-1", name: undefined, metadata }];
+    expect(applicationLabel("app-1", ns, installed)).toBe("Mero Drive");
+  });
+
+  it("falls back to the namespace when the application is not installed here", () => {
+    expect(applicationLabel("app-1", ns, [])).toBe("Calimero");
+    expect(applicationLabel("app-1", ns)).toBe("Calimero");
+  });
+});
+
+describe("applicationNamespaces", () => {
+  const ns: NamespaceSummary[] = [
+    { namespaceId: "a".repeat(64), name: "Work", targetApplicationId: "app-1" },
+    { namespaceId: "b".repeat(64), name: "Personal", targetApplicationId: "app-1" },
+    { namespaceId: "c".repeat(64), name: "Other", targetApplicationId: "app-2" },
+  ];
+
+  it("names every namespace the application is spoken in, and no others", () => {
+    expect(applicationNamespaces("app-1", ns)).toBe("Work, Personal");
+  });
+
+  it("falls back to a short id for a namespace with no name", () => {
+    const unnamed: NamespaceSummary[] = [
+      { namespaceId: "d".repeat(64), targetApplicationId: "app-1" },
+    ];
+    expect(applicationNamespaces("app-1", unnamed)).toBe("dddddddd…");
+  });
+
+  it("is empty when the application is spoken in none", () => {
+    expect(applicationNamespaces("app-9", ns)).toBe("");
   });
 });

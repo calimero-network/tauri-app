@@ -839,3 +839,32 @@
   padding-left: 12px;
   border-left: 1px solid var(--border-color);
 }
+
+/* Two lines, so the checkbox tracks the name rather than the block's middle. */
+.account-scope-app {
+  align-items: flex-start;
+  padding: 6px 0;
+}
+
+.account-scope-app input {
+  margin-top: 2px;
+  flex: none;
+}
+
+.account-scope-app-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.account-scope-app-name {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.account-scope-app-ns {
+  color: var(--text-tertiary);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}

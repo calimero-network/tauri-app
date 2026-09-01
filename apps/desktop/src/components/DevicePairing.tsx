@@ -16,7 +16,8 @@ import {
   type PairInitResult,
   type PairCompleteResult,
 } from "../lib/device-link";
-import { parseTauriError } from "../utils/appUtils";
+import { decodeMetadata, parseTauriError } from "../utils/appUtils";
+import { listInstalledApps } from "../utils/installedAppsCache";
 import { truncateText } from "../utils/string";
 
 /** Marks a blob as the invite the account holder hands out. */
@@ -99,12 +100,36 @@ export function inviteNamespaces(
   return chosen.map((ns) => ns.namespaceId);
 }
 
-/** A bs58 application id is not something anyone recognizes, so label it by the
- *  namespaces targeting it and keep the id only as a fallback. */
-export function applicationLabel(
+/** What the label needs off an installed application; the node's row carries more. */
+export interface InstalledApp {
+  id: string;
+  name?: string;
+  metadata?: number[] | string;
+}
+
+/** The namespaces an application is spoken in, named where they have names. A
+ *  scope is chosen per application, so this says what picking one would cover. */
+export function applicationNamespaces(
   applicationId: string,
   namespaces: NamespaceSummary[],
 ): string {
+  return namespaces
+    .filter((ns) => ns.targetApplicationId === applicationId)
+    .map((ns) => ns.name || truncateText(ns.namespaceId, 8))
+    .join(", ");
+}
+
+/** The application's own name where the node has one, since the question being
+ *  answered is which app to trust. Namespaces naming it, then the id, fall back. */
+export function applicationLabel(
+  applicationId: string,
+  namespaces: NamespaceSummary[],
+  installed?: InstalledApp[],
+): string {
+  const app = installed?.find((entry) => entry.id === applicationId);
+  const named = app && (decodeMetadata(app.metadata)?.name || app.name);
+  if (named) return named;
+
   const names = namespaces
     .filter((ns) => ns.targetApplicationId === applicationId && ns.name)
     .map((ns) => ns.name as string);
@@ -131,6 +156,7 @@ interface WizardProps {
 export function DevicePairWizard({ rootKey, onLinked, onClose }: WizardProps) {
   const [namespaces, setNamespaces] = useState<NamespaceSummary[]>([]);
   const [applications, setApplications] = useState<AccountApplication[]>([]);
+  const [installed, setInstalled] = useState<InstalledApp[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [step, setStep] = useState<0 | 1 | 2>(0);
@@ -154,10 +180,15 @@ export function DevicePairWizard({ rootKey, onLinked, onClose }: WizardProps) {
     Promise.all([
       listNamespaces(controller.signal),
       listAccountApplications(controller.signal),
+      // A name is a nicety; the invite must still work when the lookup fails.
+      listInstalledApps()
+        .then((r) => (Array.isArray(r.data) ? (r.data as InstalledApp[]) : []))
+        .catch(() => [] as InstalledApp[]),
     ])
-      .then(([ns, apps]) => {
+      .then(([ns, apps, apps_installed]) => {
         setNamespaces(ns);
         setApplications(apps);
+        setInstalled(apps_installed);
       })
       .catch((err: unknown) => {
         if (controller.signal.aborted) return;
@@ -322,14 +353,21 @@ export function DevicePairWizard({ rootKey, onLinked, onClose }: WizardProps) {
               </p>
             ) : (
               applications.map((app) => (
-                <label className="account-scope-choice" key={app.applicationId}>
+                <label className="account-scope-choice account-scope-app" key={app.applicationId}>
                   <input
                     type="checkbox"
                     id={`pair-app-${app.applicationId}`}
                     checked={chosenApps.includes(app.applicationId)}
                     onChange={() => toggleApp(app.applicationId)}
                   />
-                  <span>{applicationLabel(app.applicationId, namespaces)}</span>
+                  <span className="account-scope-app-text">
+                    <span className="account-scope-app-name">
+                      {applicationLabel(app.applicationId, namespaces, installed)}
+                    </span>
+                    <span className="account-scope-app-ns">
+                      {applicationNamespaces(app.applicationId, namespaces) || "no namespace yet"}
+                    </span>
+                  </span>
                 </label>
               ))
             )}

@@ -2,7 +2,13 @@ import { useState, useEffect } from "react";
 import { MonitorSmartphone, Plus, RefreshCw, SquarePlus, Trash2 } from "lucide-react";
 import DataTable, { type Column } from "./DataTable";
 import CopyButton from "./CopyButton";
-import { DevicePairWizard, DevicePairResponder, applicationLabel } from "./DevicePairing";
+import {
+  DevicePairWizard,
+  DevicePairResponder,
+  applicationLabel,
+  applicationNamespaces,
+  type InstalledApp,
+} from "./DevicePairing";
 import { SkeletonText, SkeletonTable } from "./Skeleton";
 import {
   listAccountApplications,
@@ -17,6 +23,7 @@ import {
 } from "../lib/device-link";
 import { fetchNodeIdentity, type NodeIdentity } from "../utils/nodeIdentity";
 import { parseTauriError } from "../utils/appUtils";
+import { listInstalledApps } from "../utils/installedAppsCache";
 import { truncateText } from "../utils/string";
 
 const IDENTITY_FIELDS: { id: string; label: string; key: keyof NodeIdentity }[] = [
@@ -91,6 +98,7 @@ export default function AccountPanel() {
   const [catalog, setCatalog] = useState<{
     apps: AccountApplication[];
     namespaces: NamespaceSummary[];
+    installed: InstalledApp[];
   } | null>(null);
   const [rowNote, setRowNote] = useState<RowNote | null>(null);
 
@@ -186,8 +194,15 @@ export default function AccountPanel() {
     setScopeError("");
     if (catalog) return;
     try {
-      const [apps, namespaces] = await Promise.all([listAccountApplications(), listNamespaces()]);
-      setCatalog({ apps, namespaces });
+      const [apps, namespaces, installed] = await Promise.all([
+        listAccountApplications(),
+        listNamespaces(),
+        // A name is a nicety; the picker must still work when the lookup fails.
+        listInstalledApps()
+          .then((r) => (Array.isArray(r.data) ? (r.data as InstalledApp[]) : []))
+          .catch(() => [] as InstalledApp[]),
+      ]);
+      setCatalog({ apps, namespaces, installed });
     } catch (err: unknown) {
       setScopeError(parseTauriError(err, "Could not read this account's apps"));
     }
@@ -440,7 +455,10 @@ export default function AccountPanel() {
             ) : (
               <div className="account-scope-apps" id="device-scope-apps">
                 {addableApps.map((app) => (
-                  <label className="account-scope-choice" key={app.applicationId}>
+                  <label
+                    className="account-scope-choice account-scope-app"
+                    key={app.applicationId}
+                  >
                     <input
                       type="checkbox"
                       id={`device-scope-app-${app.applicationId}`}
@@ -453,7 +471,15 @@ export default function AccountPanel() {
                         )
                       }
                     />
-                    <span>{applicationLabel(app.applicationId, catalog.namespaces)}</span>
+                    <span className="account-scope-app-text">
+                      <span className="account-scope-app-name">
+                        {applicationLabel(app.applicationId, catalog.namespaces, catalog.installed)}
+                      </span>
+                      <span className="account-scope-app-ns">
+                        {applicationNamespaces(app.applicationId, catalog.namespaces) ||
+                          "no namespace yet"}
+                      </span>
+                    </span>
                   </label>
                 ))}
               </div>

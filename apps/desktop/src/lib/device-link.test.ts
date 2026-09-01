@@ -18,6 +18,7 @@ import {
   normalizeConfirmationCode,
   pairComplete,
   pairInit,
+  refusalStatus,
   relinkDevice,
   revokeDevice,
   validatePairPayload,
@@ -431,5 +432,28 @@ describe('revokeDevice', () => {
     installFetch(json({ data: { accountId: 'e'.repeat(64), deviceId: HEX_64 } }));
 
     await expect(revokeDevice('ns-1', HEX_64)).resolves.toEqual({ revokedIn: [] });
+  });
+});
+
+describe('refusalStatus', () => {
+  it('carries the status core refused with, so a caller can tell one refusal from another', async () => {
+    installFetch(
+      json({ error: { message: 'this node takes part in none of those namespaces' } }, { status: 409 }),
+    );
+    const err = await pairComplete(validPayload(), ['App1']).catch((e: unknown) => e);
+    expect(refusalStatus(err)).toBe(409);
+    expect((err as Error).message).toContain('takes part in none');
+  });
+
+  it('distinguishes a bad payload from an unreachable scope', async () => {
+    installFetch(json({ error: { message: 'confirmation code does not match' } }, { status: 400 }));
+    const err = await pairComplete(validPayload(), undefined).catch((e: unknown) => e);
+    expect(refusalStatus(err)).toBe(400);
+  });
+
+  it('is undefined for anything that is not a refusal from the node', () => {
+    expect(refusalStatus(new Error('the network went away'))).toBeUndefined();
+    expect(refusalStatus(undefined)).toBeUndefined();
+    expect(refusalStatus('not an error at all')).toBeUndefined();
   });
 });

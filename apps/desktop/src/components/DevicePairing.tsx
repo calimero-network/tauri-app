@@ -4,6 +4,7 @@ import CopyButton from "./CopyButton";
 import { SkeletonText } from "./Skeleton";
 import {
   listAccountApplications,
+  refusalStatus,
   listAccountDevices,
   listNamespaces,
   pairInit,
@@ -139,6 +140,8 @@ export function DevicePairWizard({ rootKey, onLinked, onClose }: WizardProps) {
   const [code, setCode] = useState("");
   const [linking, setLinking] = useState(false);
   const [linkError, setLinkError] = useState("");
+  // A 409 refuses the SCOPE, not the payload, so retyping the code cannot help.
+  const [scopeRefused, setScopeRefused] = useState(false);
   const [result, setResult] = useState<PairCompleteResult | null>(null);
   const [converged, setConverged] = useState(false);
   const [reloads, setReloads] = useState(0);
@@ -190,6 +193,7 @@ export function DevicePairWizard({ rootKey, onLinked, onClose }: WizardProps) {
     if (!payload || invalid) return;
     setLinking(true);
     setLinkError("");
+    setScopeRefused(false);
     try {
       const done = await pairComplete(payload, scopedApps);
       const seen = await waitForDevice(done.deviceId);
@@ -198,6 +202,7 @@ export function DevicePairWizard({ rootKey, onLinked, onClose }: WizardProps) {
       onLinked(done.deviceId, seen);
     } catch (err: unknown) {
       setLinkError(parseTauriError(err, "Could not link the device"));
+      setScopeRefused(refusalStatus(err) === 409);
     } finally {
       setLinking(false);
     }
@@ -422,6 +427,20 @@ export function DevicePairWizard({ rootKey, onLinked, onClose }: WizardProps) {
           </div>
           {invalid && <p className="field-error" id="pair-invalid">{invalid}</p>}
           {linkError && <p className="field-error" id="pair-error">{linkError}</p>}
+          {scopeRefused && (
+            <button
+              type="button"
+              id="pair-change-scope"
+              className="button button-secondary"
+              onClick={() => {
+                setScopeRefused(false);
+                setLinkError("");
+                setStep(0);
+              }}
+            >
+              Change the apps
+            </button>
+          )}
           <div className="account-wizard-actions">
             <button
               type="button"

@@ -1,14 +1,18 @@
 import { useState, useEffect } from "react";
-import { MonitorSmartphone, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { MonitorSmartphone, Plus, RefreshCw, SquarePlus, Trash2 } from "lucide-react";
 import DataTable, { type Column } from "./DataTable";
 import CopyButton from "./CopyButton";
-import { DevicePairWizard, DevicePairResponder } from "./DevicePairing";
+import { DevicePairWizard, DevicePairResponder, applicationLabel } from "./DevicePairing";
 import { SkeletonText, SkeletonTable } from "./Skeleton";
 import {
+  listAccountApplications,
   listAccountDevices,
+  listNamespaces,
   relinkDevice,
   revokeDevice,
+  type AccountApplication,
   type AccountDevice,
+  type NamespaceSummary,
   type RelinkResult,
 } from "../lib/device-link";
 import { fetchNodeIdentity, type NodeIdentity } from "../utils/nodeIdentity";
@@ -59,6 +63,17 @@ export function canRevoke(device: AccountDevice): boolean {
   return !device.isSelf && !device.revoked && device.namespaces.length > 0;
 }
 
+/** A relink ADDS to the stored scope, and an empty scope already covers every
+ *  application, so a device holding one has nothing to widen. */
+export function canWiden(device: AccountDevice): boolean {
+  return canSync(device) && device.applications.length > 0;
+}
+
+export function widenSummary({ linkedIn }: RelinkResult, added: number): string {
+  const appWord = added === 1 ? "app" : "apps";
+  return `Added ${added} ${appWord}, reaching ${linkedIn.length} more ${namespaceWord(linkedIn.length)}.`;
+}
+
 export function relinkSummary({ linkedIn, skipped }: RelinkResult): string {
   if (!linkedIn.length && !skipped.length) return "Nothing to repair.";
   return `Repaired ${linkedIn.length} ${namespaceWord(linkedIn.length)}, skipped ${skipped.length}.`;
@@ -77,6 +92,13 @@ export default function AccountPanel() {
   const [deviceReloads, setDeviceReloads] = useState(0);
   const [busyDevice, setBusyDevice] = useState("");
   const [confirmRevoke, setConfirmRevoke] = useState("");
+  const [scopeDevice, setScopeDevice] = useState("");
+  const [scopeChoices, setScopeChoices] = useState<string[]>([]);
+  const [scopeError, setScopeError] = useState("");
+  const [catalog, setCatalog] = useState<{
+    apps: AccountApplication[];
+    namespaces: NamespaceSummary[];
+  } | null>(null);
   const [rowNote, setRowNote] = useState<RowNote | null>(null);
 
   useEffect(() => {
@@ -163,6 +185,29 @@ export default function AccountPanel() {
   const sync = (device: DeviceRow) =>
     runRowAction(device.deviceId, async () => relinkSummary(await relinkDevice(device.deviceId)));
 
+  // Loaded on demand: most visits to this panel never open the picker, and the
+  // catalog is the same for every row once it is here.
+  const openScope = async (device: DeviceRow) => {
+    setScopeDevice(device.deviceId);
+    setScopeChoices([]);
+    setScopeError("");
+    if (catalog) return;
+    try {
+      const [apps, namespaces] = await Promise.all([listAccountApplications(), listNamespaces()]);
+      setCatalog({ apps, namespaces });
+    } catch (err: unknown) {
+      setScopeError(parseTauriError(err, "Could not read this account's apps"));
+    }
+  };
+
+  const widen = (device: DeviceRow) => {
+    const chosen = scopeChoices;
+    setScopeDevice("");
+    return runRowAction(device.deviceId, async () =>
+      widenSummary(await relinkDevice(device.deviceId, chosen), chosen.length),
+    );
+  };
+
   const revoke = (device: DeviceRow) => {
     setConfirmRevoke("");
     // A revocation reaches every namespace the device is in whichever one the
@@ -172,6 +217,12 @@ export default function AccountPanel() {
       return `Withdrawn from ${revokedIn.length} ${namespaceWord(revokedIn.length)}.`;
     });
   };
+
+  const scopeTarget = devices.find((device) => device.deviceId === scopeDevice);
+  // A relink only adds, so an app the device already holds is not offered.
+  const addableApps = (catalog?.apps ?? []).filter(
+    (app) => !scopeTarget?.applications.includes(app.applicationId),
+  );
 
   const columns: Column<DeviceRow>[] = [
     {
@@ -245,6 +296,18 @@ export default function AccountPanel() {
               </>
             ) : (
               <>
+                {canWiden(device) && (
+                  <button
+                    type="button"
+                    id={`device-scope-${device.deviceId}`}
+                    className="button button-secondary button-small"
+                    disabled={busyDevice === device.deviceId}
+                    onClick={() => openScope(device)}
+                  >
+                    <SquarePlus size={12} />
+                    Add apps
+                  </button>
+                )}
                 {canSync(device) && (
                   <button
                     type="button"
@@ -366,6 +429,63 @@ export default function AccountPanel() {
             }
             compact
           />
+        )}
+        {scopeTarget && (
+          <div className="account-wizard" id="device-scope-picker">
+            <p className="field-hint">
+              Which apps should {truncateText(scopeTarget.deviceId, 8)} also reach?
+            </p>
+            {scopeError ? (
+              <p className="field-error" id="device-scope-error">
+                {scopeError}
+              </p>
+            ) : !catalog ? (
+              <SkeletonText />
+            ) : addableApps.length === 0 ? (
+              <p className="field-hint" id="device-scope-none">
+                It already reaches every app this account speaks in.
+              </p>
+            ) : (
+              <div className="account-scope-apps" id="device-scope-apps">
+                {addableApps.map((app) => (
+                  <label className="account-scope-choice" key={app.applicationId}>
+                    <input
+                      type="checkbox"
+                      id={`device-scope-app-${app.applicationId}`}
+                      checked={scopeChoices.includes(app.applicationId)}
+                      onChange={() =>
+                        setScopeChoices((prev) =>
+                          prev.includes(app.applicationId)
+                            ? prev.filter((id) => id !== app.applicationId)
+                            : [...prev, app.applicationId],
+                        )
+                      }
+                    />
+                    <span>{applicationLabel(app.applicationId, catalog.namespaces)}</span>
+                  </label>
+                ))}
+              </div>
+            )}
+            <div className="account-wizard-actions">
+              <button
+                type="button"
+                id="device-scope-add"
+                className="button button-primary"
+                disabled={!scopeChoices.length || busyDevice === scopeTarget.deviceId}
+                onClick={() => widen(scopeTarget)}
+              >
+                Add
+              </button>
+              <button
+                type="button"
+                id="device-scope-cancel"
+                className="button button-secondary"
+                onClick={() => setScopeDevice("")}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
         )}
         {wizardOpen && (
           <DevicePairWizard

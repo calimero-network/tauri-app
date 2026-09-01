@@ -7,7 +7,7 @@ vi.mock("../lib/device-link", () => ({
   revokeDevice: vi.fn(),
 }));
 
-import { canRevoke, canSync, deviceScope, relinkSummary } from "./AccountPanel";
+import { canRevoke, canSync, canWiden, deviceScope, relinkSummary, widenSummary } from "./AccountPanel";
 
 function device(overrides: Partial<AccountDevice> = {}): AccountDevice {
   return {
@@ -84,6 +84,41 @@ describe("relinkSummary", () => {
   it("still reports skips when nothing was repaired", () => {
     expect(relinkSummary({ linkedIn: [], skipped: ["ns-1"] })).toBe(
       "Repaired 0 namespaces, skipped 1.",
+    );
+  });
+});
+
+describe("canWiden", () => {
+  it("offers the action for a scoped device", () => {
+    expect(canWiden(device({ applications: ["App1"] }))).toBe(true);
+  });
+
+  it("withholds it from a device that already reaches every app", () => {
+    expect(canWiden(device({ applications: [] }))).toBe(false);
+  });
+
+  it("withholds it from this node's own device and a revoked one", () => {
+    expect(canWiden(device({ applications: ["App1"], isSelf: true }))).toBe(false);
+    expect(canWiden(device({ applications: ["App1"], revoked: true }))).toBe(false);
+  });
+});
+
+describe("widenSummary", () => {
+  it("counts the apps added and the namespaces they reached", () => {
+    expect(widenSummary({ linkedIn: ["ns-1", "ns-2"], skipped: ["ns-3"] }, 2)).toBe(
+      "Added 2 apps, reaching 2 more namespaces.",
+    );
+  });
+
+  it("says it in the singular for one app and one namespace", () => {
+    expect(widenSummary({ linkedIn: ["ns-1"], skipped: [] }, 1)).toBe(
+      "Added 1 app, reaching 1 more namespace.",
+    );
+  });
+
+  it("reports an add that reached nowhere rather than implying it landed", () => {
+    expect(widenSummary({ linkedIn: [], skipped: ["ns-1"] }, 1)).toBe(
+      "Added 1 app, reaching 0 more namespaces.",
     );
   });
 });

@@ -88,7 +88,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     }
     const message =
       json?.error?.message ?? json?.error ?? json?.message ?? `HTTP ${response.status}`;
-    throw new Error(String(message));
+    const error = new Error(String(message)) as Error & { status?: number };
+    error.status = response.status;
+    throw error;
   }
 
   return (json?.data ?? json) as T;
@@ -169,6 +171,14 @@ export async function revokeDevice(
     { method: 'POST', body: JSON.stringify({ deviceId }) },
   );
   return { revokedIn: (result?.revokedIn ?? []).map((entry) => entry.namespaceId) };
+}
+
+/** The status a refusal carried, or undefined for anything else. Core types its
+ *  refusals so a caller can tell a payload it can fix from one it cannot. */
+export function refusalStatus(error: unknown): number | undefined {
+  return typeof error === 'object' && error !== null && 'status' in error
+    ? (error as { status?: number }).status
+    : undefined;
 }
 
 /** Grouping and case are the reader's, not the code's: "7bc0daac ccb484a4" is the same code. */

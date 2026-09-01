@@ -868,3 +868,38 @@
   font-size: 12px;
   overflow-wrap: anywhere;
 }
+
+.account-install-list {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+}
+
+.account-install-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 0;
+  font-size: 13px;
+}
+
+.account-install-name {
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.account-install-status {
+  color: var(--text-tertiary);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.account-install-status.is-done {
+  color: var(--success-color, #3fb950);
+}
+
+.account-install-status.is-failed {
+  color: var(--error-color, #f85149);
+  white-space: normal;
+}

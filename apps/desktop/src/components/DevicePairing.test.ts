@@ -4,6 +4,9 @@ import {
   applicationLabel,
   applicationNamespaces,
   scopeRow,
+  installableApps,
+  inviteApps,
+  linkedToInvite,
   decodeInvite,
   decodeReply,
   encodeInvite,
@@ -196,5 +199,84 @@ describe("scopeRow", () => {
       { namespaceId: "b".repeat(64), name: "Work", targetApplicationId: "app-1" },
     ];
     expect(scopeRow("app-1", two)).toEqual(["Calimero, Work"]);
+  });
+});
+
+describe("installableApps", () => {
+  it("keeps a web source, which is the only kind a node can fetch", () => {
+    expect(installableApps([{ source: "https://registry.example/app.wasm" }])).toEqual([
+      { source: "https://registry.example/app.wasm" },
+    ]);
+  });
+
+  it("drops a local path, which names nothing on the machine being added", () => {
+    expect(installableApps([{ source: "file:///Users/someone/app.wasm" }])).toEqual([]);
+  });
+
+  it("drops a source that is not a URL at all", () => {
+    expect(
+      installableApps([{ source: "javascript:alert(1)" }, { source: "" }, {}, null, 7]),
+    ).toEqual([]);
+  });
+
+  it("carries metadata through so the installed app keeps its name", () => {
+    const metadata = [1, 2, 3];
+    expect(installableApps([{ source: "https://x/app.wasm", metadata }])).toEqual([
+      { source: "https://x/app.wasm", metadata },
+    ]);
+  });
+
+  it("is empty for an invite that offers none", () => {
+    expect(installableApps(undefined)).toEqual([]);
+    expect(installableApps("not a list")).toEqual([]);
+  });
+});
+
+describe("inviteApps", () => {
+  const installed = [
+    { id: "app-1", source: "https://reg/one.wasm", metadata: [1] },
+    { id: "app-2", source: "https://reg/two.wasm" },
+    { id: "app-3", source: "file:///local/three.wasm" },
+  ];
+
+  it("offers only the apps the scope names", () => {
+    expect(inviteApps(["app-2"], installed)).toEqual([{ source: "https://reg/two.wasm" }]);
+  });
+
+  it("offers every installed app when the scope names none, as core reads it", () => {
+    expect(inviteApps(undefined, installed).map((a) => a.source)).toEqual([
+      "https://reg/one.wasm",
+      "https://reg/two.wasm",
+    ]);
+  });
+
+  it("leaves out a scoped app the other machine could never fetch", () => {
+    expect(inviteApps(["app-3"], installed)).toEqual([]);
+  });
+
+  it("is empty when nothing is installed", () => {
+    expect(inviteApps(["app-1"], [])).toEqual([]);
+  });
+});
+
+describe("linkedToInvite", () => {
+  const ROOT = "a".repeat(64);
+
+  it("is linked once this node reports the inviting account's root", () => {
+    expect(linkedToInvite({ accountId: "x", accountRootPublicKey: ROOT }, ROOT)).toBe(true);
+  });
+
+  it("is not linked while it still reports a root it minted itself", () => {
+    expect(linkedToInvite({ accountId: "x", accountRootPublicKey: "b".repeat(64) }, ROOT)).toBe(
+      false,
+    );
+  });
+
+  it("is not linked when there is no identity to read yet", () => {
+    expect(linkedToInvite(null, ROOT)).toBe(false);
+  });
+
+  it("does not call a node with no root linked to an invite carrying none", () => {
+    expect(linkedToInvite({ accountId: "x" }, "")).toBe(false);
   });
 });

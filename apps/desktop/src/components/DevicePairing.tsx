@@ -17,7 +17,9 @@ import {
   type PairCompleteResult,
 } from "../lib/device-link";
 import { decodeMetadata, parseTauriError } from "../utils/appUtils";
-import { listInstalledApps } from "../utils/installedAppsCache";
+import { listInstalledApps, invalidateInstalledApps } from "../utils/installedAppsCache";
+import { fetchNodeIdentity, type NodeIdentity } from "../utils/nodeIdentity";
+import { apiClient } from "../lib/mero-client";
 import { truncateText } from "../utils/string";
 
 /** Marks a blob as the invite the account holder hands out. */
@@ -28,9 +30,30 @@ const REPLY_PREFIX = "mero-pair-reply:";
 const POLL_INTERVAL_MS = 1000;
 const POLL_CEILING_MS = 15000;
 
+/** An application the invite offers to install. The device holds only core's
+ *  content-hash id, which no registry resolves, so the holder passes the URL it
+ *  installed from; the same artifact yields the same id. */
+export interface PairInviteApp {
+  source: string;
+  metadata?: number[] | string;
+}
+
 export interface PairInvite {
   rootKey: string;
   namespaces: string[];
+  apps?: PairInviteApp[];
+}
+
+/** Fetched over the network on the strength of a pasted blob, so anything but a
+ *  web URL is dropped rather than handed to the node. */
+export function installableApps(value: unknown): PairInviteApp[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) => {
+    const source = str((entry as PairInviteApp | undefined)?.source);
+    if (!/^https?:\/\//i.test(source)) return [];
+    const metadata = (entry as PairInviteApp).metadata;
+    return [{ source, ...(metadata === undefined ? {} : { metadata }) }];
+  });
 }
 
 export type PairReply = Omit<PairInitResult, "accountId" | "confirmationCode">;
@@ -63,7 +86,9 @@ export function decodeInvite(blob: string): PairInvite | null {
     ? body.namespaces.filter((id): id is string => typeof id === "string" && id.length > 0)
     : [];
   // Core refuses an empty namespace list, so an invite carrying none is not one.
-  return rootKey && namespaces.length ? { rootKey, namespaces } : null;
+  if (!rootKey || !namespaces.length) return null;
+  const apps = installableApps(body?.apps);
+  return { rootKey, namespaces, ...(apps.length ? { apps } : {}) };
 }
 
 /** The confirmation code is deliberately left out: a code that travels with the
@@ -105,6 +130,22 @@ export interface InstalledApp {
   id: string;
   name?: string;
   metadata?: number[] | string;
+  /** Where the node fetched it from. A local path for a hand-installed app. */
+  source?: string;
+}
+
+/** The apps an invite offers to install: those in scope that the holder can point
+ *  at a URL. An undefined scope is every application, the same as core reads it. */
+export function inviteApps(
+  applications: string[] | undefined,
+  installed: InstalledApp[],
+): PairInviteApp[] {
+  const scoped = applications && new Set(applications);
+  return installableApps(
+    installed
+      .filter((app) => !scoped || scoped.has(app.id))
+      .map((app) => ({ source: app.source, metadata: app.metadata })),
+  );
 }
 
 /** The namespaces an application is spoken in, named where they have names. A
@@ -405,7 +446,11 @@ export function DevicePairWizard({ rootKey, onLinked, onClose }: WizardProps) {
     );
   }
 
-  const invite = encodeInvite({ rootKey, namespaces: inviteNs });
+  const invite = encodeInvite({
+    rootKey,
+    namespaces: inviteNs,
+    apps: inviteApps(scopedApps, installed),
+  });
 
   return (
     <div className="account-wizard">
@@ -521,12 +566,31 @@ export function DevicePairWizard({ rootKey, onLinked, onClose }: WizardProps) {
   );
 }
 
+/** The link has landed when this node reports the inviting account's root as its
+ *  own. Before pairing it reports the root it minted itself. */
+export function linkedToInvite(identity: NodeIdentity | null, rootKey: string): boolean {
+  return Boolean(rootKey) && identity?.accountRootPublicKey === rootKey;
+}
+
+interface InstallState {
+  source: string;
+  name: string;
+  status: "waiting" | "installing" | "done" | "failed";
+  error?: string;
+}
+
+const POLL_MS = 3000;
+
 /** The other end of the wizard: what the computer being added runs. */
 export function DevicePairResponder({ enrolledDeviceId }: { enrolledDeviceId?: string }) {
   const [inviteText, setInviteText] = useState("");
   const [result, setResult] = useState<PairInitResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  // The invite this node actually answered, kept apart from the textarea so the
+  // install below is not restarted by an edit to it.
+  const [answered, setAnswered] = useState<PairInvite | null>(null);
+  const [installs, setInstalls] = useState<InstallState[]>([]);
 
   const invite = decodeInvite(inviteText);
 
@@ -538,12 +602,60 @@ export function DevicePairResponder({ enrolledDeviceId }: { enrolledDeviceId?: s
       // Kept on failure: pair-init is idempotent, so the holder can just retry
       // against this same response instead of restarting the wizard.
       setResult(await pairInit(invite.rootKey, invite.namespaces));
+      setAnswered(invite);
     } catch (err: unknown) {
       setError(parseTauriError(err, "Could not answer that invite"));
     } finally {
       setBusy(false);
     }
   };
+
+  // Nothing has vouched for the invite until the holder accepts the code, and its
+  // sources are only pasted URLs until then, so the install waits for the link.
+  useEffect(() => {
+    const apps = answered?.apps ?? [];
+    if (!answered || !apps.length) return;
+    let cancelled = false;
+
+    setInstalls(
+      apps.map((app) => ({
+        source: app.source,
+        name: decodeMetadata(app.metadata)?.name || truncateText(app.source, 40),
+        status: "waiting" as const,
+      })),
+    );
+
+    const mark = (i: number, patch: Partial<InstallState>) =>
+      setInstalls((prev) => prev.map((entry, at) => (at === i ? { ...entry, ...patch } : entry)));
+
+    void (async () => {
+      while (!cancelled) {
+        const identity = await fetchNodeIdentity().catch(() => null);
+        if (linkedToInvite(identity, answered.rootKey)) break;
+        await new Promise((resolve) => setTimeout(resolve, POLL_MS));
+      }
+      for (const [i, app] of apps.entries()) {
+        if (cancelled) return;
+        mark(i, { status: "installing" });
+        try {
+          const response = await apiClient.node.installApplication({
+            url: app.source,
+            metadata: app.metadata ?? [],
+          } as never);
+          if (cancelled) return;
+          const failed = (response as { error?: { message?: string } })?.error;
+          mark(i, failed ? { status: "failed", error: failed.message } : { status: "done" });
+        } catch (err: unknown) {
+          if (!cancelled) mark(i, { status: "failed", error: parseTauriError(err, "Install failed") });
+        }
+      }
+      if (!cancelled) invalidateInstalledApps();
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [answered]);
 
   return (
     <>
@@ -605,6 +717,30 @@ export function DevicePairResponder({ enrolledDeviceId }: { enrolledDeviceId?: s
               Say it out loud or over the phone. Do not send it with the block above.
             </p>
           </div>
+          {installs.length > 0 && (
+            <div className="settings-field">
+              <span className="settings-field-label">Apps arriving with this account</span>
+              <ul className="account-install-list" id="pair-app-installs">
+                {installs.map((entry) => (
+                  <li className="account-install-row" key={entry.source}>
+                    <span className="account-install-name">{entry.name}</span>
+                    <span className={`account-install-status is-${entry.status}`}>
+                      {entry.status === "waiting"
+                        ? "waiting for the code"
+                        : entry.status === "installing"
+                          ? "installing…"
+                          : entry.status === "done"
+                            ? "installed"
+                            : (entry.error ?? "failed")}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+              <p className="field-hint">
+                These install once the other computer accepts the code, not before.
+              </p>
+            </div>
+          )}
         </div>
       )}
     </>

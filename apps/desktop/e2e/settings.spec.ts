@@ -1,5 +1,6 @@
 import { test, expect } from "./fixtures/test";
 import { describeAfter35 } from "./fixtures/e2e-cap";
+import type { Page } from "@playwright/test";
 import {
   setupAuthenticatedPage,
   setupDeveloperPage,
@@ -13,6 +14,21 @@ import {
   AUTHENTICATED_SETTINGS,
   DEVELOPER_SETTINGS,
   DEFAULT_REGISTRY_URL,
+  API_ROUTES,
+  MOCK_ACCOUNT_APPLICATIONS,
+  MOCK_ACCOUNT_DEVICES,
+  MOCK_APPLICATION_ID,
+  MOCK_NAMESPACE_ID,
+  MOCK_NAMESPACES,
+  MOCK_NODE_IDENTITY,
+  MOCK_OTHER_APPLICATION_ID,
+  MOCK_OTHER_NAMESPACE_ID,
+  MOCK_PAIR_COMPLETE,
+  MOCK_PAIR_INIT,
+  MOCK_PAIR_INVITE_BLOB,
+  MOCK_PAIR_REPLY_BLOB,
+  MOCK_RELINK,
+  MOCK_REVOKE,
 } from "./fixtures/mock-data";
 
 // ─── Navigate to Settings ──────────────────────────────────────────────────
@@ -340,5 +356,442 @@ describeAfter35("Tab switching", () => {
     await scrollSettingsControlIntoView(page, "#developer-mode");
     await expect(page.locator("#developer-mode")).toBeVisible();
     await expect(page.locator("#registry-url")).not.toBeVisible();
+  });
+});
+// ─── Account tab ────────────────────────────────────────────────────────────
+
+const json = (body: unknown) => ({
+  status: 200,
+  contentType: "application/json",
+  body: JSON.stringify(body),
+});
+
+describeAfter35("Account tab", () => {
+  test.beforeEach(async ({ page }) => {
+    await setupAuthenticatedPage(page);
+    await page.route(API_ROUTES.identity, (route) =>
+      route.fulfill(json({ data: MOCK_NODE_IDENTITY })),
+    );
+    // An account with nothing on it yet, so the identity assertions below do not
+    // depend on the device listing's wire shape.
+    await page.route(API_ROUTES.namespaces, (route) => route.fulfill(json({ data: [] })));
+    await page.route(API_ROUTES.accountDevices, (route) => route.fulfill(json({ devices: [] })));
+    await page.click('button[title="Settings"]');
+  });
+
+  test("Account tab is visible", async ({ page }) => {
+    await expect(page.locator("#settings-tab-account")).toBeVisible();
+  });
+
+  test("clicking the Account tab shows the panel", async ({ page }) => {
+    await page.locator("#settings-tab-account").click();
+    await expect(
+      page.getByRole("heading", { name: "This device" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "Devices on this account" }),
+    ).toBeVisible();
+  });
+
+  test("identity fields render from the node's identity", async ({ page }) => {
+    await page.locator("#settings-tab-account").click();
+
+    await expect(page.locator("#value-account-id")).toHaveText(
+      MOCK_NODE_IDENTITY.accountId,
+    );
+    await expect(page.locator("#value-device-id")).toHaveText(
+      MOCK_NODE_IDENTITY.deviceId,
+    );
+    await expect(page.locator("#value-public-key")).toHaveText(
+      MOCK_NODE_IDENTITY.publicKey,
+    );
+    await expect(page.locator("#value-account-root-public-key")).toHaveText(
+      MOCK_NODE_IDENTITY.accountRootPublicKey,
+    );
+    await expect(page.locator("#copy-account-id")).toBeVisible();
+  });
+
+  test("a node with no identity yet is a normal state, not an error", async ({
+    page,
+  }) => {
+    await page.route(API_ROUTES.identity, (route) =>
+      route.fulfill({
+        status: 404,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "not found" }),
+      }),
+    );
+    await page.locator("#settings-tab-account").click();
+
+    await expect(page.locator("#account-no-identity")).toBeVisible();
+    await expect(page.locator("#account-retry")).toHaveCount(0);
+  });
+
+  test("adding a device is offered on the bundled node, with no developer mode", async ({
+    page,
+  }) => {
+    await page.locator("#settings-tab-account").click();
+    await scrollSettingsControlIntoView(page, "#add-device");
+    await expect(page.locator("#add-device")).toBeEnabled();
+  });
+});
+
+// ─── Account tab - device pairing ───────────────────────────────────────────
+
+/** This account's two devices and namespaces, plus every account-level route. */
+async function mockPairingAPIs(page: Page): Promise<void> {
+  await page.route(API_ROUTES.identity, (route) =>
+    route.fulfill(json({ data: MOCK_NODE_IDENTITY })),
+  );
+  await page.route(API_ROUTES.namespaces, (route) =>
+    route.fulfill(json({ data: MOCK_NAMESPACES })),
+  );
+  await page.route(API_ROUTES.accountApplications, (route) =>
+    route.fulfill(json({ applications: MOCK_ACCOUNT_APPLICATIONS })),
+  );
+  await page.route(API_ROUTES.accountDevices, (route) =>
+    route.fulfill(json({ devices: MOCK_ACCOUNT_DEVICES })),
+  );
+  await page.route(API_ROUTES.relinkDevice, (route) =>
+    route.fulfill(json({ data: MOCK_RELINK })),
+  );
+  await page.route(API_ROUTES.revokeDevice, (route) =>
+    route.fulfill(json({ data: MOCK_REVOKE })),
+  );
+  await page.route(API_ROUTES.pairInit, (route) =>
+    route.fulfill(json({ data: MOCK_PAIR_INIT })),
+  );
+  await page.route(API_ROUTES.pairComplete, (route) =>
+    route.fulfill(json({ data: MOCK_PAIR_COMPLETE })),
+  );
+}
+
+/** The namespaces an invite blob on screen actually carries. */
+async function inviteNamespacesOnScreen(page: Page): Promise<string[]> {
+  const blob = (await page.locator("#pair-invite").innerText()).trim();
+  return JSON.parse(atob(blob.replace("mero-pair:", ""))).namespaces;
+}
+
+describeAfter35("Account tab - pairing needs no developer mode", () => {
+  test("both halves of the exchange are offered on an ordinary session", async ({
+    page,
+  }) => {
+    await setupAuthenticatedPage(page);
+    await mockPairingAPIs(page);
+    await page.click('button[title="Settings"]');
+    await page.locator("#settings-tab-account").click();
+
+    await scrollSettingsControlIntoView(page, "#add-device");
+    await expect(page.locator("#add-device")).toBeEnabled();
+    await expect(page.locator("#pair-invite-input")).toBeVisible();
+  });
+});
+
+describeAfter35("Account tab - device listing", () => {
+  test.beforeEach(async ({ page }) => {
+    await setupDeveloperPage(page);
+    await mockPairingAPIs(page);
+    await page.click('button[title="Settings"]');
+    await page.locator("#settings-tab-account").click();
+    await scrollSettingsControlIntoView(page, "#add-device");
+  });
+
+  test("one row per device, with its scope and its status", async ({ page }) => {
+    const rows = page.locator(".data-table tbody tr");
+    await expect(rows).toHaveCount(2);
+
+    // This node's own device: no application scope at all, which is every app.
+    await expect(rows.nth(0)).toContainText("All apps");
+    await expect(rows.nth(0)).toContainText("This device");
+    await expect(rows.nth(1)).toContainText("1 app");
+    await expect(rows.nth(1)).toContainText("Active");
+  });
+
+  test("this device is offered neither a sync nor a revoke", async ({ page }) => {
+    await expect(
+      page.locator(`#device-sync-${MOCK_NODE_IDENTITY.deviceId}`),
+    ).toHaveCount(0);
+    await expect(
+      page.locator(`#device-revoke-${MOCK_NODE_IDENTITY.deviceId}`),
+    ).toHaveCount(0);
+  });
+
+  test("syncing a device reports what it repaired and what it skipped", async ({
+    page,
+  }) => {
+    await page.locator(`#device-sync-${MOCK_PAIR_INIT.deviceId}`).click();
+
+    await expect(page.locator(`#device-note-${MOCK_PAIR_INIT.deviceId}`)).toHaveText(
+      "Repaired 1 namespace, skipped 1.",
+    );
+  });
+
+  test("revoking asks in the row itself and can be backed out of", async ({
+    page,
+  }) => {
+    await page.locator(`#device-revoke-${MOCK_PAIR_INIT.deviceId}`).click();
+    await expect(
+      page.locator(`#device-revoke-confirm-${MOCK_PAIR_INIT.deviceId}`),
+    ).toBeVisible();
+
+    await page.locator(`#device-revoke-cancel-${MOCK_PAIR_INIT.deviceId}`).click();
+    await expect(
+      page.locator(`#device-revoke-confirm-${MOCK_PAIR_INIT.deviceId}`),
+    ).toHaveCount(0);
+    await expect(page.locator(`#device-note-${MOCK_PAIR_INIT.deviceId}`)).toHaveCount(0);
+  });
+
+  test("confirming the revoke names the namespaces the device lost", async ({
+    page,
+  }) => {
+    await page.locator(`#device-revoke-${MOCK_PAIR_INIT.deviceId}`).click();
+    await page.locator(`#device-revoke-confirm-${MOCK_PAIR_INIT.deviceId}`).click();
+
+    await expect(page.locator(`#device-note-${MOCK_PAIR_INIT.deviceId}`)).toHaveText(
+      "Withdrawn from 1 namespace.",
+    );
+  });
+});
+
+describeAfter35("Account tab - pairing wizard", () => {
+  test.beforeEach(async ({ page }) => {
+    await setupDeveloperPage(page);
+    await mockPairingAPIs(page);
+    await page.click('button[title="Settings"]');
+    await page.locator("#settings-tab-account").click();
+    await scrollSettingsControlIntoView(page, "#add-device");
+    await page.locator("#add-device").click();
+  });
+
+  test("the scope step opens on everything, with no app picker in the way", async ({
+    page,
+  }) => {
+    await expect(page.locator("#pair-scope-all")).toBeChecked();
+    await expect(page.locator("#pair-app-list")).toHaveCount(0);
+    await expect(page.locator("#pair-scope-next")).toBeEnabled();
+  });
+
+  test("everything hands the new device every namespace", async ({ page }) => {
+    await page.locator("#pair-scope-next").click();
+
+    // Decoded, not matched as text: the ids are inside base64, where a substring
+    // assertion would pass on a blob that names the wrong set.
+    expect(await inviteNamespacesOnScreen(page)).toEqual([
+      MOCK_NAMESPACE_ID,
+      MOCK_OTHER_NAMESPACE_ID,
+    ]);
+  });
+
+  test("choosing one app narrows the invite to that app's namespaces", async ({
+    page,
+  }) => {
+    await page.locator("#pair-scope-apps").check();
+    await page.locator(`#pair-app-${MOCK_OTHER_APPLICATION_ID}`).check();
+    await page.locator("#pair-scope-next").click();
+
+    expect(await inviteNamespacesOnScreen(page)).toEqual([MOCK_OTHER_NAMESPACE_ID]);
+  });
+
+  test("the app picker is labelled by namespace, not by a raw id", async ({
+    page,
+  }) => {
+    await page.locator("#pair-scope-apps").check();
+
+    await expect(page.locator("#pair-app-list")).toContainText("Personal");
+    await expect(page.locator("#pair-app-list")).toContainText("Files");
+    await expect(page.locator("#pair-app-list")).not.toContainText(
+      MOCK_APPLICATION_ID,
+    );
+  });
+
+  test("choosing no app leaves nothing to invite anyone to", async ({ page }) => {
+    await page.locator("#pair-scope-apps").check();
+
+    await expect(page.locator("#pair-scope-next")).toBeDisabled();
+  });
+
+  test("step 1 hands over an invite blob", async ({ page }) => {
+    await page.locator("#pair-scope-next").click();
+
+    await expect(page.locator("#pair-invite")).toContainText("mero-pair:");
+    await expect(page.locator("#copy-pair-invite")).toBeVisible();
+  });
+
+  test("step 2 takes the response and the code in separate fields", async ({
+    page,
+  }) => {
+    await page.locator("#pair-scope-next").click();
+    await page.locator("#pair-next").click();
+
+    await expect(page.locator("#pair-response")).toBeVisible();
+    await expect(page.locator("#pair-code")).toBeVisible();
+    await expect(page.locator("#pair-complete")).toBeDisabled();
+
+    // A response alone is not enough: the code is read off the other screen,
+    // never carried by the blob.
+    await page.fill("#pair-response", MOCK_PAIR_REPLY_BLOB);
+    expect(MOCK_PAIR_REPLY_BLOB).not.toContain(MOCK_PAIR_INIT.confirmationCode);
+    await expect(page.locator("#pair-invalid")).toContainText("confirmationCode");
+    await expect(page.locator("#pair-complete")).toBeDisabled();
+
+    await page.fill("#pair-code", MOCK_PAIR_INIT.confirmationCode);
+    await expect(page.locator("#pair-invalid")).toHaveCount(0);
+    await expect(page.locator("#pair-complete")).toBeEnabled();
+  });
+
+  test("a truncated response is named as such before it is sent", async ({
+    page,
+  }) => {
+    await page.locator("#pair-scope-next").click();
+    await page.locator("#pair-next").click();
+    await page.fill("#pair-response", "mero-pair-reply:" + btoa('{"deviceId":"abc"}'));
+
+    await expect(page.locator("#pair-invalid")).toContainText(
+      "deviceId must be 64 hex characters",
+    );
+    await expect(page.locator("#pair-complete")).toBeDisabled();
+  });
+
+  test("linking shows a loader and then the success state", async ({ page }) => {
+    await page.locator("#pair-scope-next").click();
+    await page.locator("#pair-next").click();
+    await page.fill("#pair-response", MOCK_PAIR_REPLY_BLOB);
+    await page.fill("#pair-code", MOCK_PAIR_INIT.confirmationCode);
+    await page.locator("#pair-complete").click();
+
+    await expect(page.locator("#pair-linking")).toBeVisible();
+    await expect(page.locator("#pair-success")).toBeVisible();
+    // The listing already has the device, so it converged - no syncing note.
+    await expect(page.locator("#pair-syncing-note")).toHaveCount(0);
+  });
+});
+
+describeAfter35("Account tab - pairing responder", () => {
+  test.beforeEach(async ({ page }) => {
+    await setupDeveloperPage(page);
+    await mockPairingAPIs(page);
+    await page.click('button[title="Settings"]');
+    await page.locator("#settings-tab-account").click();
+    await scrollSettingsControlIntoView(page, "#pair-invite-input");
+  });
+
+  test("an invite yields a response blob and a spoken confirmation code", async ({
+    page,
+  }) => {
+    await page.fill("#pair-invite-input", MOCK_PAIR_INVITE_BLOB);
+    await page.locator("#pair-init").click();
+
+    await expect(page.locator("#pair-reply")).toContainText("mero-pair-reply:");
+
+    // Decoded, not searched: the code would not appear in the base64 text even
+    // if the blob carried it, so a text assertion here would prove nothing. Read
+    // on this step, which is the only one that shows the blob.
+    const blob = (await page.locator("#pair-reply").innerText()).trim();
+    const body = JSON.parse(atob(blob.replace("mero-pair-reply:", "")));
+    expect(Object.keys(body).sort()).toEqual([
+      "deviceId",
+      "kemPublicKey",
+      "signPublicKey",
+      "statement",
+    ]);
+
+    await page.locator("#pair-answer-next").click();
+    await expect(page.locator("#pair-confirmation-code")).toHaveText(
+      MOCK_PAIR_INIT.confirmationCode,
+    );
+  });
+
+  test("it waits while the account roster has not reached this device", async ({ page }) => {
+    // Empty is what a real node returns between `pair-init` and `pair-complete`.
+    await page.route(API_ROUTES.accountDevices, (route) => route.fulfill(json({ devices: [] })));
+
+    await page.fill("#pair-invite-input", MOCK_PAIR_INVITE_BLOB);
+    await page.locator("#pair-init").click();
+    await page.locator("#pair-answer-next").click();
+
+    await expect(page.locator("#pair-link-state")).toContainText("Waiting for the other computer");
+    await expect(page.locator("#pair-link-state")).toHaveClass(/is-waiting/);
+  });
+
+  test("nothing installs while it is still waiting", async ({ page }) => {
+    await page.route(API_ROUTES.accountDevices, (route) => route.fulfill(json({ devices: [] })));
+    let installs = 0;
+    await page.route(API_ROUTES.installApplication, (route) => {
+      installs += 1;
+      return route.fulfill(json({ data: { applicationId: "a".repeat(64) } }));
+    });
+
+    await page.fill("#pair-invite-input", MOCK_PAIR_INVITE_BLOB);
+    await page.locator("#pair-init").click();
+    await page.locator("#pair-answer-next").click();
+    await expect(page.locator("#pair-app-installs")).toBeVisible();
+
+    await page.waitForTimeout(4000);
+    expect(installs).toBe(0);
+  });
+
+  test("it links and installs once the roster names this device", async ({ page }) => {
+    await page.route(API_ROUTES.installApplication, (route) =>
+      route.fulfill(json({ data: { applicationId: "a".repeat(64) } })),
+    );
+
+    // The mocked listing already carries an `isSelf` row, which is the state a
+    // node reaches only after `pair-complete` publishes the certificate.
+    await page.fill("#pair-invite-input", MOCK_PAIR_INVITE_BLOB);
+    await page.locator("#pair-init").click();
+    await page.locator("#pair-answer-next").click();
+
+    await expect(page.locator("#pair-link-state")).toContainText("Linked");
+    await expect(page.locator("#pair-app-installs")).toContainText("installed");
+  });
+
+  test("closing the answer discards it rather than hiding it", async ({ page }) => {
+    await page.fill("#pair-invite-input", MOCK_PAIR_INVITE_BLOB);
+    await page.locator("#pair-init").click();
+    await page.locator("#pair-answer-next").click();
+    await expect(page.locator("#pair-confirmation-code")).toBeVisible();
+
+    await page.locator("#pair-answer-close").click();
+
+    // Dropped, not concealed: a stale code left on screen is one somebody reads
+    // out for a pairing that is no longer in flight.
+    await expect(page.locator("#pair-confirmation-code")).toHaveCount(0);
+    await expect(page.locator("#pair-reply")).toHaveCount(0);
+    await expect(page.locator("#pair-app-installs")).toHaveCount(0);
+  });
+
+  test("an invite naming no namespace is not one", async ({ page }) => {
+    const empty =
+      "mero-pair:" +
+      btoa(JSON.stringify({ rootKey: MOCK_NODE_IDENTITY.accountRootPublicKey, namespaces: [] }));
+    await page.fill("#pair-invite-input", empty);
+
+    await expect(page.locator("#pair-invite-invalid")).toBeVisible();
+    await expect(page.locator("#pair-init")).toBeDisabled();
+  });
+
+  test("a node that already has an identity is warned before it pairs", async ({
+    page,
+  }) => {
+    await expect(page.locator("#pair-already-enrolled")).toBeVisible();
+  });
+});
+
+describeAfter35("Settings toasts render", () => {
+  test.beforeEach(async ({ page }) => {
+    await setupAuthenticatedPage(page);
+    await page.click('button[title="Settings"]');
+  });
+
+  // Settings short-circuits the page shells that mount every other
+  // ToastContainer, so without its own mount these fire into a void.
+  test("a toast fired from Settings is visible", async ({ page }) => {
+    await scrollSettingsControlIntoView(page, "#developer-mode");
+    await page.locator("#developer-mode").check();
+
+    await expect(page.locator(".toast-container .toast")).toBeVisible();
+    await expect(page.locator(".toast-message")).toHaveText(
+      "Developer mode enabled",
+    );
   });
 });

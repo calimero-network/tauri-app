@@ -275,6 +275,116 @@ export const DISCONNECTED_SETTINGS: AppSettings = {
   ...AUTHENTICATED_SETTINGS,
 };
 
+// ─── Node identity (GET /admin-api/identity) ────────────────────────────────
+
+export const MOCK_NODE_IDENTITY = {
+  accountId: "a".repeat(64),
+  deviceId: "d".repeat(32),
+  publicKey: "EdMockDevicePublicKey11111111111111111111111",
+  accountRootPublicKey: "c".repeat(64),
+};
+
+// ─── Device pairing ─────────────────────────────────────────────────────────
+
+export const MOCK_NAMESPACE_ID = "ns-1";
+export const MOCK_OTHER_NAMESPACE_ID = "ns-2";
+export const MOCK_APPLICATION_ID = "cafe111111111111111111111111111111111111111111111111111111111111";
+export const MOCK_OTHER_APPLICATION_ID = "face222222222222222222222222222222222222222222222222222222222222";
+
+/** Two namespaces targeting two different apps, so scoping can narrow an invite. */
+export const MOCK_NAMESPACES = [
+  {
+    namespaceId: MOCK_NAMESPACE_ID,
+    name: "Personal",
+    targetApplicationId: MOCK_APPLICATION_ID,
+  },
+  {
+    namespaceId: MOCK_OTHER_NAMESPACE_ID,
+    name: "Files",
+    targetApplicationId: MOCK_OTHER_APPLICATION_ID,
+  },
+];
+
+export const MOCK_ACCOUNT_APPLICATIONS = [
+  { applicationId: MOCK_APPLICATION_ID, namespaces: [MOCK_NAMESPACE_ID] },
+  { applicationId: MOCK_OTHER_APPLICATION_ID, namespaces: [MOCK_OTHER_NAMESPACE_ID] },
+];
+
+export const MOCK_PAIR_INIT = {
+  accountId: MOCK_NODE_IDENTITY.accountId,
+  deviceId: "b".repeat(64),
+  kemPublicKey: "c".repeat(64),
+  signPublicKey: "d".repeat(64),
+  statement: "e".repeat(128),
+  confirmationCode: "7BC0-DAAC",
+};
+
+export const MOCK_PAIR_COMPLETE = {
+  accountId: MOCK_PAIR_INIT.accountId,
+  deviceId: MOCK_PAIR_INIT.deviceId,
+  keyDelivered: true,
+  confirmationCode: MOCK_PAIR_INIT.confirmationCode,
+};
+
+/** An empty `applications` is core's "every application", which is what this
+ *  node's own device always has. */
+export const MOCK_ACCOUNT_DEVICES = [
+  {
+    deviceId: MOCK_NODE_IDENTITY.deviceId,
+    signingKey: "ed01333333333333333333333333333333333333333333333333333333333333",
+    isSelf: true,
+    revoked: false,
+    applications: [],
+    namespaces: [MOCK_NAMESPACE_ID, MOCK_OTHER_NAMESPACE_ID],
+  },
+  {
+    deviceId: MOCK_PAIR_INIT.deviceId,
+    signingKey: "ed02444444444444444444444444444444444444444444444444444444444444",
+    isSelf: false,
+    revoked: false,
+    applications: [MOCK_APPLICATION_ID],
+    namespaces: [MOCK_NAMESPACE_ID],
+  },
+];
+
+export const MOCK_RELINK = {
+  accountId: MOCK_NODE_IDENTITY.accountId,
+  deviceId: MOCK_PAIR_INIT.deviceId,
+  applications: [MOCK_APPLICATION_ID],
+  linkedIn: [{ namespaceId: MOCK_NAMESPACE_ID, keyDelivered: true }],
+  skipped: [{ namespaceId: MOCK_OTHER_NAMESPACE_ID, reason: "outOfScope" }],
+};
+
+export const MOCK_REVOKE = {
+  accountId: MOCK_NODE_IDENTITY.accountId,
+  deviceId: MOCK_PAIR_INIT.deviceId,
+  keyRotated: true,
+  revokedIn: [{ namespaceId: MOCK_NAMESPACE_ID, keyRotated: true }],
+};
+
+export const MOCK_PAIR_INVITE_BLOB =
+  "mero-pair:" +
+  btoa(
+    JSON.stringify({
+      rootKey: MOCK_NODE_IDENTITY.accountRootPublicKey,
+      namespaces: [MOCK_NAMESPACE_ID, MOCK_OTHER_NAMESPACE_ID],
+      // Registry coordinates, as a holder's invite carries them.
+      apps: [{ package: "com.calimero.chat", version: "3.1.1" }],
+    }),
+  );
+
+/** The new device's answer. The confirmation code is deliberately not in it. */
+export const MOCK_PAIR_REPLY_BLOB =
+  "mero-pair-reply:" +
+  btoa(
+    JSON.stringify({
+      deviceId: MOCK_PAIR_INIT.deviceId,
+      kemPublicKey: MOCK_PAIR_INIT.kemPublicKey,
+      signPublicKey: MOCK_PAIR_INIT.signPublicKey,
+      statement: MOCK_PAIR_INIT.statement,
+    }),
+  );
+
 // ─── API route patterns (for page.route()) ───────────────────────────────────
 
 export const API_ROUTES = {
@@ -289,6 +399,16 @@ export const API_ROUTES = {
   listApplications: "**/admin-api/applications",
   installApplication: "**/admin-api/install-application",
   uninstallApplication: "**/admin-api/applications/*",
+  identity: "**/admin-api/identity",
+  // Trailing `*` for the explicit `?limit=`; `*` stops at `/`, so this still
+  // does not swallow the namespace-scoped routes below it.
+  namespaces: "**/admin-api/namespaces*",
+  accountDevices: "**/admin-api/account/devices",
+  accountApplications: "**/admin-api/account/applications",
+  relinkDevice: "**/admin-api/account/devices/*/relink",
+  revokeDevice: "**/admin-api/namespaces/*/account/revoke",
+  pairInit: "**/admin-api/account/pair-init",
+  pairComplete: "**/admin-api/account/pair-complete",
   listContexts: "**/admin-api/contexts",
   createContext: "**/admin-api/contexts",
   deleteContext: "**/admin-api/contexts/*",

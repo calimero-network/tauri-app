@@ -1,9 +1,6 @@
-/**
- * Route-mocked e2e can't catch envelope/encoding drift - this hits a real node
- * when told to, and skips cleanly otherwise.
- *
- * Run once a merod built from core's feat/account-level-pairing branch is up:
- *   REAL_NODE_URL=http://localhost:<port> REAL_NODE_TOKEN=<jwt> pnpm --filter desktop test:unit -- device-link.real
+/** Route-mocked tests cannot catch envelope or encoding drift, so this hits a
+ *  real node when given one and skips cleanly otherwise:
+ *  `REAL_NODE_URL=http://localhost:<port> REAL_NODE_TOKEN=<jwt> pnpm --filter desktop test:unit -- device-link.real`
  */
 import { describe, it, expect, vi } from 'vitest';
 

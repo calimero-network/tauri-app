@@ -4,6 +4,7 @@ import {
   applicationLabel,
   applicationNamespaces,
   scopeRow,
+  certifiedIntoAccount,
   installableApps,
   inviteApps,
   decodeInvite,
@@ -260,5 +261,36 @@ describe("inviteApps", () => {
 
   it("is empty when nothing is installed", () => {
     expect(inviteApps(["app-1"], [])).toEqual([]);
+  });
+});
+
+describe("certifiedIntoAccount", () => {
+  const device = (extra: Record<string, unknown> = {}) =>
+    ({
+      deviceId: "d".repeat(64),
+      signingKey: "s".repeat(64),
+      isSelf: true,
+      revoked: false,
+      applications: [],
+      namespaces: [],
+      ...extra,
+    }) as never;
+
+  it("is certified once the account's roster names this device", () => {
+    expect(certifiedIntoAccount([device()])).toBe(true);
+  });
+
+  it("is not certified while the roster has not arrived", () => {
+    // The listing is empty until `pair-complete` publishes, which is the whole
+    // reason it can serve as the signal that identity cannot.
+    expect(certifiedIntoAccount([])).toBe(false);
+  });
+
+  it("is not certified by another device's row alone", () => {
+    expect(certifiedIntoAccount([device({ isSelf: false })])).toBe(false);
+  });
+
+  it("does not count a revoked row as a live link", () => {
+    expect(certifiedIntoAccount([device({ revoked: true })])).toBe(false);
   });
 });

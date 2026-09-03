@@ -701,18 +701,20 @@ describeAfter35("Account tab - pairing responder", () => {
     );
   });
 
-  test("the responder claims no link it cannot observe", async ({ page }) => {
+  test("it waits while the account roster has not reached this device", async ({ page }) => {
+    // Empty is what a real node returns between `pair-init` and `pair-complete`.
+    await page.route(API_ROUTES.accountDevices, (route) => route.fulfill(json({ devices: [] })));
+
     await page.fill("#pair-invite-input", MOCK_PAIR_INVITE_BLOB);
     await page.locator("#pair-init").click();
     await page.locator("#pair-answer-next").click();
 
-    // This node reports the adopted account from `pair-init` onwards, so nothing
-    // it can read distinguishes an accepted pairing from a pasted invite.
-    await expect(page.locator("#pair-link-state")).toContainText("cannot tell when that happened");
-    await expect(page.locator("#pair-link-state")).not.toContainText("Linked.");
+    await expect(page.locator("#pair-link-state")).toContainText("Waiting for the other computer");
+    await expect(page.locator("#pair-link-state")).toHaveClass(/is-waiting/);
   });
 
-  test("nothing installs until a person says the pairing was accepted", async ({ page }) => {
+  test("nothing installs while it is still waiting", async ({ page }) => {
+    await page.route(API_ROUTES.accountDevices, (route) => route.fulfill(json({ devices: [] })));
     let installs = 0;
     await page.route(API_ROUTES.installApplication, (route) => {
       installs += 1;
@@ -726,10 +728,21 @@ describeAfter35("Account tab - pairing responder", () => {
 
     await page.waitForTimeout(4000);
     expect(installs).toBe(0);
+  });
 
-    await page.locator("#pair-install-apps").click();
+  test("it links and installs once the roster names this device", async ({ page }) => {
+    await page.route(API_ROUTES.installApplication, (route) =>
+      route.fulfill(json({ data: { applicationId: "a".repeat(64) } })),
+    );
+
+    // The mocked listing already carries an `isSelf` row, which is the state a
+    // node reaches only after `pair-complete` publishes the certificate.
+    await page.fill("#pair-invite-input", MOCK_PAIR_INVITE_BLOB);
+    await page.locator("#pair-init").click();
+    await page.locator("#pair-answer-next").click();
+
+    await expect(page.locator("#pair-link-state")).toContainText("Linked");
     await expect(page.locator("#pair-app-installs")).toContainText("installed");
-    expect(installs).toBeGreaterThan(0);
   });
 
   test("closing the answer discards it rather than hiding it", async ({ page }) => {

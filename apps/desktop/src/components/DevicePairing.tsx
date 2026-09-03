@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { createPortal } from "react-dom";
-import { Download, KeyRound, X } from "lucide-react";
+import { Check, KeyRound, Loader2, X } from "lucide-react";
 import CopyButton from "./CopyButton";
 import { SkeletonText } from "./Skeleton";
 import {
@@ -16,6 +16,7 @@ import {
   type NamespaceSummary,
   type PairInitResult,
   type PairCompleteResult,
+  type AccountDevice,
 } from "../lib/device-link";
 import { decodeMetadata, parseTauriError } from "../utils/appUtils";
 import { listInstalledApps, invalidateInstalledApps } from "../utils/installedAppsCache";
@@ -569,6 +570,15 @@ export function DevicePairWizard({ rootKey, onLinked, onClose }: WizardProps) {
   );
 }
 
+/** The account's roster reaching this device is what certification produces, and
+ *  nothing before it: the listing is empty until `pair-complete` publishes.
+ *  Identity cannot serve here - it names the adopted account from `pair-init`. */
+export function certifiedIntoAccount(devices: AccountDevice[]): boolean {
+  return devices.some((device) => device.isSelf && !device.revoked);
+}
+
+const POLL_MS = 3000;
+
 interface InstallState {
   key: string;
   name: string;
@@ -587,6 +597,7 @@ export function DevicePairResponder({ enrolledDeviceId }: { enrolledDeviceId?: s
   const [answered, setAnswered] = useState<PairInvite | null>(null);
   const [installs, setInstalls] = useState<InstallState[]>([]);
   const [installing, setInstalling] = useState(false);
+  const [linked, setLinked] = useState(false);
   const [open, setOpen] = useState(false);
   const [step, setStep] = useState<0 | 1>(0);
 
@@ -609,6 +620,7 @@ export function DevicePairResponder({ enrolledDeviceId }: { enrolledDeviceId?: s
       setResult(await pairInit(invite.rootKey, invite.namespaces));
       setInstalls([]);
       setInstalling(false);
+      setLinked(false);
       setStep(0);
       setOpen(true);
       setAnswered(invite);
@@ -621,11 +633,10 @@ export function DevicePairResponder({ enrolledDeviceId }: { enrolledDeviceId?: s
 
   // Nothing has vouched for the invite until the holder accepts the code, and its
   // sources are only pasted URLs until then, so the install waits for the link.
-  // Seeded only. Nothing installs until the person says the other computer
-  // accepted the code: this node reports the adopted account from `pair-init`
-  // onwards, so it cannot tell an accepted pairing from a pasted invite.
   useEffect(() => {
     if (!answered || !open || step !== 1) return;
+    let cancelled = false;
+
     setInstalls(
       (answered.apps ?? []).map((app) => ({
         key: `${app.package}@${app.version}`,
@@ -633,6 +644,20 @@ export function DevicePairResponder({ enrolledDeviceId }: { enrolledDeviceId?: s
         status: "waiting" as const,
       })),
     );
+
+    void (async () => {
+      while (!cancelled) {
+        if (certifiedIntoAccount(await listAccountDevices().catch(() => []))) break;
+        await new Promise((resolve) => setTimeout(resolve, POLL_MS));
+      }
+      if (cancelled) return;
+      setLinked(true);
+      await installArrivingApps();
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, [answered, open, step]);
 
   const installArrivingApps = async () => {
@@ -758,11 +783,21 @@ export function DevicePairResponder({ enrolledDeviceId }: { enrolledDeviceId?: s
                     Say it out loud or over the phone. Do not send it with the response.
                   </p>
                 </div>
-                <div className="account-pair-link-state is-waiting" id="pair-link-state">
-                  <span>
-                    The other computer links this one when you give it the code. This screen
-                    cannot tell when that happened, so it does not claim to.
-                  </span>
+                <div
+                  className={`account-pair-link-state is-${linked ? "linked" : "waiting"}`}
+                  id="pair-link-state"
+                >
+                  {linked ? (
+                    <>
+                      <Check size={14} />
+                      <span>Linked. This computer is on that account now.</span>
+                    </>
+                  ) : (
+                    <>
+                      <Loader2 size={14} className="account-spin" />
+                      <span>Waiting for the other computer to accept the code…</span>
+                    </>
+                  )}
                 </div>
                 {installs.length > 0 && (
                   <div className="settings-field">
@@ -783,16 +818,17 @@ export function DevicePairResponder({ enrolledDeviceId }: { enrolledDeviceId?: s
                         </li>
                       ))}
                     </ul>
-                    <button
-                      type="button"
-                      id="pair-install-apps"
-                      className="button button-secondary"
-                      disabled={installing}
-                      onClick={installArrivingApps}
-                    >
-                      <Download size={13} />
-                      {installing ? "Installing…" : "Install once it is linked"}
-                    </button>
+                    {linked && installs.some((entry) => entry.status === "failed") && (
+                      <button
+                        type="button"
+                        id="pair-install-apps"
+                        className="button button-secondary"
+                        disabled={installing}
+                        onClick={installArrivingApps}
+                      >
+                        {installing ? "Installing…" : "Try again"}
+                      </button>
+                    )}
                   </div>
                 )}
               </div>

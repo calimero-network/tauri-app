@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef, useCallback, memo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getSettings } from "../utils/settings";
-import { fetchAppsFromAllRegistries, fetchAppVersions, fetchAppManifest, recordDownload, type AppSummary, type VersionInfo } from "../utils/registry";
+import { fetchAppsFromAllRegistries, fetchAppVersions, recordDownload, type AppSummary, type VersionInfo } from "../utils/registry";
 import { apiClient } from "../lib/mero-client";
 import { decodeMetadata } from "../utils/appUtils";
 import {
@@ -15,7 +15,6 @@ import { truncateText } from "../utils/string";
 import { useToast } from "../contexts/ToastContext";
 import Skeleton from "../components/Skeleton";
 import { Search, RefreshCw, Package, Download, CheckCircle2, X, ExternalLink } from "lucide-react";
-import bs58 from "bs58";
 import "./Marketplace.css";
 
 interface MarketplaceApp extends AppSummary {
@@ -324,101 +323,13 @@ function Marketplace({ clientReady = true }: MarketplaceProps) {
     }
     setInstallingAppId(app.id);
     try {
-      const manifest = await fetchAppManifest(app.registry, app.id, version);
-
-      // Handle both v1 format (artifact) and v2 format (artifacts array)
-      let wasmUrl: string;
-      let wasmHashHex: string | null = null;
-      
-      if (manifest.artifact) {
-        // V1 format: single artifact object
-        if (!manifest.artifact.uri) {
-          toast.error("Invalid manifest: artifact URI is missing");
-          return;
-        }
-        wasmUrl = manifest.artifact.uri;
-        // Extract hash from digest (format: "sha256:...")
-        wasmHashHex = manifest.artifact.digest?.replace('sha256:', '') || null;
-      } else if (manifest.artifacts && manifest.artifacts.length > 0) {
-        // V2 format: artifacts array
-        // V2 bundles use MPK files, but also check for WASM for backward compatibility
-        const mpkArtifact = manifest.artifacts.find(a => a.type === 'mpk');
-        const wasmArtifact = manifest.artifacts.find(a => a.type === 'wasm');
-        
-        if (mpkArtifact) {
-          // V2 bundle: MPK file
-          wasmUrl = mpkArtifact.mirrors?.[0] || `https://ipfs.io/ipfs/${mpkArtifact.cid}`;
-          wasmHashHex = mpkArtifact.sha256?.replace('sha256:', '') || null;
-          // If no sha256, try using cid if it looks like a hex hash (64 chars)
-          if (!wasmHashHex && mpkArtifact.cid && /^[0-9a-f]{64}$/i.test(mpkArtifact.cid)) {
-            wasmHashHex = mpkArtifact.cid;
-          }
-        } else if (wasmArtifact) {
-          // Fallback: WASM artifact (v1 or legacy v2)
-          wasmUrl = wasmArtifact.mirrors?.[0] || `https://ipfs.io/ipfs/${wasmArtifact.cid}`;
-          wasmHashHex = wasmArtifact.sha256?.replace('sha256:', '') || null;
-          // If no sha256, try using cid if it looks like a hex hash (64 chars)
-          if (!wasmHashHex && wasmArtifact.cid && /^[0-9a-f]{64}$/i.test(wasmArtifact.cid)) {
-            wasmHashHex = wasmArtifact.cid;
-          }
-        } else {
-          console.error("📦 Marketplace: No MPK or WASM artifact found in:", manifest.artifacts);
-          toast.error("No MPK or WASM artifact found in application manifest");
-          return;
-        }
-      } else {
-        console.error("📦 Marketplace: No artifacts found in manifest:", manifest);
-        toast.error("No WASM artifact found in application manifest");
-        return;
-      }
-      
-      // Convert hex hash to base58 if available
-      let wasmHashBase58: string | undefined = undefined;
-      if (wasmHashHex && wasmHashHex.length === 64) {
-        // Convert hex string to bytes, then to base58
-        try {
-          const hashBytes = Uint8Array.from(
-            wasmHashHex.match(/.{1,2}/g)!.map(byte => parseInt(byte, 16))
-          );
-          wasmHashBase58 = bs58.encode(hashBytes);
-        } catch (error) {
-          console.warn("Failed to convert hash to base58:", error);
-          // Continue without hash - server can compute it
-        }
-      }
-      
-      // Create metadata without alias
-      const metadata = {
-        name: app.name,
-        description: manifest.metadata?.description || "",
+      // The node fetches from its own registry by coordinates; it takes no URL,
+      // so nothing here resolves a manifest, an artifact or a hash any more.
+      const response = await apiClient.node.installApplication({
+        package: app.id,
         version,
-        developer: app.developer_pubkey,
-        minRuntimeVersion: manifest.minRuntimeVersion,
-      };
-      // Convert metadata JSON string to byte array (Vec<u8> in Rust)
-      // serde_json expects Vec<u8> as an array of numbers [1, 2, 3]
-      const metadataJson = JSON.stringify(metadata);
-      const metadataBytes = Array.from(new TextEncoder().encode(metadataJson));
+      });
 
-      // Install the application
-      const request: any = {
-        url: wasmUrl,
-        // For MPK bundles, use empty metadata (backend will use bundle manifest metadata)
-        // For WASM files, include metadata
-        metadata: wasmUrl.endsWith('.mpk') ? [] : metadataBytes,
-      };
-      // Include hash in base58 format if we have it
-      // Note: For MPK files, we should use the MPK file's hash, not the WASM hash
-      // For now, only include hash if we're sure it matches the file being downloaded
-      // (i.e., for WASM files, not MPK files until we have actual MPK hashes)
-      if (wasmHashBase58 && !wasmUrl.endsWith('.mpk')) {
-        request.hash = wasmHashBase58;
-      }
-      // For MPK files, don't provide hash until we have the actual MPK file hash
-      // The node will compute it during download
-      
-      
-      const response = await apiClient.node.installApplication(request);
       
 
       if (response.error) {

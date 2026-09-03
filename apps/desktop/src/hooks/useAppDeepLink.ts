@@ -31,10 +31,8 @@ async function installFromRegistry(pkg: string): Promise<string | null> {
       console.warn(`[deep-link] no published version for package "${pkg}"`);
       return null;
     }
-    // Registry artifact URL: /artifacts/<pkg>/<version>/<pkg>-<version>.mpk
-    const mpkUrl = `${DEEP_LINK_REGISTRY}/artifacts/${pkg}/${version}/${pkg}-${version}.mpk`;
-    console.log(`[deep-link] installing ${pkg}@${version} from ${mpkUrl}`);
-    const res = await apiClient.node.installApplication({ url: mpkUrl, metadata: [] });
+    console.log(`[deep-link] installing ${pkg}@${version}`);
+    const res = await apiClient.node.installApplication({ package: pkg, version });
     if (res.error || !res.data?.applicationId) {
       console.warn(`[deep-link] install failed for ${pkg}:`, res.error?.message ?? 'no applicationId');
       return null;

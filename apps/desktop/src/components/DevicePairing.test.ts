@@ -6,7 +6,6 @@ import {
   scopeRow,
   installableApps,
   inviteApps,
-  linkedToInvite,
   decodeInvite,
   decodeReply,
   encodeInvite,
@@ -261,27 +260,5 @@ describe("inviteApps", () => {
 
   it("is empty when nothing is installed", () => {
     expect(inviteApps(["app-1"], [])).toEqual([]);
-  });
-});
-
-describe("linkedToInvite", () => {
-  const ROOT = "a".repeat(64);
-
-  it("is linked once this node reports the inviting account's root", () => {
-    expect(linkedToInvite({ accountId: "x", accountRootPublicKey: ROOT }, ROOT)).toBe(true);
-  });
-
-  it("is not linked while it still reports a root it minted itself", () => {
-    expect(linkedToInvite({ accountId: "x", accountRootPublicKey: "b".repeat(64) }, ROOT)).toBe(
-      false,
-    );
-  });
-
-  it("is not linked when there is no identity to read yet", () => {
-    expect(linkedToInvite(null, ROOT)).toBe(false);
-  });
-
-  it("does not call a node with no root linked to an invite carrying none", () => {
-    expect(linkedToInvite({ accountId: "x" }, "")).toBe(false);
   });
 });

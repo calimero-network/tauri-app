@@ -368,6 +368,8 @@ export const MOCK_PAIR_INVITE_BLOB =
     JSON.stringify({
       rootKey: MOCK_NODE_IDENTITY.accountRootPublicKey,
       namespaces: [MOCK_NAMESPACE_ID, MOCK_OTHER_NAMESPACE_ID],
+      // Registry coordinates, as a holder's invite carries them.
+      apps: [{ package: "com.calimero.chat", version: "3.1.1" }],
     }),
   );
 

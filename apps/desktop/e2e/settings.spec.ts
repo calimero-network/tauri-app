@@ -701,64 +701,50 @@ describeAfter35("Account tab - pairing responder", () => {
     );
   });
 
-  test("the responder reports the link once this node speaks for that account", async ({
-    page,
-  }) => {
+  test("the responder claims no link it cannot observe", async ({ page }) => {
     await page.fill("#pair-invite-input", MOCK_PAIR_INVITE_BLOB);
     await page.locator("#pair-init").click();
     await page.locator("#pair-answer-next").click();
 
-    await expect(page.locator("#pair-link-state")).toContainText("Linked");
-    await expect(page.locator("#pair-link-state")).toHaveClass(/is-linked/);
+    // This node reports the adopted account from `pair-init` onwards, so nothing
+    // it can read distinguishes an accepted pairing from a pasted invite.
+    await expect(page.locator("#pair-link-state")).toContainText("cannot tell when that happened");
+    await expect(page.locator("#pair-link-state")).not.toContainText("Linked.");
   });
 
-  test("it waits, rather than claiming a link, while this node still speaks for itself", async ({
-    page,
-  }) => {
-    // The account root is the whole signal: until it is the inviting account's,
-    // the holder has not accepted the code.
-    await page.route(API_ROUTES.identity, (route) =>
-      route.fulfill(
-        json({
-          data: { ...MOCK_NODE_IDENTITY, accountRootPublicKey: "f".repeat(64) },
-        }),
-      ),
-    );
-    await page.fill("#pair-invite-input", MOCK_PAIR_INVITE_BLOB);
-    await page.locator("#pair-init").click();
-    await page.locator("#pair-answer-next").click();
-
-    await expect(page.locator("#pair-link-state")).toContainText("Waiting for the other computer");
-    await expect(page.locator("#pair-link-state")).toHaveClass(/is-waiting/);
-  });
-
-  test("closing the answer stops the wait rather than hiding it", async ({ page }) => {
-    // Counted, not inferred: the dialog disappears either way, so only the polling
-    // itself falling silent shows the loop was torn down rather than covered up.
-    let identityHits = 0;
-    await page.route(API_ROUTES.identity, (route) => {
-      identityHits += 1;
-      return route.fulfill(
-        json({
-          data: { ...MOCK_NODE_IDENTITY, accountRootPublicKey: "f".repeat(64) },
-        }),
-      );
+  test("nothing installs until a person says the pairing was accepted", async ({ page }) => {
+    let installs = 0;
+    await page.route(API_ROUTES.installApplication, (route) => {
+      installs += 1;
+      return route.fulfill(json({ data: { applicationId: "a".repeat(64) } }));
     });
+
     await page.fill("#pair-invite-input", MOCK_PAIR_INVITE_BLOB);
     await page.locator("#pair-init").click();
     await page.locator("#pair-answer-next").click();
-    await expect(page.locator("#pair-link-state")).toBeVisible();
+    await expect(page.locator("#pair-app-installs")).toBeVisible();
 
-    await page.waitForTimeout(3500);
-    const whilePolling = identityHits;
-    expect(whilePolling).toBeGreaterThan(1);
+    await page.waitForTimeout(4000);
+    expect(installs).toBe(0);
+
+    await page.locator("#pair-install-apps").click();
+    await expect(page.locator("#pair-app-installs")).toContainText("installed");
+    expect(installs).toBeGreaterThan(0);
+  });
+
+  test("closing the answer discards it rather than hiding it", async ({ page }) => {
+    await page.fill("#pair-invite-input", MOCK_PAIR_INVITE_BLOB);
+    await page.locator("#pair-init").click();
+    await page.locator("#pair-answer-next").click();
+    await expect(page.locator("#pair-confirmation-code")).toBeVisible();
 
     await page.locator("#pair-answer-close").click();
-    await expect(page.locator("#pair-link-state")).toHaveCount(0);
 
-    const atClose = identityHits;
-    await page.waitForTimeout(4000);
-    expect(identityHits).toBe(atClose);
+    // Dropped, not concealed: a stale code left on screen is one somebody reads
+    // out for a pairing that is no longer in flight.
+    await expect(page.locator("#pair-confirmation-code")).toHaveCount(0);
+    await expect(page.locator("#pair-reply")).toHaveCount(0);
+    await expect(page.locator("#pair-app-installs")).toHaveCount(0);
   });
 
   test("an invite naming no namespace is not one", async ({ page }) => {

@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
-import { Check, KeyRound, Loader2, X } from "lucide-react";
+import { createPortal } from "react-dom";
+import { Download, KeyRound, X } from "lucide-react";
 import CopyButton from "./CopyButton";
 import { SkeletonText } from "./Skeleton";
 import {
@@ -18,7 +19,6 @@ import {
 } from "../lib/device-link";
 import { decodeMetadata, parseTauriError } from "../utils/appUtils";
 import { listInstalledApps, invalidateInstalledApps } from "../utils/installedAppsCache";
-import { fetchNodeIdentity, type NodeIdentity } from "../utils/nodeIdentity";
 import { apiClient } from "../lib/mero-client";
 import { truncateText } from "../utils/string";
 
@@ -569,20 +569,12 @@ export function DevicePairWizard({ rootKey, onLinked, onClose }: WizardProps) {
   );
 }
 
-/** The link has landed when this node reports the inviting account's root as its
- *  own. Before pairing it reports the root it minted itself. */
-export function linkedToInvite(identity: NodeIdentity | null, rootKey: string): boolean {
-  return Boolean(rootKey) && identity?.accountRootPublicKey === rootKey;
-}
-
 interface InstallState {
   key: string;
   name: string;
   status: "waiting" | "installing" | "done" | "failed";
   error?: string;
 }
-
-const POLL_MS = 3000;
 
 /** The other end of the wizard: what the computer being added runs. */
 export function DevicePairResponder({ enrolledDeviceId }: { enrolledDeviceId?: string }) {
@@ -594,7 +586,7 @@ export function DevicePairResponder({ enrolledDeviceId }: { enrolledDeviceId?: s
   // install below is not restarted by an edit to it.
   const [answered, setAnswered] = useState<PairInvite | null>(null);
   const [installs, setInstalls] = useState<InstallState[]>([]);
-  const [linked, setLinked] = useState(false);
+  const [installing, setInstalling] = useState(false);
   const [open, setOpen] = useState(false);
   const [step, setStep] = useState<0 | 1>(0);
 
@@ -615,8 +607,8 @@ export function DevicePairResponder({ enrolledDeviceId }: { enrolledDeviceId?: s
       // Kept on failure: pair-init is idempotent, so the holder can just retry
       // against this same response instead of restarting the wizard.
       setResult(await pairInit(invite.rootKey, invite.namespaces));
-      setLinked(false);
       setInstalls([]);
+      setInstalling(false);
       setStep(0);
       setOpen(true);
       setAnswered(invite);
@@ -629,54 +621,44 @@ export function DevicePairResponder({ enrolledDeviceId }: { enrolledDeviceId?: s
 
   // Nothing has vouched for the invite until the holder accepts the code, and its
   // sources are only pasted URLs until then, so the install waits for the link.
+  // Seeded only. Nothing installs until the person says the other computer
+  // accepted the code: this node reports the adopted account from `pair-init`
+  // onwards, so it cannot tell an accepted pairing from a pasted invite.
   useEffect(() => {
-    const apps = answered?.apps ?? [];
-    // Polled whether or not apps are coming: the wait is the same either way, and
-    // a device with none still has to learn it was accepted.
     if (!answered || !open || step !== 1) return;
-    let cancelled = false;
-
     setInstalls(
-      apps.map((app) => ({
+      (answered.apps ?? []).map((app) => ({
         key: `${app.package}@${app.version}`,
         name: `${app.package} ${app.version}`,
         status: "waiting" as const,
       })),
     );
+  }, [answered, open, step]);
+
+  const installArrivingApps = async () => {
+    const apps = answered?.apps ?? [];
+    if (!apps.length || installing) return;
+    setInstalling(true);
 
     const mark = (i: number, patch: Partial<InstallState>) =>
       setInstalls((prev) => prev.map((entry, at) => (at === i ? { ...entry, ...patch } : entry)));
 
-    void (async () => {
-      while (!cancelled) {
-        const identity = await fetchNodeIdentity().catch(() => null);
-        if (linkedToInvite(identity, answered.rootKey)) break;
-        await new Promise((resolve) => setTimeout(resolve, POLL_MS));
+    for (const [i, app] of apps.entries()) {
+      mark(i, { status: "installing" });
+      try {
+        const response = await apiClient.node.installApplication({
+          package: app.package,
+          version: app.version,
+        });
+        const failed = (response as { error?: { message?: string } })?.error;
+        mark(i, failed ? { status: "failed", error: failed.message } : { status: "done" });
+      } catch (err: unknown) {
+        mark(i, { status: "failed", error: parseTauriError(err, "Install failed") });
       }
-      if (cancelled) return;
-      setLinked(true);
-      for (const [i, app] of apps.entries()) {
-        if (cancelled) return;
-        mark(i, { status: "installing" });
-        try {
-          const response = await apiClient.node.installApplication({
-            package: app.package,
-            version: app.version,
-          });
-          if (cancelled) return;
-          const failed = (response as { error?: { message?: string } })?.error;
-          mark(i, failed ? { status: "failed", error: failed.message } : { status: "done" });
-        } catch (err: unknown) {
-          if (!cancelled) mark(i, { status: "failed", error: parseTauriError(err, "Install failed") });
-        }
-      }
-      if (!cancelled) invalidateInstalledApps();
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [answered, open, step]);
+    }
+    invalidateInstalledApps();
+    setInstalling(false);
+  };
 
   return (
     <>
@@ -718,8 +700,10 @@ export function DevicePairResponder({ enrolledDeviceId }: { enrolledDeviceId?: s
         {busy ? "Working…" : result ? "Get a new response" : "Get response"}
       </button>
 
-      {result && open && (
-        <div className="account-modal-backdrop" onClick={closeAnswer}>
+      {result &&
+        open &&
+        createPortal(
+          <div className="account-modal-backdrop" onClick={closeAnswer}>
           <div
             className="account-modal"
             role="dialog"
@@ -774,21 +758,11 @@ export function DevicePairResponder({ enrolledDeviceId }: { enrolledDeviceId?: s
                     Say it out loud or over the phone. Do not send it with the response.
                   </p>
                 </div>
-                <div
-                  className={`account-pair-link-state is-${linked ? "linked" : "waiting"}`}
-                  id="pair-link-state"
-                >
-                  {linked ? (
-                    <>
-                      <Check size={14} />
-                      <span>Linked. This computer is on that account now.</span>
-                    </>
-                  ) : (
-                    <>
-                      <Loader2 size={14} className="account-spin" />
-                      <span>Waiting for the other computer to accept the code…</span>
-                    </>
-                  )}
+                <div className="account-pair-link-state is-waiting" id="pair-link-state">
+                  <span>
+                    The other computer links this one when you give it the code. This screen
+                    cannot tell when that happened, so it does not claim to.
+                  </span>
                 </div>
                 {installs.length > 0 && (
                   <div className="settings-field">
@@ -809,13 +783,24 @@ export function DevicePairResponder({ enrolledDeviceId }: { enrolledDeviceId?: s
                         </li>
                       ))}
                     </ul>
+                    <button
+                      type="button"
+                      id="pair-install-apps"
+                      className="button button-secondary"
+                      disabled={installing}
+                      onClick={installArrivingApps}
+                    >
+                      <Download size={13} />
+                      {installing ? "Installing…" : "Install once it is linked"}
+                    </button>
                   </div>
                 )}
               </div>
             )}
           </div>
-        </div>
-      )}
+          </div>,
+          document.body,
+        )}
     </>
   );
 }

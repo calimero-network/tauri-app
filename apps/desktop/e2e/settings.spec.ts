@@ -698,6 +698,35 @@ describeAfter35("Account tab - pairing responder", () => {
     ]);
   });
 
+  test("the responder reports the link once this node speaks for that account", async ({
+    page,
+  }) => {
+    await page.fill("#pair-invite-input", MOCK_PAIR_INVITE_BLOB);
+    await page.locator("#pair-init").click();
+
+    await expect(page.locator("#pair-link-state")).toContainText("Linked");
+    await expect(page.locator("#pair-link-state")).toHaveClass(/is-linked/);
+  });
+
+  test("it waits, rather than claiming a link, while this node still speaks for itself", async ({
+    page,
+  }) => {
+    // The account root is the whole signal: until it is the inviting account's,
+    // the holder has not accepted the code.
+    await page.route(API_ROUTES.identity, (route) =>
+      route.fulfill(
+        json({
+          data: { ...MOCK_NODE_IDENTITY, accountRootPublicKey: "f".repeat(64) },
+        }),
+      ),
+    );
+    await page.fill("#pair-invite-input", MOCK_PAIR_INVITE_BLOB);
+    await page.locator("#pair-init").click();
+
+    await expect(page.locator("#pair-link-state")).toContainText("Waiting for the other computer");
+    await expect(page.locator("#pair-link-state")).toHaveClass(/is-waiting/);
+  });
+
   test("an invite naming no namespace is not one", async ({ page }) => {
     const empty =
       "mero-pair:" +

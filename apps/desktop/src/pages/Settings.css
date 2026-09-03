@@ -903,3 +903,33 @@
   color: var(--error-color, #f85149);
   white-space: normal;
 }
+
+.account-pair-link-state {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.account-pair-link-state.is-linked {
+  color: var(--success-color, #3fb950);
+}
+
+.account-spin {
+  animation: account-spin 1s linear infinite;
+  flex: none;
+}
+
+@keyframes account-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .account-spin {
+    animation: none;
+  }
+}

@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { KeyRound } from "lucide-react";
+import { Check, KeyRound, Loader2 } from "lucide-react";
 import CopyButton from "./CopyButton";
 import { SkeletonText } from "./Skeleton";
 import {
@@ -594,6 +594,7 @@ export function DevicePairResponder({ enrolledDeviceId }: { enrolledDeviceId?: s
   // install below is not restarted by an edit to it.
   const [answered, setAnswered] = useState<PairInvite | null>(null);
   const [installs, setInstalls] = useState<InstallState[]>([]);
+  const [linked, setLinked] = useState(false);
 
   const invite = decodeInvite(inviteText);
 
@@ -605,6 +606,7 @@ export function DevicePairResponder({ enrolledDeviceId }: { enrolledDeviceId?: s
       // Kept on failure: pair-init is idempotent, so the holder can just retry
       // against this same response instead of restarting the wizard.
       setResult(await pairInit(invite.rootKey, invite.namespaces));
+      setLinked(false);
       setAnswered(invite);
     } catch (err: unknown) {
       setError(parseTauriError(err, "Could not answer that invite"));
@@ -617,7 +619,9 @@ export function DevicePairResponder({ enrolledDeviceId }: { enrolledDeviceId?: s
   // sources are only pasted URLs until then, so the install waits for the link.
   useEffect(() => {
     const apps = answered?.apps ?? [];
-    if (!answered || !apps.length) return;
+    // Polled whether or not apps are coming: the wait is the same either way, and
+    // a device with none still has to learn it was accepted.
+    if (!answered) return;
     let cancelled = false;
 
     setInstalls(
@@ -637,6 +641,8 @@ export function DevicePairResponder({ enrolledDeviceId }: { enrolledDeviceId?: s
         if (linkedToInvite(identity, answered.rootKey)) break;
         await new Promise((resolve) => setTimeout(resolve, POLL_MS));
       }
+      if (cancelled) return;
+      setLinked(true);
       for (const [i, app] of apps.entries()) {
         if (cancelled) return;
         mark(i, { status: "installing" });
@@ -719,6 +725,22 @@ export function DevicePairResponder({ enrolledDeviceId }: { enrolledDeviceId?: s
             <p className="field-hint">
               Say it out loud or over the phone. Do not send it with the block above.
             </p>
+          </div>
+          <div
+            className={`account-pair-link-state is-${linked ? "linked" : "waiting"}`}
+            id="pair-link-state"
+          >
+            {linked ? (
+              <>
+                <Check size={14} />
+                <span>Linked. This computer is on that account now.</span>
+              </>
+            ) : (
+              <>
+                <Loader2 size={14} className="account-spin" />
+                <span>Waiting for the other computer to accept the code…</span>
+              </>
+            )}
           </div>
           {installs.length > 0 && (
             <div className="settings-field">

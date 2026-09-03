@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Check, KeyRound, Loader2 } from "lucide-react";
+import { Check, KeyRound, Loader2, X } from "lucide-react";
 import CopyButton from "./CopyButton";
 import { SkeletonText } from "./Skeleton";
 import {
@@ -595,6 +595,15 @@ export function DevicePairResponder({ enrolledDeviceId }: { enrolledDeviceId?: s
   const [answered, setAnswered] = useState<PairInvite | null>(null);
   const [installs, setInstalls] = useState<InstallState[]>([]);
   const [linked, setLinked] = useState(false);
+  const [open, setOpen] = useState(false);
+  const [step, setStep] = useState<0 | 1>(0);
+
+  // Closing stops the poll: `answered` is what the effect watches, so dropping it
+  // tears the loop down rather than leaving it running behind a shut dialog.
+  const closeAnswer = () => {
+    setOpen(false);
+    setAnswered(null);
+  };
 
   const invite = decodeInvite(inviteText);
 
@@ -607,6 +616,9 @@ export function DevicePairResponder({ enrolledDeviceId }: { enrolledDeviceId?: s
       // against this same response instead of restarting the wizard.
       setResult(await pairInit(invite.rootKey, invite.namespaces));
       setLinked(false);
+      setInstalls([]);
+      setStep(0);
+      setOpen(true);
       setAnswered(invite);
     } catch (err: unknown) {
       setError(parseTauriError(err, "Could not answer that invite"));
@@ -621,7 +633,7 @@ export function DevicePairResponder({ enrolledDeviceId }: { enrolledDeviceId?: s
     const apps = answered?.apps ?? [];
     // Polled whether or not apps are coming: the wait is the same either way, and
     // a device with none still has to learn it was accepted.
-    if (!answered) return;
+    if (!answered || !open || step !== 1) return;
     let cancelled = false;
 
     setInstalls(
@@ -664,7 +676,7 @@ export function DevicePairResponder({ enrolledDeviceId }: { enrolledDeviceId?: s
     return () => {
       cancelled = true;
     };
-  }, [answered]);
+  }, [answered, open, step]);
 
   return (
     <>
@@ -706,66 +718,102 @@ export function DevicePairResponder({ enrolledDeviceId }: { enrolledDeviceId?: s
         {busy ? "Working…" : result ? "Get a new response" : "Get response"}
       </button>
 
-      {result && (
-        <div className="account-pair-answer">
-          <div className="settings-field">
-            <div className="agent-config-header">
-              <span className="settings-field-label">Send this back</span>
-              <CopyButton id="copy-pair-reply" value={encodeReply(result)} />
-            </div>
-            <pre className="agent-config account-blob" tabIndex={0} id="pair-reply">
-              {encodeReply(result)}
-            </pre>
-          </div>
-          <div className="settings-field">
-            <span className="settings-field-label">Read this code aloud to the other computer</span>
-            <code className="account-pair-code" id="pair-confirmation-code">
-              {result.confirmationCode}
-            </code>
-            <p className="field-hint">
-              Say it out loud or over the phone. Do not send it with the block above.
-            </p>
-          </div>
+      {result && open && (
+        <div className="account-modal-backdrop" onClick={closeAnswer}>
           <div
-            className={`account-pair-link-state is-${linked ? "linked" : "waiting"}`}
-            id="pair-link-state"
+            className="account-modal"
+            role="dialog"
+            aria-label="Pair this computer"
+            onClick={(e) => e.stopPropagation()}
           >
-            {linked ? (
-              <>
-                <Check size={14} />
-                <span>Linked. This computer is on that account now.</span>
-              </>
+            <div className="account-modal-header">
+              <h2>{step === 0 ? "Send this back" : "Read this code aloud"}</h2>
+              <button
+                type="button"
+                id="pair-answer-close"
+                className="account-modal-close"
+                aria-label="Close"
+                onClick={closeAnswer}
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            {step === 0 ? (
+              <div className="account-modal-body">
+                <p className="field-hint">
+                  Paste this into the computer that already holds the account.
+                </p>
+                <div className="settings-field">
+                  <div className="agent-config-header">
+                    <span className="settings-field-label">Response</span>
+                    <CopyButton id="copy-pair-reply" value={encodeReply(result)} />
+                  </div>
+                  <pre className="agent-config account-blob" tabIndex={0} id="pair-reply">
+                    {encodeReply(result)}
+                  </pre>
+                </div>
+                <div className="account-wizard-actions">
+                  <button
+                    type="button"
+                    id="pair-answer-next"
+                    className="button button-primary"
+                    onClick={() => setStep(1)}
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
             ) : (
-              <>
-                <Loader2 size={14} className="account-spin" />
-                <span>Waiting for the other computer to accept the code…</span>
-              </>
+              <div className="account-modal-body">
+                <div className="settings-field">
+                  <code className="account-pair-code" id="pair-confirmation-code">
+                    {result.confirmationCode}
+                  </code>
+                  <p className="field-hint">
+                    Say it out loud or over the phone. Do not send it with the response.
+                  </p>
+                </div>
+                <div
+                  className={`account-pair-link-state is-${linked ? "linked" : "waiting"}`}
+                  id="pair-link-state"
+                >
+                  {linked ? (
+                    <>
+                      <Check size={14} />
+                      <span>Linked. This computer is on that account now.</span>
+                    </>
+                  ) : (
+                    <>
+                      <Loader2 size={14} className="account-spin" />
+                      <span>Waiting for the other computer to accept the code…</span>
+                    </>
+                  )}
+                </div>
+                {installs.length > 0 && (
+                  <div className="settings-field">
+                    <span className="settings-field-label">Apps arriving with this account</span>
+                    <ul className="account-install-list" id="pair-app-installs">
+                      {installs.map((entry) => (
+                        <li className="account-install-row" key={entry.key}>
+                          <span className="account-install-name">{entry.name}</span>
+                          <span className={`account-install-status is-${entry.status}`}>
+                            {entry.status === "waiting"
+                              ? "waiting for the code"
+                              : entry.status === "installing"
+                                ? "installing…"
+                                : entry.status === "done"
+                                  ? "installed"
+                                  : (entry.error ?? "failed")}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
             )}
           </div>
-          {installs.length > 0 && (
-            <div className="settings-field">
-              <span className="settings-field-label">Apps arriving with this account</span>
-              <ul className="account-install-list" id="pair-app-installs">
-                {installs.map((entry) => (
-                  <li className="account-install-row" key={entry.key}>
-                    <span className="account-install-name">{entry.name}</span>
-                    <span className={`account-install-status is-${entry.status}`}>
-                      {entry.status === "waiting"
-                        ? "waiting for the code"
-                        : entry.status === "installing"
-                          ? "installing…"
-                          : entry.status === "done"
-                            ? "installed"
-                            : (entry.error ?? "failed")}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-              <p className="field-hint">
-                These install once the other computer accepts the code, not before.
-              </p>
-            </div>
-          )}
         </div>
       )}
     </>

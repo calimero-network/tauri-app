@@ -681,13 +681,11 @@ describeAfter35("Account tab - pairing responder", () => {
     await page.fill("#pair-invite-input", MOCK_PAIR_INVITE_BLOB);
     await page.locator("#pair-init").click();
 
-    await expect(page.locator("#pair-confirmation-code")).toHaveText(
-      MOCK_PAIR_INIT.confirmationCode,
-    );
     await expect(page.locator("#pair-reply")).toContainText("mero-pair-reply:");
 
     // Decoded, not searched: the code would not appear in the base64 text even
-    // if the blob carried it, so a text assertion here would prove nothing.
+    // if the blob carried it, so a text assertion here would prove nothing. Read
+    // on this step, which is the only one that shows the blob.
     const blob = (await page.locator("#pair-reply").innerText()).trim();
     const body = JSON.parse(atob(blob.replace("mero-pair-reply:", "")));
     expect(Object.keys(body).sort()).toEqual([
@@ -696,6 +694,11 @@ describeAfter35("Account tab - pairing responder", () => {
       "signPublicKey",
       "statement",
     ]);
+
+    await page.locator("#pair-answer-next").click();
+    await expect(page.locator("#pair-confirmation-code")).toHaveText(
+      MOCK_PAIR_INIT.confirmationCode,
+    );
   });
 
   test("the responder reports the link once this node speaks for that account", async ({
@@ -703,6 +706,7 @@ describeAfter35("Account tab - pairing responder", () => {
   }) => {
     await page.fill("#pair-invite-input", MOCK_PAIR_INVITE_BLOB);
     await page.locator("#pair-init").click();
+    await page.locator("#pair-answer-next").click();
 
     await expect(page.locator("#pair-link-state")).toContainText("Linked");
     await expect(page.locator("#pair-link-state")).toHaveClass(/is-linked/);
@@ -722,9 +726,39 @@ describeAfter35("Account tab - pairing responder", () => {
     );
     await page.fill("#pair-invite-input", MOCK_PAIR_INVITE_BLOB);
     await page.locator("#pair-init").click();
+    await page.locator("#pair-answer-next").click();
 
     await expect(page.locator("#pair-link-state")).toContainText("Waiting for the other computer");
     await expect(page.locator("#pair-link-state")).toHaveClass(/is-waiting/);
+  });
+
+  test("closing the answer stops the wait rather than hiding it", async ({ page }) => {
+    // Counted, not inferred: the dialog disappears either way, so only the polling
+    // itself falling silent shows the loop was torn down rather than covered up.
+    let identityHits = 0;
+    await page.route(API_ROUTES.identity, (route) => {
+      identityHits += 1;
+      return route.fulfill(
+        json({
+          data: { ...MOCK_NODE_IDENTITY, accountRootPublicKey: "f".repeat(64) },
+        }),
+      );
+    });
+    await page.fill("#pair-invite-input", MOCK_PAIR_INVITE_BLOB);
+    await page.locator("#pair-init").click();
+    await page.locator("#pair-answer-next").click();
+    await expect(page.locator("#pair-link-state")).toBeVisible();
+
+    await page.waitForTimeout(3500);
+    const whilePolling = identityHits;
+    expect(whilePolling).toBeGreaterThan(1);
+
+    await page.locator("#pair-answer-close").click();
+    await expect(page.locator("#pair-link-state")).toHaveCount(0);
+
+    const atClose = identityHits;
+    await page.waitForTimeout(4000);
+    expect(identityHits).toBe(atClose);
   });
 
   test("an invite naming no namespace is not one", async ({ page }) => {

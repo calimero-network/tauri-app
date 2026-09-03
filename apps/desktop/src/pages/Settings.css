@@ -904,6 +904,60 @@
   white-space: normal;
 }
 
+.account-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.6);
+}
+
+.account-modal {
+  width: min(560px, 100%);
+  max-height: 80vh;
+  overflow-y: auto;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--bg-secondary, #161b22);
+}
+
+.account-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.account-modal-header h2 {
+  margin: 0;
+  font-size: 15px;
+  color: var(--text-primary);
+}
+
+.account-modal-close {
+  display: flex;
+  padding: 4px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.account-modal-close:hover {
+  background: var(--bg-tertiary, #21262d);
+  color: var(--text-primary);
+}
+
+.account-modal-body {
+  padding: 16px;
+}
+
 .account-pair-link-state {
   display: flex;
   align-items: center;

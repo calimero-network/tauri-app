@@ -279,13 +279,16 @@ class NodeApi {
     }
   }
 
+  /** By coordinates: the node resolves them against its own registry and takes
+   *  no URL, so a body carrying one is refused outright. */
   async installApplication(request: {
-    url: string;
-    hash?: string;
-    metadata: number[];
+    package: string;
+    version: string;
   }): Promise<ApiResponse<{ applicationId: string }>> {
     try {
-      const r = await this.meroJs.admin.installApplication(request);
+      // mero-js 13 still types this as a URL body. It forwards verbatim, so the
+      // coordinates reach the node; the cast goes when the SDK bump lands.
+      const r = await this.meroJs.admin.installApplication(request as any);
       return { data: { applicationId: (r as any).applicationId } };
     } catch (e: any) {
       if (e?.status === 401) return { error: { message: 'Unauthorized', code: '401' } };

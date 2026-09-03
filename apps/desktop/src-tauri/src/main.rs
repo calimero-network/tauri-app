@@ -2186,11 +2186,89 @@ async fn stop_pids(pids: &[u32]) -> Result<(), TauriError> {
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
+/// Write ends of the stdin pipes held open for nodes started with
+/// `--exit-on-stdin-close`. Closing one asks that node to shut down.
+///
+/// Keyed by pid because that is what the stop path carries, and kept beside
+/// `MerodState` rather than inside it: `MerodProcess` is `Clone` and a pipe
+/// handle is not.
+static STDIN_STOPPERS: std::sync::LazyLock<
+    Mutex<std::collections::HashMap<u32, tokio::process::ChildStdin>>,
+> = std::sync::LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
+
+/// Whether this merod understands `run --exit-on-stdin-close`.
+///
+/// Probed rather than derived from a version. The app runs whatever merod the
+/// user has pinned through `VersionId`, so a version comparison would have to
+/// know which release added the flag AND be right about every older build a
+/// user might still be on — and being wrong means passing an argument an older
+/// merod rejects, so the node fails to start at all. Asking the binary cannot
+/// be wrong about the binary.
+///
+/// Cached per path: `--help` is cheap but not free, and a node start should not
+/// pay for it every time.
+async fn merod_supports_stdin_stop(binary: &std::path::Path) -> bool {
+    static CACHE: std::sync::LazyLock<Mutex<std::collections::HashMap<std::path::PathBuf, bool>>> =
+        std::sync::LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
+
+    if let Some(known) = CACHE.lock_unpoisoned().get(binary) {
+        return *known;
+    }
+
+    let mut cmd = Command::new(binary);
+    let _ = cmd.args(["run", "--help"]);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt as _;
+        let _ = cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    // Absent on a failed probe, not present: the fallback is the old stop path,
+    // which works everywhere. Guessing "supported" would break node startup.
+    let supported = match cmd.output().await {
+        Ok(out) => String::from_utf8_lossy(&out.stdout).contains("--exit-on-stdin-close"),
+        Err(e) => {
+            warn!("[Merod] could not probe for --exit-on-stdin-close: {e}");
+            false
+        }
+    };
+
+    let _ = CACHE
+        .lock_unpoisoned()
+        .insert(binary.to_path_buf(), supported);
+    supported
+}
+
+/// Ask the nodes we started to stop, by closing the stdin they are watching.
+///
+/// Returns the pids that were asked. On Windows this is the only graceful stop
+/// there is: `taskkill` without `/F` posts `WM_CLOSE` to windows a console
+/// process does not have, so the alternative is `TerminateProcess`, which runs
+/// no code — the node never drains or flushes its store.
+fn request_stdin_stop(pids: &[u32]) -> Vec<u32> {
+    let mut stoppers = STDIN_STOPPERS.lock_unpoisoned();
+    pids.iter()
+        .filter(|pid| stoppers.remove(pid).is_some())
+        .copied()
+        .collect()
+}
+
 async fn kill_pids(pids: &[u32], patience: TermPatience) {
     if pids.is_empty() {
         return;
     }
-    let pids_owned = pids.to_vec();
+    // Closing the pipe first, and only signalling what it did not cover. A node
+    // started with `--exit-on-stdin-close` treats EOF as the request to stop and
+    // drains before exiting; on Windows that is the ONLY graceful stop, since
+    // `taskkill` without `/F` cannot reach a console process with no window and
+    // `/F` runs no code at all.
+    //
+    // The signal below is still sent to nodes with no pipe — one adopted from an
+    // earlier session, or started by a merod too old for the flag.
+    let asked = request_stdin_stop(pids);
+    let pids_owned: Vec<u32> = pids.iter().copied().filter(|p| !asked.contains(p)).collect();
+    // Every node was asked politely; nothing left to signal, but still wait for
+    // them to go below.
+    let poll_only = pids.to_vec();
     tokio::task::spawn_blocking(move || {
         for pid in &pids_owned {
             #[cfg(unix)]
@@ -2213,13 +2291,16 @@ async fn kill_pids(pids: &[u32], patience: TermPatience) {
         // three-second sleep hard-killed it on every shutdown.
         let deadline =
             std::time::Instant::now() + std::time::Duration::from_secs(PROCESS_TERM_MAX_WAIT_SECS);
+        // Every pid, not just the signalled ones: a node asked through its
+        // stdin still has to be waited for, and still has to be force-killed if
+        // it does not go.
         while std::time::Instant::now() < deadline {
-            if !pids_owned.iter().any(|pid| is_process_running(*pid)) {
+            if !poll_only.iter().any(|pid| is_process_running(*pid)) {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
-        for pid in &pids_owned {
+        for pid in &poll_only {
             #[cfg(unix)]
             {
                 let still_alive = std::process::Command::new("ps")
@@ -2987,10 +3068,29 @@ async fn start_node(
     // Add 'run' subcommand last
     cmd.arg("run");
 
+    // Ask this merod to stop when its stdin closes, if it knows how. Probed
+    // rather than assumed from a version: the user can pin any merod through
+    // `VersionId`, and passing an argument an older one rejects means the node
+    // does not start at all.
+    //
+    // Worth the pipe on every platform — a node that drains and flushes beats
+    // one that is signalled — but on Windows it is the difference between a
+    // clean stop and `TerminateProcess`, which runs no code.
+    let stdin_stop = merod_supports_stdin_stop(&merod_binary).await;
+    if stdin_stop {
+        cmd.arg("--exit-on-stdin-close");
+    }
+
     // Pipe stdout/stderr so the app can drain them into the rotating writer.
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
-    cmd.stdin(Stdio::null());
+    // Held open only when the flag went with it. A pipe nobody closes is a node
+    // nobody can stop this way, and `null` is what merod expects otherwise.
+    cmd.stdin(if stdin_stop {
+        Stdio::piped()
+    } else {
+        Stdio::null()
+    });
 
     // Log the command being run
     let cmd_str = format!("{:?}", cmd);
@@ -3010,6 +3110,14 @@ async fn start_node(
 
     let pid = child.id().unwrap();
     info!("[Merod] Started with PID: {}", pid);
+
+    // Registered before anything can fail below: a start that dies after the
+    // spawn would otherwise leave a node running that nothing can ask to stop.
+    if stdin_stop {
+        if let Some(pipe) = child.stdin.take() {
+            let _ = STDIN_STOPPERS.lock_unpoisoned().insert(pid, pipe);
+        }
+    }
 
     // Claimed before the liveness check below, not after: dying in that window
     // leaves a running node this app can never recognise as its own again.
@@ -5649,6 +5757,53 @@ listen = ["/ip4/0.0.0.0/udp/4001/quic-v1", "/ip4/0.0.0.0/tcp/4002"]
         );
         // Must contain OS and arch info
         assert!(triple.contains('-'), "triple should be dash-separated");
+    }
+
+    /// The probe decides from the binary's own `--help`, so a merod that does
+    /// not know the flag never has it passed — an unknown argument makes merod
+    /// refuse to start, which would turn a stop improvement into a node that
+    /// will not run.
+    #[tokio::test]
+    async fn a_merod_without_the_flag_is_not_given_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = fake_merod(dir.path(), "old", "Usage: merod run\n  --exit-on-eof <FD>\n");
+
+        assert!(
+            !super::merod_supports_stdin_stop(&old).await,
+            "a merod whose help lacks the flag must not be given it"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_merod_with_the_flag_is_given_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let new = fake_merod(
+            dir.path(),
+            "new",
+            "Usage: merod run\n  --exit-on-stdin-close  Stop when stdin reaches EOF\n",
+        );
+
+        assert!(super::merod_supports_stdin_stop(&new).await);
+    }
+
+    /// A probe that cannot run answers "no". Guessing "yes" would pass an
+    /// argument to a binary nothing has vouched for; the fallback stop path
+    /// works everywhere.
+    #[tokio::test]
+    async fn an_unprobeable_binary_is_treated_as_not_supporting_it() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!super::merod_supports_stdin_stop(&dir.path().join("does-not-exist")).await);
+    }
+
+    /// A shell stand-in for merod that prints the given `run --help` text.
+    #[cfg(unix)]
+    fn fake_merod(dir: &std::path::Path, name: &str, help: &str) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let path = dir.join(name);
+        std::fs::write(&path, format!("#!/bin/sh\nprintf '%s' '{help}'\n")).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path
     }
 
     fn tracked(pid: u32, home: &str, node: &str) -> super::MerodProcess {

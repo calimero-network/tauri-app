@@ -203,27 +203,30 @@ describe("scopeRow", () => {
 });
 
 describe("installableApps", () => {
-  it("keeps a web source, which is the only kind a node can fetch", () => {
-    expect(installableApps([{ source: "https://registry.example/app.wasm" }])).toEqual([
-      { source: "https://registry.example/app.wasm" },
+  it("keeps coordinates the registry would resolve", () => {
+    expect(installableApps([{ package: "com.calimero.chat", version: "3.1.1" }])).toEqual([
+      { package: "com.calimero.chat", version: "3.1.1" },
     ]);
   });
 
-  it("drops a local path, which names nothing on the machine being added", () => {
-    expect(installableApps([{ source: "file:///Users/someone/app.wasm" }])).toEqual([]);
+  it("keeps a scoped package name", () => {
+    expect(installableApps([{ package: "@calimero/chat", version: "1.0.0" }])).toEqual([
+      { package: "@calimero/chat", version: "1.0.0" },
+    ]);
   });
 
-  it("drops a source that is not a URL at all", () => {
+  it("drops an app with no coordinates, which no registry could resolve", () => {
+    expect(installableApps([{ package: "", version: "1.0" }, { package: "x" }, {}])).toEqual([]);
+  });
+
+  it("drops coordinates carrying a path, which a pasted blob must not smuggle in", () => {
     expect(
-      installableApps([{ source: "javascript:alert(1)" }, { source: "" }, {}, null, 7]),
+      installableApps([
+        { package: "../../etc/passwd", version: "1.0" },
+        { package: "ok", version: "../1.0" },
+        { package: "http://evil/x", version: "1.0" },
+      ]),
     ).toEqual([]);
-  });
-
-  it("carries metadata through so the installed app keeps its name", () => {
-    const metadata = [1, 2, 3];
-    expect(installableApps([{ source: "https://x/app.wasm", metadata }])).toEqual([
-      { source: "https://x/app.wasm", metadata },
-    ]);
   });
 
   it("is empty for an invite that offers none", () => {
@@ -234,23 +237,25 @@ describe("installableApps", () => {
 
 describe("inviteApps", () => {
   const installed = [
-    { id: "app-1", source: "https://reg/one.wasm", metadata: [1] },
-    { id: "app-2", source: "https://reg/two.wasm" },
-    { id: "app-3", source: "file:///local/three.wasm" },
+    { id: "app-1", package: "com.calimero.chat", version: "3.1.1" },
+    { id: "app-2", package: "com.calimero.kv-store", version: "0.0.11" },
+    { id: "app-3" },
   ];
 
   it("offers only the apps the scope names", () => {
-    expect(inviteApps(["app-2"], installed)).toEqual([{ source: "https://reg/two.wasm" }]);
-  });
-
-  it("offers every installed app when the scope names none, as core reads it", () => {
-    expect(inviteApps(undefined, installed).map((a) => a.source)).toEqual([
-      "https://reg/one.wasm",
-      "https://reg/two.wasm",
+    expect(inviteApps(["app-2"], installed)).toEqual([
+      { package: "com.calimero.kv-store", version: "0.0.11" },
     ]);
   });
 
-  it("leaves out a scoped app the other machine could never fetch", () => {
+  it("offers every installed app when the scope names none, as core reads it", () => {
+    expect(inviteApps(undefined, installed).map((a) => a.package)).toEqual([
+      "com.calimero.chat",
+      "com.calimero.kv-store",
+    ]);
+  });
+
+  it("leaves out an app installed outside a registry, which has no coordinates", () => {
     expect(inviteApps(["app-3"], installed)).toEqual([]);
   });
 

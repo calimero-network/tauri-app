@@ -24,18 +24,20 @@ import { truncateText } from "../utils/string";
 
 /** Marks a blob as the invite the account holder hands out. */
 const INVITE_PREFIX = "mero-pair:";
+const PACKAGE_RE = /^(?:@[\w.-]+\/)?[\w.+-]+$/; // the registry's own package shape
+const VERSION_RE = /^[\w.+-]+$/;
 /** Marks a blob as the new device's answer. Never carries the confirmation code. */
 const REPLY_PREFIX = "mero-pair-reply:";
 /** How often, and for how long, we watch for the new device to show up in the listing. */
 const POLL_INTERVAL_MS = 1000;
 const POLL_CEILING_MS = 15000;
 
-/** An application the invite offers to install. The device holds only core's
- *  content-hash id, which no registry resolves, so the holder passes the URL it
- *  installed from; the same artifact yields the same id. */
+/** An application the invite offers to install. Registry coordinates, not core's
+ *  content-hash id, which no registry resolves: the device installs the same
+ *  artifact from its own registry and so lands on the same id. */
 export interface PairInviteApp {
-  source: string;
-  metadata?: number[] | string;
+  package: string;
+  version: string;
 }
 
 export interface PairInvite {
@@ -44,15 +46,15 @@ export interface PairInvite {
   apps?: PairInviteApp[];
 }
 
-/** Fetched over the network on the strength of a pasted blob, so anything but a
- *  web URL is dropped rather than handed to the node. */
+/** Acted on from a pasted blob, so coordinates the registry would reject are
+ *  dropped rather than handed to the node. */
 export function installableApps(value: unknown): PairInviteApp[] {
   if (!Array.isArray(value)) return [];
   return value.flatMap((entry) => {
-    const source = str((entry as PairInviteApp | undefined)?.source);
-    if (!/^https?:\/\//i.test(source)) return [];
-    const metadata = (entry as PairInviteApp).metadata;
-    return [{ source, ...(metadata === undefined ? {} : { metadata }) }];
+    const pkg = str((entry as PairInviteApp | undefined)?.package);
+    const version = str((entry as PairInviteApp | undefined)?.version);
+    if (!PACKAGE_RE.test(pkg) || !VERSION_RE.test(version)) return [];
+    return [{ package: pkg, version }];
   });
 }
 
@@ -130,12 +132,13 @@ export interface InstalledApp {
   id: string;
   name?: string;
   metadata?: number[] | string;
-  /** Where the node fetched it from. A local path for a hand-installed app. */
-  source?: string;
+  /** Registry coordinates, absent on an app installed outside a registry. */
+  package?: string;
+  version?: string;
 }
 
-/** The apps an invite offers to install: those in scope that the holder can point
- *  at a URL. An undefined scope is every application, the same as core reads it. */
+/** The apps an invite offers to install: those in scope carrying the coordinates
+ *  a registry resolves. An undefined scope is every application, as core reads it. */
 export function inviteApps(
   applications: string[] | undefined,
   installed: InstalledApp[],
@@ -144,7 +147,7 @@ export function inviteApps(
   return installableApps(
     installed
       .filter((app) => !scoped || scoped.has(app.id))
-      .map((app) => ({ source: app.source, metadata: app.metadata })),
+      .map((app) => ({ package: app.package, version: app.version })),
   );
 }
 
@@ -573,7 +576,7 @@ export function linkedToInvite(identity: NodeIdentity | null, rootKey: string): 
 }
 
 interface InstallState {
-  source: string;
+  key: string;
   name: string;
   status: "waiting" | "installing" | "done" | "failed";
   error?: string;
@@ -619,8 +622,8 @@ export function DevicePairResponder({ enrolledDeviceId }: { enrolledDeviceId?: s
 
     setInstalls(
       apps.map((app) => ({
-        source: app.source,
-        name: decodeMetadata(app.metadata)?.name || truncateText(app.source, 40),
+        key: `${app.package}@${app.version}`,
+        name: `${app.package} ${app.version}`,
         status: "waiting" as const,
       })),
     );
@@ -639,9 +642,9 @@ export function DevicePairResponder({ enrolledDeviceId }: { enrolledDeviceId?: s
         mark(i, { status: "installing" });
         try {
           const response = await apiClient.node.installApplication({
-            url: app.source,
-            metadata: app.metadata ?? [],
-          } as never);
+            package: app.package,
+            version: app.version,
+          });
           if (cancelled) return;
           const failed = (response as { error?: { message?: string } })?.error;
           mark(i, failed ? { status: "failed", error: failed.message } : { status: "done" });
@@ -722,7 +725,7 @@ export function DevicePairResponder({ enrolledDeviceId }: { enrolledDeviceId?: s
               <span className="settings-field-label">Apps arriving with this account</span>
               <ul className="account-install-list" id="pair-app-installs">
                 {installs.map((entry) => (
-                  <li className="account-install-row" key={entry.source}>
+                  <li className="account-install-row" key={entry.key}>
                     <span className="account-install-name">{entry.name}</span>
                     <span className={`account-install-status is-${entry.status}`}>
                       {entry.status === "waiting"

@@ -197,32 +197,6 @@
   cursor: not-allowed;
 }
 
-.input-group {
-  display: flex;
-  gap: 8px;
-}
-
-.input-group input {
-  flex: 1;
-}
-
-.input-group .button {
-  flex-shrink: 0;
-  white-space: nowrap;
-}
-
-.form-row {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 16px;
-}
-
-.field-hint {
-  margin-top: 6px;
-  font-size: 12px;
-  color: var(--text-tertiary);
-}
-
 .node-actions {
   display: flex;
   gap: 12px;
@@ -490,23 +464,3 @@
   margin-bottom: 24px;
 }
 
-.reset-confirm-form {
-  margin-top: 12px;
-  padding: 16px;
-  background: var(--surface-glass-soft);
-  border-radius: var(--radius-md);
-  border: 1px solid var(--border-color);
-}
-
-.reset-confirm-warning {
-  margin: 0 0 16px 0;
-  color: var(--text-secondary);
-  font-size: 14px;
-  line-height: 1.5;
-}
-
-.reset-confirm-actions {
-  display: flex;
-  gap: 12px;
-  justify-content: flex-end;
-}

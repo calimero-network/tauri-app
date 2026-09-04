@@ -1092,7 +1092,7 @@ function Onboarding({ onComplete, onSettings }: OnboardingProps) {
                 </div>
               ) : cloudConnected ? (
                 <div>
-                  <CheckCircle2 size={48} style={{ color: 'var(--accent-color, #4ade80)', marginBottom: '12px' }} />
+                  <CheckCircle2 size={48} style={{ color: 'var(--success)', marginBottom: '12px' }} />
                   <p style={{ fontWeight: 600, fontSize: '1.1rem' }}>Connected to Calimero Cloud</p>
                   <p style={{ opacity: 0.7, marginTop: '4px' }}>{getSettings().cloudUserEmail}</p>
                 </div>

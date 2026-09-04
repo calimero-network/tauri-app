@@ -1256,9 +1256,9 @@ function Namespaces() {
 
   const roleColor = (role: string) => {
     switch (role.toLowerCase()) {
-      case "admin": return "var(--accent-primary, #a5ff11)";
-      case "readonly": return "var(--text-tertiary, #666)";
-      default: return "var(--text-secondary, #999)";
+      case "admin": return "var(--accent-primary)";
+      case "readonly": return "var(--text-tertiary)";
+      default: return "var(--text-secondary)";
     }
   };
 

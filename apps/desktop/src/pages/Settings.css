@@ -801,11 +801,11 @@
 }
 
 .account-install-status.is-done {
-  color: var(--success-color, #3fb950);
+  color: var(--success);
 }
 
 .account-install-status.is-failed {
-  color: var(--error-color, #f85149);
+  color: var(--error);
   white-space: normal;
 }
 
@@ -826,7 +826,7 @@
   overflow-y: auto;
   border: 1px solid var(--border-color);
   border-radius: 10px;
-  background: var(--bg-secondary, #161b22);
+  background: var(--bg-secondary);
 }
 
 .account-modal-header {
@@ -855,7 +855,7 @@
 }
 
 .account-modal-close:hover {
-  background: var(--bg-tertiary, #21262d);
+  background: var(--bg-tertiary);
   color: var(--text-primary);
 }
 
@@ -873,7 +873,7 @@
 }
 
 .account-pair-link-state.is-linked {
-  color: var(--success-color, #3fb950);
+  color: var(--success);
 }
 
 .account-spin {

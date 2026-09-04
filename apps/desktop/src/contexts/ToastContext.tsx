@@ -10,12 +10,10 @@ export interface Toast {
 }
 
 interface ToastActions {
-  showToast: (type: ToastType, message: string, duration?: number) => void;
   removeToast: (id: string) => void;
   success: (message: string, duration?: number) => void;
   error: (message: string, duration?: number) => void;
   warning: (message: string, duration?: number) => void;
-  info: (message: string, duration?: number) => void;
 }
 
 // Split so firing a toast only re-renders the container, not every page that
@@ -31,7 +29,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const showToast = useCallback((type: ToastType, message: string, duration = 5000) => {
-    const id = Math.random().toString(36).substring(2, 9);
+    const id = crypto.randomUUID();
     const newToast: Toast = { id, type, message, duration };
 
     setToasts((prev) => [...prev, newToast]);
@@ -58,14 +56,10 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     return showToast('warning', message, duration);
   }, [showToast]);
 
-  const info = useCallback((message: string, duration?: number) => {
-    return showToast('info', message, duration);
-  }, [showToast]);
-
   // Every callback above is identity-stable, so this value never changes.
   const actions = useMemo<ToastActions>(
-    () => ({ showToast, removeToast, success, error, warning, info }),
-    [showToast, removeToast, success, error, warning, info]
+    () => ({ removeToast, success, error, warning }),
+    [removeToast, success, error, warning]
   );
 
   return (

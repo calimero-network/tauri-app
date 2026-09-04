@@ -18,10 +18,7 @@ mod merod_versions;
 mod webview_isolation;
 
 use webview_isolation::{webview_isolation_supported, IsolatedWindows};
-use merod_versions::{
-    extract_merod_binary, get_bundled_merod_path, get_merod_version_at, merod_target_triple,
-    score_merod_asset,
-};
+use merod_versions::{get_bundled_merod_path, get_merod_version_at};
 
 // Imported unqualified so generate_handler! registers them under their bare
 // command names, which is what the ACL in permissions/app-commands.toml grants.
@@ -71,6 +68,22 @@ const MEROD_CONFIG_VERSION: &str = match option_env!("MEROD_CONFIG_VERSION") {
     Some(v) => v,
     None => "unknown",
 };
+
+/// Windows gives every console child of a GUI process its own window; merod would
+/// sit beside a black one all session. `Command::from` it for a tokio child.
+#[cfg(windows)]
+fn hidden_command(program: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
+    use std::os::windows::process::CommandExt as _;
+    let mut cmd = std::process::Command::new(program);
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    cmd
+}
+
+/// No console windows to suppress off Windows.
+#[cfg(not(windows))]
+fn hidden_command(program: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
+    std::process::Command::new(program)
+}
 
 /// Parses --open-app-url, --open-app-name, --open-app-id from CLI args (used when launched from a desktop shortcut).
 fn parse_open_app_args() -> Option<(String, String, Option<String>)> {
@@ -140,14 +153,9 @@ pub struct AppDeepLink {
 /// via `get_pending_app_deep_link`. Mirrors `PendingCloudAuth`.
 pub struct PendingAppDeepLink(pub std::sync::Mutex<Option<AppDeepLink>>);
 
-/// Parse an app deep-link from either the custom scheme or the Universal Link
-/// host. Returns `None` for anything that is not an app deep-link — crucially
-/// the OAuth callback (`calimero://cloud-callback?…`), which the caller keeps
-/// routing through the existing cloud-auth path.
-///
-/// Accepted shapes:
-///   - `calimero://<slug>/<action>?<params>`          (host=slug, path=/action)
-///   - `https://links.calimero.network/<slug>/<action>?<params>`
+/// Parse `calimero://<slug>/<action>?<params>` or the same shape under
+/// `https://links.calimero.network/`. `None` for anything else, crucially the
+/// OAuth callback, which the caller keeps routing through the cloud-auth path.
 fn parse_app_deep_link(raw: &str) -> Option<AppDeepLink> {
     let parsed = url::Url::parse(raw).ok()?;
 
@@ -208,12 +216,9 @@ pub struct PendingOpenApp(pub std::sync::Mutex<Option<(String, String, Option<St
 /// State for pending Calimero Cloud auth callback (set by deep link handler, read by frontend).
 pub struct PendingCloudAuth(pub std::sync::Mutex<Option<String>>);
 
-/// Validates a node name to prevent path traversal and command injection.
-/// Valid names: non-empty, max 64 chars, alphanumeric/hyphen/underscore only, no leading hyphen.
+/// A node name becomes a directory under the node home and an argument to merod,
+/// so the charset is what keeps path traversal and shell metacharacters out.
 fn validate_node_name(node_name: &str) -> Result<(), String> {
-    if node_name.is_empty() {
-        return Err("Node name cannot be empty".to_string());
-    }
     if node_name.len() > MAX_NODE_NAME_LENGTH {
         return Err(format!(
             "Node name is too long ({} characters). Maximum allowed is {} characters.",
@@ -221,39 +226,18 @@ fn validate_node_name(node_name: &str) -> Result<(), String> {
             MAX_NODE_NAME_LENGTH
         ));
     }
-    if node_name.starts_with('-') {
-        return Err(
-            "Node name cannot start with a hyphen (-) as it may be interpreted as a command flag"
-                .to_string(),
-        );
-    }
-    for (i, c) in node_name.chars().enumerate() {
-        if !c.is_ascii_alphanumeric() && c != '-' && c != '_' {
-            if c == '/' || c == '\\' {
-                return Err(format!(
-                    "Node name contains invalid path separator '{}' at position {}. \
-                     Path separators are not allowed to prevent path traversal attacks.",
-                    c, i
-                ));
-            } else if c == ';' || c == '|' || c == '&' || c == '$' || c == '`' {
-                return Err(format!(
-                    "Node name contains invalid shell metacharacter '{}' at position {}. \
-                     Shell metacharacters are not allowed to prevent command injection.",
-                    c, i
-                ));
-            } else if c == '.' && node_name.contains("..") {
-                return Err(
-                    "Node name contains '..' which could be used for path traversal attacks"
-                        .to_string(),
-                );
-            } else {
-                return Err(format!(
-                    "Node name contains invalid character '{}' at position {}. \
-                     Only alphanumeric characters, hyphens (-), and underscores (_) are allowed.",
-                    c, i
-                ));
-            }
-        }
+    // A leading hyphen is excluded too: merod would read the name as a flag.
+    if node_name.is_empty()
+        || node_name.starts_with('-')
+        || !node_name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(format!(
+            "Invalid node name '{}'. Use letters, digits, hyphens and underscores only, \
+             not starting with a hyphen.",
+            node_name
+        ));
     }
     Ok(())
 }
@@ -521,6 +505,27 @@ fn focus_window(app_handle: tauri::AppHandle, window_label: String) -> Result<()
 // ad-hoc-signed `calimero-shell` with `--app-config <bundle>/…/app.json`; the
 // shell owns that app's dock identity and brokers refresh back to this host.
 
+/// An app name reduced to what can be a `.app` bundle or a `.lnk` filename
+/// anywhere we ship. All punctuation trims to empty, which would leave it unnamed.
+fn safe_launcher_name(app_name: &str) -> String {
+    let mapped: String = app_name
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == ' ' || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let trimmed = mapped.trim().trim_matches('_');
+    if trimmed.is_empty() {
+        "Calimero App".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
 /// Where the host persists per-app capabilities (loaded into CapRegistry at startup).
 #[cfg(target_os = "macos")]
 fn caps_store_path() -> std::path::PathBuf {
@@ -735,12 +740,9 @@ fn decode_data_uri_png(s: &str) -> Option<Vec<u8>> {
     }
 }
 
-/// Fetch the app's web-manifest / favicon PNG. Runs on a DEDICATED thread with its
-/// OWN runtime: this is reached from a Tauri command that may execute inside the
-/// ambient Tokio runtime, where `tauri::async_runtime::block_on` does not drive
-/// the request (the fetch came back empty and every launcher fell back to the
-/// generic exec icon). A fresh std::thread has no ambient runtime, so a
-/// current-thread runtime can block on it; a one-off client keeps its pool here.
+/// Fetch the app's web-manifest or favicon PNG on a dedicated thread with its own
+/// runtime: the caller may already be inside the ambient one, where
+/// `async_runtime::block_on` does not drive the request and the fetch returns empty.
 #[cfg(target_os = "macos")]
 fn fetch_frontend_icon_png(frontend_url: &str) -> Option<Vec<u8>> {
     let base = frontend_url.trim_end_matches('/').to_string();
@@ -841,19 +843,8 @@ fn ensure_app_launcher(
     static BUILD: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let _serialised = BUILD.lock_unpoisoned();
 
-    // sanitize the name for the .app filename
-    let safe: String = app_name
-        .chars()
-        .map(|c| {
-            if c.is_alphanumeric() || c == ' ' || c == '-' || c == '_' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    let safe = safe.trim().trim_matches('_');
-    let safe = if safe.is_empty() { "Calimero App" } else { safe };
+    let safe = safe_launcher_name(app_name);
+    let safe = safe.as_str();
 
     // ensure the shared shell is extracted to its loose path (idempotent).
     let shell_dest = launcher::shell_install_path();
@@ -917,12 +908,9 @@ fn ensure_app_launcher(
     Ok(bundle)
 }
 
-/// "Open" on macOS: launch the app through its per-app shell/launcher (first-class
-/// dock identity), creating a managed launcher if one doesn't exist yet. Reuses
-/// the app's existing launcher location (e.g. a Desktop one) when present.
-///
-/// The body takes seconds (shell extract, icon fetch, `sips`, waiting on `open`),
-/// so it runs on a blocking thread rather than a runtime worker.
+/// "Open" on macOS: launch the app through its own launcher, building one where
+/// it has none and reusing an existing location. Seconds of work (shell extract,
+/// icon fetch, `sips`, `open`), so it takes a blocking thread.
 #[tauri::command]
 async fn open_app_launcher(
     app_handle: tauri::AppHandle,
@@ -1061,22 +1049,8 @@ fn create_desktop_shortcut_blocking(
         )
     })?;
 
-    let safe_name: String = app_name
-        .chars()
-        .map(|c| {
-            if c.is_alphanumeric() || c == ' ' || c == '-' || c == '_' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    let shortcut_name = safe_name.trim().trim_matches('_');
-    let shortcut_name = if shortcut_name.is_empty() {
-        "Calimero App"
-    } else {
-        shortcut_name
-    };
+    let shortcut_name = safe_launcher_name(&app_name);
+    let shortcut_name = shortcut_name.as_str();
 
     #[cfg(windows)]
     {
@@ -1103,10 +1077,8 @@ fn create_desktop_shortcut_blocking(
             exe_str.replace('\'', "''"),
             args.replace('\'', "''")
         );
-        use std::os::windows::process::CommandExt as _;
-        let output = std::process::Command::new("powershell")
+        let output = hidden_command("powershell")
             .args(["-NoProfile", "-NonInteractive", "-Command", &ps])
-            .creation_flags(CREATE_NO_WINDOW)
             .output()
             .map_err(|e| {
                 TauriError::with_details(
@@ -1494,17 +1466,9 @@ async fn stop_pids(pids: &[u32]) -> Result<(), TauriError> {
     Ok(())
 }
 
-/// Whether this merod understands `run --exit-on-stdin-close`.
-///
-/// Probed rather than derived from a version. The app runs whatever merod the
-/// user has pinned through `VersionId`, so a version comparison would have to
-/// know which release added the flag AND be right about every older build a
-/// user might still be on — and being wrong means passing an argument an older
-/// merod rejects, so the node fails to start at all. Asking the binary cannot
-/// be wrong about the binary.
-///
-/// Cached per path: `--help` is cheap but not free, and a node start should not
-/// pay for it every time.
+/// Whether this merod understands `run --exit-on-stdin-close`. Asked of the
+/// binary, not derived from a version: passing the flag to a merod that does not
+/// know it means the node never starts. Cached per path.
 async fn merod_supports_stdin_stop(binary: &std::path::Path) -> bool {
     static CACHE: std::sync::LazyLock<Mutex<std::collections::HashMap<std::path::PathBuf, bool>>> =
         std::sync::LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
@@ -1513,13 +1477,8 @@ async fn merod_supports_stdin_stop(binary: &std::path::Path) -> bool {
         return *known;
     }
 
-    let mut cmd = Command::new(binary);
+    let mut cmd = Command::from(hidden_command(binary));
     let _ = cmd.args(["run", "--help"]);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt as _;
-        let _ = cmd.creation_flags(CREATE_NO_WINDOW);
-    }
     // Absent on a failed probe, not present: the fallback is the old stop path,
     // which works everywhere. Guessing "supported" would break node startup.
     let supported = match cmd.output().await {
@@ -1536,12 +1495,9 @@ async fn merod_supports_stdin_stop(binary: &std::path::Path) -> bool {
     supported
 }
 
-/// Ask the nodes we started to stop, by closing the stdin they are watching.
-///
-/// Returns the pids that were asked. On Windows this is the only graceful stop
-/// there is: `taskkill` without `/F` posts `WM_CLOSE` to windows a console
-/// process does not have, so the alternative is `TerminateProcess`, which runs
-/// no code — the node never drains or flushes its store.
+/// Ask the nodes we started to stop by closing the stdin they watch, and report
+/// which were asked. On Windows it is the only graceful stop there is: the
+/// alternative, `TerminateProcess`, runs no code, so nothing drains or flushes.
 fn request_stdin_stop(pids: &[u32]) -> Vec<u32> {
     let mut stoppers = STDIN_STOPPERS.lock_unpoisoned();
     pids.iter()
@@ -1571,17 +1527,11 @@ async fn kill_pids(pids: &[u32], patience: TermPatience) {
     tokio::task::spawn_blocking(move || {
         for pid in &pids_owned {
             #[cfg(unix)]
-            let _ = std::process::Command::new("kill")
-                .args(["-TERM", &pid.to_string()])
-                .output();
+            signal_pid(*pid, libc::SIGTERM);
             #[cfg(windows)]
-            {
-                use std::os::windows::process::CommandExt as _;
-                let _ = std::process::Command::new("taskkill")
-                    .args(["/PID", &pid.to_string()])
-                    .creation_flags(CREATE_NO_WINDOW)
-                    .output();
-            }
+            let _ = hidden_command("taskkill")
+                .args(["/PID", &pid.to_string()])
+                .output();
         }
         if matches!(patience, TermPatience::SignalOnly) {
             return;
@@ -1601,34 +1551,14 @@ async fn kill_pids(pids: &[u32], patience: TermPatience) {
         }
         for pid in &poll_only {
             #[cfg(unix)]
-            {
-                let still_alive = std::process::Command::new("ps")
-                    .arg("-p")
-                    .arg(pid.to_string())
-                    .output()
-                    .map(|o| o.status.success())
-                    .unwrap_or(false);
-                if still_alive {
-                    let _ = std::process::Command::new("kill")
-                        .args(["-9", &pid.to_string()])
-                        .output();
-                }
+            if is_process_running(*pid) {
+                signal_pid(*pid, libc::SIGKILL);
             }
             #[cfg(windows)]
-            {
-                use std::os::windows::process::CommandExt as _;
-                let still_alive = std::process::Command::new("tasklist")
-                    .args(["/FI", &format!("PID eq {}", pid), "/FO", "CSV", "/NH"])
-                    .creation_flags(CREATE_NO_WINDOW)
-                    .output()
-                    .map(|o| String::from_utf8_lossy(&o.stdout).contains(&pid.to_string()))
-                    .unwrap_or(false);
-                if still_alive {
-                    let _ = std::process::Command::new("taskkill")
-                        .args(["/PID", &pid.to_string(), "/F"])
-                        .creation_flags(CREATE_NO_WINDOW)
-                        .output();
-                }
+            if is_process_running(*pid) {
+                let _ = hidden_command("taskkill")
+                    .args(["/PID", &pid.to_string(), "/F"])
+                    .output();
             }
         }
     })
@@ -1674,12 +1604,8 @@ struct LogWriterEntry {
 type MerodLogWriters = Arc<Mutex<std::collections::HashMap<String, LogWriterEntry>>>;
 
 /// The rotating writer a running node is draining into `log_dir`, if any.
-///
-/// `lock_unpoisoned`, never `.lock().ok()`: swallowing a poisoned lock would
-/// report a *running* node as stopped, and both callers then take a fallback
-/// path that races the live drain tasks — a silent loss of the serialization
-/// they ask for. The map has no cross-field invariant, so the pre-poison
-/// contents are safe to reuse.
+/// `lock_unpoisoned`, never `.lock().ok()`: swallowing a poisoned lock reports a
+/// running node as stopped, and both callers then race the live drain tasks.
 fn live_log_writer(
     log_writers: &MerodLogWriters,
     log_dir: &std::path::Path,
@@ -2322,12 +2248,7 @@ async fn start_node(
 
     // Build command - global options come BEFORE subcommand
     // Merod expects: merod --home ~/.calimero --node node1 run
-    let mut cmd = Command::new(&merod_binary);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt as _;
-        let _ = cmd.creation_flags(CREATE_NO_WINDOW);
-    }
+    let mut cmd = Command::from(hidden_command(&merod_binary));
     // Force ANSI colors in output so the log viewer can display them
     cmd.env("CLICOLOR_FORCE", "1");
     cmd.env("FORCE_COLOR", "1");
@@ -2597,27 +2518,31 @@ async fn stop_merod_by_pid_command(
     Ok(format!("Merod stopped successfully (PID: {})", pid))
 }
 
+/// Deliver `signal` to one process. Signal 0 delivers nothing and only reports
+/// whether the process is there, which is what `is_process_running` asks.
+#[cfg(unix)]
+fn signal_pid(pid: u32, signal: i32) -> bool {
+    // kill(2) reads pid <= 0 as a process-group target, so anything that is not
+    // a positive pid_t must never reach it.
+    let pid = match libc::pid_t::try_from(pid) {
+        Ok(pid) if pid > 0 => pid,
+        _ => return false,
+    };
+    // SAFETY: plain FFI call, no pointers; the guard above keeps pid a single
+    // positive process.
+    unsafe { libc::kill(pid, signal) == 0 }
+}
+
 fn is_process_running(pid: u32) -> bool {
     #[cfg(unix)]
     {
-        // kill(2) reads pid <= 0 as a process-group target, so anything that is
-        // not a positive pid_t must never reach it.
-        let pid = match libc::pid_t::try_from(pid) {
-            Ok(pid) if pid > 0 => pid,
-            _ => return false,
-        };
-        // SAFETY: plain FFI call, no pointers; the guard above keeps pid a single
-        // positive process and signal 0 delivers nothing.
-        unsafe { libc::kill(pid, 0) == 0 }
+        signal_pid(pid, 0)
     }
     #[cfg(windows)]
     {
-        use std::os::windows::process::CommandExt as _;
-        use std::process::Command;
-        let output = Command::new("tasklist")
+        let output = hidden_command("tasklist")
             .arg("/FI")
             .arg(format!("PID eq {}", pid))
-            .creation_flags(CREATE_NO_WINDOW)
             .output();
         if let Ok(out) = output {
             let stdout = String::from_utf8_lossy(&out.stdout);
@@ -2631,28 +2556,7 @@ fn is_process_running(pid: u32) -> bool {
 #[tauri::command]
 async fn list_merod_nodes(home_dir: Option<String>) -> Result<Vec<String>, TauriError> {
     // Merod stores nodes in ~/.calimero/ as directories (node1, node2, etc.)
-    let calimero_home = if let Some(dir) = home_dir {
-        // Expand ~ if present
-        let expanded = if dir.starts_with("~") {
-            if let Some(home) = dirs::home_dir() {
-                dir.replacen("~", &home.to_string_lossy(), 1)
-            } else {
-                dir
-            }
-        } else {
-            dir
-        };
-        std::path::PathBuf::from(expanded)
-    } else {
-        dirs::home_dir()
-            .ok_or_else(|| {
-                TauriError::new(
-                    TauriErrorCode::HomeDirNotFound,
-                    "Failed to get home directory",
-                )
-            })?
-            .join(".calimero")
-    };
+    let calimero_home = resolve_home_dir(home_dir)?;
 
     if !calimero_home.exists() {
         return Ok(vec![]);
@@ -2666,58 +2570,29 @@ async fn list_merod_nodes(home_dir: Option<String>) -> Result<Vec<String>, Tauri
         )
     })?;
 
-    let mut nodes = Vec::new();
-    for entry in entries {
-        let entry = entry.map_err(|e| {
-            TauriError::with_details(
-                TauriErrorCode::DirectoryError,
-                "Failed to read directory entry",
-                e.to_string(),
-            )
-        })?;
-        let file_type = entry.file_type().map_err(|e| {
-            TauriError::with_details(
-                TauriErrorCode::DirectoryError,
-                "Failed to get file type",
-                e.to_string(),
-            )
-        })?;
-        if file_type.is_dir() {
-            if let Some(name) = entry.file_name().to_str() {
-                // Skip hidden directories
-                if !name.starts_with('.') {
-                    let node_path = entry.path();
-                    let config_path = node_path.join("config.toml");
-
-                    // Check if config.toml exists and is valid TOML
-                    // Include nodes with valid config.toml even if they don't have bootstrap nodes yet
-                    // Bootstrap nodes are only required when starting the node, not for listing
-                    if config_path.exists() {
-                        if let Ok(config_content) = std::fs::read_to_string(&config_path) {
-                            if config_content.parse::<toml::Value>().is_ok() {
-                                // Valid config.toml found, include the node
-                                nodes.push(name.to_string());
-                            } else {
-                                debug!(
-                                    "[Merod] Skipping node '{}': invalid TOML in config.toml",
-                                    name
-                                );
-                            }
-                        } else {
-                            debug!(
-                                "[Merod] Skipping node '{}': failed to read config.toml",
-                                name
-                            );
-                        }
-                    } else {
-                        debug!("[Merod] Skipping node '{}': config.toml not found", name);
-                    }
-                }
+    // A node is a non-hidden directory holding a parseable config.toml. An entry
+    // that cannot be read is skipped rather than failing the whole listing.
+    let mut nodes: Vec<String> = entries
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            if !entry.file_type().ok()?.is_dir() {
+                return None;
             }
-        }
-    }
+            let name = entry.file_name().to_str()?.to_string();
+            if name.starts_with('.') {
+                return None;
+            }
+            let config = std::fs::read_to_string(entry.path().join("config.toml"))
+                .inspect_err(|e| debug!("[Merod] Skipping '{name}': config.toml unreadable: {e}"))
+                .ok()?;
+            config
+                .parse::<toml::Value>()
+                .inspect_err(|e| debug!("[Merod] Skipping '{name}': invalid config.toml: {e}"))
+                .ok()?;
+            Some(name)
+        })
+        .collect();
 
-    // Sort nodes alphabetically
     nodes.sort();
 
     Ok(nodes)
@@ -2769,28 +2644,7 @@ async fn init_merod_node(
     validate_node_name(&node_name).map_err(|e| TauriError::new(TauriErrorCode::InvalidInput, e))?;
 
     // Prepare home directory (where .calimero folder will be)
-    let home_dir_path = if let Some(dir) = home_dir {
-        // Expand ~ if present
-        let expanded = if dir.starts_with("~") {
-            if let Some(home) = dirs::home_dir() {
-                dir.replacen("~", &home.to_string_lossy(), 1)
-            } else {
-                dir
-            }
-        } else {
-            dir
-        };
-        std::path::PathBuf::from(expanded)
-    } else {
-        dirs::home_dir()
-            .ok_or_else(|| {
-                TauriError::new(
-                    TauriErrorCode::HomeDirNotFound,
-                    "Failed to get home directory",
-                )
-            })?
-            .join(".calimero")
-    };
+    let home_dir_path = resolve_home_dir(home_dir)?;
 
     std::fs::create_dir_all(&home_dir_path).map_err(|e| {
         TauriError::with_details(
@@ -2813,12 +2667,7 @@ async fn init_merod_node(
 
     // Run merod init command - global options come BEFORE subcommand
     // Use --auth-mode embedded so merod creates the full embedded_auth config
-    let mut cmd = Command::new(&merod_binary);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt as _;
-        let _ = cmd.creation_flags(CREATE_NO_WINDOW);
-    }
+    let mut cmd = Command::from(hidden_command(&merod_binary));
     cmd.arg("--home").arg(&home_dir_path);
     cmd.arg("--node").arg(&node_name);
     cmd.arg("init").arg("--auth-mode").arg("embedded");
@@ -2980,14 +2829,10 @@ async fn detect_running_merod_nodes() -> Result<Vec<serde_json::Value>, TauriErr
 
     #[cfg(windows)]
     {
-        use std::os::windows::process::CommandExt as _;
-        use tokio::process::Command;
-
         // Use tasklist on Windows; command lines come from CIM below.
-        let output = Command::new("tasklist")
+        let output = Command::from(hidden_command("tasklist"))
             .arg("/FO")
             .arg("CSV")
-            .creation_flags(CREATE_NO_WINDOW)
             .output()
             .await
             .map_err(|e| {
@@ -3013,7 +2858,7 @@ async fn detect_running_merod_nodes() -> Result<Vec<serde_json::Value>, TauriErr
                         // returned nothing and every node silently lost its name
                         // and port. `Get-CimInstance` is the supported query and
                         // is present on every Windows this app targets.
-                        let cmd_output = Command::new("powershell")
+                        let cmd_output = Command::from(hidden_command("powershell"))
                             .args([
                                 "-NoProfile",
                                 "-NonInteractive",
@@ -3023,7 +2868,6 @@ async fn detect_running_merod_nodes() -> Result<Vec<serde_json::Value>, TauriErr
                                     pid
                                 ),
                             ])
-                            .creation_flags(CREATE_NO_WINDOW)
                             .output()
                             .await;
 
@@ -3062,11 +2906,28 @@ async fn detect_running_merod_nodes() -> Result<Vec<serde_json::Value>, TauriErr
     }
 }
 
-/// Downloads the merod binary matching `MEROD_CONFIG_VERSION` from GitHub,
-/// replaces the bundled binary, and verifies the version.
-///
-/// Returns `{ replaced, expected_version, current_version, message }`.
-/// If the binary is already at the correct version, `replaced` is `false`.
+/// The phrase `utils/updater.ts` aborts the app update on. Every other error from
+/// this command is warned and swallowed, so a merod that verifies wrong has to
+/// keep saying this or the new app ships over a stale binary.
+const VERSION_MISMATCH: &str = "Version mismatch after replace";
+
+/// Restate the installer's version-verification failure in the words the updater
+/// recognises. Other install failures keep the installer's own text.
+fn merod_install_failure(e: TauriError, expected: &str) -> TauriError {
+    if e.code != TauriErrorCode::MerodVersionMismatch {
+        return e;
+    }
+    TauriError::with_details(
+        e.code,
+        format!("{VERSION_MISMATCH}: expected 'merod {expected}'"),
+        e.message,
+    )
+}
+
+/// Install the merod release matching `MEROD_CONFIG_VERSION` and put it where the
+/// bundled binary lives, so a build whose bundled merod is stale self-corrects.
+/// Returns `{ replaced, expected_version, current_version, message }`, with
+/// `replaced` false when the bundled binary was already at the expected version.
 #[tauri::command]
 async fn download_and_replace_merod(
     app_handle: tauri::AppHandle,
@@ -3075,30 +2936,13 @@ async fn download_and_replace_merod(
     if expected == "unknown" {
         return Err(TauriError::new(
             TauriErrorCode::InternalError,
-            "MEROD_CONFIG_VERSION was not embedded at build time — cannot determine target version",
-        ));
-    }
-
-    // Validate version string only contains semver-safe chars before using in URL
-    if !expected
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
-    {
-        return Err(TauriError::new(
-            TauriErrorCode::InternalError,
-            format!(
-                "MEROD_CONFIG_VERSION '{}' contains unexpected characters",
-                expected
-            ),
+            "MEROD_CONFIG_VERSION was not embedded at build time - cannot determine target version",
         ));
     }
 
     let binary_path = get_bundled_merod_path(&app_handle)
         .map_err(|e| TauriError::new(TauriErrorCode::FileNotFound, e))?;
 
-    let expected_version_output = format!("merod {}", expected);
-
-    // Fast path: already correct
     if let Some(current) = get_merod_version_at(&binary_path).await {
         if merod_versions::version_matches_tag(&current, expected) {
             return Ok(serde_json::json!({
@@ -3110,235 +2954,63 @@ async fn download_and_replace_merod(
         }
     }
 
-    // Fetch GitHub release metadata
-    let target = merod_target_triple();
-    let release_url = format!(
-        "https://api.github.com/repos/calimero-network/core/releases/tags/{}",
-        expected
-    );
-    // HTTPS to api.github.com ensures transport security; no auth token needed
-    // for public releases (60 req/hr unauthenticated is ample for a rare update path).
-    let client = http_client();
-    let api_resp = client
-        .get(&release_url)
-        .header("Accept", "application/vnd.github+json")
-        .header("User-Agent", "calimero-desktop")
-        .send()
+    // The store install does the fetching, the sha256 check, the per-hop URL
+    // allowlist and a `merod --version` check against the tag; all that is left
+    // here is putting a copy where the bundle expects to find it.
+    let app_data_dir = merod_versions::app_data(&app_handle)?;
+    let installed = merod_versions::ensure_release_installed(&app_data_dir, expected)
         .await
-        .map_err(|e| {
-            TauriError::new(TauriErrorCode::InternalError, format!("GitHub API: {}", e))
-        })?;
-    let api_status = api_resp.status();
-    let release: serde_json::Value = api_resp.json().await.map_err(|e| {
-        TauriError::new(
-            TauriErrorCode::InternalError,
-            format!("Parse release JSON: {}", e),
-        )
-    })?;
-    if !api_status.is_success() {
-        let msg = release["message"].as_str().unwrap_or("unknown error");
-        return Err(TauriError::new(
-            TauriErrorCode::InternalError,
-            format!("GitHub API returned {}: {}", api_status, msg),
-        ));
-    }
+        .map_err(|e| merod_install_failure(e, expected))?;
 
-    let assets = release["assets"].as_array().ok_or_else(|| {
-        TauriError::new(TauriErrorCode::InternalError, "No assets in GitHub release")
-    })?;
-
-    let (asset_name, asset_url) = assets
-        .iter()
-        .filter_map(|a| {
-            let name = a["name"].as_str()?;
-            let url = a["browser_download_url"].as_str()?;
-            let score = score_merod_asset(name, target)?;
-            Some((score, name.to_string(), url.to_string()))
-        })
-        .min_by_key(|(s, _, _)| *s)
-        .map(|(_, n, u)| (n, u))
-        .ok_or_else(|| {
-            TauriError::new(
-                TauriErrorCode::InternalError,
-                format!(
-                    "No merod asset for target '{}' in release '{}'",
-                    target, expected
-                ),
-            )
-        })?;
-
-    // Validate the asset URL is an HTTPS GitHub URL before downloading
-    {
-        let parsed = url::Url::parse(&asset_url).map_err(|e| {
-            TauriError::new(
-                TauriErrorCode::InternalError,
-                format!("parse asset URL: {}", e),
-            )
-        })?;
-        if parsed.scheme() != "https" {
-            return Err(TauriError::new(
-                TauriErrorCode::InternalError,
-                format!("Asset URL must use https, got: {}", asset_url),
-            ));
-        }
-        let host = parsed.host_str().unwrap_or("");
-        if host != "github.com"
-            && !host.ends_with(".github.com")
-            && !host.ends_with(".githubusercontent.com")
-        {
-            return Err(TauriError::new(
-                TauriErrorCode::InternalError,
-                format!(
-                    "Asset URL hostname '{}' is not from github.com or githubusercontent.com",
-                    host
-                ),
-            ));
-        }
-    }
-
-    info!("[Updater] Downloading {} for {}", asset_name, target);
-
-    // Sanitize asset name: strip any path components to prevent path traversal
-    let safe_asset_name: String = std::path::Path::new(&asset_name)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("merod-asset")
-        .to_string();
-
-    // Use nanoseconds for uniqueness in case two updates run back-to-back
-    let temp_dir = std::env::temp_dir().join(format!(
-        "merod-update-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    tokio::fs::create_dir_all(&temp_dir).await.map_err(|e| {
-        TauriError::new(
-            TauriErrorCode::DirectoryError,
-            format!("create temp dir: {}", e),
-        )
-    })?;
-    // Restrict temp dir to owner only so other processes can't tamper with the download
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&temp_dir, std::fs::Permissions::from_mode(0o700)).map_err(
-            |e| {
-                TauriError::new(
-                    TauriErrorCode::DirectoryError,
-                    format!("set temp dir permissions: {}", e),
-                )
-            },
-        )?;
-    }
-
-    let archive_path = temp_dir.join(&safe_asset_name);
-    // Binary downloads can be tens of MB; use a longer timeout than the shared 30s client.
-    // merod binaries are a few MB; loading into memory before writing is acceptable for a desktop app.
-    let download_client = reqwest::Client::builder()
-        .danger_accept_invalid_certs(false)
-        .timeout(std::time::Duration::from_secs(300))
-        .build()
-        .map_err(|e| {
-            TauriError::new(
-                TauriErrorCode::InternalError,
-                format!("build download client: {}", e),
-            )
-        })?;
-    let dl_resp = download_client
-        .get(&asset_url)
-        .header("User-Agent", "calimero-desktop")
-        .send()
-        .await
-        .map_err(|e| TauriError::new(TauriErrorCode::InternalError, format!("download: {}", e)))?;
-    if !dl_resp.status().is_success() {
-        return Err(TauriError::new(
-            TauriErrorCode::InternalError,
-            format!("Asset download returned HTTP {}", dl_resp.status()),
-        ));
-    }
-    let bytes = dl_resp.bytes().await.map_err(|e| {
-        TauriError::new(
-            TauriErrorCode::InternalError,
-            format!("read download: {}", e),
-        )
-    })?;
-    tokio::fs::write(&archive_path, &bytes).await.map_err(|e| {
-        TauriError::new(
-            TauriErrorCode::FileReadError,
-            format!("write archive: {}", e),
-        )
-    })?;
-
-    // Extract
-    let extracted = extract_merod_binary(&archive_path, &safe_asset_name, &temp_dir).await?;
-
-    // Atomic replace: copy to .tmp, set +x, rename over the old binary
     let tmp_path = binary_path.with_extension("tmp");
-    tokio::fs::copy(&extracted, &tmp_path).await.map_err(|e| {
+    tokio::fs::copy(&installed, &tmp_path).await.map_err(|e| {
         TauriError::new(
             TauriErrorCode::InternalError,
             format!("copy new binary: {}", e),
         )
     })?;
-
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&tmp_path, std::fs::Permissions::from_mode(0o755)).map_err(
-            |e| TauriError::new(TauriErrorCode::InternalError, format!("set +x: {}", e)),
-        )?;
+        std::fs::set_permissions(&tmp_path, std::fs::Permissions::from_mode(0o755))
+            .map_err(|e| TauriError::new(TauriErrorCode::InternalError, format!("set +x: {}", e)))?;
     }
 
-    // Rename old binary to .bak first; restore it on rename failure OR version mismatch.
-    // On Windows rename-over-existing is not allowed, so we must .bak first regardless.
-    // On Unix rename is atomic over the destination, but we still keep a .bak until
-    // version verification succeeds so we can roll back if the new binary is wrong.
+    // Back up first: Windows refuses a rename over an existing file, and the
+    // backup is what restores the working binary if the swap goes wrong.
     let bak_path = binary_path.with_extension("bak");
-    {
-        let _ = tokio::fs::remove_file(&bak_path).await; // remove stale .bak if present
-        if binary_path.exists() {
-            tokio::fs::rename(&binary_path, &bak_path)
-                .await
-                .map_err(|e| {
-                    TauriError::new(
-                        TauriErrorCode::InternalError,
-                        format!("backup old binary: {}", e),
-                    )
-                })?;
-        }
-        if let Err(e) = tokio::fs::rename(&tmp_path, &binary_path).await {
-            let _ = tokio::fs::rename(&bak_path, &binary_path).await;
-            return Err(TauriError::new(
-                TauriErrorCode::InternalError,
-                format!("replace binary: {}", e),
-            ));
-        }
-        // .bak intentionally kept until version verification succeeds below
+    let _ = tokio::fs::remove_file(&bak_path).await;
+    if binary_path.exists() {
+        tokio::fs::rename(&binary_path, &bak_path)
+            .await
+            .map_err(|e| {
+                TauriError::new(
+                    TauriErrorCode::InternalError,
+                    format!("backup old binary: {}", e),
+                )
+            })?;
     }
-
-    // Cleanup temp dir (archive and extracted files no longer needed regardless of verification outcome)
-    let _ = tokio::fs::remove_dir_all(&temp_dir).await;
-
-    // Verify — .bak still present so we can restore on mismatch
-    let new_version = get_merod_version_at(&binary_path)
-        .await
-        .unwrap_or_else(|| "unknown".to_string());
-
-    if !merod_versions::version_matches_tag(&new_version, expected) {
-        // Restore backup so the app is not left with a wrong binary
+    if let Err(e) = tokio::fs::rename(&tmp_path, &binary_path).await {
         let _ = tokio::fs::rename(&bak_path, &binary_path).await;
         return Err(TauriError::new(
             TauriErrorCode::InternalError,
-            format!(
-                "Version mismatch after replace: expected '{}', binary reports '{}'",
-                expected_version_output, new_version
-            ),
+            format!("replace binary: {}", e),
         ));
     }
 
-    // Verification passed — safe to discard backup
+    let new_version = get_merod_version_at(&binary_path)
+        .await
+        .unwrap_or_else(|| "unknown".to_string());
+    if !merod_versions::version_matches_tag(&new_version, expected) {
+        let _ = tokio::fs::rename(&bak_path, &binary_path).await;
+        return Err(TauriError::new(
+            TauriErrorCode::MerodVersionMismatch,
+            format!(
+                "{VERSION_MISMATCH}: expected 'merod {}', binary reports '{}'",
+                expected, new_version
+            ),
+        ));
+    }
     let _ = tokio::fs::remove_file(&bak_path).await;
 
     *BUNDLED_MEROD_VERSION.lock_unpoisoned() = Some(new_version.clone());
@@ -3590,20 +3262,9 @@ async fn pick_directory(
 
     let mut dialog = app_handle.dialog().file();
 
-    // Set default directory if provided
-    if let Some(path_str) = default_path {
-        // Expand ~ to home directory
-        let expanded_path = if path_str.starts_with("~") {
-            if let Some(home) = dirs::home_dir() {
-                path_str.replacen("~", &home.to_string_lossy(), 1)
-            } else {
-                path_str
-            }
-        } else {
-            path_str
-        };
-
-        let path_buf = std::path::PathBuf::from(&expanded_path);
+    // Best-effort default directory: an unresolvable path just leaves the picker
+    // where the OS would have opened it.
+    if let Some(path_buf) = default_path.and_then(|p| resolve_home_dir(Some(p)).ok()) {
         if path_buf.exists() && path_buf.is_dir() {
             dialog = dialog.set_directory(path_buf);
         } else if let Some(parent) = path_buf.parent() {
@@ -3704,20 +3365,8 @@ struct DeleteOutcome {
 
 #[tauri::command]
 async fn delete_calimero_data_dir(data_dir: String) -> Result<DeleteOutcome, TauriError> {
-    let expanded = if data_dir.starts_with("~") {
-        if let Some(home) = dirs::home_dir() {
-            data_dir.replacen("~", &home.to_string_lossy(), 1)
-        } else {
-            return Err(TauriError::new(
-                TauriErrorCode::HomeDirNotFound,
-                "Could not resolve home directory",
-            ));
-        }
-    } else {
-        data_dir
-    };
-
-    let path = std::path::PathBuf::from(&expanded);
+    let path = resolve_home_dir(Some(data_dir))?;
+    let expanded = path.to_string_lossy().into_owned();
 
     // If path doesn't exist, nothing to delete
     if !path.exists() {
@@ -3808,20 +3457,9 @@ fn launcher_bundle_is_removable(bundle: &std::path::Path, home: &std::path::Path
             .any(|c| c.as_os_str() == std::ffi::OsStr::new(".."))
 }
 
-/// Tear down every app session this desktop has handed out. Clearing the
-/// desktop's own `localStorage` was never enough:
-///
-/// - Each app frontend is its own web origin, so the SSO'd access token its
-///   MeroJs persists lands in the webview's shared website-data store
-///   (`~/Library/WebKit/<bundle id>`), which no `localStorage.removeItem` from
-///   the desktop's origin can reach. Reopening an app after a "reset" resumed
-///   the old authenticated session.
-/// - Open app windows and running launcher shells hold live sessions of their
-///   own, and a live webview re-flushes its `localStorage` to disk on close —
-///   so they must go first, or the wipe is undone behind us.
-///
-/// Every step is best-effort except the final website-data wipe, whose failure
-/// is reported so the caller can tell the user their sessions may persist.
+/// Tear down every app session this desktop handed out. Each app is its own web
+/// origin, so its token lives in the webview's shared store, not in the desktop's
+/// `localStorage`; live windows must close first or they re-flush it on the way out.
 #[tauri::command]
 async fn clear_app_sessions(app_handle: tauri::AppHandle) -> Result<String, TauriError> {
     let mut done: Vec<String> = Vec::new();
@@ -3889,14 +3527,9 @@ async fn clear_app_sessions(app_handle: tauri::AppHandle) -> Result<String, Taur
     Ok(summary)
 }
 
-/// Remove the per-app launchers: the generated `.app` bundles, the capability
-/// store that keeps authorizing them (`caps.json` — a launcher built before a
-/// total nuke would otherwise still get tokens brokered over the host socket),
-/// and the extracted shell binary they exec. Total-nuke only: a launcher is a
-/// dock icon the user placed, so the softer "reset settings" leaves them alone.
-///
-/// Best-effort per launcher; a bundle we can't remove is logged, not fatal.
-/// Call `clear_app_sessions` first so no shell is still running out of a bundle.
+/// Remove the per-app launchers, `caps.json` (which would keep brokering tokens
+/// to a surviving bundle) and the shell they exec. Total-nuke only, and after
+/// `clear_app_sessions`, so no shell is still running out of a bundle.
 #[tauri::command]
 async fn remove_app_launchers(app_handle: tauri::AppHandle) -> Result<String, TauriError> {
     #[cfg(not(target_os = "macos"))]
@@ -4435,10 +4068,39 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        launcher_bundle_is_removable, merod_target_triple, parse_app_deep_link, parse_node_ports,
-        replace_multiaddr_port, score_merod_asset, DEFAULT_NODE_PORTS,
+        launcher_bundle_is_removable, parse_app_deep_link, parse_node_ports,
+        replace_multiaddr_port, validate_node_name, DEFAULT_NODE_PORTS,
     };
     use std::path::Path;
+
+    #[test]
+    fn a_node_name_that_could_escape_its_directory_or_the_argv_is_refused() {
+        for name in ["node1", "node-1", "node_1", "N0"] {
+            assert!(validate_node_name(name).is_ok(), "{name} is a valid name");
+        }
+        for name in [
+            "",
+            "-node",              // merod would read it as a flag
+            "../etc",             // traversal
+            "a/b",
+            "a\\b",
+            "a;rm -rf /",         // shell metacharacters
+            "a$b",
+            "a`b`",
+            "a b",
+            "nodé",               // non-ascii
+            &"n".repeat(65),      // over MAX_NODE_NAME_LENGTH
+        ] {
+            assert!(validate_node_name(name).is_err(), "{name:?} must be refused");
+        }
+    }
+
+    #[test]
+    fn a_launcher_name_of_pure_punctuation_falls_back_instead_of_going_blank() {
+        assert_eq!(super::safe_launcher_name("Mero Drive"), "Mero Drive");
+        assert_eq!(super::safe_launcher_name("a/b:c"), "a_b_c");
+        assert_eq!(super::safe_launcher_name("!!!"), "Calimero App");
+    }
 
     /// Two node homes that differ, for the tests that match tracked state on one.
     const HOME_A: &str = "/tmp/calimero-test-home-a";
@@ -4655,25 +4317,6 @@ listen = ["/ip4/0.0.0.0/udp/4001/quic-v1", "/ip4/0.0.0.0/tcp/4002"]
         assert!(parse_app_deep_link("http://localhost:2528/api").is_none());
     }
 
-    #[test]
-    fn test_score_merod_asset_windows() {
-        let triple = "x86_64-pc-windows-msvc";
-        assert!(score_merod_asset("merod-x86_64-pc-windows-msvc.zip", triple).is_some());
-        assert!(score_merod_asset("merod-x86_64-pc-windows-msvc.exe", triple).is_some());
-        assert!(score_merod_asset("merod-aarch64-apple-darwin.tar.gz", triple).is_none());
-    }
-
-    #[test]
-    fn test_merod_target_triple_is_known() {
-        let triple = merod_target_triple();
-        assert_ne!(
-            triple, "unknown",
-            "target triple should be known on supported platforms"
-        );
-        // Must contain OS and arch info
-        assert!(triple.contains('-'), "triple should be dash-separated");
-    }
-
     /// The probe decides from the binary's own `--help`, so a merod that does
     /// not know the flag never has it passed — an unknown argument makes merod
     /// refuse to start, which would turn a stop improvement into a node that
@@ -4699,6 +4342,45 @@ listen = ["/ip4/0.0.0.0/udp/4001/quic-v1", "/ip4/0.0.0.0/tcp/4002"]
         );
 
         assert!(super::merod_supports_stdin_stop(&new).await);
+    }
+
+    /// `utils/updater.ts` rethrows on one phrase and warns on every other error
+    /// from this command, so a merod that downloads wrong has to keep producing
+    /// it - otherwise the app updates over a binary it knows is stale. The phrase
+    /// is spelled out here rather than read from the constant: the contract is
+    /// with a string literal in TypeScript that this test cannot change.
+    #[tokio::test]
+    async fn a_mismatched_merod_keeps_the_phrase_the_app_updater_aborts_on() {
+        let dir = tempfile::tempdir().unwrap();
+        let wrong = fake_merod(dir.path(), "wrong-merod", "merod 0.0.1\n");
+
+        // A real binary reporting the wrong version, put through the check the
+        // installer makes before it refuses to install.
+        let reported = super::get_merod_version_at(&wrong)
+            .await
+            .expect("the fake merod reports a version");
+        assert!(!crate::merod_versions::version_matches_tag(&reported, "0.11.0"));
+        let refused = super::TauriError::new(
+            super::TauriErrorCode::MerodVersionMismatch,
+            format!("Downloaded binary reports '{reported}', expected 'merod 0.11.0'"),
+        );
+
+        let surfaced = super::merod_install_failure(refused, "0.11.0");
+        assert!(
+            surfaced.message.contains("Version mismatch after replace"),
+            "the updater aborts only on that phrase; got {:?}",
+            surfaced.message
+        );
+
+        // Every other install failure keeps the installer's own words.
+        let other = super::TauriError::new(
+            super::TauriErrorCode::InternalError,
+            "GitHub API: timed out",
+        );
+        assert_eq!(
+            super::merod_install_failure(other, "0.11.0").message,
+            "GitHub API: timed out"
+        );
     }
 
     /// A probe that cannot run answers "no". Guessing "yes" would pass an

@@ -2,6 +2,7 @@
 //! The ONLY thing crossing this socket is "give me a fresh access token".
 
 use serde::{Deserialize, Serialize};
+use std::os::unix::io::AsRawFd;
 use std::path::Path;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -30,35 +31,11 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 
 /// True iff the connected peer runs as the same OS user as us.
-pub fn same_user_peer(stream: &UnixStream) -> bool {
-    use std::os::unix::io::AsRawFd;
-    extern "C" {
-        fn getpeereid(fd: i32, euid: *mut u32, egid: *mut u32) -> i32;
-        fn geteuid() -> u32;
-    }
-    let (mut euid, mut egid) = (0u32, 0u32);
-    let rc = unsafe { getpeereid(stream.as_raw_fd(), &mut euid, &mut egid) };
-    rc == 0 && euid == unsafe { geteuid() }
-}
-
-async fn handle_conn<F, Fut>(stream: UnixStream, handler: F) -> std::io::Result<()>
-where
-    F: Fn(BrokerRequest) -> Fut,
-    Fut: std::future::Future<Output = BrokerResponse>,
-{
-    let mut reader = BufReader::new(stream);
-    let mut line = String::new();
-    reader.read_line(&mut line).await?;
-    let resp = match serde_json::from_str::<BrokerRequest>(line.trim()) {
-        Ok(req) => handler(req).await,
-        Err(e) => BrokerResponse {
-            access_token: None,
-            error: Some(format!("bad request: {e}")),
-        },
-    };
-    let mut bytes = serde_json::to_vec(&resp).unwrap_or_default();
-    bytes.push(b'\n');
-    reader.into_inner().write_all(&bytes).await
+fn same_user_peer(stream: &UnixStream) -> bool {
+    let (mut euid, mut egid) = (0, 0);
+    // SAFETY: both out-params are live locals, and the fd outlives the call.
+    let rc = unsafe { libc::getpeereid(stream.as_raw_fd(), &mut euid, &mut egid) };
+    rc == 0 && euid == unsafe { libc::geteuid() }
 }
 
 pub async fn serve<F, Fut>(listener: UnixListener, handler: F) -> std::io::Result<()>
@@ -73,7 +50,19 @@ where
         }
         let handler = handler.clone();
         tokio::spawn(async move {
-            let _ = handle_conn(stream, handler).await;
+            let mut reader = BufReader::new(stream);
+            let mut line = String::new();
+            reader.read_line(&mut line).await?;
+            let resp = match serde_json::from_str::<BrokerRequest>(line.trim()) {
+                Ok(req) => handler(req).await,
+                Err(e) => BrokerResponse {
+                    access_token: None,
+                    error: Some(format!("bad request: {e}")),
+                },
+            };
+            let mut bytes = serde_json::to_vec(&resp).unwrap_or_default();
+            bytes.push(b'\n');
+            reader.into_inner().write_all(&bytes).await
         });
     }
 }

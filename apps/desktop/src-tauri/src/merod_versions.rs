@@ -22,12 +22,12 @@ pub enum VersionId {
     Local(PathBuf),
 }
 
-pub const BUNDLED_ID: &str = "bundled";
+const BUNDLED_ID: &str = "bundled";
 const LOCAL_PREFIX: &str = "local:";
 
 /// Check a download against the `sha256:...` digest GitHub publishes for the
 /// asset. Catches corruption and a tampered CDN, not a malicious release itself.
-pub(crate) fn verify_sha256(bytes: &[u8], expected: &str) -> Result<(), TauriError> {
+fn verify_sha256(bytes: &[u8], expected: &str) -> Result<(), TauriError> {
     // Refuse an algorithm we cannot compute: a digest we are unable to check is
     // not a digest that passed. An absent digest is handled by the caller.
     let Some(want) = expected.strip_prefix("sha256:") else {
@@ -56,6 +56,18 @@ fn github_get(url: &str) -> reqwest::RequestBuilder {
         .header("User-Agent", "calimero-desktop")
 }
 
+/// The `message` GitHub puts in an error body ("API rate limit exceeded…"), which
+/// is the only useful thing in a non-2xx response.
+fn github_error(body: &str) -> String {
+    #[derive(Deserialize)]
+    struct GhError {
+        message: String,
+    }
+    serde_json::from_str::<GhError>(body)
+        .map(|e| e.message)
+        .unwrap_or_else(|_| "unknown error".to_string())
+}
+
 /// Asset downloads must stay on GitHub, on every redirect hop, not just the first.
 fn is_allowed_asset_url(url: &url::Url) -> bool {
     let host = url.host_str().unwrap_or("");
@@ -77,7 +89,7 @@ pub(crate) fn version_matches_tag(reported: &str, tag: &str) -> bool {
 
 /// Tags land in both a URL and a directory name. `.` and `..` need excluding
 /// separately: both pass the charset yet resolve out of their own directory.
-pub fn is_safe_tag(tag: &str) -> bool {
+fn is_safe_tag(tag: &str) -> bool {
     !tag.is_empty()
         && tag != "."
         && tag != ".."
@@ -89,7 +101,7 @@ pub fn is_safe_tag(tag: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_')
 }
 
-pub fn parse_version_id(raw: &str) -> Result<VersionId, TauriError> {
+pub(crate) fn parse_version_id(raw: &str) -> Result<VersionId, TauriError> {
     if raw == BUNDLED_ID {
         return Ok(VersionId::Bundled);
     }
@@ -115,7 +127,7 @@ pub fn parse_version_id(raw: &str) -> Result<VersionId, TauriError> {
     ))
 }
 
-pub fn version_id_to_string(id: &VersionId) -> String {
+pub(crate) fn version_id_to_string(id: &VersionId) -> String {
     match id {
         VersionId::Bundled => BUNDLED_ID.to_string(),
         VersionId::Release(tag) => tag.clone(),
@@ -125,11 +137,11 @@ pub fn version_id_to_string(id: &VersionId) -> String {
 
 /// Root of the shared binary store. Deliberately under the app data directory:
 /// writing into the app bundle would break its signature seal.
-pub fn store_dir(app_data_dir: &Path) -> PathBuf {
+fn store_dir(app_data_dir: &Path) -> PathBuf {
     app_data_dir.join("merod")
 }
 
-pub fn release_binary_path(app_data_dir: &Path, tag: &str) -> PathBuf {
+fn release_binary_path(app_data_dir: &Path, tag: &str) -> PathBuf {
     // Windows needs the extension: Command::new does not append .exe to an
     // explicit path the way PATH lookup does.
     let name = if cfg!(target_os = "windows") { "merod.exe" } else { "merod" };
@@ -147,11 +159,11 @@ pub struct NodePin {
     pub version_at_init: Option<String>,
 }
 
-pub fn pin_path(home_dir: &Path, node_name: &str) -> PathBuf {
+fn pin_path(home_dir: &Path, node_name: &str) -> PathBuf {
     home_dir.join(node_name).join("merod-version.json")
 }
 
-pub fn read_pin_raw(home_dir: &Path, node_name: &str) -> Option<NodePin> {
+fn read_pin_raw(home_dir: &Path, node_name: &str) -> Option<NodePin> {
     let raw = std::fs::read_to_string(pin_path(home_dir, node_name)).ok()?;
     serde_json::from_str(&raw).ok()
 }
@@ -213,36 +225,40 @@ const RELEASE_CACHE_TTL: Duration = Duration::from_secs(3600);
 
 static RELEASE_CACHE: Mutex<Option<(Instant, ReleaseListing)>> = Mutex::new(None);
 
-pub(crate) fn releases_from_json(body: &serde_json::Value, target: &str) -> Vec<ReleaseInfo> {
-    body.as_array()
-        .map(|items| {
-            items
+/// The parts of GitHub's release JSON this app reads. Everything but the tag and
+/// the asset name defaults, so one unusual release cannot fail a whole listing.
+#[derive(Debug, Deserialize)]
+struct GhRelease {
+    #[serde(default)]
+    tag_name: String,
+    #[serde(default)]
+    prerelease: bool,
+    #[serde(default)]
+    assets: Vec<GhAsset>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GhAsset {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    browser_download_url: String,
+    digest: Option<String>,
+}
+
+fn releases_from_json(releases: &[GhRelease], target: &str) -> Vec<ReleaseInfo> {
+    releases
+        .iter()
+        .filter(|r| is_safe_tag(&r.tag_name))
+        .map(|r| ReleaseInfo {
+            tag: r.tag_name.clone(),
+            prerelease: r.prerelease,
+            has_asset: r
+                .assets
                 .iter()
-                .filter_map(|item| {
-                    let tag = item["tag_name"].as_str()?;
-                    if !is_safe_tag(tag) {
-                        return None;
-                    }
-                    let has_asset = item["assets"]
-                        .as_array()
-                        .map(|assets| {
-                            assets.iter().any(|a| {
-                                a["name"]
-                                    .as_str()
-                                    .and_then(|n| score_merod_asset(n, target))
-                                    .is_some()
-                            })
-                        })
-                        .unwrap_or(false);
-                    Some(ReleaseInfo {
-                        tag: tag.to_string(),
-                        prerelease: item["prerelease"].as_bool().unwrap_or(false),
-                        has_asset,
-                    })
-                })
-                .collect()
+                .any(|a| score_merod_asset(&a.name, target).is_some()),
         })
-        .unwrap_or_default()
+        .collect()
 }
 
 /// Releases plus whether they came from an expired cache after a failed fetch,
@@ -275,18 +291,17 @@ fn stale_or_error(error: TauriError) -> Result<ReleaseListing, TauriError> {
 #[tauri::command]
 pub async fn list_merod_releases(refresh: Option<bool>) -> Result<ReleaseListing, TauriError> {
     if !refresh.unwrap_or(false) {
-        if let Ok(guard) = RELEASE_CACHE.lock() {
-            if let Some((fetched_at, cached)) = guard.as_ref() {
-                if fetched_at.elapsed() < RELEASE_CACHE_TTL {
-                    return Ok(cached.clone());
-                }
+        if let Some((fetched_at, cached)) = RELEASE_CACHE.lock_unpoisoned().as_ref() {
+            if fetched_at.elapsed() < RELEASE_CACHE_TTL {
+                return Ok(cached.clone());
             }
         }
     }
 
-    let response = github_get("https://api.github.com/repos/calimero-network/core/releases?per_page=40")
-        .send()
-        .await;
+    let response =
+        github_get("https://api.github.com/repos/calimero-network/core/releases?per_page=40")
+            .send()
+            .await;
 
     let response = match response {
         Ok(r) => r,
@@ -299,8 +314,25 @@ pub async fn list_merod_releases(refresh: Option<bool>) -> Result<ReleaseListing
     };
 
     let status = response.status();
-    let body: serde_json::Value = match response.json().await {
+    let body = match response.text().await {
         Ok(b) => b,
+        Err(e) => {
+            return stale_or_error(TauriError::new(
+                TauriErrorCode::InternalError,
+                format!("Read releases response: {}", e),
+            ))
+        }
+    };
+
+    if !status.is_success() {
+        return stale_or_error(TauriError::new(
+            TauriErrorCode::InternalError,
+            format!("GitHub API returned {}: {}", status, github_error(&body)),
+        ));
+    }
+
+    let releases: Vec<GhRelease> = match serde_json::from_str(&body) {
+        Ok(r) => r,
         Err(e) => {
             return stale_or_error(TauriError::new(
                 TauriErrorCode::InternalError,
@@ -309,21 +341,11 @@ pub async fn list_merod_releases(refresh: Option<bool>) -> Result<ReleaseListing
         }
     };
 
-    if !status.is_success() {
-        let msg = body["message"].as_str().unwrap_or("unknown error");
-        return stale_or_error(TauriError::new(
-            TauriErrorCode::InternalError,
-            format!("GitHub API returned {}: {}", status, msg),
-        ));
-    }
-
     let listing = ReleaseListing {
-        releases: releases_from_json(&body, merod_target_triple()),
+        releases: releases_from_json(&releases, merod_target_triple()),
         stale: false,
     };
-    if let Ok(mut guard) = RELEASE_CACHE.lock() {
-        *guard = Some((Instant::now(), listing.clone()));
-    }
+    *RELEASE_CACHE.lock_unpoisoned() = Some((Instant::now(), listing.clone()));
     Ok(listing)
 }
 
@@ -418,7 +440,7 @@ pub(crate) fn nodes_using(home_dir: &Path, id: &str) -> Vec<String> {
 
 /// Download and extract `tag` into the store unless it is already there.
 /// Installs of the same tag are serialised so two nodes cannot race the download.
-pub async fn ensure_release_installed(
+pub(crate) async fn ensure_release_installed(
     app_data_dir: &Path,
     tag: &str,
 ) -> Result<PathBuf, TauriError> {
@@ -462,38 +484,34 @@ pub async fn ensure_release_installed(
         .await
         .map_err(|e| TauriError::new(TauriErrorCode::InternalError, format!("GitHub API: {}", e)))?;
     let status = response.status();
-    let release: serde_json::Value = response.json().await.map_err(|e| {
-        TauriError::new(TauriErrorCode::InternalError, format!("Parse release JSON: {}", e))
+    let body = response.text().await.map_err(|e| {
+        TauriError::new(TauriErrorCode::InternalError, format!("Read release: {}", e))
     })?;
     if !status.is_success() {
-        let msg = release["message"].as_str().unwrap_or("unknown error");
         return Err(TauriError::new(
             TauriErrorCode::InternalError,
-            format!("GitHub API returned {}: {}", status, msg),
+            format!("GitHub API returned {}: {}", status, github_error(&body)),
         ));
     }
+    let release: GhRelease = serde_json::from_str(&body).map_err(|e| {
+        TauriError::new(TauriErrorCode::InternalError, format!("Parse release JSON: {}", e))
+    })?;
 
-    let (asset_name, asset_url, asset_digest) = release["assets"]
-        .as_array()
-        .ok_or_else(|| {
-            TauriError::new(TauriErrorCode::InternalError, "No assets in GitHub release")
-        })?
+    let asset = release
+        .assets
         .iter()
-        .filter_map(|a| {
-            let name = a["name"].as_str()?;
-            let url = a["browser_download_url"].as_str()?;
-            let score = score_merod_asset(name, target)?;
-            let digest = a["digest"].as_str().map(str::to_string);
-            Some((score, name.to_string(), url.to_string(), digest))
-        })
-        .min_by_key(|(s, _, _, _)| *s)
-        .map(|(_, n, u, d)| (n, u, d))
+        .filter(|a| !a.browser_download_url.is_empty())
+        .filter_map(|a| Some((score_merod_asset(&a.name, target)?, a)))
+        .min_by_key(|(score, _)| *score)
+        .map(|(_, a)| a)
         .ok_or_else(|| {
             TauriError::new(
                 TauriErrorCode::FileNotFound,
                 format!("Release {} ships no merod build for {}", tag, target),
             )
         })?;
+    let asset_url = asset.browser_download_url.clone();
+    let asset_digest = asset.digest.clone();
 
     let parsed = url::Url::parse(&asset_url)
         .map_err(|e| TauriError::new(TauriErrorCode::InvalidUrl, format!("asset URL: {}", e)))?;
@@ -504,7 +522,7 @@ pub async fn ensure_release_installed(
         ));
     }
 
-    let safe_asset_name: String = Path::new(&asset_name)
+    let safe_asset_name: String = Path::new(&asset.name)
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("merod-asset")
@@ -613,9 +631,11 @@ pub async fn ensure_release_installed(
             let expected = format!("merod {}", tag);
             match reported {
                 Some(ref v) if version_matches_tag(v, tag) => {}
+                // Its own code: `download_and_replace_merod` has to recognise this
+                // one failure to keep the phrase the app updater aborts on.
                 other => {
                     return Err(TauriError::new(
-                        TauriErrorCode::InternalError,
+                        TauriErrorCode::MerodVersionMismatch,
                         format!(
                             "Downloaded binary reports '{}', expected '{}'",
                             other.unwrap_or_else(|| "nothing".to_string()),
@@ -645,7 +665,7 @@ pub async fn ensure_release_installed(
     install_result
 }
 
-fn app_data(app_handle: &tauri::AppHandle) -> Result<PathBuf, TauriError> {
+pub(crate) fn app_data(app_handle: &tauri::AppHandle) -> Result<PathBuf, TauriError> {
     app_handle.path().app_data_dir().map_err(|e| {
         TauriError::with_details(
             TauriErrorCode::DirectoryError,
@@ -824,28 +844,16 @@ pub async fn remove_merod_version(
 // ── merod binary helpers, moved here from main.rs so the module that owns
 // version resolution also owns the primitives it is built on ──
 
-/// Returns the Rust target triple for the running platform, used to pick the
-/// right GitHub release asset.
-pub(crate) fn merod_target_triple() -> &'static str {
-    if cfg!(target_os = "macos") && cfg!(target_arch = "aarch64") {
-        "aarch64-apple-darwin"
-    } else if cfg!(target_os = "macos") && cfg!(target_arch = "x86_64") {
-        "x86_64-apple-darwin"
-    } else if cfg!(target_os = "linux") && cfg!(target_arch = "x86_64") {
-        "x86_64-unknown-linux-gnu"
-    } else if cfg!(target_os = "linux") && cfg!(target_arch = "aarch64") {
-        "aarch64-unknown-linux-gnu"
-    } else if cfg!(target_os = "windows") && cfg!(target_arch = "x86_64") {
-        "x86_64-pc-windows-msvc"
-    } else {
-        "unknown"
-    }
+/// The Rust target triple this binary was built for, which is how the GitHub
+/// release assets are named. Emitted by build.rs from cargo's own `TARGET`.
+fn merod_target_triple() -> &'static str {
+    env!("TARGET_TRIPLE")
 }
 
 
 /// Scores a GitHub release asset name for the given target triple.
 /// Lower score = better match. Returns `None` if the asset is not for this platform.
-pub(crate) fn score_merod_asset(name: &str, target_triple: &str) -> Option<u32> {
+fn score_merod_asset(name: &str, target_triple: &str) -> Option<u32> {
     let lower = name.to_lowercase();
     // Releases use "merod-<triple>" or "merod_<triple>"; require a separator so
     // a name that merely starts with "merod" with no delimiter after it is rejected.
@@ -869,7 +877,7 @@ pub(crate) fn score_merod_asset(name: &str, target_triple: &str) -> Option<u32> 
 
 
 /// Recursively finds a `merod` / `merod.exe` binary inside a directory tree.
-pub(crate) fn find_merod_binary_in_dir(dir: &std::path::Path) -> Option<std::path::PathBuf> {
+fn find_merod_binary_in_dir(dir: &std::path::Path) -> Option<std::path::PathBuf> {
     let entries = std::fs::read_dir(dir).ok()?;
     for entry in entries.flatten() {
         let path = entry.path();
@@ -920,7 +928,7 @@ pub(crate) async fn get_merod_version_at(path: &std::path::Path) -> Option<Strin
 
 /// Extracts the merod binary from an archive (`.tar.gz` / `.zip`) into `temp_dir`.
 /// Returns the path to the extracted binary.
-pub(crate) async fn extract_merod_binary(
+async fn extract_merod_binary(
     archive_path: &std::path::Path,
     asset_name: &str,
     temp_dir: &std::path::Path,
@@ -1080,6 +1088,14 @@ mod tests {
             score_merod_asset("merod_aarch64-apple-darwin.tar.gz", triple).is_some(),
             "published underscore asset name must match"
         );
+    }
+
+    #[test]
+    fn test_score_merod_asset_windows() {
+        let triple = "x86_64-pc-windows-msvc";
+        assert!(score_merod_asset("merod-x86_64-pc-windows-msvc.zip", triple).is_some());
+        assert!(score_merod_asset("merod-x86_64-pc-windows-msvc.exe", triple).is_some());
+        assert!(score_merod_asset("merod-aarch64-apple-darwin.tar.gz", triple).is_none());
     }
 
     #[test]
@@ -1254,15 +1270,16 @@ mod tests {
 
     #[test]
     fn maps_release_json_to_release_info() {
-        let body = serde_json::json!([
+        let body = r#"[
             { "tag_name": "0.11.0-rc.19", "prerelease": true,
               "assets": [{ "name": "merod_aarch64-apple-darwin.tar.gz" }] },
             { "tag_name": "0.10.0", "prerelease": false,
               "assets": [{ "name": "meroctl_aarch64-apple-darwin.tar.gz" }] },
             { "tag_name": "bad tag", "prerelease": false, "assets": [] }
-        ]);
+        ]"#;
+        let releases: Vec<GhRelease> = serde_json::from_str(body).unwrap();
 
-        let out = releases_from_json(&body, "aarch64-apple-darwin");
+        let out = releases_from_json(&releases, "aarch64-apple-darwin");
 
         // The unsafe tag is dropped entirely; the other two survive in order.
         assert_eq!(out.len(), 2);

@@ -438,51 +438,6 @@
   word-break: break-all;
 }
 
-.button {
-  padding: 10px 20px;
-  border: 1px solid transparent;
-  border-radius: var(--radius-md);
-  font-size: 14px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-  font-family: inherit;
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-}
-
-.button:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
-.button-primary {
-  background: var(--button-glass);
-  color: var(--accent-primary);
-  border-color: rgba(165, 255, 17, 0.2);
-  box-shadow: none;
-}
-
-.button-primary:hover:not(:disabled) {
-  background: var(--button-glass-hover);
-  border-color: rgba(165, 255, 17, 0.28);
-  transform: translateY(-1px);
-  box-shadow: var(--shadow-sm);
-}
-
-.button-secondary {
-  background: var(--surface-glass-soft);
-  color: var(--text-primary);
-  border: 1px solid var(--border-color);
-}
-
-.button-secondary:hover:not(:disabled) {
-  background: var(--button-glass);
-  border-color: var(--border-hover);
-}
-
-
-
 .agent-connected {
   margin-top: 20px;
   padding-top: 16px;
@@ -503,7 +458,7 @@
   margin-bottom: 0;
 }
 
-/* Standalone rather than a .button variant: App.css defines .button later in the
+/* Standalone rather than a .button variant: index.css defines .button later in the
    bundle, so any size set on a .button modifier here silently loses the cascade. */
 .agent-config-copy {
   flex-shrink: 0;

@@ -475,23 +475,6 @@
   border-color: var(--accent-primary);
 }
 
-.button-success {
-  background: var(--success);
-  color: white;
-  border: none;
-}
-
-.button-success:hover:not(:disabled) {
-  background: var(--success);
-  opacity: 0.9;
-  transform: translateY(-1px);
-}
-
-.button-success:disabled {
-  opacity: 0.7;
-  cursor: not-allowed;
-}
-
 .spinning {
   animation: spin 1s linear infinite;
 }

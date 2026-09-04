@@ -1,5 +1,3 @@
-import type { Page } from "@playwright/test";
-
 // ─── localStorage keys ───────────────────────────────────────────────────────
 
 export const STORAGE_KEYS = {
@@ -98,13 +96,6 @@ export const MOCK_PROVIDERS_RESPONSE = {
   },
 };
 
-export const MOCK_TOKEN_RESPONSE = {
-  data: {
-    access_token: MOCK_ACCESS_TOKEN,
-    refresh_token: MOCK_REFRESH_TOKEN,
-  },
-};
-
 // ─── Marketplace / Registry (V2 bundle API) ───────────────────────────────────
 // `fetchAppsFromRegistry` / `fetchAppManifest` expect V2 bundle objects
 // (`package`, `appVersion`, `wasm`, `metadata`, `signature`, `downloads`, …).
@@ -195,28 +186,8 @@ export const MOCK_INSTALLED_APPS = [
   },
 ];
 
-// ─── Contexts ────────────────────────────────────────────────────────────────
-
-export const MOCK_CONTEXTS = [
-  {
-    id: "ctx-001-abcdef1234567890",
-    name: "Test Context Alpha",
-    application_id: "installed-app-1",
-    protocol: "near",
-    created_at: "2025-03-01T12:00:00Z",
-  },
-  {
-    id: "ctx-002-1234567890abcdef",
-    name: "Test Context Beta",
-    application_id: "installed-app-2",
-    protocol: "near",
-    created_at: "2025-04-15T08:30:00Z",
-  },
-];
-
-/** Row shapes used by Playwright route mocks (same as `MOCK_INSTALLED_APPS` / `MOCK_CONTEXTS`). */
+/** Row shape used by Playwright route mocks (same as `MOCK_INSTALLED_APPS`). */
 export type MockInstalledAppRow = (typeof MOCK_INSTALLED_APPS)[number];
-export type MockContextRow = (typeof MOCK_CONTEXTS)[number];
 
 /**
  * JSON body for `GET .../admin-api/applications`.
@@ -237,21 +208,12 @@ export function listApplicationsWireBody(apps: MockInstalledAppRow[]): string {
 }
 
 /**
- * JSON body for `GET .../admin-api/contexts`.
+ * JSON body for `GET .../admin-api/contexts`. Every spec exercises the
+ * fresh-install (empty) case, so this always returns no contexts.
  * mero-js expects `{ contexts: Context[] }` after unwrap.
  */
-export function listContextsWireBody(rows: MockContextRow[]): string {
-  return JSON.stringify({
-    data: {
-      contexts: rows.map((c) => ({
-        id: c.id,
-        name: c.name,
-        applicationId: c.application_id,
-        protocol: c.protocol,
-        created_at: c.created_at,
-      })),
-    },
-  });
+export function listContextsWireBody(): string {
+  return JSON.stringify({ data: { contexts: [] } });
 }
 
 // ─── Health check response ───────────────────────────────────────────────────
@@ -269,10 +231,6 @@ export const EMBEDDED_NODE_SETTINGS: AppSettings = {
   embeddedNodeName: "test-node",
   embeddedNodePort: 2528,
   embeddedNodeDataDir: "~/.calimero",
-};
-
-export const DISCONNECTED_SETTINGS: AppSettings = {
-  ...AUTHENTICATED_SETTINGS,
 };
 
 // ─── Node identity (GET /admin-api/identity) ────────────────────────────────
@@ -391,7 +349,6 @@ export const API_ROUTES = {
   health: "**/auth/health",
   adminHealth: "**/admin-api/health",
   providers: "**/auth/providers",
-  requestToken: "**/auth/request-token",
   // The node's route is `/auth/refresh` (mero-js posts there). This used to read
   // `**/auth/refresh-token`, which matched nothing — the refresh path was
   // effectively untested and every refresh request escaped the mock.
@@ -410,8 +367,5 @@ export const API_ROUTES = {
   pairInit: "**/admin-api/account/pair-init",
   pairComplete: "**/admin-api/account/pair-complete",
   listContexts: "**/admin-api/contexts",
-  createContext: "**/admin-api/contexts",
-  deleteContext: "**/admin-api/contexts/*",
-  registryBundles: "**/api/v2/bundles",
   registryDownloadsRecord: "**/api/v2/downloads/record",
 } as const;

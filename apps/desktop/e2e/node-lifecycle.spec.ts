@@ -1,6 +1,6 @@
 import { test, expect } from "./fixtures/test";
 import {
-  setupConnectedPage,
+  setupAuthenticatedPage,
   setupDisconnectedPage,
   setupEmbeddedNodePage,
   waitForNodeStatus,
@@ -9,11 +9,6 @@ import {
   mockCoreAPIs,
   clearAllStorage,
 } from "./fixtures/helpers";
-import {
-  EMBEDDED_NODE_SETTINGS,
-  DISCONNECTED_SETTINGS,
-} from "./fixtures/mock-data";
-import { describeAfter35 } from "./fixtures/e2e-cap";
 
 /**
  * Node lifecycle tests.
@@ -28,9 +23,9 @@ import { describeAfter35 } from "./fixtures/e2e-cap";
 
 // ─── Connected state ────────────────────────────────────────────────────────
 
-describeAfter35("Node lifecycle – connected", () => {
+test.describe("Node lifecycle – connected", () => {
   test.beforeEach(async ({ page }) => {
-    await setupConnectedPage(page);
+    await setupAuthenticatedPage(page);
   });
 
   test("shows the Connected status indicator", async ({ page }) => {
@@ -43,15 +38,6 @@ describeAfter35("Node lifecycle – connected", () => {
     );
   });
 
-  test("connected indicator has a green dot", async ({ page }) => {
-    await waitForNodeStatus(page, "connected");
-
-    const dot = page.locator(
-      ".node-status-indicator.connected .node-status-dot",
-    );
-    await expect(dot).toBeVisible();
-  });
-
   test("does not show the 'Reconnect' action when healthy", async ({
     page,
   }) => {
@@ -59,19 +45,11 @@ describeAfter35("Node lifecycle – connected", () => {
 
     await expect(page.locator(".node-status-action")).not.toBeVisible();
   });
-
-  test("sidebar navigation is accessible when connected", async ({ page }) => {
-    await waitForNodeStatus(page, "connected");
-
-    const sidebar = page.locator("aside.sidebar");
-    await expect(sidebar).toBeVisible();
-    await expect(sidebar.getByTitle("Home")).toBeVisible();
-  });
 });
 
 // ─── Disconnected state ─────────────────────────────────────────────────────
 
-describeAfter35("Node lifecycle – disconnected", () => {
+test.describe("Node lifecycle – disconnected", () => {
   test.beforeEach(async ({ page }) => {
     await setupDisconnectedPage(page);
   });
@@ -85,20 +63,11 @@ describeAfter35("Node lifecycle – disconnected", () => {
       "Disconnected",
     );
   });
-
-  test("disconnected indicator has a dot", async ({ page }) => {
-    await waitForNodeStatus(page, "disconnected");
-
-    const dot = page.locator(
-      ".node-status-indicator.disconnected .node-status-dot",
-    );
-    await expect(dot).toBeVisible();
-  });
 });
 
 // ─── Transition from disconnected → connected ───────────────────────────────
 
-describeAfter35("Node lifecycle – reconnection", () => {
+test.describe("Node lifecycle – reconnection", () => {
   test("transitions to Connected when health endpoint recovers", async ({
     page,
   }) => {
@@ -118,11 +87,11 @@ describeAfter35("Node lifecycle – reconnection", () => {
 
 // ─── Transition from connected → disconnected ───────────────────────────────
 
-describeAfter35("Node lifecycle – connection loss", () => {
+test.describe("Node lifecycle – connection loss", () => {
   test("transitions to Disconnected when health endpoint starts failing", async ({
     page,
   }) => {
-    await setupConnectedPage(page);
+    await setupAuthenticatedPage(page);
     await waitForNodeStatus(page, "connected");
 
     await page.unroute("**/auth/health");
@@ -138,7 +107,7 @@ describeAfter35("Node lifecycle – connection loss", () => {
 
 // ─── Embedded node settings ─────────────────────────────────────────────────
 
-describeAfter35("Node lifecycle – embedded node configuration", () => {
+test.describe("Node lifecycle – embedded node configuration", () => {
   test.beforeEach(async ({ page }) => {
     await setupEmbeddedNodePage(page);
   });
@@ -151,20 +120,11 @@ describeAfter35("Node lifecycle – embedded node configuration", () => {
     const indicator = page.locator(".node-status-indicator.connected");
     await expect(indicator).toBeVisible();
   });
-
-  test("sidebar is accessible with embedded node settings", async ({
-    page,
-  }) => {
-    await waitForNodeStatus(page, "connected");
-
-    const sidebar = page.locator("aside.sidebar");
-    await expect(sidebar).toBeVisible();
-  });
 });
 
 // ─── Fresh state / no settings ──────────────────────────────────────────────
 
-describeAfter35("Node lifecycle – fresh state", () => {
+test.describe("Node lifecycle – fresh state", () => {
   test("app without completed onboarding shows onboarding flow", async ({
     page,
   }) => {

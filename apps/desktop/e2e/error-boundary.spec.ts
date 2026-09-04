@@ -60,21 +60,14 @@ test.describe("ErrorBoundary — Try Again", () => {
   });
 
   test("clicking Try Again re-renders the app", async ({ page }) => {
-    await mockCoreAPIs(page);
-    await page.goto("/");
-    await page.evaluate(
-      ([key, val]: [string, any]) => localStorage.setItem(key, JSON.stringify(val)),
-      [STORAGE_KEYS.settings, AUTHENTICATED_SETTINGS] as const,
-    );
-    await page.reload();
-
+    await seedAndLoad(page);
     await triggerRootError(page);
     await page.getByTestId("error-boundary-retry").click();
 
     // App content should be back — login or main shell visible
     await expect(
       page.locator("aside.sidebar, [data-testid='login-screen']")
-    ).toBeVisible({ timeout: 10_000 });
+    ).toBeVisible();
   });
 });
 
@@ -92,7 +85,7 @@ test.describe("ErrorBoundary — Reload App", () => {
     await page.getByTestId("error-boundary-reload").click();
     await navPromise;
 
-    await expect(page.getByTestId("error-boundary")).not.toBeVisible({ timeout: 10_000 });
+    await expect(page.getByTestId("error-boundary")).not.toBeVisible();
   });
 });
 
@@ -178,29 +171,12 @@ test.describe("ErrorBoundary — Copy Error", () => {
 // ─── Authenticated page — boundary wraps sections ────────────────────────────
 
 test.describe("ErrorBoundary — authenticated app sections", () => {
-  test("login screen is wrapped — error boundary test hook is registered", async ({ page }) => {
-    // Verify root ErrorBoundary hook is always available after app boots
-    await mockCoreAPIs(page);
-    await page.goto("/");
-    await page.evaluate(
-      ([key, val]: [string, any]) => localStorage.setItem(key, JSON.stringify(val)),
-      [STORAGE_KEYS.settings, AUTHENTICATED_SETTINGS] as const,
-    );
-    await page.reload();
-
-    const hookExists = await page.waitForFunction(
-      () => typeof (window as any).__triggerErrorBoundary === "function",
-      { timeout: 10_000 },
-    );
-    expect(hookExists).toBeTruthy();
-  });
-
   test("app recovers to main shell after error + retry on authenticated page", async ({ page }) => {
     await setupAuthenticatedPage(page);
     await triggerRootError(page, "Crash in main app");
 
     await expect(page.getByTestId("error-boundary")).toBeVisible();
     await page.getByTestId("error-boundary-retry").click();
-    await expect(page.locator("aside.sidebar")).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator("aside.sidebar")).toBeVisible();
   });
 });

@@ -1,8 +1,6 @@
 import { test, expect } from "./fixtures/test";
-import { describeAfter35 } from "./fixtures/e2e-cap";
 import {
   getInvokeCalls,
-  mockContextAPIs,
   mockCoreAPIs,
   navigateVia,
   seedDeveloperState,
@@ -29,7 +27,7 @@ async function openLogs(page: import("@playwright/test").Page) {
   await expect(page.getByRole("heading", { name: `Logs: ${NODE}` })).toBeVisible();
 }
 
-describeAfter35("Nodes – logs viewer", () => {
+test.describe("Nodes – logs viewer", () => {
   test.beforeEach(async ({ page }) => {
     await stubTauriInvoke(page, {
       list_merod_nodes: [NODE],
@@ -46,7 +44,6 @@ describeAfter35("Nodes – logs viewer", () => {
       export_merod_logs: { path: `/Users/tester/Downloads/merod-${NODE}.txt`, bytes: 5 * 1024 * 1024 },
     });
     await mockCoreAPIs(page);
-    await mockContextAPIs(page);
     await page.goto("/");
     await seedDeveloperState(page);
     await page.reload();

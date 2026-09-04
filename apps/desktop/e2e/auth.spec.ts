@@ -6,7 +6,6 @@ import {
   setupAuthenticatedPage,
   seedAuthenticatedState,
   seedSettings,
-  stubTauriIPC,
   waitForAppShellReady,
 } from "./fixtures/helpers";
 import {
@@ -31,11 +30,11 @@ test.describe("Login screen display", () => {
   });
 
   test("shows login screen when tokens are absent", async ({ page }) => {
-    await expect(page.getByTestId("login-screen")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByTestId("login-screen")).toBeVisible();
   });
 
   test("login screen has a Settings button", async ({ page }) => {
-    await expect(page.getByTestId("login-screen")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByTestId("login-screen")).toBeVisible();
     await expect(page.getByRole("button", { name: "Settings" })).toBeVisible();
   });
 });
@@ -66,7 +65,6 @@ test.describe("single-use refresh token rotation", () => {
   test("desktop keeps the rotated refresh token and never replays a consumed one", async ({
     page,
   }) => {
-    await stubTauriIPC(page);
     await mockCoreAPIs(page);
     const refresh = await mockSingleUseRefresh(page);
 
@@ -120,7 +118,6 @@ test.describe("single-use refresh token rotation", () => {
   test("node rejects a replayed refresh token with token_reuse and revokes the family", async ({
     page,
   }) => {
-    await stubTauriIPC(page);
     await mockCoreAPIs(page);
     const refresh = await mockSingleUseRefresh(page);
     await page.goto("/");
@@ -188,7 +185,7 @@ test.describe("401 redirect to login", () => {
       route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: listContextsWireBody([]),
+        body: listContextsWireBody(),
       }),
     );
 
@@ -210,7 +207,7 @@ test.describe("401 redirect to login", () => {
     );
     await page.reload();
 
-    await expect(page.getByTestId("login-screen")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByTestId("login-screen")).toBeVisible();
   });
 });
 
@@ -243,7 +240,7 @@ test.describe("Node disconnected state", () => {
       route.fulfill({ status: 200, contentType: "application/json", body: listApplicationsWireBody([]) }),
     );
     await page.route(API_ROUTES.listContexts, (route) =>
-      route.fulfill({ status: 200, contentType: "application/json", body: listContextsWireBody([]) }),
+      route.fulfill({ status: 200, contentType: "application/json", body: listContextsWireBody() }),
     );
 
     await page.goto("/");
@@ -264,7 +261,7 @@ test.describe("Node disconnected state", () => {
     );
     await page.reload();
 
-    await expect(page.locator(".node-status-indicator.disconnected")).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator(".node-status-indicator.disconnected")).toBeVisible();
     await expect(page.locator(".node-status-label", { hasText: "Disconnected" })).toBeVisible();
   });
 });

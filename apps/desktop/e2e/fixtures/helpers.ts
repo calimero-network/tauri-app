@@ -3,16 +3,13 @@ import {
   STORAGE_KEYS,
   AUTHENTICATED_SETTINGS,
   DEVELOPER_SETTINGS,
-  DEFAULT_SETTINGS,
   EMBEDDED_NODE_SETTINGS,
-  DISCONNECTED_SETTINGS,
   MOCK_ACCESS_TOKEN,
   MOCK_REFRESH_TOKEN,
   MOCK_TOKEN_EXPIRES_AT,
   MOCK_HEALTH_OK,
   MOCK_HEALTH_UNREACHABLE,
   MOCK_PROVIDERS_RESPONSE,
-  MOCK_CONTEXTS,
   MOCK_INSTALLED_APPS,
   MOCK_REGISTRY_V2_BUNDLES,
   API_ROUTES,
@@ -20,13 +17,10 @@ import {
   listApplicationsWireBody,
   listContextsWireBody,
   type AppSettings,
-  type MockContextRow,
   type MockInstalledAppRow,
 } from "./mock-data";
 
 export type MockCoreAPIsOptions = {
-  /** Defaults to `[]` (fresh install: no contexts). */
-  contexts?: MockContextRow[];
   /** Defaults to `MOCK_INSTALLED_APPS` (non-empty app dropdown for create-context flows). */
   installedApps?: MockInstalledAppRow[];
 };
@@ -34,37 +28,12 @@ export type MockCoreAPIsOptions = {
 // ─── Tauri IPC stub ──────────────────────────────────────────────────────────
 
 /**
- * Stub `window.__TAURI_IPC__` so that `invoke()` from `@tauri-apps/api/tauri`
- * resolves immediately instead of throwing a TypeError in the browser context.
- * Must be called **before** the page navigates to the app.
- */
-export async function stubTauriIPC(page: Page): Promise<void> {
-  await page.addInitScript(() => {
-    (window as any).__TAURI_IPC__ = ({
-      callback,
-    }: {
-      cmd: string;
-      callback: number;
-      error: number;
-    }) => {
-      // Resolve every invoke call with an empty/successful response.
-      const cb = (window as any)[`_${callback}`];
-      if (typeof cb === "function") {
-        cb(null);
-      }
-    };
-  });
-}
-
-/**
  * Stub the Tauri **v2** invoke bridge (`window.__TAURI_INTERNALS__`) with a
  * per-command response map, and record every call on `window.__invokeCalls` so a
  * test can assert what the UI asked the backend to do.
  *
- * `stubTauriIPC` above only stubs the v1 `__TAURI_IPC__` global, which
- * `@tauri-apps/api@2`'s `invoke()` never reads — under it every command rejects
- * and the app falls back to its error paths. Use this when a test needs a
- * command to actually *succeed*. Must be called before the page navigates.
+ * Use this when a test needs a command to actually *succeed*. Must be called
+ * before the page navigates.
  *
  * A command with no entry in `responses` resolves to `null`, matching the
  * permissive v1 stub. **Stub every command whose result the page treats as an
@@ -174,7 +143,6 @@ export async function mockCoreAPIs(
   page: Page,
   options?: MockCoreAPIsOptions,
 ): Promise<void> {
-  const contexts = options?.contexts ?? [];
   const installedApps = options?.installedApps ?? MOCK_INSTALLED_APPS;
 
   await page.route(API_ROUTES.health, (route) =>
@@ -202,7 +170,7 @@ export async function mockCoreAPIs(
       return route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: listContextsWireBody(contexts),
+        body: listContextsWireBody(),
       });
     }
     return route.continue();
@@ -372,62 +340,6 @@ export async function mockRegistryAPIs(page: Page): Promise<void> {
   });
 }
 
-/**
- * Mock install/uninstall endpoints to return success.
- */
-export async function mockInstallAPIs(page: Page): Promise<void> {
-  await page.route(API_ROUTES.installApplication, (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify({
-        data: { applicationId: "mock-installed-app-" + Date.now() },
-      }),
-    }),
-  );
-
-  await page.route(API_ROUTES.uninstallApplication, (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify({ data: { success: true } }),
-    }),
-  );
-}
-
-/**
- * Mock context create / delete endpoints.
- */
-export async function mockContextAPIs(page: Page): Promise<void> {
-  await page.route(API_ROUTES.createContext, (route) => {
-    if (route.request().method() === "POST") {
-      return route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({
-          data: {
-            contextId: "ctx-new-" + Date.now(),
-            memberPublicKey: "mock-member-pk",
-          },
-        }),
-      });
-    }
-    // Same glob as listContexts in mockCoreAPIs; fallback chains to that handler.
-    return route.fallback();
-  });
-
-  await page.route(API_ROUTES.deleteContext, (route) => {
-    if (route.request().method() === "DELETE") {
-      return route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({ data: { success: true } }),
-      });
-    }
-    return route.continue();
-  });
-}
-
 // ─── Navigation helpers ──────────────────────────────────────────────────────
 
 /** Max time for post-reload init: node health (3s race) + checkOnboardingState (10s race). */
@@ -494,7 +406,6 @@ export async function setupAuthenticatedPage(
   page: Page,
   options?: MockCoreAPIsOptions,
 ): Promise<void> {
-  await stubTauriIPC(page);
   await mockCoreAPIs(page, options);
   await page.goto("/");
   await seedAuthenticatedState(page);
@@ -509,9 +420,7 @@ export async function setupDeveloperPage(
   page: Page,
   options?: MockCoreAPIsOptions,
 ): Promise<void> {
-  await stubTauriIPC(page);
   await mockCoreAPIs(page, options);
-  await mockContextAPIs(page);
   await page.goto("/");
   await seedDeveloperState(page);
   await page.reload();
@@ -563,52 +472,17 @@ export async function mockUnhealthy(page: Page): Promise<void> {
 }
 
 /**
- * Setup for an authenticated page where the node is healthy / connected.
- */
-export async function setupConnectedPage(page: Page): Promise<void> {
-  await stubTauriIPC(page);
-  await mockCoreAPIs(page);
-  await page.goto("/");
-  await seedAuthenticatedState(page);
-  await page.reload();
-  await waitForAppShellReady(page);
-}
-
-/**
  * Setup for an authenticated page where the node is unreachable / disconnected.
  * The health endpoint returns 503, all other core routes are still mocked so the
- * app doesn't hang on unrelated requests.
+ * app doesn't hang on unrelated requests. Routes registered later win, so
+ * mockUnhealthy overrides the healthy default mockCoreAPIs just set up.
  */
 export async function setupDisconnectedPage(page: Page): Promise<void> {
-  await stubTauriIPC(page);
+  await mockCoreAPIs(page, { installedApps: [] });
   await mockUnhealthy(page);
 
-  await page.route(API_ROUTES.providers, (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify(MOCK_PROVIDERS_RESPONSE),
-    }),
-  );
-
-  await page.route(API_ROUTES.listApplications, (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: listApplicationsWireBody([]),
-    }),
-  );
-
-  await page.route(API_ROUTES.listContexts, (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: listContextsWireBody([]),
-    }),
-  );
-
   await page.goto("/");
-  await seedSettings(page, DISCONNECTED_SETTINGS);
+  await seedSettings(page, AUTHENTICATED_SETTINGS);
   await page.evaluate(() => {
     localStorage.setItem("calimero-autostart-default-applied", "1");
   });
@@ -620,7 +494,6 @@ export async function setupDisconnectedPage(page: Page): Promise<void> {
  * Setup for an authenticated page with embedded-node settings seeded.
  */
 export async function setupEmbeddedNodePage(page: Page): Promise<void> {
-  await stubTauriIPC(page);
   await mockCoreAPIs(page);
   await page.goto("/");
   await seedSettings(page, EMBEDDED_NODE_SETTINGS);

@@ -1,18 +1,12 @@
 import { test, expect } from "./fixtures/test";
-import { describeAfter35 } from "./fixtures/e2e-cap";
 import type { Page } from "@playwright/test";
 import {
   setupAuthenticatedPage,
   setupDeveloperPage,
-  seedSettings,
-  seedAuthTokens,
-  mockCoreAPIs,
   scrollSettingsControlIntoView,
 } from "./fixtures/helpers";
 import {
   STORAGE_KEYS,
-  AUTHENTICATED_SETTINGS,
-  DEVELOPER_SETTINGS,
   DEFAULT_REGISTRY_URL,
   API_ROUTES,
   MOCK_ACCOUNT_APPLICATIONS,
@@ -33,26 +27,21 @@ import {
 
 // ─── Navigate to Settings ──────────────────────────────────────────────────
 
-describeAfter35("Settings page access", () => {
+test.describe("Settings page access", () => {
   test.beforeEach(async ({ page }) => {
     await setupAuthenticatedPage(page);
   });
 
-  test("opens settings page via gear button", async ({ page }) => {
+  test("opens settings page via gear button, with General active and Registries reachable", async ({
+    page,
+  }) => {
     await page.click('button[title="Settings"]');
     await expect(
       page.getByRole("heading", { name: "Settings", level: 1 }),
     ).toHaveText("Settings");
-  });
-
-  test("settings page has General tab active by default", async ({ page }) => {
-    await page.click('button[title="Settings"]');
-    const generalTab = page.locator(".settings-tab", { hasText: "General" });
-    await expect(generalTab).toHaveClass(/active/);
-  });
-
-  test("settings page has Registries tab", async ({ page }) => {
-    await page.click('button[title="Settings"]');
+    await expect(
+      page.locator(".settings-tab", { hasText: "General" }),
+    ).toHaveClass(/active/);
     await expect(
       page.locator(".settings-tab", { hasText: "Registries" }),
     ).toBeVisible();
@@ -73,30 +62,22 @@ describeAfter35("Settings page access", () => {
 
 // ─── General tab — toggles ──────────────────────────────────────────────────
 
-describeAfter35("General tab toggles", () => {
+test.describe("General tab toggles", () => {
   test.beforeEach(async ({ page }) => {
     await setupAuthenticatedPage(page);
     await page.click('button[title="Settings"]');
   });
 
-  test("dark mode toggle is visible", async ({ page }) => {
+  test("toggles are visible, with developer mode off by default", async ({
+    page,
+  }) => {
     await scrollSettingsControlIntoView(page, "#theme-toggle");
     await expect(page.locator("#theme-toggle")).toBeVisible();
-  });
-
-  test("developer mode toggle is visible", async ({ page }) => {
     await scrollSettingsControlIntoView(page, "#developer-mode");
     await expect(page.locator("#developer-mode")).toBeVisible();
-  });
-
-  test("debug logs toggle is visible", async ({ page }) => {
+    await expect(page.locator("#developer-mode")).not.toBeChecked();
     await scrollSettingsControlIntoView(page, "#debug-logs");
     await expect(page.locator("#debug-logs")).toBeVisible();
-  });
-
-  test("developer mode is off by default", async ({ page }) => {
-    await scrollSettingsControlIntoView(page, "#developer-mode");
-    await expect(page.locator("#developer-mode")).not.toBeChecked();
   });
 
   test("toggling developer mode on updates localStorage", async ({ page }) => {
@@ -156,7 +137,7 @@ describeAfter35("General tab toggles", () => {
 
 // ─── Developer mode effect on sidebar ───────────────────────────────────────
 
-describeAfter35("Developer mode enables sidebar links", () => {
+test.describe("Developer mode enables sidebar links", () => {
   test("enabling developer mode reveals Namespaces & Nodes links", async ({
     page,
   }) => {
@@ -196,7 +177,7 @@ describeAfter35("Developer mode enables sidebar links", () => {
 
 // ─── Developer mode pre-seeded ──────────────────────────────────────────────
 
-describeAfter35("Developer mode pre-seeded", () => {
+test.describe("Developer mode pre-seeded", () => {
   test.beforeEach(async ({ page }) => {
     await setupDeveloperPage(page);
     await page.click('button[title="Settings"]');
@@ -212,7 +193,7 @@ describeAfter35("Developer mode pre-seeded", () => {
 
 // ─── Registries tab ─────────────────────────────────────────────────────────
 
-describeAfter35("Registries tab", () => {
+test.describe("Registries tab", () => {
   test.beforeEach(async ({ page }) => {
     await setupAuthenticatedPage(page);
     await page.click('button[title="Settings"]');
@@ -280,57 +261,41 @@ describeAfter35("Registries tab", () => {
 
 // ─── Reset / Nuke sections ──────────────────────────────────────────────────
 
-describeAfter35("Reset and Nuke sections", () => {
+test.describe("Reset and Nuke sections", () => {
   test.beforeEach(async ({ page }) => {
     await setupAuthenticatedPage(page);
     await page.click('button[title="Settings"]');
   });
 
-  test("Reset section shows initial button", async ({ page }) => {
-    await scrollSettingsControlIntoView(
-      page,
-      page.getByRole("button", { name: "Reset settings" }),
-    );
-    await expect(
-      page.locator("button", { hasText: "Reset settings" }),
-    ).toBeVisible();
-  });
-
-  test("clicking Reset button shows confirmation checkbox", async ({
+  test("Reset section shows its button, which reveals a confirmation checkbox", async ({
     page,
   }) => {
     await scrollSettingsControlIntoView(
       page,
       page.getByRole("button", { name: "Reset settings" }),
     );
-    await page
-      .locator("button", { hasText: "Reset settings" })
-      .click();
+    const resetBtn = page.locator("button", { hasText: "Reset settings" });
+    await expect(resetBtn).toBeVisible();
+
+    await resetBtn.click();
     await expect(
       page.locator("text=I understand this cannot be undone"),
     ).toBeVisible();
   });
 
-  test("Nuke section shows initial button", async ({ page }) => {
-    await scrollSettingsControlIntoView(
-      page,
-      page.getByRole("button", { name: "Delete data folder and reset" }),
-    );
-    await expect(
-      page.locator("button", { hasText: "Delete data folder and reset" }),
-    ).toBeVisible();
-  });
-
-  test("clicking Nuke button shows confirmation checkbox", async ({
+  test("Nuke section shows its button, which reveals a confirmation checkbox", async ({
     page,
   }) => {
     await scrollSettingsControlIntoView(
       page,
       page.getByRole("button", { name: "Delete data folder and reset" }),
     );
-    await page
-      .locator("button", { hasText: "Delete data folder and reset" })
-      .click();
+    const nukeBtn = page.locator("button", {
+      hasText: "Delete data folder and reset",
+    });
+    await expect(nukeBtn).toBeVisible();
+
+    await nukeBtn.click();
     await expect(
       page.locator("text=I understand this will permanently"),
     ).toBeVisible();
@@ -339,7 +304,7 @@ describeAfter35("Reset and Nuke sections", () => {
 
 // ─── Tab switching ──────────────────────────────────────────────────────────
 
-describeAfter35("Tab switching", () => {
+test.describe("Tab switching", () => {
   test.beforeEach(async ({ page }) => {
     await setupAuthenticatedPage(page);
     await page.click('button[title="Settings"]');
@@ -366,7 +331,7 @@ const json = (body: unknown) => ({
   body: JSON.stringify(body),
 });
 
-describeAfter35("Account tab", () => {
+test.describe("Account tab", () => {
   test.beforeEach(async ({ page }) => {
     await setupAuthenticatedPage(page);
     await page.route(API_ROUTES.identity, (route) =>
@@ -472,7 +437,7 @@ async function inviteNamespacesOnScreen(page: Page): Promise<string[]> {
   return JSON.parse(atob(blob.replace("mero-pair:", ""))).namespaces;
 }
 
-describeAfter35("Account tab - pairing needs no developer mode", () => {
+test.describe("Account tab - pairing needs no developer mode", () => {
   test("both halves of the exchange are offered on an ordinary session", async ({
     page,
   }) => {
@@ -487,7 +452,7 @@ describeAfter35("Account tab - pairing needs no developer mode", () => {
   });
 });
 
-describeAfter35("Account tab - device listing", () => {
+test.describe("Account tab - device listing", () => {
   test.beforeEach(async ({ page }) => {
     await setupDeveloperPage(page);
     await mockPairingAPIs(page);
@@ -553,7 +518,7 @@ describeAfter35("Account tab - device listing", () => {
   });
 });
 
-describeAfter35("Account tab - pairing wizard", () => {
+test.describe("Account tab - pairing wizard", () => {
   test.beforeEach(async ({ page }) => {
     await setupDeveloperPage(page);
     await mockPairingAPIs(page);
@@ -666,7 +631,7 @@ describeAfter35("Account tab - pairing wizard", () => {
   });
 });
 
-describeAfter35("Account tab - pairing responder", () => {
+test.describe("Account tab - pairing responder", () => {
   test.beforeEach(async ({ page }) => {
     await setupDeveloperPage(page);
     await mockPairingAPIs(page);
@@ -777,7 +742,7 @@ describeAfter35("Account tab - pairing responder", () => {
   });
 });
 
-describeAfter35("Settings toasts render", () => {
+test.describe("Settings toasts render", () => {
   test.beforeEach(async ({ page }) => {
     await setupAuthenticatedPage(page);
     await page.click('button[title="Settings"]');

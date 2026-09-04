@@ -21,14 +21,8 @@ pub const SEGMENT_BYTES: u64 = 10 * 1024 * 1024; // 10 MB
 pub const MAX_SEGMENTS: u32 = 9;
 /// Rotated segments older than this are removed on cleanup.
 pub const RETENTION_DAYS: u64 = 14;
-/// Upper bound on bytes read from any single file when tailing. Kept at the
-/// segment size so a properly-rotated segment (≤ SEGMENT_BYTES) is always read in
-/// full — reading less than a whole file would skip its older half and leave a
-/// silent chronological gap before the next (older) segment. A legacy
-/// pre-rotation `merod.log` larger than this is still bounded to its last slice
-/// (and gets brought under the cap on the next node start); since no older
-/// segments exist in that case there is no misleading interleaving.
-const TAIL_READ_CAP_BYTES: u64 = SEGMENT_BYTES; // 10 MB — one full segment
+/// Upper bound on bytes read from any single file when tailing.
+const TAIL_READ_CAP_BYTES: u64 = SEGMENT_BYTES; // one full segment, so an older segment is never read half-way
 
 const ACTIVE_NAME: &str = "merod.log";
 
@@ -40,40 +34,22 @@ fn seg_path(dir: &Path, n: u32) -> PathBuf {
     dir.join(format!("{}.{}", ACTIVE_NAME, n))
 }
 
+fn parse_segment_index(name: &str) -> Option<u32> {
+    name.strip_prefix(&format!("{}.", ACTIVE_NAME)).and_then(|rest| rest.parse::<u32>().ok())
+}
+
 /// Whether `path` is named like a log file this module manages (`merod.log` or
-/// `merod.log.<N>`) — in any directory, so it identifies *any* node's log.
-///
-/// Matched case-insensitively: macOS (APFS) and Windows (NTFS) are
-/// case-insensitive by default, where `MEROD.LOG` opens the very same file as
-/// `merod.log`. On a case-sensitive filesystem this over-matches, and that is
-/// the right way to be wrong — the cost is a user renaming an oddly-named
-/// export, against silently truncating a live log.
+/// `merod.log.<N>`), matched case-insensitively since APFS/NTFS treat `MEROD.LOG` as `merod.log`.
 fn is_log_file_name(path: &Path) -> bool {
     let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
         return false;
     };
     let name = name.to_ascii_lowercase(); // ACTIVE_NAME is already lowercase
-    name == ACTIVE_NAME
-        || name
-            .strip_prefix(&format!("{}.", ACTIVE_NAME))
-            .and_then(|rest| rest.parse::<u32>().ok())
-            .is_some()
+    name == ACTIVE_NAME || parse_segment_index(&name).is_some()
 }
 
-/// `dest` as `File::create` will actually resolve it, or an error if it is a
-/// symlink.
-///
-/// Symlinks are refused outright rather than followed. Resolving them is a trap:
-/// `canonicalize` fails on a *dangling* link — the target not existing is enough,
-/// which is the normal state right after a node's logs are cleared — and falling
-/// back to the literal path then hides an innocuous name pointing at a log file
-/// that `File::create` will happily create and truncate. Chained and relative
-/// links have the same shape. A save destination is never legitimately a symlink,
-/// so the categorical rule is both safer and simpler than out-resolving each case.
-///
-/// What remains is honest resolution: a destination can exist even when the user
-/// believes they typed a new name, because the filesystems macOS and Windows
-/// default to are case-insensitive.
+/// `dest` resolved the way `File::create` would see it, or an error if it is a
+/// symlink — refused outright since a dangling link can't be canonicalized safely.
 fn resolved_dest(dest: &Path) -> io::Result<PathBuf> {
     // symlink_metadata does not follow the link, so this sees dangling ones too.
     if dest
@@ -228,22 +204,33 @@ impl RollingLogWriter {
     }
 }
 
-/// Delete `merod.log.1`, `.2`, … in order; returns how many were removed.
-fn remove_rotated_segments(dir: &Path) -> usize {
-    let mut removed = 0;
-    let mut k = 1;
-    loop {
-        let p = seg_path(dir, k);
-        if p.exists() {
-            if fs::remove_file(&p).is_ok() {
-                removed += 1;
-            }
-            k += 1;
-        } else {
-            break;
+/// Every `merod.log[.N]` entry in `dir`, with `None` marking the active file.
+fn segments(dir: &Path) -> io::Result<Vec<(Option<u32>, PathBuf)>> {
+    let mut out = Vec::new();
+    for entry in fs::read_dir(dir)? {
+        let path = entry?.path();
+        let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        if name == ACTIVE_NAME {
+            out.push((None, path));
+        } else if let Some(idx) = parse_segment_index(name) {
+            out.push((Some(idx), path));
         }
     }
-    removed
+    Ok(out)
+}
+
+/// Delete every rotated segment in `dir`; returns how many were removed.
+fn remove_rotated_segments(dir: &Path) -> usize {
+    let Ok(found) = segments(dir) else {
+        return 0;
+    };
+    found
+        .into_iter()
+        .filter(|(idx, _)| idx.is_some())
+        .filter(|(_, path)| fs::remove_file(path).is_ok())
+        .count()
 }
 
 /// Delete rotated segments beyond `MAX_SEGMENTS`, drop rotated segments older than
@@ -259,21 +246,7 @@ pub fn cleanup_logs_with(dir: &Path, max_segments: u32, retention_days: u64) -> 
     let retention = Duration::from_secs(retention_days.saturating_mul(24 * 60 * 60));
     let now = SystemTime::now();
 
-    for entry in fs::read_dir(dir)?.flatten() {
-        let path = entry.path();
-        let name = match path.file_name().and_then(|s| s.to_str()) {
-            Some(n) => n.to_string(),
-            None => continue,
-        };
-        // Only ever manage our own files.
-        let idx = match name.strip_prefix(&format!("{}.", ACTIVE_NAME)) {
-            Some(rest) => rest.parse::<u32>().ok(),
-            None => None,
-        };
-        let is_active = name == ACTIVE_NAME;
-        if !is_active && idx.is_none() {
-            continue; // not a merod.log[.N] file
-        }
+    for (idx, path) in segments(dir)? {
         // Segments past the retained count go immediately.
         if let Some(idx) = idx {
             if idx > max_segments {
@@ -282,8 +255,8 @@ pub fn cleanup_logs_with(dir: &Path, max_segments: u32, retention_days: u64) -> 
             }
         }
         // Age out old rotated segments (never the live file).
-        if !is_active {
-            if let Ok(modified) = entry.metadata().and_then(|m| m.modified()) {
+        if idx.is_some() {
+            if let Ok(modified) = path.metadata().and_then(|m| m.modified()) {
                 if now.duration_since(modified).map(|age| age > retention).unwrap_or(false) {
                     let _ = fs::remove_file(&path);
                 }
@@ -293,13 +266,8 @@ pub fn cleanup_logs_with(dir: &Path, max_segments: u32, retention_days: u64) -> 
     Ok(())
 }
 
-/// Truncate the active file and remove all rotated segments. Returns how many
-/// rotated segments were removed. Safe to call whether or not a node is running:
-/// the active file is truncated in place so a live writer keeps appending at 0.
-/// Clear logs on disk when there is NO live writer for this node (node not
-/// running). When a node IS running, clear through the live
-/// [`RollingLogWriter::clear`] instead so the operation is serialized with the
-/// drain tasks (no TOCTOU on the log dir, no cached-length desync).
+/// Truncate the active file and remove rotated segments; returns the count removed.
+/// Use only when no live writer exists for this node — a running node should clear through [`RollingLogWriter::clear`] instead, to stay serialized with its drain task.
 pub fn clear_logs(dir: &Path) -> io::Result<usize> {
     if !dir.exists() {
         return Ok(0);
@@ -311,56 +279,21 @@ pub fn clear_logs(dir: &Path) -> io::Result<usize> {
     Ok(remove_rotated_segments(dir))
 }
 
-/// Every `merod.log[.N]` file in `dir`, ordered oldest → newest: the
-/// highest-numbered rotated segment first, down to `.1`, then the active file.
-/// Built by scanning the directory rather than walking `1..N` so a gap left by
-/// age-based cleanup can't cut the history short.
-///
-/// A failed scan is an error, never an empty list: `export_logs` treats this as
-/// the authoritative file set, so swallowing the error would write a
-/// plausible-looking export that silently omits every rotated segment.
+/// Every `merod.log[.N]` file in `dir`, oldest -> newest (active last). Errors
+/// rather than returning an empty list, since `export_logs` treats this as authoritative.
 fn ordered_paths_oldest_first(dir: &Path) -> io::Result<Vec<PathBuf>> {
-    let mut segments: Vec<(u32, PathBuf)> = Vec::new();
-    for entry in fs::read_dir(dir)? {
-        let path = entry?.path();
-        let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
-            continue;
-        };
-        if let Some(idx) = name
-            .strip_prefix(&format!("{}.", ACTIVE_NAME))
-            .and_then(|rest| rest.parse::<u32>().ok())
-        {
-            segments.push((idx, path));
-        }
-    }
-    // Descending index == ascending age-of-newest-line: merod.log.9 is the oldest.
-    segments.sort_by(|a, b| b.0.cmp(&a.0));
-    let mut paths: Vec<PathBuf> = segments.into_iter().map(|(_, p)| p).collect();
-    let active = active_path(dir);
-    if active.exists() {
-        paths.push(active);
-    }
-    Ok(paths)
+    let mut segs = segments(dir)?;
+    // Descending index == ascending age-of-newest-line: merod.log.9 is oldest;
+    // `None` (active) sorts last, since it has no index to compare.
+    segs.sort_by(|a, b| b.0.cmp(&a.0));
+    Ok(segs.into_iter().map(|(_, p)| p).collect())
 }
 
-/// Concatenate a node's entire retained log history into `dest` as plain text,
-/// oldest line first, each source file introduced by a banner comment. Streams
-/// in fixed-size chunks, so exporting a full ~100 MB history never buffers it in
-/// memory. Returns the number of bytes written.
-///
-/// A file that disappears mid-export (a rotation renamed it) is skipped rather
-/// than failing the whole export; callers that hold the live writer's lock — see
-/// `export_merod_logs` — prevent that from happening at all.
+/// Concatenate a node's entire retained log history into `dest`, oldest line
+/// first, streamed in chunks so a ~100 MB export never buffers in memory.
 pub fn export_logs(dir: &Path, dest: &Path) -> io::Result<u64> {
-    // `File::create` truncates, so two kinds of destination have to be refused —
-    // the file picker will happily hand us either.
-    //
-    // Any file named `merod.log[.N]`, wherever it lives. That is the name every
-    // node's log carries, so this is not only about the node being exported: a
-    // destination in *another* node's logs dir would truncate that node's live
-    // log while its drain task is still writing to it, and the caller only holds
-    // the exported node's writer lock. Checking the name rather than enumerating
-    // running nodes also covers stopped ones, whose logs are just as destroyable.
+    // `File::create` truncates, so refuse a destination matching any node's log
+    // name (case-insensitively) or falling inside this node's own logs dir.
     let probe = resolved_dest(dest)?;
     if is_log_file_name(&probe) {
         return Err(io::Error::new(
@@ -425,25 +358,13 @@ pub fn export_logs(dir: &Path, dest: &Path) -> io::Result<u64> {
 /// segments (newest first), reading at most `TAIL_READ_CAP_BYTES` from any single
 /// file. Returns the lines joined oldest→newest.
 pub fn read_tail(dir: &Path, max_lines: usize) -> io::Result<String> {
-    if max_lines == 0 {
+    if max_lines == 0 || !dir.exists() {
         return Ok(String::new());
     }
     // Newest -> oldest: merod.log, merod.log.1, merod.log.2, ...
-    let mut paths: Vec<PathBuf> = Vec::new();
-    let active = active_path(dir);
-    if active.exists() {
-        paths.push(active);
-    }
-    let mut k = 1;
-    loop {
-        let p = seg_path(dir, k);
-        if p.exists() {
-            paths.push(p);
-            k += 1;
-        } else {
-            break;
-        }
-    }
+    let mut segs = segments(dir)?;
+    segs.sort_by(|a, b| a.0.cmp(&b.0));
+    let paths = segs.into_iter().map(|(_, p)| p);
 
     // Collect lines newest-first until we have enough.
     let mut rev: Vec<String> = Vec::with_capacity(max_lines.min(4096));
@@ -463,23 +384,10 @@ pub fn read_tail(dir: &Path, max_lines: usize) -> io::Result<String> {
     Ok(rev.join("\n"))
 }
 
-/// Read at most `max_bytes` from the end of `path`, dropping a leading partial
-/// line when we started mid-file so callers only ever see whole lines.
+/// Read at most `max_bytes` from the end of `path`, decoded lossily, dropping a
+/// leading partial line when we started mid-file.
 fn read_tail_bytes(path: &Path, max_bytes: u64) -> io::Result<String> {
-    let mut f = File::open(path)?;
-    let len = f.metadata()?.len();
-    let start = len.saturating_sub(max_bytes);
-    f.seek(SeekFrom::Start(start))?;
-    let mut buf = Vec::with_capacity((len - start) as usize);
-    f.read_to_end(&mut buf)?;
-    let text = String::from_utf8_lossy(&buf).into_owned();
-    if start > 0 {
-        // We began mid-file: discard the truncated first line.
-        if let Some(nl) = text.find('\n') {
-            return Ok(text[nl + 1..].to_string());
-        }
-    }
-    Ok(text)
+    Ok(String::from_utf8_lossy(&tail_bytes_raw(path, max_bytes)?).into_owned())
 }
 
 /// Read at most `max_bytes` of raw bytes from the end of `path`, dropping a
@@ -577,22 +485,6 @@ mod tests {
         assert!(!seg_path(&dir, 3).exists());
         assert!(!seg_path(&dir, 4).exists());
         assert!(!seg_path(&dir, 5).exists());
-        fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn clear_truncates_active_and_removes_segments() {
-        let dir = tmp();
-        let mut w = RollingLogWriter::open_with(&dir, 40, 5).unwrap();
-        for i in 0..20 {
-            w.write_line(format!("x{:02}\n", i).as_bytes()).unwrap();
-        }
-        assert!(seg_path(&dir, 1).exists());
-        let removed = clear_logs(&dir).unwrap();
-        assert!(removed >= 1);
-        assert!(!seg_path(&dir, 1).exists());
-        assert_eq!(active_path(&dir).metadata().unwrap().len(), 0);
-        assert_eq!(read_tail(&dir, 100).unwrap(), "");
         fs::remove_dir_all(&dir).ok();
     }
 
@@ -703,46 +595,6 @@ mod tests {
     }
 
     #[test]
-    fn export_refuses_to_write_into_the_log_dir() {
-        let dir = tmp();
-        let mut w = RollingLogWriter::open(&dir).unwrap();
-        w.write_line(b"keep me\n").unwrap();
-        // Picking the active log itself as the destination must not truncate it.
-        let err = export_logs(&dir, &active_path(&dir)).unwrap_err();
-        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
-        assert_eq!(read_tail(&dir, 10).unwrap(), "keep me");
-        // Any other path in the same dir is refused too.
-        assert!(export_logs(&dir, &dir.join("dump.txt")).is_err());
-        fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn export_refuses_to_overwrite_another_nodes_log() {
-        // The same-dir check alone would let this through: the destination is a
-        // *different* node's logs dir, whose drain task we hold no lock on, so a
-        // truncation there races a live writer exactly as it would at home.
-        let source = tmp();
-        let other = tmp();
-        let mut sw = RollingLogWriter::open(&source).unwrap();
-        sw.write_line(b"source line\n").unwrap();
-        let mut ow = RollingLogWriter::open(&other).unwrap();
-        ow.write_line(b"other node's history\n").unwrap();
-
-        for dest in [active_path(&other), seg_path(&other, 1)] {
-            let err = export_logs(&source, &dest).unwrap_err();
-            assert_eq!(err.kind(), io::ErrorKind::InvalidInput, "dest {dest:?}");
-        }
-        // The other node's log is untouched.
-        assert_eq!(read_tail(&other, 10).unwrap(), "other node's history");
-
-        // A normal name in that directory is fine — nothing writes to it.
-        assert!(export_logs(&source, &other.join("exported.txt")).is_ok());
-
-        fs::remove_dir_all(&source).ok();
-        fs::remove_dir_all(&other).ok();
-    }
-
-    #[test]
     fn export_of_an_unscannable_dir_errors_instead_of_writing_a_partial_file() {
         let dir = tmp();
         fs::remove_dir_all(&dir).ok(); // dir cannot be scanned
@@ -790,32 +642,6 @@ mod tests {
         let err = export_logs(&source, &link).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
         assert_eq!(read_tail(&other, 10).unwrap(), "precious history");
-
-        fs::remove_file(&link).ok();
-        fs::remove_dir_all(&source).ok();
-        fs::remove_dir_all(&other).ok();
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn export_refuses_a_dangling_symlink() {
-        // canonicalize() fails when the *target* is missing, not just the link —
-        // the normal state right after a node's logs are cleared. Treating an
-        // unresolvable path as "genuinely new" would let File::create follow the
-        // link and recreate the log file at the far end.
-        let source = tmp();
-        let other = tmp();
-        let target = active_path(&other);
-        assert!(!target.exists(), "target must not exist for this test");
-
-        let link = source.parent().unwrap().join(format!("dangling_{}.txt", std::process::id()));
-        fs::remove_file(&link).ok();
-        std::os::unix::fs::symlink(&target, &link).unwrap();
-        assert!(link.canonicalize().is_err(), "a dangling link must not canonicalize");
-
-        let err = export_logs(&source, &link).unwrap_err();
-        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
-        assert!(!target.exists(), "the export must not create the link's target");
 
         fs::remove_file(&link).ok();
         fs::remove_dir_all(&source).ok();

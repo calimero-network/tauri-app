@@ -8,19 +8,23 @@ import {
   listApplicationsWireBody,
 } from "./fixtures/mock-data";
 
+// A fresh page.goto boots the whole app cold (bundle parse, Tauri IPC probing,
+// onboarding-state resolution), which can exceed the default expect timeout.
+async function expectWelcomeHeading(page: import("@playwright/test").Page) {
+  await expect(
+    page.getByRole("heading", { name: /Welcome to Calimero/i }),
+  ).toBeVisible({ timeout: 30_000 });
+}
+
 test.describe("onboarding flow", () => {
   test("fresh profile shows welcome screen", async ({ page }) => {
     await page.goto("/");
-    await expect(
-      page.getByRole("heading", { name: /Welcome to Calimero/i }),
-    ).toBeVisible({ timeout: 30_000 });
+    await expectWelcomeHeading(page);
   });
 
   test("welcome → what-is step via Continue button", async ({ page }) => {
     await page.goto("/");
-    await expect(
-      page.getByRole("heading", { name: /Welcome to Calimero/i }),
-    ).toBeVisible({ timeout: 30_000 });
+    await expectWelcomeHeading(page);
 
     await page.getByRole("button", { name: "Continue" }).click();
     await expect(
@@ -30,9 +34,7 @@ test.describe("onboarding flow", () => {
 
   test("what-is → node-setup step via Get Started", async ({ page }) => {
     await page.goto("/");
-    await expect(
-      page.getByRole("heading", { name: /Welcome to Calimero/i }),
-    ).toBeVisible({ timeout: 30_000 });
+    await expectWelcomeHeading(page);
 
     await page.getByRole("button", { name: "Continue" }).click();
     await expect(
@@ -47,9 +49,7 @@ test.describe("onboarding flow", () => {
 
   test("what-is back button returns to welcome", async ({ page }) => {
     await page.goto("/");
-    await expect(
-      page.getByRole("heading", { name: /Welcome to Calimero/i }),
-    ).toBeVisible({ timeout: 30_000 });
+    await expectWelcomeHeading(page);
 
     await page.getByRole("button", { name: "Continue" }).click();
     await expect(
@@ -66,9 +66,7 @@ test.describe("onboarding flow", () => {
     page,
   }) => {
     await page.goto("/");
-    await expect(
-      page.getByRole("heading", { name: /Welcome to Calimero/i }),
-    ).toBeVisible({ timeout: 30_000 });
+    await expectWelcomeHeading(page);
 
     await page.getByRole("button", { name: "Continue" }).click();
     await page.getByRole("button", { name: "Get Started" }).click();
@@ -80,7 +78,7 @@ test.describe("onboarding flow", () => {
     // defaults to nodeSetupMode='create-new', showing the create form
     await expect(
       page.getByText("Create your first Calimero node"),
-    ).toBeVisible({ timeout: 15_000 });
+    ).toBeVisible();
     await expect(page.getByLabel("Data Directory")).toBeVisible();
     // Credentials moved to the auth step; node-setup is config-only and its
     // primary action is now "Continue".
@@ -132,6 +130,7 @@ test.describe("onboarding flow", () => {
       ] as const,
     );
 
+    // Same cold-boot cost as a fresh goto: this is the app's first render after seeding.
     await page.reload();
     await expect(
       page.getByRole("heading", { name: /Set Up Authentication/i }),
@@ -174,8 +173,6 @@ test.describe("onboarding flow", () => {
 
     await page.reload();
     // Past onboarding: main shell may still show headings that match "Welcome to Calimero"
-    await expect(page.getByTestId("onboarding-page")).toHaveCount(0, {
-      timeout: 10_000,
-    });
+    await expect(page.getByTestId("onboarding-page")).toHaveCount(0);
   });
 });

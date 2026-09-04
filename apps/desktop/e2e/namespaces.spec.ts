@@ -37,33 +37,22 @@ test.describe("Namespaces – page rendering", () => {
     await navigateVia(page, "Namespaces");
   });
 
-  test("renders the shell page title", async ({ page }) => {
+  test("renders the shell page title and the Namespaces heading", async ({
+    page,
+  }) => {
     await expect(page.getByTestId("shell-page-title")).toHaveText(
       "Namespaces",
     );
+    await expect(page.locator(".ns-page-top h1")).toHaveText("Namespaces");
   });
 
-  test("renders the Namespaces heading inside the page", async ({ page }) => {
-    await expect(
-      page.locator(".ns-page-top h1"),
-    ).toHaveText("Namespaces");
-  });
-
-  test("shows empty state or error when no namespaces available", async ({
+  test("shows empty state or error, with no namespace cards, when none are available", async ({
     page,
   }) => {
     // Without a running node, the page shows either the empty state or an error.
     // Wait for loading to finish by checking for either outcome via CSS class.
     const loaded = page.locator(".empty-state, .error-message").first();
-    await expect(loaded).toBeVisible({ timeout: 15_000 });
-  });
-
-  test("does not show namespace cards when list is empty", async ({
-    page,
-  }) => {
-    // Wait for loading to finish
-    const loaded = page.locator(".empty-state, .error-message").first();
-    await expect(loaded).toBeVisible({ timeout: 15_000 });
+    await expect(loaded).toBeVisible();
 
     const cards = page.locator(".ns-card");
     await expect(cards).toHaveCount(0);

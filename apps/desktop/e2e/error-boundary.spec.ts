@@ -67,7 +67,7 @@ test.describe("ErrorBoundary — Try Again", () => {
     // App content should be back — login or main shell visible
     await expect(
       page.locator("aside.sidebar, [data-testid='login-screen']")
-    ).toBeVisible({ timeout: 10_000 });
+    ).toBeVisible();
   });
 });
 
@@ -85,7 +85,7 @@ test.describe("ErrorBoundary — Reload App", () => {
     await page.getByTestId("error-boundary-reload").click();
     await navPromise;
 
-    await expect(page.getByTestId("error-boundary")).not.toBeVisible({ timeout: 10_000 });
+    await expect(page.getByTestId("error-boundary")).not.toBeVisible();
   });
 });
 
@@ -177,6 +177,6 @@ test.describe("ErrorBoundary — authenticated app sections", () => {
 
     await expect(page.getByTestId("error-boundary")).toBeVisible();
     await page.getByTestId("error-boundary-retry").click();
-    await expect(page.locator("aside.sidebar")).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator("aside.sidebar")).toBeVisible();
   });
 });

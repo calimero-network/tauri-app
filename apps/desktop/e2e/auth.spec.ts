@@ -30,11 +30,11 @@ test.describe("Login screen display", () => {
   });
 
   test("shows login screen when tokens are absent", async ({ page }) => {
-    await expect(page.getByTestId("login-screen")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByTestId("login-screen")).toBeVisible();
   });
 
   test("login screen has a Settings button", async ({ page }) => {
-    await expect(page.getByTestId("login-screen")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByTestId("login-screen")).toBeVisible();
     await expect(page.getByRole("button", { name: "Settings" })).toBeVisible();
   });
 });
@@ -207,7 +207,7 @@ test.describe("401 redirect to login", () => {
     );
     await page.reload();
 
-    await expect(page.getByTestId("login-screen")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByTestId("login-screen")).toBeVisible();
   });
 });
 
@@ -261,7 +261,7 @@ test.describe("Node disconnected state", () => {
     );
     await page.reload();
 
-    await expect(page.locator(".node-status-indicator.disconnected")).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator(".node-status-indicator.disconnected")).toBeVisible();
     await expect(page.locator(".node-status-label", { hasText: "Disconnected" })).toBeVisible();
   });
 });

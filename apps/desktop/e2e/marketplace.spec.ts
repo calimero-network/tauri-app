@@ -104,16 +104,11 @@ test.describe("Installed Applications – listing", () => {
     ).toBeVisible();
   });
 
-  test("renders installed apps in a table", async ({ page }) => {
+  test("renders installed apps in a table, with version info", async ({ page }) => {
     for (const app of MOCK_INSTALLED_APPS) {
       const meta = JSON.parse(atob(app.metadata));
       const displayName = meta.name || app.name;
       await expect(page.locator("td", { hasText: displayName })).toBeVisible();
-    }
-  });
-
-  test("shows version info for installed apps", async ({ page }) => {
-    for (const app of MOCK_INSTALLED_APPS) {
       await expect(page.locator("td", { hasText: app.version })).toBeVisible();
     }
   });
@@ -129,13 +124,14 @@ test.describe("Installed Applications – listing", () => {
       });
     });
 
-    const refreshBtn = page.locator("button", { hasText: /refresh/i });
-    if (await refreshBtn.isVisible()) {
-      const requestPromise = page.waitForRequest(API_ROUTES.listApplications);
-      await refreshBtn.click();
-      await requestPromise;
-      expect(listCallCount).toBeGreaterThanOrEqual(1);
-    }
+    // Matched by class, not text: the button carries only an icon, so a
+    // text-based locator never found it and this test never clicked anything.
+    const refreshBtn = page.locator(".installed-refresh-btn");
+    await expect(refreshBtn).toBeVisible();
+    const requestPromise = page.waitForRequest(API_ROUTES.listApplications);
+    await refreshBtn.click();
+    await requestPromise;
+    expect(listCallCount).toBeGreaterThanOrEqual(1);
   });
 });
 
@@ -201,14 +197,6 @@ test.describe("Installed Applications – actions", () => {
     const chatRow = page.locator("tr", { hasText: "Only Peers Chat" });
     const openBtn = chatRow.locator('button:has-text("Open")');
     await expect(openBtn).toBeVisible();
-  });
-
-  test("dropdown menu has Uninstall for apps with frontend URLs", async ({
-    page,
-  }) => {
-    const chatRow = page.locator("tr", { hasText: "Only Peers Chat" });
-    await chatRow.locator('.btn-more').click();
-    await expect(page.locator('.app-actions-dropdown .dropdown-item', { hasText: "Uninstall" })).toBeVisible();
   });
 
   test("Uninstall is in dropdown for all installed apps", async ({

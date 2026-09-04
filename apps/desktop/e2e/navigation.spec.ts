@@ -1,8 +1,6 @@
 import { test, expect } from "./fixtures/test";
 import { setupAuthenticatedPage, setupDeveloperPage } from "./fixtures/helpers";
 
-const shellTitleTimeout = 20_000;
-
 test.describe("Sidebar navigation", () => {
   test.beforeEach(async ({ page }) => {
     await setupAuthenticatedPage(page);
@@ -26,10 +24,7 @@ test.describe("Sidebar navigation", () => {
     page,
   }) => {
     await page.click('button[title="Marketplace"]');
-    await expect(page.getByTestId("shell-page-title")).toHaveText(
-      "Marketplace",
-      { timeout: shellTitleTimeout }
-    );
+    await expect(page.getByTestId("shell-page-title")).toHaveText("Marketplace");
     await expect(page.locator('button[title="Marketplace"]')).toHaveClass(
       /active/
     );
@@ -39,10 +34,7 @@ test.describe("Sidebar navigation", () => {
     page,
   }) => {
     await page.click('button[title="Applications"]');
-    await expect(page.getByTestId("shell-page-title")).toHaveText(
-      "Applications",
-      { timeout: shellTitleTimeout }
-    );
+    await expect(page.getByTestId("shell-page-title")).toHaveText("Applications");
     await expect(page.locator('button[title="Applications"]')).toHaveClass(
       /active/
     );
@@ -50,15 +42,10 @@ test.describe("Sidebar navigation", () => {
 
   test("clicking Home returns to home page", async ({ page }) => {
     await page.click('button[title="Marketplace"]');
-    await expect(page.getByTestId("shell-page-title")).toHaveText(
-      "Marketplace",
-      { timeout: shellTitleTimeout }
-    );
+    await expect(page.getByTestId("shell-page-title")).toHaveText("Marketplace");
 
     await page.click('button[title="Home"]');
-    await expect(page.getByTestId("shell-page-title")).toHaveText("Home", {
-      timeout: shellTitleTimeout,
-    });
+    await expect(page.getByTestId("shell-page-title")).toHaveText("Home");
     await expect(page.locator('button[title="Home"]')).toHaveClass(/active/);
   });
 });
@@ -70,9 +57,7 @@ test.describe("Sidebar navigation — developer mode", () => {
 
   test("clicking Namespaces navigates to namespaces page", async ({ page }) => {
     await page.click('button[title="Namespaces"]');
-    await expect(page.getByTestId("shell-page-title")).toHaveText("Namespaces", {
-      timeout: shellTitleTimeout,
-    });
+    await expect(page.getByTestId("shell-page-title")).toHaveText("Namespaces");
     await expect(page.locator('button[title="Namespaces"]')).toHaveClass(
       /active/
     );
@@ -80,9 +65,7 @@ test.describe("Sidebar navigation — developer mode", () => {
 
   test("clicking Nodes navigates to nodes page", async ({ page }) => {
     await page.click('button[title="Nodes"]');
-    await expect(page.getByTestId("shell-page-title")).toHaveText("Nodes", {
-      timeout: shellTitleTimeout,
-    });
+    await expect(page.getByTestId("shell-page-title")).toHaveText("Nodes");
     await expect(page.locator('button[title="Nodes"]')).toHaveClass(/active/);
   });
 });

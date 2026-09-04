@@ -32,21 +32,16 @@ test.describe("Settings page access", () => {
     await setupAuthenticatedPage(page);
   });
 
-  test("opens settings page via gear button", async ({ page }) => {
+  test("opens settings page via gear button, with General active and Registries reachable", async ({
+    page,
+  }) => {
     await page.click('button[title="Settings"]');
     await expect(
       page.getByRole("heading", { name: "Settings", level: 1 }),
     ).toHaveText("Settings");
-  });
-
-  test("settings page has General tab active by default", async ({ page }) => {
-    await page.click('button[title="Settings"]');
-    const generalTab = page.locator(".settings-tab", { hasText: "General" });
-    await expect(generalTab).toHaveClass(/active/);
-  });
-
-  test("settings page has Registries tab", async ({ page }) => {
-    await page.click('button[title="Settings"]');
+    await expect(
+      page.locator(".settings-tab", { hasText: "General" }),
+    ).toHaveClass(/active/);
     await expect(
       page.locator(".settings-tab", { hasText: "Registries" }),
     ).toBeVisible();
@@ -73,24 +68,16 @@ test.describe("General tab toggles", () => {
     await page.click('button[title="Settings"]');
   });
 
-  test("dark mode toggle is visible", async ({ page }) => {
+  test("toggles are visible, with developer mode off by default", async ({
+    page,
+  }) => {
     await scrollSettingsControlIntoView(page, "#theme-toggle");
     await expect(page.locator("#theme-toggle")).toBeVisible();
-  });
-
-  test("developer mode toggle is visible", async ({ page }) => {
     await scrollSettingsControlIntoView(page, "#developer-mode");
     await expect(page.locator("#developer-mode")).toBeVisible();
-  });
-
-  test("debug logs toggle is visible", async ({ page }) => {
+    await expect(page.locator("#developer-mode")).not.toBeChecked();
     await scrollSettingsControlIntoView(page, "#debug-logs");
     await expect(page.locator("#debug-logs")).toBeVisible();
-  });
-
-  test("developer mode is off by default", async ({ page }) => {
-    await scrollSettingsControlIntoView(page, "#developer-mode");
-    await expect(page.locator("#developer-mode")).not.toBeChecked();
   });
 
   test("toggling developer mode on updates localStorage", async ({ page }) => {
@@ -280,51 +267,35 @@ test.describe("Reset and Nuke sections", () => {
     await page.click('button[title="Settings"]');
   });
 
-  test("Reset section shows initial button", async ({ page }) => {
-    await scrollSettingsControlIntoView(
-      page,
-      page.getByRole("button", { name: "Reset settings" }),
-    );
-    await expect(
-      page.locator("button", { hasText: "Reset settings" }),
-    ).toBeVisible();
-  });
-
-  test("clicking Reset button shows confirmation checkbox", async ({
+  test("Reset section shows its button, which reveals a confirmation checkbox", async ({
     page,
   }) => {
     await scrollSettingsControlIntoView(
       page,
       page.getByRole("button", { name: "Reset settings" }),
     );
-    await page
-      .locator("button", { hasText: "Reset settings" })
-      .click();
+    const resetBtn = page.locator("button", { hasText: "Reset settings" });
+    await expect(resetBtn).toBeVisible();
+
+    await resetBtn.click();
     await expect(
       page.locator("text=I understand this cannot be undone"),
     ).toBeVisible();
   });
 
-  test("Nuke section shows initial button", async ({ page }) => {
-    await scrollSettingsControlIntoView(
-      page,
-      page.getByRole("button", { name: "Delete data folder and reset" }),
-    );
-    await expect(
-      page.locator("button", { hasText: "Delete data folder and reset" }),
-    ).toBeVisible();
-  });
-
-  test("clicking Nuke button shows confirmation checkbox", async ({
+  test("Nuke section shows its button, which reveals a confirmation checkbox", async ({
     page,
   }) => {
     await scrollSettingsControlIntoView(
       page,
       page.getByRole("button", { name: "Delete data folder and reset" }),
     );
-    await page
-      .locator("button", { hasText: "Delete data folder and reset" })
-      .click();
+    const nukeBtn = page.locator("button", {
+      hasText: "Delete data folder and reset",
+    });
+    await expect(nukeBtn).toBeVisible();
+
+    await nukeBtn.click();
     await expect(
       page.locator("text=I understand this will permanently"),
     ).toBeVisible();

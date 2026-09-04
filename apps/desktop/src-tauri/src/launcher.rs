@@ -160,7 +160,7 @@ fn record_stamp(src: &Path, dest: &Path) {
 /// launch of the shared shell. The parent .app is notarized (Gatekeeper already
 /// cleared it on first open); the loose child inherits the flag without that
 /// clearance, so we drop it explicitly. No-op / ignored if absent.
-pub fn dequarantine(path: &Path) {
+fn dequarantine(path: &Path) {
     let _ = std::process::Command::new("xattr")
         .arg("-d")
         .arg("com.apple.quarantine")

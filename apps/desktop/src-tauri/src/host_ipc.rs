@@ -44,12 +44,10 @@ pub fn ensure_host_running(sock: &Path) {
 
 /// Resolve the installed host binary: /Applications/Calimero Desktop.app/Contents/MacOS/Calimero Desktop.
 fn installed_host_binary() -> Option<PathBuf> {
-    let p = Path::new("/Applications/Calimero Desktop.app/Contents/MacOS/Calimero Desktop");
-    if p.exists() {
-        Some(p.to_path_buf())
-    } else {
-        None
-    }
+    Some(PathBuf::from(
+        "/Applications/Calimero Desktop.app/Contents/MacOS/Calimero Desktop",
+    ))
+    .filter(|p| p.exists())
 }
 
 #[cfg(test)]

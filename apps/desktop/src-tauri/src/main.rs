@@ -222,12 +222,9 @@ pub struct PendingOpenApp(pub std::sync::Mutex<Option<(String, String, Option<St
 /// State for pending Calimero Cloud auth callback (set by deep link handler, read by frontend).
 pub struct PendingCloudAuth(pub std::sync::Mutex<Option<String>>);
 
-/// Validates a node name to prevent path traversal and command injection.
-/// Valid names: non-empty, max 64 chars, alphanumeric/hyphen/underscore only, no leading hyphen.
+/// A node name becomes a directory under the node home and an argument to merod,
+/// so the charset is what keeps path traversal and shell metacharacters out.
 fn validate_node_name(node_name: &str) -> Result<(), String> {
-    if node_name.is_empty() {
-        return Err("Node name cannot be empty".to_string());
-    }
     if node_name.len() > MAX_NODE_NAME_LENGTH {
         return Err(format!(
             "Node name is too long ({} characters). Maximum allowed is {} characters.",
@@ -235,39 +232,18 @@ fn validate_node_name(node_name: &str) -> Result<(), String> {
             MAX_NODE_NAME_LENGTH
         ));
     }
-    if node_name.starts_with('-') {
-        return Err(
-            "Node name cannot start with a hyphen (-) as it may be interpreted as a command flag"
-                .to_string(),
-        );
-    }
-    for (i, c) in node_name.chars().enumerate() {
-        if !c.is_ascii_alphanumeric() && c != '-' && c != '_' {
-            if c == '/' || c == '\\' {
-                return Err(format!(
-                    "Node name contains invalid path separator '{}' at position {}. \
-                     Path separators are not allowed to prevent path traversal attacks.",
-                    c, i
-                ));
-            } else if c == ';' || c == '|' || c == '&' || c == '$' || c == '`' {
-                return Err(format!(
-                    "Node name contains invalid shell metacharacter '{}' at position {}. \
-                     Shell metacharacters are not allowed to prevent command injection.",
-                    c, i
-                ));
-            } else if c == '.' && node_name.contains("..") {
-                return Err(
-                    "Node name contains '..' which could be used for path traversal attacks"
-                        .to_string(),
-                );
-            } else {
-                return Err(format!(
-                    "Node name contains invalid character '{}' at position {}. \
-                     Only alphanumeric characters, hyphens (-), and underscores (_) are allowed.",
-                    c, i
-                ));
-            }
-        }
+    // A leading hyphen is excluded too: merod would read the name as a flag.
+    if node_name.is_empty()
+        || node_name.starts_with('-')
+        || !node_name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(format!(
+            "Invalid node name '{}'. Use letters, digits, hyphens and underscores only, \
+             not starting with a hyphen.",
+            node_name
+        ));
     }
     Ok(())
 }
@@ -534,6 +510,28 @@ fn focus_window(app_handle: tauri::AppHandle, window_label: String) -> Result<()
 // A per-app `.app` is an unsigned bash trampoline that execs the shared, loose,
 // ad-hoc-signed `calimero-shell` with `--app-config <bundle>/…/app.json`; the
 // shell owns that app's dock identity and brokers refresh back to this host.
+
+/// An app name reduced to what can be a `.app` bundle or a `.lnk` filename on
+/// every platform we ship to. Empty after trimming means a name that was all
+/// punctuation, which would otherwise leave the launcher unnamed.
+fn safe_launcher_name(app_name: &str) -> String {
+    let mapped: String = app_name
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == ' ' || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let trimmed = mapped.trim().trim_matches('_');
+    if trimmed.is_empty() {
+        "Calimero App".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
 
 /// Where the host persists per-app capabilities (loaded into CapRegistry at startup).
 #[cfg(target_os = "macos")]
@@ -855,19 +853,8 @@ fn ensure_app_launcher(
     static BUILD: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let _serialised = BUILD.lock_unpoisoned();
 
-    // sanitize the name for the .app filename
-    let safe: String = app_name
-        .chars()
-        .map(|c| {
-            if c.is_alphanumeric() || c == ' ' || c == '-' || c == '_' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    let safe = safe.trim().trim_matches('_');
-    let safe = if safe.is_empty() { "Calimero App" } else { safe };
+    let safe = safe_launcher_name(app_name);
+    let safe = safe.as_str();
 
     // ensure the shared shell is extracted to its loose path (idempotent).
     let shell_dest = launcher::shell_install_path();
@@ -1075,22 +1062,8 @@ fn create_desktop_shortcut_blocking(
         )
     })?;
 
-    let safe_name: String = app_name
-        .chars()
-        .map(|c| {
-            if c.is_alphanumeric() || c == ' ' || c == '-' || c == '_' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    let shortcut_name = safe_name.trim().trim_matches('_');
-    let shortcut_name = if shortcut_name.is_empty() {
-        "Calimero App"
-    } else {
-        shortcut_name
-    };
+    let shortcut_name = safe_launcher_name(&app_name);
+    let shortcut_name = shortcut_name.as_str();
 
     #[cfg(windows)]
     {
@@ -4115,9 +4088,31 @@ fn main() {
 mod tests {
     use super::{
         launcher_bundle_is_removable, parse_app_deep_link, parse_node_ports,
-        replace_multiaddr_port, DEFAULT_NODE_PORTS,
+        replace_multiaddr_port, validate_node_name, DEFAULT_NODE_PORTS,
     };
     use std::path::Path;
+
+    #[test]
+    fn a_node_name_that_could_escape_its_directory_or_the_argv_is_refused() {
+        for name in ["node1", "node-1", "node_1", "N0"] {
+            assert!(validate_node_name(name).is_ok(), "{name} is a valid name");
+        }
+        for name in [
+            "",
+            "-node",              // merod would read it as a flag
+            "../etc",             // traversal
+            "a/b",
+            "a\\b",
+            "a;rm -rf /",         // shell metacharacters
+            "a$b",
+            "a`b`",
+            "a b",
+            "nodé",               // non-ascii
+            &"n".repeat(65),      // over MAX_NODE_NAME_LENGTH
+        ] {
+            assert!(validate_node_name(name).is_err(), "{name:?} must be refused");
+        }
+    }
 
     /// Two node homes that differ, for the tests that match tracked state on one.
     const HOME_A: &str = "/tmp/calimero-test-home-a";

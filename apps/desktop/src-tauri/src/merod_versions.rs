@@ -22,7 +22,7 @@ pub enum VersionId {
     Local(PathBuf),
 }
 
-pub const BUNDLED_ID: &str = "bundled";
+const BUNDLED_ID: &str = "bundled";
 const LOCAL_PREFIX: &str = "local:";
 
 /// Check a download against the `sha256:...` digest GitHub publishes for the
@@ -77,7 +77,7 @@ pub(crate) fn version_matches_tag(reported: &str, tag: &str) -> bool {
 
 /// Tags land in both a URL and a directory name. `.` and `..` need excluding
 /// separately: both pass the charset yet resolve out of their own directory.
-pub fn is_safe_tag(tag: &str) -> bool {
+fn is_safe_tag(tag: &str) -> bool {
     !tag.is_empty()
         && tag != "."
         && tag != ".."
@@ -89,7 +89,7 @@ pub fn is_safe_tag(tag: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_')
 }
 
-pub fn parse_version_id(raw: &str) -> Result<VersionId, TauriError> {
+pub(crate) fn parse_version_id(raw: &str) -> Result<VersionId, TauriError> {
     if raw == BUNDLED_ID {
         return Ok(VersionId::Bundled);
     }
@@ -115,7 +115,7 @@ pub fn parse_version_id(raw: &str) -> Result<VersionId, TauriError> {
     ))
 }
 
-pub fn version_id_to_string(id: &VersionId) -> String {
+pub(crate) fn version_id_to_string(id: &VersionId) -> String {
     match id {
         VersionId::Bundled => BUNDLED_ID.to_string(),
         VersionId::Release(tag) => tag.clone(),
@@ -125,11 +125,11 @@ pub fn version_id_to_string(id: &VersionId) -> String {
 
 /// Root of the shared binary store. Deliberately under the app data directory:
 /// writing into the app bundle would break its signature seal.
-pub fn store_dir(app_data_dir: &Path) -> PathBuf {
+fn store_dir(app_data_dir: &Path) -> PathBuf {
     app_data_dir.join("merod")
 }
 
-pub fn release_binary_path(app_data_dir: &Path, tag: &str) -> PathBuf {
+fn release_binary_path(app_data_dir: &Path, tag: &str) -> PathBuf {
     // Windows needs the extension: Command::new does not append .exe to an
     // explicit path the way PATH lookup does.
     let name = if cfg!(target_os = "windows") { "merod.exe" } else { "merod" };
@@ -147,11 +147,11 @@ pub struct NodePin {
     pub version_at_init: Option<String>,
 }
 
-pub fn pin_path(home_dir: &Path, node_name: &str) -> PathBuf {
+fn pin_path(home_dir: &Path, node_name: &str) -> PathBuf {
     home_dir.join(node_name).join("merod-version.json")
 }
 
-pub fn read_pin_raw(home_dir: &Path, node_name: &str) -> Option<NodePin> {
+fn read_pin_raw(home_dir: &Path, node_name: &str) -> Option<NodePin> {
     let raw = std::fs::read_to_string(pin_path(home_dir, node_name)).ok()?;
     serde_json::from_str(&raw).ok()
 }
@@ -418,7 +418,7 @@ pub(crate) fn nodes_using(home_dir: &Path, id: &str) -> Vec<String> {
 
 /// Download and extract `tag` into the store unless it is already there.
 /// Installs of the same tag are serialised so two nodes cannot race the download.
-pub async fn ensure_release_installed(
+pub(crate) async fn ensure_release_installed(
     app_data_dir: &Path,
     tag: &str,
 ) -> Result<PathBuf, TauriError> {

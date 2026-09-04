@@ -17,13 +17,10 @@ fn default_node_url() -> String {
 }
 
 pub fn parse_app_config_arg(args: &[String]) -> Option<PathBuf> {
-    let mut it = args.iter();
-    while let Some(a) = it.next() {
-        if a == "--app-config" {
-            return it.next().map(PathBuf::from);
-        }
-    }
-    None
+    args.iter()
+        .position(|a| a == "--app-config")
+        .and_then(|i| args.get(i + 1))
+        .map(PathBuf::from)
 }
 
 pub fn load_shell_config(path: &Path) -> Option<ShellConfig> {

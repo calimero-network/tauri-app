@@ -18,12 +18,11 @@ import { setAccessToken, setRefreshToken, setTokenExpiresAt } from "../lib/token
 import { saveOnboardingProgress, loadOnboardingProgress } from "../utils/onboardingProgress";
 import { startCloudLogin } from "../utils/cloudAuth";
 import { isCloudEnabled } from "../utils/featureFlags";
-import { fetchAppsFromAllRegistries, fetchAppManifest, recordDownload, type AppSummary } from "../utils/registry";
+import { fetchAppsFromAllRegistries, recordDownload, type AppSummary } from "../utils/registry";
 import { useToast } from "../contexts/ToastContext";
 import { useTheme } from "../contexts/ThemeContext";
 import { ArrowLeft, ArrowRight, Check, Package, Download, CheckCircle2, ChevronDown, ChevronUp, AlertTriangle, Settings, RefreshCw } from "lucide-react";
 import calimeroLogo from "../assets/calimero-logo.svg";
-import bs58 from "bs58";
 import "./Onboarding.css";
 
 interface OnboardingProps {
@@ -520,67 +519,12 @@ function Onboarding({ onComplete, onSettings }: OnboardingProps) {
   const handleInstallApp = async (app: AppSummary, registry: string) => {
     setInstallingAppId(app.id);
     try {
-      const manifest = await fetchAppManifest(registry, app.id, app.latest_version);
-      
-      let wasmUrl: string;
-      let wasmHashHex: string | null = null;
-      
-      if (manifest.artifact) {
-        if (!manifest.artifact.uri) {
-          toast.error("Invalid manifest: artifact URI is missing");
-          return;
-        }
-        wasmUrl = manifest.artifact.uri;
-        wasmHashHex = manifest.artifact.digest?.replace('sha256:', '') || null;
-      } else if (manifest.artifacts && manifest.artifacts.length > 0) {
-        const mpkArtifact = manifest.artifacts.find(a => a.type === 'mpk');
-        const wasmArtifact = manifest.artifacts.find(a => a.type === 'wasm');
-        
-        if (mpkArtifact) {
-          wasmUrl = mpkArtifact.mirrors?.[0] || `https://ipfs.io/ipfs/${mpkArtifact.cid}`;
-          wasmHashHex = mpkArtifact.sha256?.replace('sha256:', '') || null;
-        } else if (wasmArtifact) {
-          wasmUrl = wasmArtifact.mirrors?.[0] || `https://ipfs.io/ipfs/${wasmArtifact.cid}`;
-          wasmHashHex = wasmArtifact.sha256?.replace('sha256:', '') || null;
-        } else {
-          toast.error("No MPK or WASM artifact found");
-          return;
-        }
-      } else {
-        toast.error("No artifacts found in manifest");
-        return;
-      }
-      
-      let wasmHashBase58: string | undefined = undefined;
-      if (wasmHashHex && wasmHashHex.length === 64) {
-        try {
-          const hashBytes = Uint8Array.from(
-            wasmHashHex.match(/.{1,2}/g)!.map(byte => parseInt(byte, 16))
-          );
-          wasmHashBase58 = bs58.encode(hashBytes);
-        } catch (error) {
-          console.warn("Failed to convert hash to base58:", error);
-        }
-      }
-      
-      const metadata = {
-        name: app.name,
-        description: manifest.metadata?.description || "",
+      // The node fetches from its own registry by coordinates; it takes no URL,
+      // so nothing here resolves a manifest, an artifact or a hash any more.
+      const installResponse = await apiClient.node.installApplication({
+        package: app.id,
         version: app.latest_version,
-        developer: app.developer_pubkey,
-      };
-      const metadataJson = JSON.stringify(metadata);
-      const metadataBytes = Array.from(new TextEncoder().encode(metadataJson));
-
-      const request: any = {
-        url: wasmUrl,
-        metadata: wasmUrl.endsWith('.mpk') ? [] : metadataBytes,
-      };
-      if (wasmHashBase58 && !wasmUrl.endsWith('.mpk')) {
-        request.hash = wasmHashBase58;
-      }
-
-      const installResponse = await apiClient.node.installApplication(request);
+      });
       if (installResponse.error) {
         throw new Error(installResponse.error.message);
       }

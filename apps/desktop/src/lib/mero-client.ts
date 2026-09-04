@@ -286,10 +286,8 @@ class NodeApi {
     version: string;
   }): Promise<ApiResponse<{ applicationId: string }>> {
     try {
-      // mero-js 13 still types this as a URL body. It forwards verbatim, so the
-      // coordinates reach the node; the cast goes when the SDK bump lands.
-      const r = await this.meroJs.admin.installApplication(request as any);
-      return { data: { applicationId: (r as any).applicationId } };
+      const r = await this.meroJs.admin.installApplication(request);
+      return { data: { applicationId: r.applicationId } };
     } catch (e: any) {
       if (e?.status === 401) return { error: { message: 'Unauthorized', code: '401' } };
       return { error: { message: e instanceof Error ? e.message : 'Failed to install application' } };

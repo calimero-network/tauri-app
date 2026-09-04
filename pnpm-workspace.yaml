@@ -3,6 +3,9 @@ packages:
 
 overrides:
   postcss: '>=8.5.18'
+  # mero-react declares an older mero-js range; hold it to the app's so both
+  # share one MeroJs class. Keep in step with apps/desktop/package.json.
+  '@calimero-network/mero-react>@calimero-network/mero-js': '^18.1.0'
 
 # pnpm 10 stopped running dependency build scripts by default. Both of these
 # ship native binaries and were already being built under pnpm 9.
@@ -10,5 +13,7 @@ allowBuilds:
   esbuild: true
   sharp: true
 
+# First-party packages: the bump bot opens its PR seconds after publish, so the
+# 24h quarantine would fail `--frozen-lockfile` on every one of them.
 minimumReleaseAgeExclude:
-  - '@calimero-network/mero-ui@1.5.1'
+  - '@calimero-network/*'

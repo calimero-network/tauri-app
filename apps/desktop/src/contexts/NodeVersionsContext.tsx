@@ -4,7 +4,7 @@ import { getMerodBinaryVersion } from "../utils/merod";
 import { getSettings } from "../utils/settings";
 import { useMerodStatusChanged } from "../hooks/useMerodStatusChanged";
 
-export interface NodeVersionMap {
+interface NodeVersionMap {
   /** node name -> version id it is pinned to */
   byNode: Record<string, string>;
   /** version id -> what that binary reports now (local builds only) */

@@ -1,10 +1,8 @@
 import { apiClient } from "../lib/mero-client";
 
 export interface OnboardingState {
-  isFirstTime: boolean;
   authAvailable: boolean;
   providersAvailable: boolean;
-  providersConfigured: boolean;
   hasConfiguredProviders: boolean;
   error?: string;
 }
@@ -15,10 +13,8 @@ export interface OnboardingState {
  */
 export async function checkOnboardingState(): Promise<OnboardingState> {
   const state: OnboardingState = {
-    isFirstTime: false,
     authAvailable: false,
     providersAvailable: false,
-    providersConfigured: false,
     hasConfiguredProviders: false,
   };
 
@@ -59,17 +55,9 @@ export async function checkOnboardingState(): Promise<OnboardingState> {
 
     // Check if any providers are configured (have users/keys)
     const configuredProviders = providers.filter((p) => p.configured === true);
-    state.providersConfigured = configuredProviders.length > 0;
     state.hasConfiguredProviders = configuredProviders.length > 0;
     console.log('✅ Configured providers:', state.hasConfiguredProviders, configuredProviders.length);
     console.log('📝 Provider details:', providers.map((p) => ({ name: p.name, configured: p.configured })));
-
-    // Determine if this is first-time setup
-    // First time = auth is available, providers are available, but none are configured
-    state.isFirstTime =
-      state.authAvailable &&
-      state.providersAvailable &&
-      !state.hasConfiguredProviders;
 
     return state;
   } catch (error) {
@@ -96,38 +84,11 @@ export function getOnboardingMessage(state: OnboardingState): {
     };
   }
 
-  if (!state.providersAvailable) {
-    return {
-      title: "No Authentication Providers",
-      message:
-        "No authentication providers are available. Please configure at least one authentication provider in your node configuration.",
-      action: "Check Settings",
-    };
-  }
-
-  if (state.isFirstTime) {
-    return {
-      title: "Welcome to Calimero Desktop",
-      message:
-        "This appears to be your first time using the app. You'll need to create an account using one of the available authentication methods.",
-      action: "Get Started",
-    };
-  }
-
-  if (!state.hasConfiguredProviders) {
-    return {
-      title: "No Accounts Configured",
-      message:
-        "Authentication providers are available but no accounts have been created yet. Please create your first account.",
-      action: "Create Account",
-    };
-  }
-
-  // Everything is configured
   return {
-    title: "Ready to Use",
-    message: "Your authentication is properly configured. You can now log in.",
-    action: "Continue",
+    title: "No Authentication Providers",
+    message:
+      "No authentication providers are available. Please configure at least one authentication provider in your node configuration.",
+    action: "Check Settings",
   };
 }
 

@@ -36,7 +36,6 @@ export const DEFAULT_EMBEDDED_SWARM_PORT = 2428;
 /** Home dir the app manages when settings say nothing; also merod's own default. */
 export const DEFAULT_NODE_HOME_DIR = '~/.calimero';
 const DEFAULT_REGISTRY_URL = 'https://apps.calimero.network/';
-const OLD_DEFAULT_REGISTRY_URL = 'http://localhost:8080';
 
 function readStored(): string | null {
   try {
@@ -57,79 +56,18 @@ function parseStored(stored: string | null): AppSettings | null {
   }
 }
 
-/**
- * Migrate old registry URLs to the new default
- */
-function migrateRegistries(registries: string[] | undefined, rawSettings: AppSettings | null): string[] {
-  if (!registries || registries.length === 0) {
-    return [DEFAULT_REGISTRY_URL];
-  }
-
-  // Replace old localhost registry with new default
-  const migrated = registries.map(url => {
-    // Normalize URLs for comparison (remove trailing slashes)
-    const normalizedUrl = url.replace(/\/$/, '');
-    const normalizedOld = OLD_DEFAULT_REGISTRY_URL.replace(/\/$/, '');
-    
-    if (normalizedUrl === normalizedOld) {
-      return DEFAULT_REGISTRY_URL;
-    }
-    return url;
-  });
-
-  // If we made changes, save them back
-  const hasChanges = migrated.some((url, index) => url !== registries[index]);
-  if (hasChanges && rawSettings) {
-    try {
-      saveSettings({
-        ...rawSettings,
-        registries: migrated,
-      });
-    } catch {
-      // A failed write must not cost the caller its settings. The memo still keys
-      // on the unchanged raw string, so a later successful write re-derives.
-    }
-  }
-
-  return migrated;
-}
-
 function buildSettings(rawSettings: AppSettings | null): AppSettings {
-  try {
-    if (rawSettings) {
-      const migratedRegistries = migrateRegistries(rawSettings.registries, rawSettings);
-
-      return {
-        nodeUrl: rawSettings.nodeUrl || DEFAULT_NODE_URL,
-        authUrl: rawSettings.authUrl,
-        registries: migratedRegistries,
-        useEmbeddedNode: rawSettings.useEmbeddedNode,
-        embeddedNodePort: rawSettings.embeddedNodePort,
-        embeddedNodeSwarmPort: rawSettings.embeddedNodeSwarmPort,
-        embeddedNodeDataDir: rawSettings.embeddedNodeDataDir,
-        embeddedNodeName: rawSettings.embeddedNodeName,
-        developerMode: rawSettings.developerMode ?? false, // Default to false
-        debugLogs: rawSettings.debugLogs ?? false,
-        cloudEnabled: rawSettings.cloudEnabled, // Passthrough: keep undefined when unset so featureFlags can fall back to build-time default
-
-        onboardingCompleted: rawSettings.onboardingCompleted ?? false,
-        cloudConnected: rawSettings.cloudConnected ?? false,
-        cloudIdToken: rawSettings.cloudIdToken,
-        cloudUserEmail: rawSettings.cloudUserEmail,
-        cloudUserName: rawSettings.cloudUserName,
-        cloudUserPicture: rawSettings.cloudUserPicture,
-        mcpAgentClientId: rawSettings.mcpAgentClientId,
-        mcpAgentCredentialPath: rawSettings.mcpAgentCredentialPath,
-        mcpAgentNodeUrl: rawSettings.mcpAgentNodeUrl,
-      };
-    }
-  } catch (error) {
-    console.error('Failed to load settings:', error);
+  if (!rawSettings) {
+    return { nodeUrl: DEFAULT_NODE_URL, registries: [DEFAULT_REGISTRY_URL] };
   }
-
   return {
-    nodeUrl: DEFAULT_NODE_URL,
-    registries: [DEFAULT_REGISTRY_URL], // Default to Calimero apps registry
+    ...rawSettings,
+    nodeUrl: rawSettings.nodeUrl || DEFAULT_NODE_URL,
+    registries: rawSettings.registries?.length ? rawSettings.registries : [DEFAULT_REGISTRY_URL],
+    developerMode: rawSettings.developerMode ?? false,
+    debugLogs: rawSettings.debugLogs ?? false,
+    onboardingCompleted: rawSettings.onboardingCompleted ?? false,
+    cloudConnected: rawSettings.cloudConnected ?? false,
   };
 }
 
@@ -150,8 +88,7 @@ export function getSettings(): AppSettings {
   // callers would otherwise reach for.
   Object.freeze(built.registries);
   const settings = Object.freeze(built);
-  // Re-read: the registry migration writes back while we build.
-  cachedStored = readStored();
+  cachedStored = stored;
   cachedSettings = settings;
   return settings;
 }
@@ -167,14 +104,6 @@ export function saveSettings(settings: AppSettings): void {
     console.error('Failed to save settings:', error);
     throw error;
   }
-}
-
-/**
- * Clear app settings. Use to reset onboarding and start from scratch.
- * Caller should reload the app after this.
- */
-export function clearSettings(): void {
-  localStorage.removeItem(SETTINGS_KEY);
 }
 
 /**

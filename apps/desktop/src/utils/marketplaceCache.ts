@@ -1,30 +1,13 @@
 /**
- * Marketplace cache utility
- *
  * Caches raw registry app data (before installed-status is applied) so that
  * navigating back to the Marketplace page does not trigger a slow re-fetch
- * every time.
- *
- * Design:
- *  - Raw AppSummary[] from each registry is stored in localStorage + in-memory.
- *  - Installed status is NOT cached – it is applied on top by the Marketplace
- *    component using the live installedAppIds set.
- *  - A TTL controls when the cache is considered stale and a background
- *    refresh is triggered.
- *  - The cache automatically invalidates when the list of configured
- *    registries changes.
- *  - install / uninstall operations only need to update the installed-status
- *    overlay; however, callers can also call `invalidateMarketplaceCache()` if
- *    they want a full re-fetch on next load.
+ * every time. Installed status is NOT cached - the Marketplace component
+ * applies it on top from the live installedAppIds set.
  */
 
 import type { AppSummary } from "./registry";
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-export interface RegistryApps {
+interface RegistryApps {
   registry: string;
   apps: AppSummary[];
 }
@@ -36,28 +19,12 @@ interface CacheEntry {
   results: RegistryApps[];
   /** Unix-ms timestamp when the cache was written */
   timestamp: number;
-  /** Simple content fingerprint for change-detection */
-  contentHash: string;
 }
 
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
 const STORAGE_KEY = "calimero-marketplace-cache";
-
-/** Default time-to-live: 5 minutes */
-const DEFAULT_TTL_MS = 5 * 60 * 1000;
-
-// ---------------------------------------------------------------------------
-// In-memory singleton (survives within a single SPA session)
-// ---------------------------------------------------------------------------
+const TTL_MS = 5 * 60 * 1000; // cache considered stale after this long
 
 let memoryCache: CacheEntry | null = null;
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 /** Build a deterministic key from a list of registry URLs */
 function buildRegistriesKey(registries: string[]): string {
@@ -65,25 +32,6 @@ function buildRegistriesKey(registries: string[]): string {
     .map((u) => u.replace(/\/+$/, "").toLowerCase())
     .sort()
     .join("|");
-}
-
-/** Cheap content fingerprint so we can tell if the registry payload changed */
-function computeContentHash(results: RegistryApps[]): string {
-  const parts: string[] = [];
-  for (const { registry, apps } of results) {
-    for (const app of apps) {
-      parts.push(`${registry}::${app.id}::${app.latest_version}`);
-    }
-  }
-  parts.sort();
-  const raw = parts.join("\n");
-
-  // djb2 hash → base-36 string
-  let hash = 5381;
-  for (let i = 0; i < raw.length; i++) {
-    hash = (hash * 33) ^ raw.charCodeAt(i);
-  }
-  return (hash >>> 0).toString(36);
 }
 
 // ---------------------------------------------------------------------------
@@ -120,15 +68,14 @@ function writeToStorage(entry: CacheEntry): void {
  * flag the caller can use to decide whether to trigger a background refresh.
  */
 export function getMarketplaceCache(
-  registries: string[],
-  ttlMs: number = DEFAULT_TTL_MS
+  registries: string[]
 ): { results: RegistryApps[]; isStale: boolean } | null {
   const key = buildRegistriesKey(registries);
 
   // Try memory cache first (fastest)
   if (memoryCache && memoryCache.registriesKey === key) {
     const age = Date.now() - memoryCache.timestamp;
-    return { results: memoryCache.results, isStale: age > ttlMs };
+    return { results: memoryCache.results, isStale: age > TTL_MS };
   }
 
   // Fall back to localStorage
@@ -137,38 +84,22 @@ export function getMarketplaceCache(
     // Populate memory cache
     memoryCache = stored;
     const age = Date.now() - stored.timestamp;
-    return { results: stored.results, isStale: age > ttlMs };
+    return { results: stored.results, isStale: age > TTL_MS };
   }
 
   return null;
 }
 
-/**
- * Store fresh marketplace data in the cache.
- *
- * Returns `true` if the content actually changed compared to the previous
- * cache (useful for deciding whether to update React state).
- */
-export function setMarketplaceCache(
-  registries: string[],
-  results: RegistryApps[]
-): boolean {
-  const key = buildRegistriesKey(registries);
-  const hash = computeContentHash(results);
-
-  const changed = memoryCache?.contentHash !== hash;
-
+/** Store fresh marketplace data in the cache. */
+export function setMarketplaceCache(registries: string[], results: RegistryApps[]): void {
   const entry: CacheEntry = {
-    registriesKey: key,
+    registriesKey: buildRegistriesKey(registries),
     results,
     timestamp: Date.now(),
-    contentHash: hash,
   };
 
   memoryCache = entry;
   writeToStorage(entry);
-
-  return changed;
 }
 
 /**

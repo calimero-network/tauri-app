@@ -13,19 +13,9 @@ const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 const THEME_KEY = 'calimero-desktop-theme';
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
-  const [theme, setThemeState] = useState<Theme>(() => {
-    // Check localStorage first
+  const [theme, setTheme] = useState<Theme>(() => {
     const stored = localStorage.getItem(THEME_KEY);
-    if (stored === 'dark' || stored === 'light') {
-      return stored;
-    }
-    // If no settings saved (onboarding), default to dark mode
-    const hasCustomSettings = localStorage.getItem('calimero-desktop-settings') !== null;
-    if (!hasCustomSettings) {
-      return 'dark';
-    }
-    // Default to dark (Calimero brand)
-    return 'dark';
+    return stored === 'light' ? 'light' : 'dark'; // Calimero brand default
   });
 
   useEffect(() => {
@@ -35,11 +25,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   }, [theme]);
 
   const toggleTheme = () => {
-    setThemeState(prev => prev === 'light' ? 'dark' : 'light');
-  };
-
-  const setTheme = (newTheme: Theme) => {
-    setThemeState(newTheme);
+    setTheme(prev => prev === 'light' ? 'dark' : 'light');
   };
 
   return (

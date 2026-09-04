@@ -13,7 +13,6 @@ import {
 import type { GroupInfo, MetadataRecord } from "@calimero-network/mero-js";
 import { useToast } from "../contexts/ToastContext";
 import { ChevronLeft, Users, Box, Layers, Copy, ChevronRight, Shield, Globe, Plus, X, Trash2, UserMinus, Link, ChevronDown, Check, MoreHorizontal, LogIn, LogOut } from "lucide-react";
-import { saveContextKey } from "../utils/contextKeys";
 import { decodeMetadata } from "../utils/appUtils";
 import { listInstalledApps } from "../utils/installedAppsCache";
 import { getSettings } from "../utils/settings";
@@ -559,7 +558,6 @@ function Namespaces() {
         name: alias?.trim() || undefined,
       });
       if (!result) throw new Error('createContext returned null');
-      saveContextKey(result.contextId, result.memberPublicKey, applicationId);
       toast.success(`Context created: ${truncateId(result.contextId)}`);
       setCtxModalOpen(null);
       refetchTree();

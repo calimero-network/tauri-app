@@ -1,16 +1,10 @@
 import { invoke } from '@tauri-apps/api/core';
+import { pollUntil } from './appUtils';
 
-export interface MerodHealth {
+interface MerodHealth {
   status: number;
   healthy: boolean;
   body: string;
-}
-
-/**
- * Download and extract the merod binary from GitHub release
- */
-export async function downloadMerod(): Promise<string> {
-  return await invoke('download_merod');
 }
 
 /**
@@ -34,7 +28,7 @@ export async function stopMerod(): Promise<string> {
   return await invoke('stop_merod');
 }
 
-export interface RestartOutcome {
+interface RestartOutcome {
   restarted: boolean;
   /** null when the node started but the app could not re-confirm which pid it is. */
   pid: number | null;
@@ -68,15 +62,15 @@ const HEALTH_POLL_INTERVAL_MS = 500;
  * the node is actually ready before advancing to login/auth steps.
  */
 export async function waitForNodeHealthy(nodeUrl: string, timeoutMs: number): Promise<void> {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    const health = await checkMerodHealth(nodeUrl);
-    if (health.healthy) return;
-    await new Promise((r) => setTimeout(r, HEALTH_POLL_INTERVAL_MS));
+  const healthy = await pollUntil(async () => (await checkMerodHealth(nodeUrl)).healthy, {
+    deadlineMs: timeoutMs,
+    intervalMs: HEALTH_POLL_INTERVAL_MS,
+  });
+  if (!healthy) {
+    throw new Error(
+      'Node did not become healthy in time. The node process may have crashed - check the logs.'
+    );
   }
-  throw new Error(
-    'Node did not become healthy in time. The node process may have crashed - check the logs.'
-  );
 }
 
 const RESTART_READY_POLL_INTERVAL_MS = 250;
@@ -89,13 +83,13 @@ export async function pollUntilNodeReady(
   deadlineMs = RESTART_READY_DEADLINE_MS,
   intervalMs = RESTART_READY_POLL_INTERVAL_MS
 ): Promise<boolean> {
-  const start = Date.now();
-  while (Date.now() - start < deadlineMs) {
-    const result = await healthCheck().catch(() => ({ error: { code: undefined as string | undefined } }));
-    if (!result.error || result.error.code === '401') return true;
-    await new Promise((r) => setTimeout(r, intervalMs));
-  }
-  return false;
+  return pollUntil(
+    async () => {
+      const result = await healthCheck().catch(() => ({ error: { code: undefined as string | undefined } }));
+      return !result.error || result.error.code === '401';
+    },
+    { deadlineMs, intervalMs }
+  );
 }
 
 export interface RunningMerodNode {
@@ -185,7 +179,7 @@ export async function clearMerodLogs(
   return await invoke('clear_merod_logs', { nodeName, homeDir });
 }
 
-export interface ExportedLogs {
+interface ExportedLogs {
   /** Absolute path the user chose in the save dialog. */
   path: string;
   /** Bytes written, including the per-segment banner lines. */
@@ -206,7 +200,7 @@ export async function exportMerodLogs(
 }
 
 /** Whether the delete removed anything, so callers never read prose to decide. */
-export interface DeleteOutcome {
+interface DeleteOutcome {
   deleted: boolean;
   path: string;
 }
@@ -223,7 +217,7 @@ export async function getMerodBinaryVersion(): Promise<string> {
   return await invoke('get_merod_binary_version');
 }
 
-export interface MerodUpdateResult {
+interface MerodUpdateResult {
   replaced: boolean;
   expected_version: string;
   current_version: string;

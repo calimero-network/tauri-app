@@ -25,7 +25,7 @@ export interface UpdateInfo {
   body: string;
 }
 
-export interface UpdateStatus {
+interface UpdateStatus {
   available: boolean;
   info?: UpdateInfo;
   /** The installed version is below the manifest's minimumVersion — the update cannot be deferred. */

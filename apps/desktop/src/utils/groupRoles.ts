@@ -30,7 +30,7 @@ import { getSettings } from './settings';
 import { getAccessToken } from '../lib/token-storage';
 import { extractMembersFromResponse } from './teeEviction';
 
-export interface GroupMember {
+interface GroupMember {
   /** The ACCOUNT, 64 hex. rc.23 (#3522) made the member listing answer with
    *  accounts, not the base58 device key — comparing against a device key
    *  matches nobody and every row reads as somebody else's. */

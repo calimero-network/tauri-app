@@ -17,7 +17,6 @@ export interface AppSummary {
 export interface VersionInfo {
   semver: string;
   cid: string;
-  yanked?: boolean;
 }
 
 export interface AppManifest {
@@ -74,48 +73,40 @@ export interface AppManifest {
  */
 export async function fetchAppsFromRegistry(
   registryUrl: string,
-  filters?: { dev?: string; name?: string }
+  filters?: { name?: string }
 ): Promise<AppSummary[]> {
-  try {
-    const url = new URL('/api/v2/bundles', registryUrl);
-    if (filters?.dev) {
-      url.searchParams.set('developer', filters.dev);
-    }
-    if (filters?.name) {
-      url.searchParams.set('package', filters.name);
-    }
-
-    const response = await fetch(url.toString(), {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    });
-
-    if (!response.ok) {
-      throw new Error(`Registry request failed: ${response.status} ${response.statusText}`);
-    }
-
-    const bundles = await response.json();
-    const bundlesArray = Array.isArray(bundles) ? bundles : [];
-
-    // Transform V2 BundleManifest to AppSummary format
-    return bundlesArray.map((bundle: any) => ({
-      id: bundle.package,
-      name: bundle.metadata?.name || bundle.package,
-      developer_pubkey: bundle.signature?.pubkey || 'unknown',
-      latest_version: bundle.appVersion,
-      latest_cid: bundle.wasm?.hash || bundle.wasm?.path || '',
-      alias: bundle.metadata?.name,
-      description: bundle.metadata?.description,
-      author: bundle.metadata?.author,
-      minRuntimeVersion: bundle.minRuntimeVersion,
-      downloads: bundle.downloads ?? 0,
-    }));
-  } catch (error) {
-    console.error(`Failed to fetch apps from registry ${registryUrl}:`, error);
-    throw error;
+  const url = new URL('/api/v2/bundles', registryUrl);
+  if (filters?.name) {
+    url.searchParams.set('package', filters.name);
   }
+
+  const response = await fetch(url.toString(), {
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Registry request failed: ${response.status} ${response.statusText}`);
+  }
+
+  const bundles = await response.json();
+  const bundlesArray = Array.isArray(bundles) ? bundles : [];
+
+  // Transform V2 BundleManifest to AppSummary format
+  return bundlesArray.map((bundle: any) => ({
+    id: bundle.package,
+    name: bundle.metadata?.name || bundle.package,
+    developer_pubkey: bundle.signature?.pubkey || 'unknown',
+    latest_version: bundle.appVersion,
+    latest_cid: bundle.wasm?.hash || bundle.wasm?.path || '',
+    alias: bundle.metadata?.name,
+    description: bundle.metadata?.description,
+    author: bundle.metadata?.author,
+    minRuntimeVersion: bundle.minRuntimeVersion,
+    downloads: bundle.downloads ?? 0,
+  }));
 }
 
 // Package ids may be scoped (@org/name) but nothing more — this mirrors the
@@ -180,47 +171,41 @@ export async function fetchAppVersions(
   appId: string
 ): Promise<VersionInfo[]> {
   if (!APP_ID_RE.test(appId)) throw new Error(`Invalid appId: ${appId}`);
-  try {
-    // Use V2 Bundle API - get all published versions for this package
-    const url = new URL('/api/v2/bundles', registryUrl);
-    url.searchParams.set('package', appId); // encodeURIComponent handled by URLSearchParams
-    url.searchParams.set('all_versions', 'true');
+  // Use V2 Bundle API - get all published versions for this package
+  const url = new URL('/api/v2/bundles', registryUrl);
+  url.searchParams.set('package', appId); // encodeURIComponent handled by URLSearchParams
+  url.searchParams.set('all_versions', 'true');
 
-    const response = await fetch(url.toString(), {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    });
+  const response = await fetch(url.toString(), {
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+  });
 
-    if (!response.ok) {
-      throw new Error(`Failed to fetch versions: ${response.status} ${response.statusText}`);
-    }
-
-    const bundles = await response.json();
-    const bundlesArray = Array.isArray(bundles) ? bundles : [];
-
-    // Drop yanked/invalid entries and deduplicate by semver (the registry may
-    // return one entry per platform/arch), then sort newest-first.
-    const seen = new Set<string>();
-    const versions: VersionInfo[] = [];
-    for (const bundle of bundlesArray as any[]) {
-      const semver = bundle.appVersion as string;
-      if (!VERSION_RE.test(semver)) continue;
-      if (bundle.yanked === true) continue;
-      if (seen.has(semver)) continue;
-      seen.add(semver);
-      versions.push({
-        semver,
-        cid: `/artifacts/${bundle.package}/${semver}/${bundle.package}-${semver}.mpk`,
-        yanked: false,
-      });
-    }
-    return versions.sort((a, b) => compareSemverDesc(a.semver, b.semver));
-  } catch (error) {
-    console.error(`Failed to fetch app versions from registry ${registryUrl}:`, error);
-    throw error;
+  if (!response.ok) {
+    throw new Error(`Failed to fetch versions: ${response.status} ${response.statusText}`);
   }
+
+  const bundles = await response.json();
+  const bundlesArray = Array.isArray(bundles) ? bundles : [];
+
+  // Drop yanked/invalid entries and deduplicate by semver (the registry may
+  // return one entry per platform/arch), then sort newest-first.
+  const seen = new Set<string>();
+  const versions: VersionInfo[] = [];
+  for (const bundle of bundlesArray as any[]) {
+    const semver = bundle.appVersion as string;
+    if (!VERSION_RE.test(semver)) continue;
+    if (bundle.yanked === true) continue;
+    if (seen.has(semver)) continue;
+    seen.add(semver);
+    versions.push({
+      semver,
+      cid: `/artifacts/${bundle.package}/${semver}/${bundle.package}-${semver}.mpk`,
+    });
+  }
+  return versions.sort((a, b) => compareSemverDesc(a.semver, b.semver));
 }
 
 /**
@@ -347,12 +332,11 @@ export function recordDownload(
  * Fetch applications from all configured registries
  */
 export async function fetchAppsFromAllRegistries(
-  registryUrls: string[],
-  filters?: { dev?: string; name?: string }
+  registryUrls: string[]
 ): Promise<Array<{ registry: string; apps: AppSummary[] }>> {
   const results = await Promise.allSettled(
     registryUrls.map(async (url) => {
-      const apps = await fetchAppsFromRegistry(url, filters);
+      const apps = await fetchAppsFromRegistry(url);
       return { registry: url, apps };
     })
   );

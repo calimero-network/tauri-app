@@ -3,6 +3,9 @@
 
 use log::{debug, info, warn};
 use serde::Serialize;
+use std::process::Stdio;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
@@ -42,18 +45,28 @@ use calimero_tauri_app::node_discovery::{
 #[cfg(target_os = "macos")]
 use calimero_tauri_app::node_discovery::parse_shell_pids;
 
-/// Serialises starting a node against deleting a node home; unguarded they
-/// interleave into a delete unlinking a store a start just opened.
-static NODE_LIFECYCLE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-/// Set by the first quit path to reach teardown; the others then do nothing.
-static SHUTDOWN_CLAIMED: AtomicBool = AtomicBool::new(false);
+static NODE_LIFECYCLE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(()); // serialises a node start against a home delete
+static SHUTDOWN_CLAIMED: AtomicBool = AtomicBool::new(false); // claimed by whichever quit path reaches teardown first
+static IN_FLIGHT_REQUESTS: AtomicUsize = AtomicUsize::new(0); // proxy requests the shutdown drain waits on
+static BUNDLED_MEROD_VERSION: Mutex<Option<String>> = Mutex::new(None); // cached `merod --version`; three UI surfaces ask for it
+/// Write ends of the stdin pipes of nodes started with `--exit-on-stdin-close`;
+/// keyed by pid, and outside `MerodProcess`, which is `Clone` and a pipe is not.
+static STDIN_STOPPERS: std::sync::LazyLock<
+    Mutex<std::collections::HashMap<u32, tokio::process::ChildStdin>>,
+> = std::sync::LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
+/// Node homes being initialised right now, so two inits cannot race on one name.
+static NODE_INIT_IN_FLIGHT: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashSet<String>>,
+> = std::sync::LazyLock::new(Default::default);
 
-/// How long in-flight proxy requests get to finish before the node is stopped.
-const REQUEST_DRAIN_TIMEOUT_SECS: u64 = 10;
-/// How long a node gets to flush and exit before it is killed outright.
-const PROCESS_TERM_MAX_WAIT_SECS: u64 = 30;
-
-/// Version of the merod binary this build expects, embedded at compile time from merod-config.json.
+const REQUEST_DRAIN_TIMEOUT_SECS: u64 = 10; // in-flight proxy requests get this long before the node stops
+const PROCESS_TERM_MAX_WAIT_SECS: u64 = 30; // a node gets this long to flush and exit before it is killed
+const MAX_NODE_NAME_LENGTH: usize = 64;
+const TOKEN_BROKER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20); // the desktop window's deadline to answer a refresh
+const DEFAULT_NODE_PORTS: (u16, u16) = (2528, 2428); // (server, swarm) when a node config says nothing usable
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000; // winbase.h, so no windows-sys dependency for one u32
+/// Version of the merod binary this build expects, from merod-config.json.
 const MEROD_CONFIG_VERSION: &str = match option_env!("MEROD_CONFIG_VERSION") {
     Some(v) => v,
     None => "unknown",
@@ -195,8 +208,6 @@ pub struct PendingOpenApp(pub std::sync::Mutex<Option<(String, String, Option<St
 /// State for pending Calimero Cloud auth callback (set by deep link handler, read by frontend).
 pub struct PendingCloudAuth(pub std::sync::Mutex<Option<String>>);
 
-const MAX_NODE_NAME_LENGTH: usize = 64;
-
 /// Validates a node name to prevent path traversal and command injection.
 /// Valid names: non-empty, max 64 chars, alphanumeric/hyphen/underscore only, no leading hyphen.
 fn validate_node_name(node_name: &str) -> Result<(), String> {
@@ -258,19 +269,9 @@ async fn proxy_http_request(
     proxy::proxy_http_request_inner(request, configured_node_url).await
 }
 
-// ─── Desktop token broker ───────────────────────────────────────────────────
-//
-// Refresh tokens are single-use (calimero-network/core#3083): every
-// POST /auth/refresh consumes the presented token, and re-presenting a consumed
-// one is treated as theft — the node revokes the whole token family and logs
-// out every holder. Each app webview is a separate origin with its own
-// localStorage and its own MeroJs, so they must not share a refresh token: the
-// first to rotate consumes it and the next one trips reuse detection.
-//
-// So app windows never get the real refresh token. The desktop window holds it
-// and is the sole rotator. The proxy script intercepts an app's
-// POST /auth/refresh and calls `broker_token_refresh`, which relays the request
-// to the desktop window and returns the access token it hands back.
+// Refresh tokens are single-use and re-presenting a consumed one revokes the
+// whole family, so the desktop window is the sole holder and rotator; every app
+// webview brokers a fresh access token off it instead of keeping its own.
 
 /// What the desktop window answers with: a fresh access token, or why not.
 type TokenBrokerReply = Result<String, String>;
@@ -281,9 +282,6 @@ type TokenBrokerRegistry = std::sync::Arc<
         std::collections::HashMap<String, tokio::sync::oneshot::Sender<TokenBrokerReply>>,
     >,
 >;
-
-/// How long the desktop window gets to answer before the app's fetch fails.
-const TOKEN_BROKER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 
 #[derive(Clone, Serialize)]
 struct TokenRequestPayload {
@@ -519,11 +517,9 @@ fn focus_window(app_handle: tauri::AppHandle, window_label: String) -> Result<()
     Ok(())
 }
 
-// ─── Per-app launcher (macOS) ────────────────────────────────────────────────
-// A per-app `.app` is an UNSIGNED bash trampoline that execs a shared, loose,
-// ad-hoc-signed `calimero-shell` binary with `--app-config <bundle>/…/app.json`.
-// The shell owns the app's dock identity + badge/notify, and brokers refresh to
-// this host over the Unix socket.
+// A per-app `.app` is an unsigned bash trampoline that execs the shared, loose,
+// ad-hoc-signed `calimero-shell` with `--app-config <bundle>/…/app.json`; the
+// shell owns that app's dock identity and brokers refresh back to this host.
 
 /// Where the host persists per-app capabilities (loaded into CapRegistry at startup).
 #[cfg(target_os = "macos")]
@@ -723,9 +719,6 @@ fn png_to_icns(png: &std::path::Path, icns: &std::path::Path) -> std::io::Result
     }
 }
 
-/// Best-effort produce a `.icns` for the per-app launcher, sourced from the web
-/// app served at `frontend_url`. Returns the cached `.icns` path on success, or
-/// `None` on ANY failure so launcher creation never breaks.
 /// Decode a `data:image/...;base64,<b64>` URI to raw PNG bytes, verifying the PNG
 /// magic. Returns None for anything that isn't a base64 PNG data URI.
 #[cfg(target_os = "macos")]
@@ -1377,15 +1370,6 @@ async fn create_app_window(
     Ok(())
 }
 
-// Merod process management using bundled resource
-use std::process::Stdio;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
-
-/// Tracks the number of in-flight HTTP proxy requests.
-/// Used during graceful shutdown to wait for pending requests to complete.
-static IN_FLIGHT_REQUESTS: AtomicUsize = AtomicUsize::new(0);
-
 struct InFlightGuard;
 impl InFlightGuard {
     fn new() -> Self {
@@ -1510,24 +1494,6 @@ async fn stop_pids(pids: &[u32]) -> Result<(), TauriError> {
     Ok(())
 }
 
-/// Sends SIGTERM to all pids, waits for them to go, then force-kills any survivors.
-/// Windows starts a console window for every console child a GUI process spawns.
-/// merod runs for the whole session, so without this the app sits beside a black
-/// console window; the short-lived helpers below flash one each time they run.
-/// `CREATE_NO_WINDOW` from `winbase.h` — no `windows-sys` dependency for one u32.
-#[cfg(windows)]
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-
-/// Write ends of the stdin pipes held open for nodes started with
-/// `--exit-on-stdin-close`. Closing one asks that node to shut down.
-///
-/// Keyed by pid because that is what the stop path carries, and kept beside
-/// `MerodState` rather than inside it: `MerodProcess` is `Clone` and a pipe
-/// handle is not.
-static STDIN_STOPPERS: std::sync::LazyLock<
-    Mutex<std::collections::HashMap<u32, tokio::process::ChildStdin>>,
-> = std::sync::LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
-
 /// Whether this merod understands `run --exit-on-stdin-close`.
 ///
 /// Probed rather than derived from a version. The app runs whatever merod the
@@ -1584,6 +1550,7 @@ fn request_stdin_stop(pids: &[u32]) -> Vec<u32> {
         .collect()
 }
 
+/// Sends SIGTERM to all pids, waits for them to go, then force-kills any survivors.
 async fn kill_pids(pids: &[u32], patience: TermPatience) {
     if pids.is_empty() {
         return;
@@ -1744,10 +1711,6 @@ pub(crate) fn resolve_home_dir(home_dir: Option<String>) -> Result<std::path::Pa
 /// Serialises node creation per name without holding a lock across the download
 /// a pinned release may need. Cleared on drop so every exit path releases it.
 struct NodeInitReservation(String);
-
-static NODE_INIT_IN_FLIGHT: std::sync::LazyLock<
-    std::sync::Mutex<std::collections::HashSet<String>>,
-> = std::sync::LazyLock::new(Default::default);
 
 impl NodeInitReservation {
     fn claim(home: &std::path::Path, node_name: &str) -> Result<Self, TauriError> {
@@ -2952,9 +2915,6 @@ async fn init_merod_node(
     Ok(format!("Node '{}' initialized successfully", node_name))
 }
 
-/// `(server, swarm)` ports a node uses when its config says nothing usable.
-const DEFAULT_NODE_PORTS: (u16, u16) = (2528, 2428);
-
 /// The port out of a multiaddr like `/ip4/127.0.0.1/tcp/2528` or
 /// `/ip4/0.0.0.0/udp/2428/quic-v1`.
 fn multiaddr_port(addr: &str, proto: &str) -> Option<u16> {
@@ -3101,8 +3061,6 @@ async fn detect_running_merod_nodes() -> Result<Vec<serde_json::Value>, TauriErr
         Ok(running_nodes)
     }
 }
-
-// ── Merod binary self-update helpers ─────────────────────────────────────────
 
 /// Downloads the merod binary matching `MEROD_CONFIG_VERSION` from GitHub,
 /// replaces the bundled binary, and verifies the version.
@@ -3392,11 +3350,6 @@ async fn download_and_replace_merod(
         "message": format!("merod updated to {}", new_version)
     }))
 }
-
-/// `merod --version` for the bundled binary. Cached: three UI surfaces re-invoke
-/// this on mount, and only `download_and_replace_merod` can change the answer.
-static BUNDLED_MEROD_VERSION: Mutex<Option<String>> = Mutex::new(None);
-
 
 /// Return the version string reported by the bundled merod binary (`merod --version`).
 #[tauri::command]

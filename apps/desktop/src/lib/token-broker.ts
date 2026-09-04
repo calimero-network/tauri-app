@@ -136,7 +136,9 @@ export function rotateTokens(): Promise<TokenPair> {
     // very call back into `rotateTokens`, join its own in-flight promise and hang.
     const baseUrl = (getSettings().nodeUrl ?? '').replace(/\/$/, '');
     const auth = createAuthApiClientFromHttpClient(
-      createHttpClient({ fetch: originalFetch ?? fetch, baseUrl }),
+      // Bound: the client calls this as a method on the transport object, and an
+      // unbound `fetch` throws Illegal invocation there.
+      createHttpClient({ fetch: originalFetch ?? fetch.bind(globalThis), baseUrl }),
       { baseUrl },
     );
 

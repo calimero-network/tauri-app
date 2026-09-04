@@ -45,6 +45,33 @@ export interface ClientConfig {
   timeoutMs?: number;
 }
 
+/** Core answers some refusals as JSON and some as plain text. */
+export function nodeBodyMessage(body: string | undefined): string | undefined {
+  if (!body) return undefined;
+  try {
+    const parsed = JSON.parse(body);
+    const value = parsed?.error?.message ?? parsed?.error ?? parsed?.message;
+    return typeof value === 'string' && value.trim() ? value : undefined;
+  } catch {
+    return body.trim() || undefined;
+  }
+}
+
+/**
+ * The sentence a user should read. `HTTPError.message` prefixes its own status
+ * line and drops both a `{ message }` body and a plain-text one, so the body is
+ * re-read here. `action` names the step that failed, as the raw fetches did.
+ */
+export function nodeErrorMessage(error: unknown, action?: string): string {
+  const detail =
+    error instanceof HTTPError
+      ? nodeBodyMessage(error.bodyText) || error.statusText || `HTTP ${error.status}`
+      : error instanceof Error
+        ? error.message
+        : String(error);
+  return action ? `${action}: ${detail}` : detail;
+}
+
 /**
  * Every wrapper answers with `{ data }` or `{ error }` instead of throwing, so
  * one place turns a rejection into the shape a caller reads. `code` is what
@@ -60,7 +87,7 @@ async function wrap<T>(label: string, call: () => Promise<T>): Promise<ApiRespon
     if (e instanceof HTTPError && e.status === 401) {
       return { error: { message: 'Unauthorized', code: '401' } };
     }
-    return { error: { message: e instanceof Error ? e.message : label } };
+    return { error: { message: nodeErrorMessage(e) || label } };
   }
 }
 

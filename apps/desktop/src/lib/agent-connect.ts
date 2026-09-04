@@ -10,7 +10,7 @@ import {
 } from '@calimero-network/mero-js';
 import { getSettings, saveSettings } from '../utils/settings';
 import { parseJwtPayload } from '../utils/jwt';
-import { apiClient } from './mero-client';
+import { apiClient, nodeErrorMessage } from './mero-client';
 
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
 
@@ -170,7 +170,7 @@ async function mintAndWriteCredential(): Promise<ConnectAiAgentResult> {
     if (error instanceof AuthRevokedError) {
       throw new Error('Your node session was revoked. Sign in again, then reconnect the agent.');
     }
-    throw error;
+    throw new Error(nodeErrorMessage(error));
   }
   if (!key?.access_token || !key?.refresh_token) {
     throw new Error('Node returned no credential for the agent');

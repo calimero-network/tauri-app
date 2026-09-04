@@ -160,7 +160,7 @@ export function isInheritedMembershipError(
 }
 
 /**
- * A group's members, or `null` — never a throw — when the node is unreachable
+ * A group's members, or `null` - never a throw - when the node is unreachable
  * or refuses, so a caller cannot mistake "couldn't tell" for "you have no role
  * here". The SDK already rejects a body carrying no `members` array.
  */

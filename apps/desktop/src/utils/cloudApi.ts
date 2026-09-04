@@ -1,5 +1,5 @@
 import type { GetTeeAdmissionPolicyResponseData } from '@calimero-network/mero-js';
-import { apiClient } from '../lib/mero-client';
+import { apiClient, nodeErrorMessage } from '../lib/mero-client';
 import { getSettings, saveSettings } from './settings';
 import { isMdmaSessionToken, isTokenExpired, parseJwtPayload } from './jwt';
 
@@ -236,10 +236,22 @@ export async function disableHaNamespace(
 const admin = () => apiClient.meroJs.admin;
 
 /**
+ * The node's own sentence, named by the step that failed. An `HTTPError` message
+ * says neither, and the operator needs both to tell which call refused.
+ */
+async function named<T>(action: string, call: Promise<T>): Promise<T> {
+  try {
+    return await call;
+  } catch (error) {
+    throw new Error(nodeErrorMessage(error, action));
+  }
+}
+
+/**
  * Set the TEE admission policy on a group. Called after enabling HA so fleet
  * TEE nodes can be admitted into the group's governance DAG.
  *
- * `acceptMock` is always false — only real TDX attestations are accepted.
+ * `acceptMock` is always false - only real TDX attestations are accepted.
  * `allowedMrtd` comes from the cloud's fleet measurements; core rejects an
  * empty set with "at least one MRTD must be specified".
  */
@@ -247,15 +259,18 @@ export function setTeeAdmissionPolicy(
   groupId: string,
   allowedMrtd?: string[],
 ): Promise<void> {
-  return admin().setTeeAdmissionPolicy(groupId, {
-    allowedMrtd: allowedMrtd ?? [],
-    allowedRtmr0: [],
-    allowedRtmr1: [],
-    allowedRtmr2: [],
-    allowedRtmr3: [],
-    allowedTcbStatuses: [],
-    acceptMock: false,
-  });
+  return named(
+    'Failed to set TEE admission policy',
+    admin().setTeeAdmissionPolicy(groupId, {
+      allowedMrtd: allowedMrtd ?? [],
+      allowedRtmr0: [],
+      allowedRtmr1: [],
+      allowedRtmr2: [],
+      allowedRtmr3: [],
+      allowedTcbStatuses: [],
+      acceptMock: false,
+    }),
+  );
 }
 
 /** The subset of the merod GET tee-admission-policy response we act on. */
@@ -268,14 +283,17 @@ export interface TeeAdmissionPolicyState {
  * Read the current TEE admission policy for a group from the local merod.
  *
  * merod answers 200 with the `disabled()` shape (`enabled:false`, empty lists)
- * when no policy is set — NOT a 404 — so an absent policy is distinguishable
+ * when no policy is set - NOT a 404 - so an absent policy is distinguishable
  * from a set one.
  */
 export async function getTeeAdmissionPolicy(
   groupId: string,
 ): Promise<TeeAdmissionPolicyState> {
   // `enabled` rides on the wire but is missing from the SDK's response type.
-  const policy = (await admin().getTeeAdmissionPolicy(groupId)) as
+  const policy = (await named(
+    'Failed to read TEE admission policy',
+    admin().getTeeAdmissionPolicy(groupId),
+  )) as
     | (GetTeeAdmissionPolicyResponseData & { enabled?: unknown })
     | null;
   return {
@@ -394,7 +412,10 @@ const PROOF_TTL_MS = 60_000; // a request only: merod clamps it to now+5min
  * because core's actor bails rather than answering with an empty list.
  */
 async function getSelfRoleInGroup(groupId: string): Promise<string | null> {
-  const { members } = await admin().listGroupMembers(groupId);
+  const { members } = await named(
+    'Failed to list group members',
+    admin().listGroupMembers(groupId),
+  );
   // After the listing deliberately, so a malformed member list reports itself
   // rather than being blamed on the identity lookup.
   const identity = await admin().getNodeIdentity();
@@ -433,13 +454,16 @@ export async function requestOwnershipProof(
   groupId: string,
   opts: { contextId: string; subject: string },
 ): Promise<OwnershipProof> {
-  const data = await admin().issueOwnershipProof(groupId, {
-    audience: PROOF_AUDIENCE_CLAIM_CONTEXT,
-    contextId: opts.contextId,
-    subject: opts.subject,
-    nonce: generateProofNonce(),
-    expiresAtMs: Date.now() + PROOF_TTL_MS,
-  });
+  const data = await named(
+    'Failed to issue ownership proof',
+    admin().issueOwnershipProof(groupId, {
+      audience: PROOF_AUDIENCE_CLAIM_CONTEXT,
+      contextId: opts.contextId,
+      subject: opts.subject,
+      nonce: generateProofNonce(),
+      expiresAtMs: Date.now() + PROOF_TTL_MS,
+    }),
+  );
   return ownershipProof(data as IssueOwnershipProofResponseData | null);
 }
 
@@ -454,12 +478,15 @@ export async function requestNamespaceOwnershipProof(
   namespaceId: string,
   opts: { subject: string },
 ): Promise<OwnershipProof> {
-  const data = await admin().issueNamespaceOwnershipProof(namespaceId, {
-    audience: PROOF_AUDIENCE_ENABLE_HA_NAMESPACE,
-    subject: opts.subject,
-    nonce: generateProofNonce(),
-    expiresAtMs: Date.now() + PROOF_TTL_MS,
-  });
+  const data = await named(
+    'Failed to issue namespace ownership proof',
+    admin().issueNamespaceOwnershipProof(namespaceId, {
+      audience: PROOF_AUDIENCE_ENABLE_HA_NAMESPACE,
+      subject: opts.subject,
+      nonce: generateProofNonce(),
+      expiresAtMs: Date.now() + PROOF_TTL_MS,
+    }),
+  );
   return ownershipProof(data as IssueOwnershipProofResponseData | null);
 }
 

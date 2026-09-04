@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 // The local-node calls go through the app's shared MeroJs. A real instance is
 // used so the routes and bodies under test are the SDK's own, not a stub's.
-vi.mock('../lib/mero-client', async () => {
+vi.mock('../lib/mero-client', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/mero-client')>();
   const { MeroJs, MemoryTokenStore } = await import('@calimero-network/mero-js');
   const meroJs = new MeroJs({
     baseUrl: 'http://node',
@@ -13,10 +14,12 @@ vi.mock('../lib/mero-client', async () => {
     refresh_token: 'test-refresh-token',
     expires_at: Date.now() + 3_600_000,
   });
-  return { apiClient: { meroJs } };
+  // Only the singleton is stood in for; the error-message helpers are the real
+  // ones, since the copy they produce is what these tests assert.
+  return { ...actual, apiClient: { meroJs } };
 });
 
-// settings.ts touches localStorage — keep it inert.
+// settings.ts touches localStorage - keep it inert.
 vi.mock('./settings', () => ({
   getSettings: () => ({ nodeUrl: 'http://node' }),
   saveSettings: () => {},
@@ -143,14 +146,26 @@ describe('requestOwnershipProof', () => {
     ).rejects.toThrow(/Malformed ownership proof/);
   });
 
-  it('surfaces the status merod refused with', async () => {
+  // Exact, not a substring: a substring match passes against the SDK's own
+  // `HTTP 404 : group not found`, which is the copy this must not regress to.
+  it('names the step and quotes a plain-text refusal verbatim', async () => {
     const { restore: r } = installFetch(
       () => new Response('group not found', { status: 404 }),
     );
     restore = r;
     await expect(
       requestOwnershipProof('group-1', { contextId: 'ctx', subject: 'u@e' }),
-    ).rejects.toMatchObject({ status: 404 });
+    ).rejects.toThrow(new Error('Failed to issue ownership proof: group not found'));
+  });
+
+  it('names the step and quotes a JSON refusal', async () => {
+    const { restore: r } = installFetch(
+      () => jsonResponse({ error: { message: 'not a direct admin' } }, 403),
+    );
+    restore = r;
+    await expect(
+      requestOwnershipProof('group-1', { contextId: 'ctx', subject: 'u@e' }),
+    ).rejects.toThrow(new Error('Failed to issue ownership proof: not a direct admin'));
   });
 });
 

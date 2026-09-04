@@ -785,7 +785,6 @@ function Namespaces() {
     // then honestly says cleanup is pending instead of claiming success;
     // the reconcile retries. A missing node token is handled inside the
     // deps (→ listFailed), not here, so the reconcile path shares it.
-    // tauri-app#107 v3 review (cursor + meroreviewer).
     if (!mero) return { evicted: 0, failed: 0, listFailed: true, groupsVisited: 0 };
     const settings = getSettings();
     if (!settings.nodeUrl) return { evicted: 0, failed: 0, listFailed: true, groupsVisited: 0 };
@@ -1117,8 +1116,6 @@ function Namespaces() {
           // changed in mero before the failure, and refetching reflects
           // truth. On pure `listFailed` we have no removals to mirror, so
           // skip the refresh. Mirrors the `handleRemoveMember` pattern.
-          // tauri-app#107 v3 review (cursor) + v5 review (defensive
-          // `failed > 0` arm per meroreviewer).
           if (evictResult.evicted > 0 || evictResult.failed > 0) {
             refetchNsMembers?.();
             refetchGroupMembers?.();

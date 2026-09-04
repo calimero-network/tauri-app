@@ -13,7 +13,8 @@ vi.mock('../utils/settings', () => ({
 
 // A real MeroJs behind the app's singleton, so these tests still assert what
 // reaches the wire: the SDK's own routes, bodies and bearer header.
-vi.mock('./mero-client', async () => {
+vi.mock('./mero-client', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./mero-client')>();
   const { MeroJs, MemoryTokenStore } = await import('@calimero-network/mero-js');
   const meroJs = new MeroJs({
     baseUrl: 'http://localhost:2528',
@@ -24,7 +25,9 @@ vi.mock('./mero-client', async () => {
     refresh_token: 'desktop-refresh-token',
     expires_at: Date.now() + 3_600_000,
   });
-  return { apiClient: { meroJs } };
+  // Only the singleton is stood in for; the error-message helpers are the real
+  // ones, since the copy they produce is what these tests assert.
+  return { ...actual, apiClient: { meroJs } };
 });
 
 // Imported fresh for every test: the module keeps the in-flight connect and the
@@ -198,7 +201,11 @@ describe('connectAiAgent', () => {
   it('surfaces the node error message and writes nothing', async () => {
     installFetch(json({ error: { message: 'permission denied' } }, { status: 403 }));
 
-    await expect(agentConnect.connectAiAgent()).rejects.toThrow('permission denied');
+    // Exact: a substring match passes against the SDK's `HTTP 403 : permission
+    // denied`, which is the copy this must not regress to.
+    await expect(agentConnect.connectAiAgent()).rejects.toThrow(
+      new Error('permission denied'),
+    );
     expect(invoke).not.toHaveBeenCalled();
   });
 

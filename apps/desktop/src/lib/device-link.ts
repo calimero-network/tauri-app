@@ -12,7 +12,7 @@ import {
   type NodeIdentity,
 } from '@calimero-network/mero-js';
 import { getSettings } from '../utils/settings';
-import { apiClient } from './mero-client';
+import { apiClient, nodeBodyMessage, nodeErrorMessage } from './mero-client';
 import { brokerAccessToken } from './token-broker';
 
 /** Core's own ceiling for a list page; its default of 100 would truncate in silence. */
@@ -47,12 +47,17 @@ export interface NamespaceSummary {
 /** The node's admin API, over the app's shared token store and its refresh. */
 const admin = () => apiClient.meroJs.admin;
 
-/** A revoked family is terminal, and the SDK's status line does not say so. */
-async function terminalOnRevoked<T>(call: Promise<T>): Promise<T> {
+/**
+ * Surface what the node said, and treat a revoked family as terminal. The
+ * message is reworded in place rather than re-wrapped, because `refusalStatus`
+ * and the 404 check below read fields only the original error carries.
+ */
+async function nodeCall<T>(call: Promise<T>): Promise<T> {
   try {
     return await call;
   } catch (error) {
     if (error instanceof AuthRevokedError) throw new Error(REVOKED_MESSAGE);
+    if (error instanceof HTTPError) error.message = nodeErrorMessage(error);
     throw error;
   }
 }
@@ -61,10 +66,12 @@ async function terminalOnRevoked<T>(call: Promise<T>): Promise<T> {
  * Who this node is, or `null` for a node that has taken part in nothing yet -
  * it holds neither a device nor an account root, so the route 404s, and that is
  * a normal state rather than a failure.
+ *
+ * `?? null` because mero-js types this as non-optional but reads `response.data`.
  */
 export async function nodeIdentity(): Promise<NodeIdentity | null> {
   try {
-    return await admin().getNodeIdentity();
+    return (await admin().getNodeIdentity()) ?? null;
   } catch (error) {
     if (error instanceof HTTPError && error.status === 404) return null;
     throw error;
@@ -89,11 +96,15 @@ export async function listNamespaces(signal?: AbortSignal): Promise<NamespaceSum
   });
   if (!response.ok) {
     const authError = response.headers.get('x-auth-error');
-    throw new Error(
-      authError && REVOKED_AUTH_ERRORS.includes(authError)
-        ? REVOKED_MESSAGE
-        : `HTTP ${response.status}`,
-    );
+    if (authError && REVOKED_AUTH_ERRORS.includes(authError)) throw new Error(REVOKED_MESSAGE);
+    // Fails like the SDK calls beside it: the node's own sentence, and a status
+    // a caller can branch on.
+    const detail = nodeBodyMessage(await response.text().catch(() => ''));
+    const error = new Error(
+      detail || response.statusText || `HTTP ${response.status}`,
+    ) as Error & { status?: number };
+    error.status = response.status;
+    throw error;
   }
 
   const body = await response.json().catch(() => null);
@@ -102,11 +113,11 @@ export async function listNamespaces(signal?: AbortSignal): Promise<NamespaceSum
 }
 
 export async function listAccountDevices(): Promise<AccountDevice[]> {
-  return (await terminalOnRevoked(admin().listAccountDevices())) ?? [];
+  return (await nodeCall(admin().listAccountDevices())) ?? [];
 }
 
 export async function listAccountApplications(): Promise<AccountApplication[]> {
-  const applications = (await terminalOnRevoked(admin().listAccountApplications())) ?? [];
+  const applications = (await nodeCall(admin().listAccountApplications())) ?? [];
   return applications.filter((app) => !ALL_ZERO.test(app.applicationId));
 }
 
@@ -114,7 +125,7 @@ export function pairInit(
   accountRootPublicKey: string,
   namespaces: string[],
 ): Promise<PairInitResult> {
-  return terminalOnRevoked(admin().initAccountPairing({ accountRootPublicKey, namespaces }));
+  return nodeCall(admin().initAccountPairing({ accountRootPublicKey, namespaces }));
 }
 
 export function pairComplete(
@@ -126,7 +137,7 @@ export function pairComplete(
 
   // Undefined drops out of the JSON, which is core's "every application"; an
   // empty array would say the same thing, so neither is written explicitly.
-  return terminalOnRevoked(admin().completeAccountPairing({ ...payload, applications }));
+  return nodeCall(admin().completeAccountPairing({ ...payload, applications }));
 }
 
 /** Without `applications` this repairs the scope already stored, which is what
@@ -135,7 +146,7 @@ export async function relinkDevice(
   deviceId: string,
   applications?: string[],
 ): Promise<RelinkResult> {
-  const result = await terminalOnRevoked(
+  const result = await nodeCall(
     admin().relinkAccountDevice(deviceId, { applications }),
   );
   return {
@@ -148,7 +159,7 @@ export async function revokeDevice(
   namespaceId: string,
   deviceId: string,
 ): Promise<{ revokedIn: string[] }> {
-  const result = await terminalOnRevoked(
+  const result = await nodeCall(
     admin().revokeAccountDevice(namespaceId, { deviceId }),
   );
   return { revokedIn: (result?.revokedIn ?? []).map((entry) => entry.namespaceId) };

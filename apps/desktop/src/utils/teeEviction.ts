@@ -360,7 +360,7 @@ export function buildEvictionDeps(args: {
   const { mero, signal } = args;
   return {
     listGroupMembers: async (groupId) => {
-      // Caller already superseded (e.g. HA re-enabled) — don't start a call
+      // Caller already superseded (e.g. HA re-enabled) - don't start a call
       // whose answer we would only discard.
       if (signal?.aborted) return null;
       try {
@@ -373,7 +373,7 @@ export function buildEvictionDeps(args: {
       } catch (e) {
         console.warn(
           `buildEvictionDeps: list-members failed for group=${short(groupId)} ` +
-            `(${(e as Error)?.name ?? 'unknown'}) — cleanup pending`,
+            `(${(e as Error)?.name ?? 'unknown'}) - cleanup pending`,
         );
         return null;
       }

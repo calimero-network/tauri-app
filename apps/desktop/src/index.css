@@ -40,6 +40,7 @@
   --button-glass: rgba(165, 255, 17, 0.06);
   --button-glass-hover: rgba(165, 255, 17, 0.1);
   --header-height: 56px;
+  --z-modal: 1000; /* every full-screen backdrop; toasts and context menus sit above at 10000 */
   --radius-sm: 6px;
   --radius-md: 10px;
   --radius-lg: 16px;

@@ -7,13 +7,6 @@ export interface MerodHealth {
 }
 
 /**
- * Download and extract the merod binary from GitHub release
- */
-export async function downloadMerod(): Promise<string> {
-  return await invoke('download_merod');
-}
-
-/**
  * List available merod nodes
  */
 export async function listMerodNodes(homeDir?: string): Promise<string[]> {

@@ -1,10 +1,20 @@
 name: Build Linux
 
+# Two targets share this pipeline: x86_64 desktop Linux, and the ARM64 build that
+# ARM Chromebooks need under the Crostini (Debian) container. Intel/AMD
+# Chromebooks are already covered by the x86_64 build. The ARM64 deliverable is
+# the .deb (double-click install in the ChromeOS Files app); its AppImage feeds
+# the Tauri updater (linux-aarch64).
+
 on:
   workflow_call:
     inputs:
       version:
         description: "Version number (e.g., 1.0.0)"
+        required: true
+        type: string
+      platform:
+        description: "Target to build: linux (x86_64) or chromebook (ARM64)"
         required: true
         type: string
     secrets:
@@ -15,10 +25,6 @@ on:
         required: false
       TAURI_PUBLIC_KEY:
         required: true
-    outputs:
-      artifact-name:
-        description: "Name of the uploaded artifact"
-        value: ${{ jobs.build.outputs.artifact-name }}
   pull_request:
     branches:
       - master
@@ -29,10 +35,13 @@ env:
 
 jobs:
   build:
-    name: Build Linux x64
-    runs-on: ubuntu-22.04
-    outputs:
-      artifact-name: linux-build
+    name: Build ${{ matrix.platform }}
+    runs-on: ${{ matrix.platform == 'chromebook' && 'ubuntu-22.04-arm' || 'ubuntu-22.04' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # A release builds one target per caller job; a PR validates both.
+        platform: ${{ inputs.platform && fromJSON(format('["{0}"]', inputs.platform)) || fromJSON('["linux","chromebook"]') }}
 
     steps:
       - name: Checkout code
@@ -99,9 +108,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ steps.get-pnpm-store.outputs.path }}
-          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
+          key: ${{ runner.os }}-${{ matrix.platform }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
           restore-keys: |
-            ${{ runner.os }}-pnpm-store-
+            ${{ runner.os }}-${{ matrix.platform }}-pnpm-store-
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -110,6 +119,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: apps/desktop/src-tauri
+          key: ${{ matrix.platform }}
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -131,7 +141,7 @@ jobs:
             BEFORE=$(stat --printf="%s" "$MEROD_BINARY")
             strip "$MEROD_BINARY"
             AFTER=$(stat --printf="%s" "$MEROD_BINARY")
-            echo "Stripped merod: $(( BEFORE / 1024 / 1024 ))MB → $(( AFTER / 1024 / 1024 ))MB"
+            echo "Stripped merod: $(( BEFORE / 1024 / 1024 ))MB -> $(( AFTER / 1024 / 1024 ))MB"
           else
             echo "Warning: merod binary not found at $MEROD_BINARY"
           fi
@@ -181,14 +191,16 @@ jobs:
             echo "No TAURI_PUBLIC_KEY provided, using default pubkey"
           fi
 
-      - name: Build Tauri app for Linux
+      - name: Build Tauri app
         working-directory: apps/desktop
         env:
           # beforeBuildCommand runs merod:prepare again; reuse binary from "Prepare merod binary" (no GITHUB_TOKEN here).
           MEROD_SKIP_IF_EXISTS: "1"
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
-        run: pnpm exec tauri build --bundles appimage,deb,rpm
+        # ARM64 skips rpm: the .deb is the Crostini install path on ChromeOS and
+        # the AppImage feeds the updater.
+        run: pnpm exec tauri build --bundles ${{ matrix.platform == 'chromebook' && 'appimage,deb' || 'appimage,deb,rpm' }}
 
       - name: Verify build outputs
         if: steps.build-mode.outputs.mode == 'validation'
@@ -215,13 +227,13 @@ jobs:
         run: |
           node scripts/release/collect-assets.cjs \
             --version "${{ steps.build-mode.outputs.version }}" \
-            --platform linux \
+            --platform ${{ matrix.platform }} \
             --output release-assets/
 
       - name: Upload artifacts
         if: steps.build-mode.outputs.mode == 'release'
         uses: actions/upload-artifact@v4
         with:
-          name: linux-build
+          name: ${{ matrix.platform }}-build
           path: release-assets/
           retention-days: 7

@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import { Server, ChevronDown } from "lucide-react";
 import type { RunningMerodNode } from "../utils/merod";
 import { formatVersionLabel, BUNDLED_VERSION_ID } from "../utils/merodVersions";
+import { getSettings } from "../utils/settings";
 import { useNodeVersions } from "../contexts/NodeVersionsContext";
 import "./NodeStatusIndicator.css";
 
@@ -9,9 +10,7 @@ interface NodeStatusIndicatorProps {
   connected: boolean;
   error?: string | null;
   onClick?: () => void;
-  developerMode?: boolean;
   runningNodes?: RunningMerodNode[];
-  currentNodeUrl?: string;
   onSelectNode?: (nodeUrl: string) => void;
 }
 
@@ -19,14 +18,13 @@ export function NodeStatusIndicator({
   connected,
   error,
   onClick,
-  developerMode,
   runningNodes,
-  currentNodeUrl,
   onSelectNode,
 }: NodeStatusIndicatorProps) {
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const { byNode: nodeVersions, measured: versionMeasured, bundled } = useNodeVersions();
+  const { developerMode, nodeUrl: currentNodeUrl } = getSettings();
 
   // Pass the measured version through, or a local build always reads as the
   // generic "local build" and a rebuild produces no visible signal here.

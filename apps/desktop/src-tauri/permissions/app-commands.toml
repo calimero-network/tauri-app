@@ -1,10 +1,5 @@
-# App command permissions for the Tauri v2 ACL.
-#
-# The moment ANY app-command permission is defined, Tauri leaves its implicit
-# "allow every command for local windows" mode and only recognises commands that
-# have one; an unlisted command then fails with "<cmd> not allowed. Command not
-# found". So `allow-app-commands` must list every command in main.rs's
-# generate_handler!, which the test in main.rs enforces.
+# Defining any app-command permission turns off Tauri's implicit "allow everything
+# locally", so allow-app-commands must list every generate_handler! entry.
 
 # The subset remote `app-*` windows get, for the injected proxy script.
 # Granted by capabilities/remote.json.

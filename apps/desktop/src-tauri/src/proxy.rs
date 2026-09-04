@@ -472,7 +472,7 @@ mod tests {
 
     #[test]
     fn test_is_textual_content_type() {
-        // Text — carried as a UTF-8 string.
+        // Text - carried as a UTF-8 string.
         for ct in [
             "application/json",
             "application/json; charset=utf-8",
@@ -489,7 +489,7 @@ mod tests {
         ] {
             assert!(is_textual_content_type(ct), "should be textual: {ct}");
         }
-        // Binary — must go over IPC as base64, not lossy UTF-8.
+        // Binary - must go over IPC as base64, not lossy UTF-8.
         for ct in [
             "application/octet-stream",
             "image/png",
@@ -612,7 +612,7 @@ mod tests {
         assert!(validate_allowed_url("http://localhost:2528@evil.com/", None).is_err());
     }
 
-    // SSE streaming tests — spin up a real TCP listener and drive reqwest's
+    // SSE streaming tests - spin up a real TCP listener and drive reqwest's
     // bytes_stream() + tokio::select! cancellation, verifying the mechanism
     // used by proxy_sse_stream without needing a live tauri::Window.
 

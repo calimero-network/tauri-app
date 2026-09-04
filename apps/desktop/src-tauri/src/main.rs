@@ -3,6 +3,8 @@
 
 use log::{debug, info, warn};
 use serde::Serialize;
+#[cfg(target_os = "macos")]
+use sha2::{Digest, Sha256};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -10,8 +12,6 @@ use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use tokio::process::Command;
-#[cfg(target_os = "macos")]
-use sha2::{Digest, Sha256};
 
 mod log_rotation;
 mod merod_versions;
@@ -49,12 +49,12 @@ static NODE_LIFECYCLE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(()
 static SHUTDOWN_CLAIMED: AtomicBool = AtomicBool::new(false); // claimed by whichever quit path reaches teardown first
 static IN_FLIGHT_REQUESTS: AtomicUsize = AtomicUsize::new(0); // proxy requests the shutdown drain waits on
 static BUNDLED_MEROD_VERSION: Mutex<Option<String>> = Mutex::new(None); // cached `merod --version`; three UI surfaces ask for it
-/// Write ends of the stdin pipes of nodes started with `--exit-on-stdin-close`;
-/// keyed by pid, and outside `MerodProcess`, which is `Clone` and a pipe is not.
+// stdin pipes of nodes started with `--exit-on-stdin-close`, keyed by pid; outside
+// `MerodProcess`, which is `Clone` and a pipe is not.
 static STDIN_STOPPERS: std::sync::LazyLock<
     Mutex<std::collections::HashMap<u32, tokio::process::ChildStdin>>,
 > = std::sync::LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
-/// Node homes being initialised right now, so two inits cannot race on one name.
+// node homes being initialised right now, so two inits cannot race on one name
 static NODE_INIT_IN_FLIGHT: std::sync::LazyLock<
     std::sync::Mutex<std::collections::HashSet<String>>,
 > = std::sync::LazyLock::new(Default::default);
@@ -65,7 +65,7 @@ const MAX_NODE_NAME_LENGTH: usize = 64;
 const TOKEN_BROKER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20); // the desktop window's deadline to answer a refresh
 const DEFAULT_NODE_PORTS: (u16, u16) = (2528, 2428); // (server, swarm) when a node config says nothing usable
 #[cfg(windows)]
-const CREATE_NO_WINDOW: u32 = 0x0800_0000; // winbase.h, so no windows-sys dependency for one u32
+const CREATE_NO_WINDOW: u32 = 0x0800_0000; // else every console child pops a window on Windows
 /// Version of the merod binary this build expects, from merod-config.json.
 const MEROD_CONFIG_VERSION: &str = match option_env!("MEROD_CONFIG_VERSION") {
     Some(v) => v,
@@ -5044,31 +5044,52 @@ listen = ["/ip4/0.0.0.0/udp/4001/quic-v1", "/ip4/0.0.0.0/tcp/4002"]
             .map(|s| s.rsplit("::").next().unwrap_or(s))
             .collect();
 
+        #[derive(serde::Deserialize)]
+        struct Acl {
+            permission: Vec<Perm>,
+        }
+        #[derive(serde::Deserialize)]
+        struct Perm {
+            identifier: String,
+            commands: Commands,
+        }
+        #[derive(serde::Deserialize)]
+        struct Commands {
+            allow: Vec<String>,
+        }
+        fn granted<'a>(acl: &'a Acl, id: &str) -> std::collections::BTreeSet<&'a str> {
+            acl.permission
+                .iter()
+                .find(|p| p.identifier == id)
+                .unwrap_or_else(|| panic!("{id} is gone from app-commands.toml"))
+                .commands
+                .allow
+                .iter()
+                .map(String::as_str)
+                .collect()
+        }
+
+        let acl: Acl = toml::from_str(ACL_TOML).expect("app-commands.toml does not parse");
+
         // The main window is granted `allow-app-commands` and nothing else, so a
-        // command missing from that one list is unreachable at runtime.
-        let granted: std::collections::BTreeSet<&str> = ACL_TOML
-            .split_once("identifier = \"allow-app-commands\"")
-            .expect("the allow-app-commands permission is gone from app-commands.toml")
-            .1
-            .split_once("commands.allow = [")
-            .expect("allow-app-commands has no commands.allow list")
-            .1
-            .split_once(']')
-            .expect("unterminated commands.allow list")
-            .0
-            .split('"')
-            .skip(1)
-            .step_by(2)
-            .collect();
-
-        let ungranted: Vec<_> = handler_commands.difference(&granted).collect();
-        let unknown: Vec<_> = granted.difference(&handler_commands).collect();
-
+        // command missing from that list is unreachable at runtime.
+        let main_window = granted(&acl, "allow-app-commands");
+        let ungranted: Vec<_> = handler_commands.difference(&main_window).collect();
+        let stale: Vec<_> = main_window.difference(&handler_commands).collect();
         assert!(
-            ungranted.is_empty() && unknown.is_empty(),
-            "generate_handler! and permissions/app-commands.toml are out of sync.\n\
-             In generate_handler! but not granted by allow-app-commands: {ungranted:?}\n\
-             Granted by allow-app-commands but not in generate_handler!: {unknown:?}"
+            ungranted.is_empty() && stale.is_empty(),
+            "generate_handler! and allow-app-commands are out of sync.\n\
+             In generate_handler! but not granted: {ungranted:?}\n\
+             Granted but not a command: {stale:?}"
+        );
+
+        // Nothing checks a command name inside a permission at build time, so a
+        // typo here would surface only as a failed fetch in an app window.
+        let remote = granted(&acl, "allow-remote-proxy");
+        let unknown: Vec<_> = remote.difference(&handler_commands).collect();
+        assert!(
+            unknown.is_empty(),
+            "allow-remote-proxy grants commands that do not exist: {unknown:?}"
         );
     }
 }

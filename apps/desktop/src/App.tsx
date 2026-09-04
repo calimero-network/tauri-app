@@ -673,9 +673,7 @@ function App() {
               connected={connected}
               error={error}
               onClick={handleRestartNode}
-              developerMode={getSettings().developerMode}
               runningNodes={runningNodes}
-              currentNodeUrl={getSettings().nodeUrl}
               onSelectNode={handleSelectNode}
             />
           </header>

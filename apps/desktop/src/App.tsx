@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef, lazy } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef, lazy, Suspense } from "react";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { createClientAsync, apiClient } from "./lib/mero-client";
 import { MeroContext, type MeroContextValue } from "@calimero-network/mero-react";
@@ -18,8 +18,7 @@ import { startMerod, detectRunningMerodNodes, waitForNodeHealthy, findRunningNod
 import { homeDir } from "@tauri-apps/api/path";
 import { useToast } from "./contexts/ToastContext";
 import { checkOnboardingState } from "./utils/onboarding";
-import { decodeMetadata, openAppFrontend, parseTauriError } from "./utils/appUtils";
-import { listInstalledApps } from "./utils/installedAppsCache";
+import { openAppFrontend, parseTauriError } from "./utils/appUtils";
 import { useAppDeepLink } from "./hooks/useAppDeepLink";
 import UpdateNotification from "./components/UpdateNotification";
 import Sidebar from "./components/Sidebar";
@@ -27,13 +26,14 @@ import { NodeStatusIndicator } from "./components/NodeStatusIndicator";
 import ToastContainer from "./components/ToastContainer";
 import { getCurrentVersion } from "./utils/updater";
 import { invoke } from "@tauri-apps/api/core";
-import { Settings as SettingsIcon, ArrowRight, Package, ShoppingCart } from "lucide-react";
+import { Settings as SettingsIcon } from "lucide-react";
 import calimeroLogo from "./assets/calimero-logo.svg";
 import { useTheme } from "./contexts/ThemeContext";
 import { useNodeVersions } from "./contexts/NodeVersionsContext";
 import "./App.css";
 
 // Only one page renders at a time, so keep them out of the initial bundle.
+const Home = lazy(() => import("./pages/Home"));
 const Settings = lazy(() => import("./pages/Settings"));
 const Onboarding = lazy(() => import("./pages/Onboarding"));
 const Marketplace = lazy(() => import("./pages/Marketplace"));
@@ -56,8 +56,6 @@ function App() {
   const [clientReady, setClientReady] = useState(false);
   const [clientVersion, setClientVersion] = useState(0);
   const [needsNodeConfig, setNeedsNodeConfig] = useState(false);
-  const [installedApps, setInstalledApps] = useState<any[]>([]);
-  const [loadingApps, setLoadingApps] = useState(false);
   const [confirmAction, setConfirmAction] = useState<{
     title: string;
     message: string;
@@ -103,33 +101,6 @@ function App() {
     getCurrentVersion().then(setAppVersion);
   }, []);
 
-  // Load installed apps for main page
-  const loadInstalledApps = useCallback(async () => {
-    // Until the client is configured, the singleton falls back to its hardcoded
-    // localhost:2528, so a node on any other port answers 401 and forces login.
-    if (!clientReady) return;
-    setLoadingApps(true);
-    try {
-      const response = await listInstalledApps();
-      if (response.error) {
-        // If 401, show login (but not if we just completed onboarding)
-        if (response.error.code === '401' && !showOnboarding) {
-          setShowLogin(true);
-          return;
-        }
-        console.error('❌ Apps error:', response.error.message);
-        return;
-      }
-      if (response.data && Array.isArray(response.data)) {
-        setInstalledApps(response.data);
-      }
-    } catch (err: any) {
-      console.error('Failed to load apps:', err);
-    } finally {
-      setLoadingApps(false);
-    }
-  }, [showOnboarding, clientReady]);
-
   // Each set_tray_icon_connected decodes a PNG on the Rust side, and the health
   // poll asks for the same value every tick. Only send changes; a failed send
   // clears the guard so the next tick retries.
@@ -146,8 +117,8 @@ function App() {
   const initRan = useRef(false);
 
   useEffect(() => {
-    // initializeApp sets clientReady, which rebuilds loadInstalledApps and re-fires
-    // this effect; without the guard the whole init chain runs twice per launch.
+    // StrictMode remounts effects in dev; without the guard the whole init
+    // chain runs twice per launch.
     if (initRan.current) return;
     initRan.current = true;
 
@@ -269,7 +240,6 @@ function App() {
           setConnected(false);
           setError(healthCheck.error.message);
           setNeedsNodeConfig(false);
-          loadInstalledApps().catch(() => {});
           updateTrayIcon(false);
           return;
         }
@@ -288,12 +258,8 @@ function App() {
         // PRIORITY: Check for existing tokens FIRST
         const existingToken = getAccessToken();
         console.log('🔑 Existing token check:', existingToken ? 'EXISTS' : 'NONE');
-        
-        if (existingToken) {
-          // User has token - try to use it (mero-js will refresh if needed)
-          console.log('✅ User has existing token, loading apps');
-          loadInstalledApps();
-        } else {
+
+        if (!existingToken) {
           // No token — always show login. Onboarding is only shown when
           // onboardingCompleted=false (handled by the early return above).
           // Node switching, new nodes with no accounts, auth unavailable — all
@@ -307,7 +273,6 @@ function App() {
         setConnected(false);
         setError(parseTauriError(err));
         setNeedsNodeConfig(false);
-        loadInstalledApps().catch(() => {});
         updateTrayIcon(false);
       } finally {
         setCheckingOnboarding(false);
@@ -315,7 +280,7 @@ function App() {
     }
 
     initializeApp();
-  }, [loadInstalledApps]);
+  }, []);
 
   // Health-only check — no app loading. Keeps the status indicator up to date
   // without triggering re-renders of the app list on every tick.
@@ -381,16 +346,6 @@ function App() {
     }
   }, [checkConnection, toast]);
 
-  // Open app frontend in a new window
-  const handleOpenAppFrontend = useCallback(async (frontendUrl: string, appName?: string, applicationId?: string, iconData?: string) => {
-    try {
-      await openAppFrontend(frontendUrl, appName, undefined, applicationId ? { applicationId, iconData } : undefined);
-    } catch (error) {
-      // Fallback to navigating to installed apps page
-      setCurrentPage('installed');
-    }
-  }, []);
-
   // Page props are hoisted out of the JSX below: the pages are memoized, and an
   // inline arrow would give them a new prop identity on every App render.
   const handleOnboardingComplete = useCallback(async () => {
@@ -404,7 +359,7 @@ function App() {
       // Autostart may not be available
     }
     // Onboarding never runs initializeApp, so nothing has marked the client
-    // ready - without this the loads below and the health interval no-op.
+    // ready - without this Home's app load and the health interval no-op.
     await createClientAsync({
       baseUrl: settings.nodeUrl.replace(/\/$/, ''),
       authBaseUrl: getAuthUrl(settings).replace(/\/$/, ''),
@@ -417,8 +372,7 @@ function App() {
     setError(null);
     // Onboarding may have pointed the node at a custom data dir.
     refreshNodeVersions();
-    loadInstalledApps().catch(() => {});
-  }, [loadInstalledApps, refreshNodeVersions]);
+  }, [refreshNodeVersions]);
 
   const handleOnboardingSettings = useCallback(() => {
     setShowOnboarding(false);
@@ -461,8 +415,6 @@ function App() {
           setShowOnboarding(true);
         } else if (!getAccessToken()) {
           setShowLogin(true);
-        } else {
-          loadInstalledApps();
         }
       } catch (err) {
         console.error('Failed to check onboarding state:', err);
@@ -470,15 +422,12 @@ function App() {
       } finally {
         setCheckingOnboarding(false);
       }
-    } else {
-      // Settings changed, reload apps if logged in
-      if (getAccessToken()) {
-        loadInstalledApps();
-      }
     }
-  }, [needsNodeConfig, loadInstalledApps]);
+  }, [needsNodeConfig]);
 
   const handleAuthRequired = useCallback(() => setShowLogin(true), []);
+
+  const handleOpenSettings = useCallback(() => setShowSettings(true), []);
 
   const handleConfirmUninstall = useCallback((_appId: string, appName: string, onConfirm: () => Promise<void>) => {
     setConfirmAction({
@@ -532,14 +481,6 @@ function App() {
     const interval = setInterval(checkConnection, 10000);
     return () => clearInterval(interval);
   }, [checkConnection, clientReady, showLogin, showSettings, showOnboarding]);
-
-  // Load apps only when the user is on the home page.
-  // Fires once on navigation — not on every health-check tick.
-  useEffect(() => {
-    if (showLogin || showSettings || showOnboarding) return;
-    if (currentPage !== 'home' || !clientReady) return;
-    loadInstalledApps().catch(() => {});
-  }, [currentPage, clientReady, showLogin, showSettings, showOnboarding, loadInstalledApps]);
 
   // When launched from a desktop shortcut (--open-app-url / --open-app-name): open app, focus it, then hide main window
   useEffect(() => {
@@ -641,7 +582,6 @@ function App() {
               variant={theme}
               onSuccess={() => {
                 setShowLogin(false);
-                loadInstalledApps();
                 checkConnection();
               }}
               onError={(error) => {
@@ -882,150 +822,19 @@ function App() {
             />
       </header>
 
+      {/* Own boundary so a page chunk loads under a painted shell, not a blank window. */}
       <main className="main">
-        {/* Welcome Section */}
-        <div className="welcome-section">
-          <h2>Welcome to Calimero Desktop</h2>
-          <p className="welcome-description">
-            Your gateway to decentralized applications. Get started by installing apps from the marketplace.
-          </p>
-        </div>
-
-        {/* Node Status - Simplified */}
-        <div className="status-cards-simple">
-          <div className="status-card-simple">
-            <div className="status-header-simple">
-              <h3>Node Status</h3>
-              <div className={`status-badge ${connected ? "connected" : "disconnected"}`}>
-                <div className="status-dot"></div>
-                {connected ? "Connected" : "Disconnected"}
-              </div>
-            </div>
-            {!connected && error && (
-              <div className="status-error-block">
-                <p className="status-error">{error}</p>
-                <p className="status-error-hint">
-                  Can't reach your node right now (e.g. after your computer slept). Click Reconnect to check its status again.
-                </p>
-                <button
-                  onClick={handleRestartNode}
-                  className="button button-primary button-small"
-                >
-                  Reconnect
-                </button>
-              </div>
-            )}
-          </div>
-          </div>
-
-        {/* Recent Applications */}
-        {installedApps.length > 0 && (
-          <div className="recent-apps-section">
-            <div className="section-header">
-              <h3>Your Applications</h3>
-              <button 
-                onClick={() => setCurrentPage('installed')} 
-                className="view-all-link"
-              >
-                View All
-                <ArrowRight size={14} />
-          </button>
-            </div>
-            <div className="apps-grid">
-              {installedApps.slice(0, 4).map((app: any, index: number) => {
-                let appName = app.id;
-                let frontendUrl: string | null = null;
-                let iconData: string | undefined;
-                try {
-                  const metadata = decodeMetadata(app.metadata);
-                  if (metadata) {
-                    appName = metadata.name || metadata.alias || app.id;
-                    frontendUrl = metadata?.links?.frontend || null;
-                    iconData = metadata?.icon;
-                  }
-                } catch (e) {
-                  // Use app.id as fallback
-                }
-
-                return (
-                  <button
-                    key={`${app?.id != null && String(app.id) !== '' ? String(app.id) : 'app'}-${index}`}
-                    type="button"
-                    onClick={() => {
-                      if (frontendUrl) {
-                        handleOpenAppFrontend(frontendUrl, appName, app.id, iconData);
-                      } else {
-                        setCurrentPage('installed');
-                      }
-                    }}
-                    className="app-card-mini"
-                    title={frontendUrl ? `Open ${appName}` : `View ${appName} details`}
-                  >
-                    <Package className="app-icon" size={28} />
-                    <span className="app-name">{appName}</span>
-                    {frontendUrl && <span className="app-card-open-hint">Open</span>}
-                  </button>
-                );
-              })}
-            </div>
-            </div>
-          )}
-
-        {/* Empty State for Apps */}
-        {!loadingApps && installedApps.length === 0 && (
-          <div className="empty-state-card">
-            <Package size={48} className="empty-icon" />
-            <h3>No Applications Installed</h3>
-            <p>Get started by browsing the marketplace and installing your first app.</p>
-            <button
-              onClick={() => setCurrentPage('marketplace')}
-              className="btn-browse-marketplace"
-            >
-              <ShoppingCart size={16} className="browse-icon" />
-              Browse Marketplace
-            </button>
-          </div>
-        )}
-
-        {/* Quick Actions */}
-        <div className="quick-actions">
-          <h3>Quick Actions</h3>
-          <div className="actions-grid">
-            <button 
-              onClick={() => setCurrentPage('marketplace')} 
-              className="action-card"
-            >
-              <ShoppingCart className="action-icon" size={24} />
-              <div>
-                <strong>Browse Marketplace</strong>
-                <p>Discover and install new applications</p>
-              </div>
-          </button>
-            {installedApps.length > 0 && (
-              <button 
-                onClick={() => setCurrentPage('installed')} 
-                className="action-card"
-              >
-                <Package className="action-icon" size={24} />
-                <div>
-                  <strong>Applications</strong>
-                  <p>View and manage your applications</p>
-            </div>
-              </button>
-            )}
-            <button 
-              onClick={() => setShowSettings(true)}
-              className="action-card"
-            >
-              <SettingsIcon className="action-icon" size={24} />
-              <div>
-                <strong>Settings</strong>
-                <p>Configure node, theme, and app settings</p>
-              </div>
-            </button>
-          </div>
-        </div>
-
+        <Suspense fallback={null}>
+          <Home
+            connected={connected}
+            error={error}
+            clientReady={clientReady}
+            onReconnect={handleRestartNode}
+            onNavigate={setCurrentPage}
+            onOpenSettings={handleOpenSettings}
+            onAuthRequired={handleAuthRequired}
+          />
+        </Suspense>
       </main>
         </div>
       </div>

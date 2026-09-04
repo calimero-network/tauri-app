@@ -35,7 +35,6 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             echo "mode=validation" >> $GITHUB_OUTPUT
-            echo "version=0.0.0-dev" >> $GITHUB_OUTPUT
             # Dependabot and fork PRs receive no secrets, so the signing key arrives as an
             # empty string, which Tauri treats as present and fails to decode.
             echo "config={\"bundle\":{\"createUpdaterArtifacts\":false}}" >> $GITHUB_OUTPUT

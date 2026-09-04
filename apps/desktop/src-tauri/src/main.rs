@@ -69,6 +69,23 @@ const MEROD_CONFIG_VERSION: &str = match option_env!("MEROD_CONFIG_VERSION") {
     None => "unknown",
 };
 
+/// Windows gives every console child of a GUI process its own window, so merod
+/// would sit beside a black one all session and each short-lived helper would
+/// flash one. Wrap with `Command::from` where a tokio child is wanted.
+#[cfg(windows)]
+fn hidden_command(program: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
+    use std::os::windows::process::CommandExt as _;
+    let mut cmd = std::process::Command::new(program);
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    cmd
+}
+
+/// No console windows to suppress off Windows.
+#[cfg(not(windows))]
+fn hidden_command(program: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
+    std::process::Command::new(program)
+}
+
 /// Parses --open-app-url, --open-app-name, --open-app-id from CLI args (used when launched from a desktop shortcut).
 fn parse_open_app_args() -> Option<(String, String, Option<String>)> {
     let args: Vec<String> = std::env::args().collect();
@@ -1100,10 +1117,8 @@ fn create_desktop_shortcut_blocking(
             exe_str.replace('\'', "''"),
             args.replace('\'', "''")
         );
-        use std::os::windows::process::CommandExt as _;
-        let output = std::process::Command::new("powershell")
+        let output = hidden_command("powershell")
             .args(["-NoProfile", "-NonInteractive", "-Command", &ps])
-            .creation_flags(CREATE_NO_WINDOW)
             .output()
             .map_err(|e| {
                 TauriError::with_details(
@@ -1510,13 +1525,8 @@ async fn merod_supports_stdin_stop(binary: &std::path::Path) -> bool {
         return *known;
     }
 
-    let mut cmd = Command::new(binary);
+    let mut cmd = Command::from(hidden_command(binary));
     let _ = cmd.args(["run", "--help"]);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt as _;
-        let _ = cmd.creation_flags(CREATE_NO_WINDOW);
-    }
     // Absent on a failed probe, not present: the fallback is the old stop path,
     // which works everywhere. Guessing "supported" would break node startup.
     let supported = match cmd.output().await {
@@ -1572,13 +1582,9 @@ async fn kill_pids(pids: &[u32], patience: TermPatience) {
                 .args(["-TERM", &pid.to_string()])
                 .output();
             #[cfg(windows)]
-            {
-                use std::os::windows::process::CommandExt as _;
-                let _ = std::process::Command::new("taskkill")
-                    .args(["/PID", &pid.to_string()])
-                    .creation_flags(CREATE_NO_WINDOW)
-                    .output();
-            }
+            let _ = hidden_command("taskkill")
+                .args(["/PID", &pid.to_string()])
+                .output();
         }
         if matches!(patience, TermPatience::SignalOnly) {
             return;
@@ -1612,20 +1618,10 @@ async fn kill_pids(pids: &[u32], patience: TermPatience) {
                 }
             }
             #[cfg(windows)]
-            {
-                use std::os::windows::process::CommandExt as _;
-                let still_alive = std::process::Command::new("tasklist")
-                    .args(["/FI", &format!("PID eq {}", pid), "/FO", "CSV", "/NH"])
-                    .creation_flags(CREATE_NO_WINDOW)
-                    .output()
-                    .map(|o| String::from_utf8_lossy(&o.stdout).contains(&pid.to_string()))
-                    .unwrap_or(false);
-                if still_alive {
-                    let _ = std::process::Command::new("taskkill")
-                        .args(["/PID", &pid.to_string(), "/F"])
-                        .creation_flags(CREATE_NO_WINDOW)
-                        .output();
-                }
+            if is_process_running(*pid) {
+                let _ = hidden_command("taskkill")
+                    .args(["/PID", &pid.to_string(), "/F"])
+                    .output();
             }
         }
     })
@@ -2319,12 +2315,7 @@ async fn start_node(
 
     // Build command - global options come BEFORE subcommand
     // Merod expects: merod --home ~/.calimero --node node1 run
-    let mut cmd = Command::new(&merod_binary);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt as _;
-        let _ = cmd.creation_flags(CREATE_NO_WINDOW);
-    }
+    let mut cmd = Command::from(hidden_command(&merod_binary));
     // Force ANSI colors in output so the log viewer can display them
     cmd.env("CLICOLOR_FORCE", "1");
     cmd.env("FORCE_COLOR", "1");
@@ -2609,12 +2600,9 @@ fn is_process_running(pid: u32) -> bool {
     }
     #[cfg(windows)]
     {
-        use std::os::windows::process::CommandExt as _;
-        use std::process::Command;
-        let output = Command::new("tasklist")
+        let output = hidden_command("tasklist")
             .arg("/FI")
             .arg(format!("PID eq {}", pid))
-            .creation_flags(CREATE_NO_WINDOW)
             .output();
         if let Ok(out) = output {
             let stdout = String::from_utf8_lossy(&out.stdout);
@@ -2810,12 +2798,7 @@ async fn init_merod_node(
 
     // Run merod init command - global options come BEFORE subcommand
     // Use --auth-mode embedded so merod creates the full embedded_auth config
-    let mut cmd = Command::new(&merod_binary);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt as _;
-        let _ = cmd.creation_flags(CREATE_NO_WINDOW);
-    }
+    let mut cmd = Command::from(hidden_command(&merod_binary));
     cmd.arg("--home").arg(&home_dir_path);
     cmd.arg("--node").arg(&node_name);
     cmd.arg("init").arg("--auth-mode").arg("embedded");
@@ -2977,14 +2960,10 @@ async fn detect_running_merod_nodes() -> Result<Vec<serde_json::Value>, TauriErr
 
     #[cfg(windows)]
     {
-        use std::os::windows::process::CommandExt as _;
-        use tokio::process::Command;
-
         // Use tasklist on Windows; command lines come from CIM below.
-        let output = Command::new("tasklist")
+        let output = Command::from(hidden_command("tasklist"))
             .arg("/FO")
             .arg("CSV")
-            .creation_flags(CREATE_NO_WINDOW)
             .output()
             .await
             .map_err(|e| {
@@ -3010,7 +2989,7 @@ async fn detect_running_merod_nodes() -> Result<Vec<serde_json::Value>, TauriErr
                         // returned nothing and every node silently lost its name
                         // and port. `Get-CimInstance` is the supported query and
                         // is present on every Windows this app targets.
-                        let cmd_output = Command::new("powershell")
+                        let cmd_output = Command::from(hidden_command("powershell"))
                             .args([
                                 "-NoProfile",
                                 "-NonInteractive",
@@ -3020,7 +2999,6 @@ async fn detect_running_merod_nodes() -> Result<Vec<serde_json::Value>, TauriErr
                                     pid
                                 ),
                             ])
-                            .creation_flags(CREATE_NO_WINDOW)
                             .output()
                             .await;
 

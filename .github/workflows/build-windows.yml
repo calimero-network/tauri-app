@@ -81,40 +81,10 @@ jobs:
           fi
           echo "Required secrets validated"
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - name: Setup build environment
+        uses: ./.github/actions/setup-build
         with:
-          node-version: "22"
-          cache: "pnpm"
-
-      - name: Get pnpm store directory
-        id: get-pnpm-store
-        shell: bash
-        run: |
-          STORE_PATH=$(pnpm store path --silent || echo "$HOME/.pnpm-store")
-          echo "path=$STORE_PATH" >> $GITHUB_OUTPUT
-
-      - name: Setup pnpm cache
-        uses: actions/cache@v4
-        with:
-          path: ${{ steps.get-pnpm-store.outputs.path }}
-          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pnpm-store-
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: apps/desktop/src-tauri
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+          cache-suffix: x64
 
       - name: Generate Windows icon
         working-directory: apps/desktop

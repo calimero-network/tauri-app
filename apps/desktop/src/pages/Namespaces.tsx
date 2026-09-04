@@ -6,6 +6,7 @@ import {
   useGroupInfo,
   useGroupMembers,
   useGroupContexts,
+  useNodeIdentity,
   useSubgroups,
   useCreateNamespace,
   type Namespace,
@@ -25,7 +26,6 @@ import {
 } from "../utils/cloudApi";
 import { getCloudIdToken } from "../utils/cloudAuth";
 import { getAccessToken } from "../lib/token-storage";
-import { fetchNodeIdentity, type NodeIdentity } from "../utils/nodeIdentity";
 import {
   fetchGroupMembers,
   isInheritedMembershipError,
@@ -223,14 +223,7 @@ function Namespaces() {
   // which `useNamespaceIdentity` calls, because every namespace on a node
   // resolves to the same account: the route took a namespace and answered with
   // the node's account whichever one you passed.
-  const [myNodeIdentity, setMyNodeIdentity] = useState<NodeIdentity | null>(null);
-  useEffect(() => {
-    const controller = new AbortController();
-    void fetchNodeIdentity(controller.signal)
-      .then(setMyNodeIdentity)
-      .catch(() => setMyNodeIdentity(null));
-    return () => controller.abort();
-  }, []);
+  const { identity: myNodeIdentity } = useNodeIdentity();
   const [nsMembers, setNsMembers] = useState<any[]>([]);
   const [nsMembersLoading, setNsMembersLoading] = useState(false);
   const [nsMembersVersion, setNsMembersVersion] = useState(0);

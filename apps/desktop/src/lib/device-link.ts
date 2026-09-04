@@ -2,7 +2,9 @@
  * Pair a second device into this node's account, and withdraw one - the calls
  * behind the Account / Devices panel.
  */
+import { HTTPError, type NodeIdentity } from '@calimero-network/mero-js';
 import { getSettings } from '../utils/settings';
+import { apiClient } from './mero-client';
 import { brokerAccessToken } from './token-broker';
 
 /** The node revoked our token family; no retry can succeed. */
@@ -95,6 +97,20 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   return (json?.data ?? json) as T;
+}
+
+/**
+ * Who this node is, or `null` for a node that has taken part in nothing yet -
+ * it holds neither a device nor an account root, so the route 404s, and that is
+ * a normal state rather than a failure.
+ */
+export async function nodeIdentity(): Promise<NodeIdentity | null> {
+  try {
+    return await apiClient.meroJs.admin.getNodeIdentity();
+  } catch (error) {
+    if (error instanceof HTTPError && error.status === 404) return null;
+    throw error;
+  }
 }
 
 export async function listNamespaces(signal?: AbortSignal): Promise<NamespaceSummary[]> {

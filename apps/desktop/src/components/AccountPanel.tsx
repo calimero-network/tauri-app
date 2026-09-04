@@ -9,10 +9,12 @@ import {
   type InstalledApp,
 } from "./DevicePairing";
 import { SkeletonText, SkeletonTable } from "./Skeleton";
+import type { NodeIdentity } from "@calimero-network/mero-js";
 import {
   listAccountApplications,
   listAccountDevices,
   listNamespaces,
+  nodeIdentity,
   relinkDevice,
   revokeDevice,
   type AccountApplication,
@@ -20,7 +22,6 @@ import {
   type NamespaceSummary,
   type RelinkResult,
 } from "../lib/device-link";
-import { fetchNodeIdentity, type NodeIdentity } from "../utils/nodeIdentity";
 import { parseTauriError } from "../utils/appUtils";
 import { listInstalledApps } from "../utils/installedAppsCache";
 import { truncateText } from "../utils/string";
@@ -131,8 +132,10 @@ export default function AccountPanel() {
     const controller = new AbortController();
     setIdentityLoading(true);
     setIdentityError("");
-    fetchNodeIdentity(controller.signal)
-      .then(setIdentity)
+    nodeIdentity()
+      .then((next) => {
+        if (!controller.signal.aborted) setIdentity(next);
+      })
       .catch((err: unknown) => {
         if (controller.signal.aborted) return;
         setIdentityError(parseTauriError(err, "Could not read this device's identity"));

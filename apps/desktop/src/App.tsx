@@ -130,38 +130,6 @@ function App() {
     }
   }, [showOnboarding, clientReady]);
 
-  // Load contexts for main page (only if developer mode)
-  const loadContexts = useCallback(async () => {
-    if (!clientReady) {
-      console.log('⏳ loadContexts: Client not ready yet, skipping');
-      return;
-    }
-    const settings = getSettings();
-    if (!settings.developerMode) {
-      return; // Skip loading contexts if developer mode is off
-    }
-    try {
-      const contextsResponse = await apiClient.node.getContexts();
-      if (contextsResponse.error) {
-        // If 401, show login (but not if we just completed onboarding)
-        if (contextsResponse.error.code === '401' && !showOnboarding) {
-          setShowLogin(true);
-          return;
-        }
-        console.error('❌ Contexts error:', contextsResponse.error.message);
-        return;
-      }
-      // Contexts loaded (stored in API client state)
-    } catch (err: any) {
-      // Check for 401 in error object (but not if we just completed onboarding)
-      if (err?.status === 401 && !showOnboarding) {
-        setShowLogin(true);
-        return;
-      }
-      console.error('Failed to load contexts:', err);
-    }
-  }, [clientReady, showOnboarding]);
-
   // Each set_tray_icon_connected decodes a PNG on the Rust side, and the health
   // poll asks for the same value every tick. Only send changes; a failed send
   // clears the guard so the next tick retries.
@@ -178,8 +146,8 @@ function App() {
   const initRan = useRef(false);
 
   useEffect(() => {
-    // initializeApp sets clientReady, which rebuilds loadContexts and re-fires this
-    // effect; without the guard the whole init chain runs twice per launch.
+    // initializeApp sets clientReady, which rebuilds loadInstalledApps and re-fires
+    // this effect; without the guard the whole init chain runs twice per launch.
     if (initRan.current) return;
     initRan.current = true;
 
@@ -301,7 +269,6 @@ function App() {
           setConnected(false);
           setError(healthCheck.error.message);
           setNeedsNodeConfig(false);
-          loadContexts().catch(() => {});
           loadInstalledApps().catch(() => {});
           updateTrayIcon(false);
           return;
@@ -324,8 +291,7 @@ function App() {
         
         if (existingToken) {
           // User has token - try to use it (mero-js will refresh if needed)
-          console.log('✅ User has existing token, loading contexts');
-          loadContexts();
+          console.log('✅ User has existing token, loading apps');
           loadInstalledApps();
         } else {
           // No token — always show login. Onboarding is only shown when
@@ -341,7 +307,6 @@ function App() {
         setConnected(false);
         setError(parseTauriError(err));
         setNeedsNodeConfig(false);
-        loadContexts().catch(() => {});
         loadInstalledApps().catch(() => {});
         updateTrayIcon(false);
       } finally {
@@ -350,7 +315,7 @@ function App() {
     }
 
     initializeApp();
-  }, [loadContexts]);
+  }, [loadInstalledApps]);
 
   // Health-only check — no app loading. Keeps the status indicator up to date
   // without triggering re-renders of the app list on every tick.
@@ -452,9 +417,8 @@ function App() {
     setError(null);
     // Onboarding may have pointed the node at a custom data dir.
     refreshNodeVersions();
-    loadContexts().catch(() => {});
     loadInstalledApps().catch(() => {});
-  }, [loadContexts, loadInstalledApps, refreshNodeVersions]);
+  }, [loadInstalledApps, refreshNodeVersions]);
 
   const handleOnboardingSettings = useCallback(() => {
     setShowOnboarding(false);
@@ -498,7 +462,6 @@ function App() {
         } else if (!getAccessToken()) {
           setShowLogin(true);
         } else {
-          loadContexts();
           loadInstalledApps();
         }
       } catch (err) {
@@ -508,13 +471,12 @@ function App() {
         setCheckingOnboarding(false);
       }
     } else {
-      // Settings changed, reload contexts if logged in
+      // Settings changed, reload apps if logged in
       if (getAccessToken()) {
-        loadContexts();
         loadInstalledApps();
       }
     }
-  }, [needsNodeConfig, loadContexts, loadInstalledApps]);
+  }, [needsNodeConfig, loadInstalledApps]);
 
   const handleAuthRequired = useCallback(() => setShowLogin(true), []);
 
@@ -571,14 +533,13 @@ function App() {
     return () => clearInterval(interval);
   }, [checkConnection, clientReady, showLogin, showSettings, showOnboarding]);
 
-  // Load apps + contexts only when the user is on the home page.
+  // Load apps only when the user is on the home page.
   // Fires once on navigation — not on every health-check tick.
   useEffect(() => {
     if (showLogin || showSettings || showOnboarding) return;
     if (currentPage !== 'home' || !clientReady) return;
-    loadContexts().catch(() => {});
     loadInstalledApps().catch(() => {});
-  }, [currentPage, clientReady, showLogin, showSettings, showOnboarding, loadContexts, loadInstalledApps]);
+  }, [currentPage, clientReady, showLogin, showSettings, showOnboarding, loadInstalledApps]);
 
   // When launched from a desktop shortcut (--open-app-url / --open-app-name): open app, focus it, then hide main window
   useEffect(() => {
@@ -680,7 +641,6 @@ function App() {
               variant={theme}
               onSuccess={() => {
                 setShowLogin(false);
-                loadContexts();
                 loadInstalledApps();
                 checkConnection();
               }}

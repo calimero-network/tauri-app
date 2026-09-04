@@ -234,13 +234,6 @@
   font-family: 'JetBrains Mono', 'Fira Code', monospace;
 }
 
-.saved-indicator {
-  color: var(--success);
-  font-size: 14px;
-  font-weight: 500;
-  animation: fadeIn 0.3s;
-}
-
 .theme-toggle {
   margin-top: 8px;
 }

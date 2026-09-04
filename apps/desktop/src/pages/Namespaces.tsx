@@ -215,7 +215,13 @@ function Namespaces() {
   // Remove this cast once mero-js is bumped to expose the field.
   const groupInfo = groupInfoRaw as GroupInfoExt | null;
   const nsRootGroupInfo = nsRootGroupInfoRaw as GroupInfoExt | null;
-  const { members: groupMembers, refetch: refetchGroupMembers } = useGroupMembers(activeGroupId) as any;
+  // One listing per open group: this feeds the Group Detail Members list AND the
+  // Delete-vs-Leave decision for that subgroup and the contexts it owns.
+  const {
+    members: groupMembers,
+    loading: groupMembersLoading,
+    refetch: refetchGroupMembers,
+  } = useGroupMembers(activeGroupId);
   // Who this NODE is — used to find my ROLE in the member list (admin → may
   // Delete; member → may only Leave) and to self-remove.
   //
@@ -224,37 +230,9 @@ function Namespaces() {
   // resolves to the same account: the route took a namespace and answered with
   // the node's account whichever one you passed.
   const { identity: myNodeIdentity } = useNodeIdentity();
-  const [nsMembers, setNsMembers] = useState<any[]>([]);
-  const [nsMembersLoading, setNsMembersLoading] = useState(false);
-  const [nsMembersVersion, setNsMembersVersion] = useState(0);
-
-  useEffect(() => {
-    if (view.type !== "namespace" || !activeNsRootId) { setNsMembers([]); return; }
-    const controller = new AbortController();
-    setNsMembersLoading(true);
-    void fetchGroupMembers(activeNsRootId)
-      .then((members) => { if (!controller.signal.aborted) setNsMembers(members ?? []); })
-      .finally(() => { if (!controller.signal.aborted) setNsMembersLoading(false); });
-    return () => controller.abort();
-  }, [activeNsRootId, nsMembersVersion, view.type]);
-
-  // Members of the subgroup currently open in the Group Detail view. Fetched
-  // separately from `useGroupMembers` (which feeds that view's Members list)
-  // for the same reason the namespace root's list is: the hook's parsing of
-  // this route is still wrong, and a role read wrong here silently offers the
-  // wrong destructive button.
-  const [activeGroupMembers, setActiveGroupMembers] = useState<any[]>([]);
-  const [activeGroupMembersLoading, setActiveGroupMembersLoading] = useState(false);
-
-  useEffect(() => {
-    if (view.type !== "group" || !activeGroupId) { setActiveGroupMembers([]); return; }
-    const controller = new AbortController();
-    setActiveGroupMembersLoading(true);
-    void fetchGroupMembers(activeGroupId)
-      .then((members) => { if (!controller.signal.aborted) setActiveGroupMembers(members ?? []); })
-      .finally(() => { if (!controller.signal.aborted) setActiveGroupMembersLoading(false); });
-    return () => controller.abort();
-  }, [activeGroupId, view.type]);
+  const { members: nsMembers, loading: nsMembersLoading } = useGroupMembers(
+    view.type === "namespace" ? activeNsRootId : null,
+  );
 
   // My role on the active namespace, resolved from its member list, matched on
   // the ACCOUNT. rc.23 made the member listing answer with accounts (#3522) —
@@ -272,9 +250,9 @@ function Namespaces() {
 
   // Same decision for the subgroup open in the Group Detail view, and for the
   // contexts it owns (`delete_context` gates on the OWNING group).
-  const myActiveGroupRole = roleOf(activeGroupMembers, myNodeIdentity?.accountId);
+  const myActiveGroupRole = roleOf(groupMembers, myNodeIdentity?.accountId);
   const groupAction: GroupAction = resolveGroupAction({
-    loading: activeGroupMembersLoading,
+    loading: groupMembersLoading,
     accountId: myNodeIdentity?.accountId,
     role: myActiveGroupRole,
   });
@@ -336,7 +314,7 @@ function Namespaces() {
       return;
     }
     let cancelled = false;
-    const admin: any = mero.admin;
+    const admin = mero.admin;
     // When the namespace itself changes, drop the previous tree so we don't
     // briefly show the wrong namespace's structure; a same-namespace refresh
     // keeps the current tree on screen (no flicker, no collapse).
@@ -542,7 +520,7 @@ function Namespaces() {
     setCreatingContext(true);
     try {
       const argsJson = initArgs.trim() || '{}';
-      const result = await (mero.admin as any).createContext({
+      const result = await mero.admin.createContext({
         applicationId,
         groupId: namespaceId,
         serviceName: serviceName.trim() || undefined,
@@ -603,7 +581,7 @@ function Namespaces() {
     if (!mero) return;
     setActionLoading(true);
     try {
-      await (mero.admin as any).deleteNamespace(ns.namespaceId, {});
+      await mero.admin.deleteNamespace(ns.namespaceId);
       toast.success('Namespace deleted');
       setDeleteNsTarget(null);
       setView({ type: 'list' });
@@ -647,7 +625,7 @@ function Namespaces() {
     if (!mero) return;
     setActionLoading(true);
     try {
-      await (mero.admin as any).deleteGroup(groupId, {});
+      await mero.admin.deleteGroup(groupId);
       toast.success('Group deleted');
       setDeleteGroupTarget(null);
       if (view.type === 'group') setView({ type: 'namespace', ns: view.ns });

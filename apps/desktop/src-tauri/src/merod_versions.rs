@@ -645,7 +645,7 @@ pub async fn ensure_release_installed(
     install_result
 }
 
-fn app_data(app_handle: &tauri::AppHandle) -> Result<PathBuf, TauriError> {
+pub(crate) fn app_data(app_handle: &tauri::AppHandle) -> Result<PathBuf, TauriError> {
     app_handle.path().app_data_dir().map_err(|e| {
         TauriError::with_details(
             TauriErrorCode::DirectoryError,
@@ -1080,6 +1080,24 @@ mod tests {
             score_merod_asset("merod_aarch64-apple-darwin.tar.gz", triple).is_some(),
             "published underscore asset name must match"
         );
+    }
+
+    #[test]
+    fn test_score_merod_asset_windows() {
+        let triple = "x86_64-pc-windows-msvc";
+        assert!(score_merod_asset("merod-x86_64-pc-windows-msvc.zip", triple).is_some());
+        assert!(score_merod_asset("merod-x86_64-pc-windows-msvc.exe", triple).is_some());
+        assert!(score_merod_asset("merod-aarch64-apple-darwin.tar.gz", triple).is_none());
+    }
+
+    #[test]
+    fn test_merod_target_triple_is_known() {
+        let triple = merod_target_triple();
+        assert_ne!(
+            triple, "unknown",
+            "target triple should be known on supported platforms"
+        );
+        assert!(triple.contains('-'), "triple should be dash-separated");
     }
 
     #[test]

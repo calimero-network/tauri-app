@@ -651,7 +651,7 @@ function App() {
   return (
     <div className="app">
       <ToastContainer />
-      <UpdateNotification checkOnMount={true} checkInterval={3600000} />
+      <UpdateNotification />
 
       <div className="app-layout">
         <Sidebar

@@ -8,19 +8,12 @@ import {
 import { parseTauriError } from "../utils/appUtils";
 import "./UpdateNotification.css";
 
-interface UpdateNotificationProps {
-  checkOnMount?: boolean;
-  checkInterval?: number; // in milliseconds, 0 to disable
-}
-
 // Stores the version the user last deferred, not a boolean — otherwise "Later"
 // either resets on every relaunch or silently swallows every future release.
 const DISMISSED_KEY = "calimero-update-dismissed-version";
+const CHECK_INTERVAL_MS = 60 * 60 * 1000;
 
-export default function UpdateNotification({
-  checkOnMount = true,
-  checkInterval = 3600000, // 1 hour default
-}: UpdateNotificationProps) {
+export default function UpdateNotification() {
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
   const [currentVersion, setCurrentVersion] = useState<string>("");
@@ -31,20 +24,11 @@ export default function UpdateNotification({
   const [mandatory, setMandatory] = useState(false);
 
   useEffect(() => {
-    // Get current version
     getCurrentVersion().then(setCurrentVersion);
-
-    // Check for updates on mount
-    if (checkOnMount) {
-      performUpdateCheck();
-    }
-
-    // Set up interval for periodic checks
-    if (checkInterval > 0) {
-      const interval = setInterval(performUpdateCheck, checkInterval);
-      return () => clearInterval(interval);
-    }
-  }, [checkOnMount, checkInterval]);
+    performUpdateCheck();
+    const interval = setInterval(performUpdateCheck, CHECK_INTERVAL_MS);
+    return () => clearInterval(interval);
+  }, []);
 
   const performUpdateCheck = async () => {
     const status = await checkForUpdates();

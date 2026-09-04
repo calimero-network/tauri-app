@@ -154,14 +154,9 @@ pub struct AppDeepLink {
 /// via `get_pending_app_deep_link`. Mirrors `PendingCloudAuth`.
 pub struct PendingAppDeepLink(pub std::sync::Mutex<Option<AppDeepLink>>);
 
-/// Parse an app deep-link from either the custom scheme or the Universal Link
-/// host. Returns `None` for anything that is not an app deep-link — crucially
-/// the OAuth callback (`calimero://cloud-callback?…`), which the caller keeps
-/// routing through the existing cloud-auth path.
-///
-/// Accepted shapes:
-///   - `calimero://<slug>/<action>?<params>`          (host=slug, path=/action)
-///   - `https://links.calimero.network/<slug>/<action>?<params>`
+/// Parse `calimero://<slug>/<action>?<params>` or the same shape under
+/// `https://links.calimero.network/`. `None` for anything else, crucially the
+/// OAuth callback, which the caller keeps routing through the cloud-auth path.
 fn parse_app_deep_link(raw: &str) -> Option<AppDeepLink> {
     let parsed = url::Url::parse(raw).ok()?;
 
@@ -747,12 +742,9 @@ fn decode_data_uri_png(s: &str) -> Option<Vec<u8>> {
     }
 }
 
-/// Fetch the app's web-manifest / favicon PNG. Runs on a DEDICATED thread with its
-/// OWN runtime: this is reached from a Tauri command that may execute inside the
-/// ambient Tokio runtime, where `tauri::async_runtime::block_on` does not drive
-/// the request (the fetch came back empty and every launcher fell back to the
-/// generic exec icon). A fresh std::thread has no ambient runtime, so a
-/// current-thread runtime can block on it; a one-off client keeps its pool here.
+/// Fetch the app's web-manifest or favicon PNG on a dedicated thread with its own
+/// runtime: the caller may already be inside the ambient one, where
+/// `async_runtime::block_on` does not drive the request and the fetch returns empty.
 #[cfg(target_os = "macos")]
 fn fetch_frontend_icon_png(frontend_url: &str) -> Option<Vec<u8>> {
     let base = frontend_url.trim_end_matches('/').to_string();
@@ -918,12 +910,9 @@ fn ensure_app_launcher(
     Ok(bundle)
 }
 
-/// "Open" on macOS: launch the app through its per-app shell/launcher (first-class
-/// dock identity), creating a managed launcher if one doesn't exist yet. Reuses
-/// the app's existing launcher location (e.g. a Desktop one) when present.
-///
-/// The body takes seconds (shell extract, icon fetch, `sips`, waiting on `open`),
-/// so it runs on a blocking thread rather than a runtime worker.
+/// "Open" on macOS: launch the app through its own launcher, building one where
+/// it has none and reusing an existing location. Seconds of work (shell extract,
+/// icon fetch, `sips`, `open`), so it takes a blocking thread.
 #[tauri::command]
 async fn open_app_launcher(
     app_handle: tauri::AppHandle,
@@ -1479,17 +1468,9 @@ async fn stop_pids(pids: &[u32]) -> Result<(), TauriError> {
     Ok(())
 }
 
-/// Whether this merod understands `run --exit-on-stdin-close`.
-///
-/// Probed rather than derived from a version. The app runs whatever merod the
-/// user has pinned through `VersionId`, so a version comparison would have to
-/// know which release added the flag AND be right about every older build a
-/// user might still be on — and being wrong means passing an argument an older
-/// merod rejects, so the node fails to start at all. Asking the binary cannot
-/// be wrong about the binary.
-///
-/// Cached per path: `--help` is cheap but not free, and a node start should not
-/// pay for it every time.
+/// Whether this merod understands `run --exit-on-stdin-close`. Asked of the
+/// binary, not derived from a version: passing the flag to a merod that does not
+/// know it means the node never starts. Cached per path.
 async fn merod_supports_stdin_stop(binary: &std::path::Path) -> bool {
     static CACHE: std::sync::LazyLock<Mutex<std::collections::HashMap<std::path::PathBuf, bool>>> =
         std::sync::LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
@@ -1516,12 +1497,9 @@ async fn merod_supports_stdin_stop(binary: &std::path::Path) -> bool {
     supported
 }
 
-/// Ask the nodes we started to stop, by closing the stdin they are watching.
-///
-/// Returns the pids that were asked. On Windows this is the only graceful stop
-/// there is: `taskkill` without `/F` posts `WM_CLOSE` to windows a console
-/// process does not have, so the alternative is `TerminateProcess`, which runs
-/// no code — the node never drains or flushes its store.
+/// Ask the nodes we started to stop by closing the stdin they watch, and report
+/// which were asked. On Windows it is the only graceful stop there is: the
+/// alternative, `TerminateProcess`, runs no code, so nothing drains or flushes.
 fn request_stdin_stop(pids: &[u32]) -> Vec<u32> {
     let mut stoppers = STDIN_STOPPERS.lock_unpoisoned();
     pids.iter()
@@ -1628,12 +1606,8 @@ struct LogWriterEntry {
 type MerodLogWriters = Arc<Mutex<std::collections::HashMap<String, LogWriterEntry>>>;
 
 /// The rotating writer a running node is draining into `log_dir`, if any.
-///
-/// `lock_unpoisoned`, never `.lock().ok()`: swallowing a poisoned lock would
-/// report a *running* node as stopped, and both callers then take a fallback
-/// path that races the live drain tasks — a silent loss of the serialization
-/// they ask for. The map has no cross-field invariant, so the pre-poison
-/// contents are safe to reuse.
+/// `lock_unpoisoned`, never `.lock().ok()`: swallowing a poisoned lock reports a
+/// running node as stopped, and both callers then race the live drain tasks.
 fn live_log_writer(
     log_writers: &MerodLogWriters,
     log_dir: &std::path::Path,
@@ -3460,20 +3434,9 @@ fn launcher_bundle_is_removable(bundle: &std::path::Path, home: &std::path::Path
             .any(|c| c.as_os_str() == std::ffi::OsStr::new(".."))
 }
 
-/// Tear down every app session this desktop has handed out. Clearing the
-/// desktop's own `localStorage` was never enough:
-///
-/// - Each app frontend is its own web origin, so the SSO'd access token its
-///   MeroJs persists lands in the webview's shared website-data store
-///   (`~/Library/WebKit/<bundle id>`), which no `localStorage.removeItem` from
-///   the desktop's origin can reach. Reopening an app after a "reset" resumed
-///   the old authenticated session.
-/// - Open app windows and running launcher shells hold live sessions of their
-///   own, and a live webview re-flushes its `localStorage` to disk on close —
-///   so they must go first, or the wipe is undone behind us.
-///
-/// Every step is best-effort except the final website-data wipe, whose failure
-/// is reported so the caller can tell the user their sessions may persist.
+/// Tear down every app session this desktop handed out. Each app is its own web
+/// origin, so its token lives in the webview's shared store, not in the desktop's
+/// `localStorage`; live windows must close first or they re-flush it on the way out.
 #[tauri::command]
 async fn clear_app_sessions(app_handle: tauri::AppHandle) -> Result<String, TauriError> {
     let mut done: Vec<String> = Vec::new();
@@ -3541,14 +3504,9 @@ async fn clear_app_sessions(app_handle: tauri::AppHandle) -> Result<String, Taur
     Ok(summary)
 }
 
-/// Remove the per-app launchers: the generated `.app` bundles, the capability
-/// store that keeps authorizing them (`caps.json` — a launcher built before a
-/// total nuke would otherwise still get tokens brokered over the host socket),
-/// and the extracted shell binary they exec. Total-nuke only: a launcher is a
-/// dock icon the user placed, so the softer "reset settings" leaves them alone.
-///
-/// Best-effort per launcher; a bundle we can't remove is logged, not fatal.
-/// Call `clear_app_sessions` first so no shell is still running out of a bundle.
+/// Remove the per-app launchers, `caps.json` (which would keep brokering tokens
+/// to a surviving bundle) and the shell they exec. Total-nuke only, and after
+/// `clear_app_sessions`, so no shell is still running out of a bundle.
 #[tauri::command]
 async fn remove_app_launchers(app_handle: tauri::AppHandle) -> Result<String, TauriError> {
     #[cfg(not(target_os = "macos"))]

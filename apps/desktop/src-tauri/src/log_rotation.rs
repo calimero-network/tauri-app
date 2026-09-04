@@ -595,6 +595,20 @@ mod tests {
     }
 
     #[test]
+    fn export_refuses_to_write_into_the_log_dir() {
+        let dir = tmp();
+        let mut w = RollingLogWriter::open(&dir).unwrap();
+        w.write_line(b"keep me\n").unwrap();
+        // Picking the active log itself as the destination must not truncate it.
+        let err = export_logs(&dir, &active_path(&dir)).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(read_tail(&dir, 10).unwrap(), "keep me");
+        // Any other path in the same dir is refused too.
+        assert!(export_logs(&dir, &dir.join("dump.txt")).is_err());
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn export_of_an_unscannable_dir_errors_instead_of_writing_a_partial_file() {
         let dir = tmp();
         fs::remove_dir_all(&dir).ok(); // dir cannot be scanned

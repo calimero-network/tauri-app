@@ -2,26 +2,16 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use log::{debug, info, warn};
-use serde::{Deserialize, Serialize};
-use std::sync::OnceLock;
+use serde::Serialize;
+#[cfg(target_os = "macos")]
+use sha2::{Digest, Sha256};
+use std::process::Stdio;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{Emitter, Manager};
+use tauri::{Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use tokio::process::Command;
-use thiserror::Error;
-
-/// Chain-style poison recovery: every mutex here guards a plain collection with
-/// no cross-field invariant, so the pre-poison data is always safe to reuse.
-pub(crate) trait LockUnpoisoned<T> {
-    fn lock_unpoisoned(&self) -> std::sync::MutexGuard<'_, T>;
-}
-impl<T> LockUnpoisoned<T> for std::sync::Mutex<T> {
-    fn lock_unpoisoned(&self) -> std::sync::MutexGuard<'_, T> {
-        self.lock().unwrap_or_else(|p| p.into_inner())
-    }
-}
-// Brings `.encode()` / `.decode()` onto the base64 engine used by the HTTP proxy.
-use base64::Engine as _;
 
 mod log_rotation;
 mod merod_versions;
@@ -43,7 +33,10 @@ use merod_versions::{
 // with the `calimero-shell` binary via the crate's lib target.
 #[cfg(target_os = "macos")]
 use calimero_tauri_app::{app_registry, host_socket_path, launcher, token_broker_ipc};
+use calimero_tauri_app::errors::{TauriError, TauriErrorCode};
 use calimero_tauri_app::node_discovery::resolved;
+use calimero_tauri_app::proxy::{self, http_client};
+use calimero_tauri_app::LockUnpoisoned;
 #[cfg(unix)]
 use calimero_tauri_app::node_discovery::{
     claim_matches, discover_nodes, existing_node_for, is_signalable, nodes_under_path, remove_claim,
@@ -52,201 +45,32 @@ use calimero_tauri_app::node_discovery::{
 #[cfg(target_os = "macos")]
 use calimero_tauri_app::node_discovery::parse_shell_pids;
 
-static HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-static SSE_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-/// Serialises starting a node against deleting a node home; unguarded they
-/// interleave into a delete unlinking a store a start just opened.
-static NODE_LIFECYCLE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-/// Set by the first quit path to reach teardown; the others then do nothing.
-static SHUTDOWN_CLAIMED: AtomicBool = AtomicBool::new(false);
+static NODE_LIFECYCLE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(()); // serialises a node start against a home delete
+static SHUTDOWN_CLAIMED: AtomicBool = AtomicBool::new(false); // claimed by whichever quit path reaches teardown first
+static IN_FLIGHT_REQUESTS: AtomicUsize = AtomicUsize::new(0); // proxy requests the shutdown drain waits on
+static BUNDLED_MEROD_VERSION: Mutex<Option<String>> = Mutex::new(None); // cached `merod --version`; three UI surfaces ask for it
+// stdin pipes of nodes started with `--exit-on-stdin-close`, keyed by pid; outside
+// `MerodProcess`, which is `Clone` and a pipe is not.
+static STDIN_STOPPERS: std::sync::LazyLock<
+    Mutex<std::collections::HashMap<u32, tokio::process::ChildStdin>>,
+> = std::sync::LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
+// node homes being initialised right now, so two inits cannot race on one name
+static NODE_INIT_IN_FLIGHT: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashSet<String>>,
+> = std::sync::LazyLock::new(Default::default);
 
-/// How long in-flight proxy requests get to finish before the node is stopped.
-const REQUEST_DRAIN_TIMEOUT_SECS: u64 = 10;
-/// How long a node gets to flush and exit before it is killed outright.
-const PROCESS_TERM_MAX_WAIT_SECS: u64 = 30;
-
-/// Version of the merod binary this build expects, embedded at compile time from merod-config.json.
+const REQUEST_DRAIN_TIMEOUT_SECS: u64 = 10; // in-flight proxy requests get this long before the node stops
+const PROCESS_TERM_MAX_WAIT_SECS: u64 = 30; // a node gets this long to flush and exit before it is killed
+const MAX_NODE_NAME_LENGTH: usize = 64;
+const TOKEN_BROKER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20); // the desktop window's deadline to answer a refresh
+const DEFAULT_NODE_PORTS: (u16, u16) = (2528, 2428); // (server, swarm) when a node config says nothing usable
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000; // else every console child pops a window on Windows
+/// Version of the merod binary this build expects, from merod-config.json.
 const MEROD_CONFIG_VERSION: &str = match option_env!("MEROD_CONFIG_VERSION") {
     Some(v) => v,
     None => "unknown",
 };
-
-pub(crate) fn http_client() -> &'static reqwest::Client {
-    HTTP_CLIENT.get_or_init(|| {
-        reqwest::Client::builder()
-            .danger_accept_invalid_certs(false)
-            .timeout(std::time::Duration::from_secs(30))
-            .build()
-            .expect("Failed to build HTTP client")
-    })
-}
-
-// SSE streams are long-lived; no request timeout is set so the connection
-// is only closed when the server ends the stream or the stream is cancelled.
-fn sse_client() -> &'static reqwest::Client {
-    SSE_CLIENT.get_or_init(|| {
-        reqwest::Client::builder()
-            .danger_accept_invalid_certs(false)
-            .build()
-            .expect("Failed to build SSE HTTP client")
-    })
-}
-
-// ============================================================================
-// Typed error types for Tauri commands
-// ============================================================================
-
-/// Error codes for programmatic error handling on the frontend.
-/// Serializes as SCREAMING_SNAKE_CASE, e.g. `"INVALID_URL"`.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum TauriErrorCode {
-    // URL / proxy errors
-    InvalidUrl,
-    UrlNotAllowed,
-    UnsupportedMethod,
-    // HTTP errors
-    HttpClientError,
-    HttpRequestFailed,
-    HttpTimeout,
-    ConnectionFailed,
-    ResponseReadError,
-    // Merod process errors
-    MerodNotRunning,
-    MerodStartFailed,
-    MerodStopFailed,
-    MerodInitFailed,
-    MerodProcessExited,
-    // Window errors
-    WindowCreationFailed,
-    WindowOperationFailed,
-    // Filesystem errors
-    FileNotFound,
-    FileReadError,
-    FileWriteError,
-    DirectoryError,
-    PathNotAllowed,
-    // Config errors
-    ConfigParseError,
-    ConfigWriteError,
-    // Platform / feature errors
-    PlatformNotSupported,
-    ShortcutCreationFailed,
-    HomeDirNotFound,
-    AutostartNotAvailable,
-    // General
-    InvalidInput,
-    Timeout,
-    InternalError,
-}
-
-/// Structured error returned by all `#[tauri::command]` functions.
-///
-/// Serialises to:
-/// ```json
-/// { "code": "INVALID_URL", "message": "...", "details": "..." }
-/// ```
-#[derive(Debug, Clone, Error, Serialize)]
-#[error("{message}")]
-pub struct TauriError {
-    pub code: TauriErrorCode,
-    pub message: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub details: Option<String>,
-}
-
-impl TauriError {
-    pub fn new(code: TauriErrorCode, message: impl Into<String>) -> Self {
-        Self {
-            code,
-            message: message.into(),
-            details: None,
-        }
-    }
-
-    pub fn with_details(
-        code: TauriErrorCode,
-        message: impl Into<String>,
-        details: impl Into<String>,
-    ) -> Self {
-        Self {
-            code,
-            message: message.into(),
-            details: Some(details.into()),
-        }
-    }
-}
-
-/// Fallback conversion so internal helpers returning `Result<_, String>` can propagate
-/// through commands with `?`. Uses `InternalError` — callers that need a specific code
-/// should call `.map_err(|e| TauriError::new(TauriErrorCode::XYZ, e))?` explicitly.
-impl From<String> for TauriError {
-    fn from(e: String) -> Self {
-        TauriError::new(TauriErrorCode::InternalError, e)
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct HttpRequest {
-    url: String,
-    method: String,
-    headers: Option<std::collections::HashMap<String, String>>,
-    /// Text bodies (JSON, form-encoded, …) — sent as a UTF-8 string.
-    body: Option<String>,
-    /// Binary bodies (image uploads, octet-stream, …) — base64 of the raw bytes.
-    /// Set by the proxy script instead of `body` so bytes survive the IPC hop
-    /// intact; `String(arrayBuffer)`/`.text()` would otherwise mangle them.
-    #[serde(default)]
-    body_base64: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct HttpResponse {
-    status: u16,
-    headers: std::collections::HashMap<String, String>,
-    /// Text responses — a UTF-8 string (unchanged wire shape for JSON/text).
-    body: String,
-    /// Binary responses (images, octet-stream, …) — base64 of the raw bytes.
-    /// When present the proxy script decodes this instead of reading `body`,
-    /// so downloaded blobs are byte-exact rather than UTF-8-lossy corrupted.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    body_base64: Option<String>,
-}
-
-/// Whether a response/request body of this content-type is safe to carry as a
-/// UTF-8 string. Anything else (images, octet-stream, video, …) must go over the
-/// IPC boundary as base64 to avoid lossy UTF-8 corruption.
-///
-/// Precise on purpose: a broad `contains("xml")`/`contains("json")` would
-/// misclassify ZIP-based Office Open XML types (`application/vnd.openxmlformats-*`
-/// = docx/xlsx/pptx) as text and corrupt them. Note the asymmetry — treating a
-/// genuinely textual type as binary is harmless (base64 round-trips exactly),
-/// while treating binary as text corrupts, so we bias toward binary.
-fn is_textual_content_type(content_type: &str) -> bool {
-    // Media type only, ignoring any `; charset=…` parameters.
-    let ct = content_type
-        .split(';')
-        .next()
-        .unwrap_or("")
-        .trim()
-        .to_ascii_lowercase();
-    // Vendor types are overwhelmingly binary containers (OOXML, .xls, …); never
-    // treat them as text even though some contain "xml"/"json" in the name.
-    if ct.starts_with("application/vnd.") {
-        return false;
-    }
-    ct.starts_with("text/")
-        || ct == "application/json"
-        || ct.ends_with("+json")
-        || ct == "application/xml"
-        || ct == "text/xml"
-        || ct.ends_with("+xml")
-        || ct.contains("javascript")
-        || ct.contains("ecmascript")
-        || ct == "application/x-www-form-urlencoded"
-        || ct == "text/csv"
-        || ct.starts_with("multipart/") // boundaries + text fields; keep as-is
-}
 
 /// Parses --open-app-url, --open-app-name, --open-app-id from CLI args (used when launched from a desktop shortcut).
 fn parse_open_app_args() -> Option<(String, String, Option<String>)> {
@@ -384,8 +208,6 @@ pub struct PendingOpenApp(pub std::sync::Mutex<Option<(String, String, Option<St
 /// State for pending Calimero Cloud auth callback (set by deep link handler, read by frontend).
 pub struct PendingCloudAuth(pub std::sync::Mutex<Option<String>>);
 
-const MAX_NODE_NAME_LENGTH: usize = 64;
-
 /// Validates a node name to prevent path traversal and command injection.
 /// Valid names: non-empty, max 64 chars, alphanumeric/hyphen/underscore only, no leading hyphen.
 fn validate_node_name(node_name: &str) -> Result<(), String> {
@@ -436,455 +258,20 @@ fn validate_node_name(node_name: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Validates that a URL is allowed for proxying
-///
-/// Allowed URLs:
-/// - Configured node URL (from settings, typically http://localhost:2528 or custom HTTP localhost)
-///
-/// Only HTTP localhost URLs are proxied. HTTPS registries don't need proxying (no mixed content issues).
-///
-/// This function prevents hostname spoofing attacks like:
-/// - http://localhost:2528.evil.com (invalid hostname)
-/// - http://localhost:2528@evil.com (invalid URL structure)
-pub(crate) fn validate_allowed_url(
-    url: &str,
-    configured_node_url: Option<&str>,
-) -> Result<(), String> {
-    let parsed = url::Url::parse(url).map_err(|e| {
-        format!(
-            "Invalid URL format: {}. Please check that the URL is properly formatted.",
-            e
-        )
-    })?;
-
-    // Validate scheme
-    let scheme = parsed.scheme();
-    if scheme != "http" && scheme != "https" {
-        return Err(format!(
-            "Unsupported URL scheme: '{}'. Only 'http' and 'https' are allowed. Please use http://localhost:2528 or https://apps.calimero.network",
-            scheme
-        ));
-    }
-
-    // Reject URLs with userinfo (e.g., user@host) as a security measure
-    if parsed.username() != "" || parsed.password().is_some() {
-        return Err(format!(
-            "URLs with authentication credentials are not allowed for security reasons. Please use a URL without username/password (e.g., http://localhost:2528 instead of user@localhost:2528)"
-        ));
-    }
-
-    // Validate hostname (must be exact match, no subdomains or spoofing)
-    let host = parsed.host_str()
-        .ok_or_else(|| "Invalid URL: missing hostname. Please provide a valid URL with a hostname (e.g., localhost or apps.calimero.network)".to_string())?;
-
-    // Normalize hostname to lowercase for comparison
-    let host_lower = host.to_lowercase();
-
-    // Get port (explicit or default based on scheme)
-    let port = parsed.port().unwrap_or_else(|| {
-        match scheme {
-            "http" => 80,
-            "https" => 443,
-            _ => unreachable!(), // Already validated scheme above
-        }
-    });
-
-    // Check if URL matches configured node URL
-    if let Some(node_url) = configured_node_url {
-        match url::Url::parse(node_url) {
-            Ok(node_parsed) => {
-                let node_host = node_parsed.host_str().map(|h| h.to_lowercase());
-                let node_port = node_parsed.port().or_else(|| match node_parsed.scheme() {
-                    "http" => Some(80),
-                    "https" => Some(443),
-                    _ => None,
-                });
-
-                if node_host
-                    .as_ref()
-                    .map(|h| h == &host_lower)
-                    .unwrap_or(false)
-                    && node_port.map(|p| p == port).unwrap_or(false)
-                    && node_parsed.scheme() == scheme
-                {
-                    return Ok(());
-                }
-                // Configured URL present but request URL doesn't match — reject.
-                return Err(format!(
-                    "URL not allowed: {}. Only requests to the configured node URL are proxied.",
-                    url
-                ));
-            }
-            Err(_) => {
-                return Err(format!(
-                    "URL not allowed: {}. The configured node URL is invalid and cannot be used for proxying.",
-                    url
-                ));
-            }
-        }
-    }
-
-    // No configured URL — allow any HTTP localhost request (any port).
-    match (scheme, host_lower.as_str()) {
-        ("http", "localhost") | ("http", "127.0.0.1") => Ok(()),
-        _ => {
-            let suggestion = if scheme == "https" {
-                "HTTPS URLs don't need proxying. Only HTTP localhost node URLs are proxied."
-                    .to_string()
-            } else {
-                "Only HTTP localhost URLs are allowed for proxying (e.g., http://localhost:2528)."
-                    .to_string()
-            };
-
-            Err(format!(
-                "URL not allowed: {}://{}:{}. {}",
-                scheme, host, port, suggestion
-            ))
-        }
-    }
-}
-
+/// The shared proxy command, wrapped so the host can drain in-flight requests
+/// before it stops merod. The shell registers `proxy::proxy_http_request` as-is.
 #[tauri::command]
 async fn proxy_http_request(
-    request: HttpRequest,
+    request: proxy::HttpRequest,
     configured_node_url: Option<String>,
-) -> Result<HttpResponse, TauriError> {
+) -> Result<proxy::HttpResponse, TauriError> {
     let _guard = InFlightGuard::new();
-    proxy_http_request_inner(request, configured_node_url).await
+    proxy::proxy_http_request_inner(request, configured_node_url).await
 }
 
-async fn proxy_http_request_inner(
-    request: HttpRequest,
-    configured_node_url: Option<String>,
-) -> Result<HttpResponse, TauriError> {
-    use reqwest;
-
-    // Validate URL before processing (pass configured node URL if available)
-    validate_allowed_url(&request.url, configured_node_url.as_deref())
-        .map_err(|e| TauriError::new(TauriErrorCode::UrlNotAllowed, e))?;
-
-    // Parse URL to determine what Host header to use
-    let parsed_original = url::Url::parse(&request.url).map_err(|e| {
-        TauriError::with_details(
-            TauriErrorCode::InvalidUrl,
-            format!("Failed to parse URL '{}'", request.url),
-            e.to_string(),
-        )
-    })?;
-    let original_host = parsed_original.host_str().ok_or_else(|| {
-        TauriError::new(
-            TauriErrorCode::InvalidUrl,
-            format!("Invalid URL '{}': missing hostname", request.url),
-        )
-    })?;
-    // Get port (explicit or default)
-    let original_port = parsed_original
-        .port()
-        .or_else(|| {
-            match parsed_original.scheme() {
-                "http" => Some(2528), // Default for localhost
-                "https" => Some(443), // Default for HTTPS
-                _ => None,
-            }
-        })
-        .ok_or_else(|| {
-            TauriError::new(
-                TauriErrorCode::InvalidUrl,
-                "Could not determine port from URL",
-            )
-        })?;
-    let host_header = format!("{}:{}", original_host, original_port);
-
-    // DON'T normalize - use original URL exactly as Chrome does
-    // The issue might be that normalizing breaks something
-    let normalized_url = request.url.clone();
-
-    info!(
-        "[Tauri Proxy] Proxying request: {} {}",
-        request.method, request.url
-    );
-    if let Some(ref headers) = request.headers {
-        debug!("[Tauri Proxy] Request headers count: {}", headers.len());
-        // Log only whether auth header is present — never log its value
-        let has_auth =
-            headers.contains_key("Authorization") || headers.contains_key("authorization");
-        debug!("[Tauri Proxy] Has Authorization header: {}", has_auth);
-    }
-
-    // Build request (use normalized URL)
-    let client = http_client();
-    let mut req_builder = match request.method.as_str() {
-        "GET" => client.get(&normalized_url),
-        "POST" => client.post(&normalized_url),
-        "PUT" => client.put(&normalized_url),
-        "DELETE" => client.delete(&normalized_url),
-        "PATCH" => client.patch(&normalized_url),
-        "OPTIONS" => client.request(reqwest::Method::OPTIONS, &normalized_url),
-        "HEAD" => client.head(&normalized_url),
-        _ => return Err(TauriError::new(
-            TauriErrorCode::UnsupportedMethod,
-            format!("Unsupported HTTP method: '{}'. Supported methods are: GET, POST, PUT, DELETE, PATCH, OPTIONS, HEAD", request.method),
-        )),
-    };
-
-    // Add headers (default to JSON if body is present and no content-type)
-    if let Some(headers) = request.headers.as_ref() {
-        let mut has_content_type = false;
-        let mut has_host = false;
-        for (key, value) in headers {
-            let key_lower = key.to_lowercase();
-            if key_lower == "content-type" {
-                has_content_type = true;
-            }
-            if key_lower == "host" {
-                has_host = true;
-            }
-            // Redact sensitive headers entirely in logs
-            let is_sensitive = key_lower == "authorization"
-                || key_lower == "cookie"
-                || key_lower == "x-api-key"
-                || key_lower == "x-auth-token"
-                || key_lower.contains("secret")
-                || key_lower.contains("password")
-                || key_lower.contains("token");
-            if is_sensitive {
-                debug!("[Tauri Proxy] Adding header: '{}' = '[REDACTED]'", key);
-            } else {
-                // Built inside the macro so the truncation/clone only runs when
-                // debug logging is actually enabled.
-                debug!(
-                    "[Tauri Proxy] Adding header: '{}' = '{}'",
-                    key,
-                    if value.len() > 50 {
-                        format!("{}...", value.chars().take(50).collect::<String>())
-                    } else {
-                        value.clone()
-                    }
-                );
-            }
-            // Add header directly - reqwest will handle validation
-            req_builder = req_builder.header(key, value);
-        }
-        // Explicitly set Host header to match original request (localhost vs 127.0.0.1)
-        // reqwest will override this, so we need to use a custom client or handle differently
-        // For now, let's not normalize the URL at all - use it exactly as Chrome does
-        if !has_host {
-            debug!("[Tauri Proxy] Original Host would be: {}", host_header);
-            // Note: reqwest sets Host automatically from URL, so we can't override it easily
-            // The solution is to NOT normalize the URL
-        }
-        debug!("[Tauri Proxy] Total headers processed: {}", headers.len());
-        // Add default Content-Type if a body exists but no Content-Type header.
-        // Binary bodies default to octet-stream, text bodies to JSON.
-        if !has_content_type {
-            if request.body_base64.is_some() {
-                req_builder = req_builder.header("Content-Type", "application/octet-stream");
-            } else if request.body.is_some() {
-                req_builder = req_builder.header("Content-Type", "application/json");
-            }
-        }
-    } else if request.body.is_some() || request.body_base64.is_some() {
-        // No headers provided but body exists - add default Content-Type
-        let default_ct = if request.body_base64.is_some() {
-            "application/octet-stream"
-        } else {
-            "application/json"
-        };
-        req_builder = req_builder.header("Content-Type", default_ct);
-    }
-
-    // Add body: a base64 binary body (decoded to raw bytes) wins over the text
-    // body, so image/octet-stream uploads are sent as bytes, not mangled text.
-    if let Some(b64) = request.body_base64 {
-        let bytes = base64::engine::general_purpose::STANDARD
-            .decode(b64.as_bytes())
-            .map_err(|e| TauriError::with_details(TauriErrorCode::InvalidInput, "Invalid base64 request body", e.to_string()))?;
-        req_builder = req_builder.body(bytes);
-    } else if let Some(body) = request.body {
-        req_builder = req_builder.body(body);
-    }
-
-    // Send request
-    let response = req_builder.send().await.map_err(|e| {
-        let error_msg = e.to_string();
-        if error_msg.contains("timeout") {
-            TauriError::with_details(
-                TauriErrorCode::HttpTimeout,
-                format!("Request to {} timed out after 30 seconds", request.url),
-                error_msg,
-            )
-        } else if error_msg.contains("connection") || error_msg.contains("resolve") {
-            TauriError::with_details(
-                TauriErrorCode::ConnectionFailed,
-                format!("Failed to connect to {}", request.url),
-                error_msg,
-            )
-        } else {
-            TauriError::with_details(
-                TauriErrorCode::HttpRequestFailed,
-                format!("Request to {} failed", request.url),
-                error_msg,
-            )
-        }
-    })?;
-
-    // Extract response
-    let status = response.status().as_u16();
-    let mut response_headers = std::collections::HashMap::new();
-    for (key, value) in response.headers() {
-        if let Ok(value_str) = value.to_str() {
-            response_headers.insert(key.to_string(), value_str.to_string());
-        }
-    }
-    // Decide text vs binary from the response Content-Type BEFORE consuming the
-    // body: textual replies keep the plain-string wire shape (unchanged for
-    // JSON/text); binary (images, octet-stream) is base64 so the raw bytes reach
-    // the webview byte-exact. A missing content-type is treated as text to
-    // preserve prior behavior for plain APIs.
-    let content_type = response_headers
-        .iter()
-        .find(|(k, _)| k.eq_ignore_ascii_case("content-type"))
-        .map(|(_, v)| v.clone())
-        .unwrap_or_default();
-    let textual = content_type.is_empty() || is_textual_content_type(&content_type);
-    info!(
-        "[Tauri Proxy] Response: {} (content-type: {}, {})",
-        status,
-        if content_type.is_empty() { "<none>" } else { content_type.as_str() },
-        if textual { "text" } else { "binary/base64" },
-    );
-
-    let (body, body_base64) = if textual {
-        // reqwest's text() honors the Content-Type charset (defaulting to UTF-8),
-        // so a non-UTF-8 text response isn't garbled the way from_utf8_lossy would.
-        let text = response.text().await.map_err(|e| {
-            TauriError::with_details(TauriErrorCode::ResponseReadError, format!("Failed to read response from {}", request.url), e.to_string())
-        })?;
-        (text, None)
-    } else {
-        let bytes = response.bytes().await.map_err(|e| {
-            TauriError::with_details(TauriErrorCode::ResponseReadError, format!("Failed to read response from {}", request.url), e.to_string())
-        })?;
-        (String::new(), Some(base64::engine::general_purpose::STANDARD.encode(&bytes)))
-    };
-
-    Ok(HttpResponse {
-        status,
-        headers: response_headers,
-        body,
-        body_base64,
-    })
-}
-
-// Registry of active SSE streams, keyed by stream_id, for cancellation support.
-type SseCancelRegistry = std::sync::Arc<
-    std::sync::Mutex<std::collections::HashMap<String, tokio::sync::oneshot::Sender<()>>>,
->;
-
-/// Open an SSE connection to `url` on the Rust side (bypasses mixed-content
-/// restrictions for HTTPS-hosted app windows) and relay each chunk back to the
-/// JS layer as a `sse-chunk-{stream_id}` window event.  Fires `sse-end-{stream_id}`
-/// when the stream closes or errors.  Designed to be fire-and-forget from JS
-/// (do not await the return value for data — use the window events).
-#[tauri::command]
-async fn proxy_sse_stream(
-    window: tauri::Window,
-    url: String,
-    auth_header: String,
-    stream_id: String,
-    cancel_registry: tauri::State<'_, SseCancelRegistry>,
-) -> Result<(), TauriError> {
-    use futures_util::StreamExt;
-
-    let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel::<()>();
-    {
-        let mut registry = cancel_registry.lock_unpoisoned();
-        registry.insert(stream_id.clone(), cancel_tx);
-    }
-
-    let chunk_event = format!("sse-chunk-{}", stream_id);
-    let end_event = format!("sse-end-{}", stream_id);
-
-    if let Err(reason) = validate_allowed_url(&url, None) {
-        cancel_registry
-            .lock_unpoisoned()
-            .remove(&stream_id);
-        let _ = window.emit(&end_event, "");
-        return Err(TauriError::new(TauriErrorCode::UrlNotAllowed, reason));
-    }
-
-    let mut request = sse_client()
-        .get(&url)
-        .header("Accept", "text/event-stream")
-        .header("Cache-Control", "no-cache");
-    if !auth_header.is_empty() {
-        request = request.header("Authorization", &auth_header);
-    }
-    let result = request.send().await;
-
-    let response = match result {
-        Ok(r) => r,
-        Err(e) => {
-            cancel_registry
-                .lock_unpoisoned()
-                .remove(&stream_id);
-            let _ = window.emit(&end_event, "");
-            return Err(TauriError::with_details(
-                TauriErrorCode::HttpRequestFailed,
-                format!("SSE connection to {} failed", url),
-                e.to_string(),
-            ));
-        }
-    };
-
-    let mut stream = response.bytes_stream();
-    loop {
-        tokio::select! {
-            chunk = stream.next() => {
-                match chunk {
-                    Some(Ok(bytes)) => {
-                        let text = String::from_utf8_lossy(&bytes).to_string();
-                        if window.emit(&chunk_event, text).is_err() {
-                            break; // window closed
-                        }
-                    }
-                    Some(Err(_)) | None => break,
-                }
-            }
-            _ = &mut cancel_rx => break,
-        }
-    }
-
-    cancel_registry
-        .lock_unpoisoned()
-        .remove(&stream_id);
-    let _ = window.emit(&end_event, "");
-    Ok(())
-}
-
-/// Cancel a running SSE stream started by `proxy_sse_stream`.
-#[tauri::command]
-fn cancel_sse_stream(stream_id: String, cancel_registry: tauri::State<'_, SseCancelRegistry>) {
-    if let Ok(mut registry) = cancel_registry.lock() {
-        if let Some(sender) = registry.remove(&stream_id) {
-            let _ = sender.send(());
-        }
-    }
-}
-
-// ─── Desktop token broker ───────────────────────────────────────────────────
-//
-// Refresh tokens are single-use (calimero-network/core#3083): every
-// POST /auth/refresh consumes the presented token, and re-presenting a consumed
-// one is treated as theft — the node revokes the whole token family and logs
-// out every holder. Each app webview is a separate origin with its own
-// localStorage and its own MeroJs, so they must not share a refresh token: the
-// first to rotate consumes it and the next one trips reuse detection.
-//
-// So app windows never get the real refresh token. The desktop window holds it
-// and is the sole rotator. The proxy script intercepts an app's
-// POST /auth/refresh and calls `broker_token_refresh`, which relays the request
-// to the desktop window and returns the access token it hands back.
+// Refresh tokens are single-use and re-presenting a consumed one revokes the
+// whole family, so the desktop window is the sole holder and rotator; every app
+// webview brokers a fresh access token off it instead of keeping its own.
 
 /// What the desktop window answers with: a fresh access token, or why not.
 type TokenBrokerReply = Result<String, String>;
@@ -895,9 +282,6 @@ type TokenBrokerRegistry = std::sync::Arc<
         std::collections::HashMap<String, tokio::sync::oneshot::Sender<TokenBrokerReply>>,
     >,
 >;
-
-/// How long the desktop window gets to answer before the app's fetch fails.
-const TOKEN_BROKER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 
 #[derive(Clone, Serialize)]
 struct TokenRequestPayload {
@@ -1133,11 +517,9 @@ fn focus_window(app_handle: tauri::AppHandle, window_label: String) -> Result<()
     Ok(())
 }
 
-// ─── Per-app launcher (macOS) ────────────────────────────────────────────────
-// A per-app `.app` is an UNSIGNED bash trampoline that execs a shared, loose,
-// ad-hoc-signed `calimero-shell` binary with `--app-config <bundle>/…/app.json`.
-// The shell owns the app's dock identity + badge/notify, and brokers refresh to
-// this host over the Unix socket.
+// A per-app `.app` is an unsigned bash trampoline that execs the shared, loose,
+// ad-hoc-signed `calimero-shell` with `--app-config <bundle>/…/app.json`; the
+// shell owns that app's dock identity and brokers refresh back to this host.
 
 /// Where the host persists per-app capabilities (loaded into CapRegistry at startup).
 #[cfg(target_os = "macos")]
@@ -1153,9 +535,8 @@ fn caps_store_path() -> std::path::PathBuf {
 /// same-user socket.
 #[cfg(target_os = "macos")]
 fn new_cap(app_id: &str) -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     format!("cap-{app_id}-{nanos:x}-{}", std::process::id())
@@ -1338,9 +719,6 @@ fn png_to_icns(png: &std::path::Path, icns: &std::path::Path) -> std::io::Result
     }
 }
 
-/// Best-effort produce a `.icns` for the per-app launcher, sourced from the web
-/// app served at `frontend_url`. Returns the cached `.icns` path on success, or
-/// `None` on ANY failure so launcher creation never breaks.
 /// Decode a `data:image/...;base64,<b64>` URI to raw PNG bytes, verifying the PNG
 /// magic. Returns None for anything that isn't a base64 PNG data URI.
 #[cfg(target_os = "macos")]
@@ -1399,7 +777,6 @@ fn ensure_app_launcher_icon(
     // app id and refresh via Remove Launchers, which clears this cache.
     let cache_key = match bundled_icon {
         Some(data) => {
-            use sha2::{Digest, Sha256};
             format!("{app_id}-{}", &format!("{:x}", Sha256::digest(data.as_bytes()))[..12])
         }
         None => app_id.to_string(),
@@ -1527,12 +904,8 @@ fn ensure_app_launcher(
         &store,
         &app_registry::InstalledApp {
             id: app_id.to_string(),
-            name: safe.to_string(),
-            url: frontend_url.to_string(),
-            node_url: node_url.to_string(),
             cap: cap.clone(),
             bundle_path: bundle.to_string_lossy().into_owned(),
-            host_version: env!("CARGO_PKG_VERSION").to_string(),
         },
     )
     .map_err(|e| TauriError::new(TauriErrorCode::ShortcutCreationFailed, e.to_string()))?;
@@ -1854,12 +1227,9 @@ async fn create_app_window(
     window_label: String,
     url: String,
     title: String,
-    open_devtools: Option<bool>,
     node_url: Option<String>,
     isolation_key: Option<String>,
 ) -> Result<(), TauriError> {
-    use tauri::{WebviewUrl, WebviewWindowBuilder};
-
     // Parse URL up front to fail fast on invalid input.
     let _parsed_url = url.parse::<url::Url>().map_err(|e| {
         TauriError::with_details(
@@ -1997,62 +1367,8 @@ async fn create_app_window(
     // Bring app window to front so user sees it instead of the main dashboard
     let _ = window.set_focus();
 
-    // Open devtools if flag is set (defaults to debug mode only, or TAURI_OPEN_DEVTOOLS env var)
-    // IMPORTANT: Release builds NEVER enable devtools, even if env var is set
-    let should_open_devtools = {
-        #[cfg(not(debug_assertions))]
-        {
-            // Release builds: NEVER enable devtools (security)
-            false
-        }
-        #[cfg(debug_assertions)]
-        {
-            // Debug builds: Check explicit parameter first, then env var, then default to true
-            open_devtools.unwrap_or_else(|| {
-                // Check environment variable (allows override via script)
-                if let Ok(env_value) = std::env::var("TAURI_OPEN_DEVTOOLS") {
-                    env_value == "true" || env_value == "1"
-                } else {
-                    // Default to true in debug builds
-                    true
-                }
-            })
-        }
-    };
-
-    #[cfg(feature = "devtools")]
-    if should_open_devtools {
-        tokio::time::sleep(tokio::time::Duration::from_millis(800)).await;
-        window.open_devtools();
-    }
-
     Ok(())
 }
-
-#[tauri::command]
-async fn open_devtools(_window_label: String, _app_handle: tauri::AppHandle) {
-    #[cfg(feature = "devtools")]
-    {
-        // Try multiple times with delays in case window isn't ready yet
-        for _i in 0..5 {
-            if let Some(window) = _app_handle.get_webview_window(&_window_label) {
-                window.open_devtools();
-                return;
-            }
-            // Wait a bit before retrying (use async sleep to avoid blocking runtime)
-            tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
-        }
-    }
-}
-
-// Merod process management using bundled resource
-use std::process::Stdio;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
-
-/// Tracks the number of in-flight HTTP proxy requests.
-/// Used during graceful shutdown to wait for pending requests to complete.
-static IN_FLIGHT_REQUESTS: AtomicUsize = AtomicUsize::new(0);
 
 struct InFlightGuard;
 impl InFlightGuard {
@@ -2178,24 +1494,6 @@ async fn stop_pids(pids: &[u32]) -> Result<(), TauriError> {
     Ok(())
 }
 
-/// Sends SIGTERM to all pids, waits for them to go, then force-kills any survivors.
-/// Windows starts a console window for every console child a GUI process spawns.
-/// merod runs for the whole session, so without this the app sits beside a black
-/// console window; the short-lived helpers below flash one each time they run.
-/// `CREATE_NO_WINDOW` from `winbase.h` — no `windows-sys` dependency for one u32.
-#[cfg(windows)]
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-
-/// Write ends of the stdin pipes held open for nodes started with
-/// `--exit-on-stdin-close`. Closing one asks that node to shut down.
-///
-/// Keyed by pid because that is what the stop path carries, and kept beside
-/// `MerodState` rather than inside it: `MerodProcess` is `Clone` and a pipe
-/// handle is not.
-static STDIN_STOPPERS: std::sync::LazyLock<
-    Mutex<std::collections::HashMap<u32, tokio::process::ChildStdin>>,
-> = std::sync::LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
-
 /// Whether this merod understands `run --exit-on-stdin-close`.
 ///
 /// Probed rather than derived from a version. The app runs whatever merod the
@@ -2254,6 +1552,7 @@ fn request_stdin_stop(pids: &[u32]) -> Vec<u32> {
         .collect()
 }
 
+/// Sends SIGTERM to all pids, waits for them to go, then force-kills any survivors.
 async fn kill_pids(pids: &[u32], patience: TermPatience) {
     if pids.is_empty() {
         return;
@@ -2342,7 +1641,6 @@ async fn kill_pids(pids: &[u32], patience: TermPatience) {
 #[derive(Debug, Clone)]
 struct MerodProcess {
     pid: u32,
-    port: u16,
     /// The data directory this node owns, which identifies it without a name match.
     home: std::path::PathBuf,
     node: Option<String>,
@@ -2416,10 +1714,6 @@ pub(crate) fn resolve_home_dir(home_dir: Option<String>) -> Result<std::path::Pa
 /// a pinned release may need. Cleared on drop so every exit path releases it.
 struct NodeInitReservation(String);
 
-static NODE_INIT_IN_FLIGHT: std::sync::LazyLock<
-    std::sync::Mutex<std::collections::HashSet<String>>,
-> = std::sync::LazyLock::new(Default::default);
-
 impl NodeInitReservation {
     fn claim(home: &std::path::Path, node_name: &str) -> Result<Self, TauriError> {
         let key = format!("{}::{}", home.display(), node_name);
@@ -2453,19 +1747,6 @@ impl Drop for NodeInitReservation {
             .lock_unpoisoned()
             .remove(&self.0);
     }
-}
-
-/// Get the app data directory for storing merod data
-fn get_app_data_dir(app_handle: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
-    let app_data_dir = app_handle
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Failed to get app data directory: {e}"))?;
-
-    std::fs::create_dir_all(&app_data_dir)
-        .map_err(|e| format!("Failed to create app data directory: {}", e))?;
-
-    Ok(app_data_dir)
 }
 
 /// Drain a child stdout/stderr stream into the rotating log writer.
@@ -2605,7 +1886,6 @@ fn adopt_running_node(
     if !state.iter().any(|p| p.pid == pid) {
         state.push(MerodProcess {
             pid,
-            port,
             home: home.to_path_buf(),
             node: Some(node.to_string()),
             owned,
@@ -3163,7 +2443,6 @@ async fn start_node(
         let mut state = merod_state.lock_unpoisoned();
         state.push(MerodProcess {
             pid,
-            port: server_port,
             home: home_dir_path.clone(),
             node: node_name.clone(),
             owned: true,
@@ -3638,9 +2917,6 @@ async fn init_merod_node(
     Ok(format!("Node '{}' initialized successfully", node_name))
 }
 
-/// `(server, swarm)` ports a node uses when its config says nothing usable.
-const DEFAULT_NODE_PORTS: (u16, u16) = (2528, 2428);
-
 /// The port out of a multiaddr like `/ip4/127.0.0.1/tcp/2528` or
 /// `/ip4/0.0.0.0/udp/2428/quic-v1`.
 fn multiaddr_port(addr: &str, proto: &str) -> Option<u16> {
@@ -3787,8 +3063,6 @@ async fn detect_running_merod_nodes() -> Result<Vec<serde_json::Value>, TauriErr
         Ok(running_nodes)
     }
 }
-
-// ── Merod binary self-update helpers ─────────────────────────────────────────
 
 /// Downloads the merod binary matching `MEROD_CONFIG_VERSION` from GitHub,
 /// replaces the bundled binary, and verifies the version.
@@ -4078,11 +3352,6 @@ async fn download_and_replace_merod(
         "message": format!("merod updated to {}", new_version)
     }))
 }
-
-/// `merod --version` for the bundled binary. Cached: three UI surfaces re-invoke
-/// this on mount, and only `download_and_replace_merod` can change the answer.
-static BUNDLED_MEROD_VERSION: Mutex<Option<String>> = Mutex::new(None);
-
 
 /// Return the version string reported by the bundled merod binary (`merod --version`).
 #[tauri::command]
@@ -4416,13 +3685,6 @@ async fn autostart_disable(_app: tauri::AppHandle) -> Result<(), TauriError> {
 #[tauri::command]
 async fn autostart_is_enabled(_app: tauri::AppHandle) -> Result<bool, TauriError> {
     Ok(false)
-}
-
-#[tauri::command]
-async fn close_current_window(window: tauri::Window) -> Result<(), TauriError> {
-    window
-        .close()
-        .map_err(|e| TauriError::new(TauriErrorCode::WindowOperationFailed, e.to_string()))
 }
 
 #[tauri::command]
@@ -4864,61 +4126,6 @@ fn write_mcp_agent_credentials(
     Ok(path.to_string_lossy().into_owned())
 }
 
-// ─── Secure Token Storage ──────────────────────────────────────────────────────
-// Stores JWT tokens in the OS keychain (Keychain on macOS, Credential Manager
-// on Windows, libsecret on Linux) instead of plaintext localStorage.
-
-const KEYRING_SERVICE: &str = "calimero-desktop";
-
-#[tauri::command]
-fn secure_store_token(key: String, value: String) -> Result<(), String> {
-    let entry = keyring::Entry::new(KEYRING_SERVICE, &key)
-        .map_err(|e| format!("Failed to create keyring entry: {}", e))?;
-    entry
-        .set_password(&value)
-        .map_err(|e| format!("Failed to store token: {}", e))?;
-    debug!("[SecureStorage] Stored token for key: {}", key);
-    Ok(())
-}
-
-#[tauri::command]
-fn secure_get_token(key: String) -> Result<Option<String>, String> {
-    let entry = keyring::Entry::new(KEYRING_SERVICE, &key)
-        .map_err(|e| format!("Failed to create keyring entry: {}", e))?;
-    match entry.get_password() {
-        Ok(password) => {
-            debug!("[SecureStorage] Retrieved token for key: {}", key);
-            Ok(Some(password))
-        }
-        Err(keyring::Error::NoEntry) => {
-            debug!("[SecureStorage] No token found for key: {}", key);
-            Ok(None)
-        }
-        Err(e) => Err(format!("Failed to retrieve token: {}", e)),
-    }
-}
-
-#[tauri::command]
-fn secure_delete_token(key: String) -> Result<(), String> {
-    let entry = keyring::Entry::new(KEYRING_SERVICE, &key)
-        .map_err(|e| format!("Failed to create keyring entry: {}", e))?;
-    match entry.delete_password() {
-        Ok(()) => {
-            debug!("[SecureStorage] Deleted token for key: {}", key);
-            Ok(())
-        }
-        Err(keyring::Error::NoEntry) => {
-            // Token doesn't exist — deletion is idempotent
-            debug!(
-                "[SecureStorage] Token for key {} didn't exist, nothing to delete",
-                key
-            );
-            Ok(())
-        }
-        Err(e) => Err(format!("Failed to delete token: {}", e)),
-    }
-}
-
 fn main() {
     // Initialize logger - reads from RUST_LOG environment variable
     // Default: info level in release, debug level in debug builds
@@ -5155,40 +4362,11 @@ fn main() {
                 ));
             }
 
-            // Enable devtools for main window based on TAURI_OPEN_DEVTOOLS env var
-            // IMPORTANT: Release builds NEVER enable devtools, even if env var is set
-            // Debug builds also default to false - only open if explicitly requested
-            let should_open_main_devtools = {
-                #[cfg(not(debug_assertions))]
-                {
-                    // Release builds: NEVER enable devtools (security)
-                    false
-                }
-                #[cfg(debug_assertions)]
-                {
-                    // Debug builds: Only open if explicitly requested via env var
-                    if let Ok(env_value) = std::env::var("TAURI_OPEN_DEVTOOLS") {
-                        env_value == "true" || env_value == "1"
-                    } else {
-                        // Default to false - don't open devtools automatically
-                        false
-                    }
-                }
-            };
-
-            #[cfg(feature = "devtools")]
-            if should_open_main_devtools {
-                use tauri::Manager;
-                if let Some(window) = app.get_webview_window("main") {
-                    window.open_devtools();
-                }
-            }
-
             Ok(())
         })
         .manage(MerodState::default())
         .manage(MerodLogWriters::default())
-        .manage(SseCancelRegistry::new(std::sync::Mutex::new(std::collections::HashMap::new())))
+        .manage(proxy::SseCancelRegistry::new(std::sync::Mutex::new(std::collections::HashMap::new())))
         .manage(TokenBrokerRegistry::new(std::sync::Mutex::new(std::collections::HashMap::new())))
         .manage(IsolatedWindows::new(std::sync::Mutex::new(std::collections::HashSet::new())))
         .invoke_handler(tauri::generate_handler![
@@ -5200,10 +4378,9 @@ fn main() {
             open_app_launcher,
             create_app_window,
             webview_isolation_supported,
-            open_devtools,
             proxy_http_request,
-            proxy_sse_stream,
-            cancel_sse_stream,
+            proxy::proxy_sse_stream,
+            proxy::cancel_sse_stream,
             broker_token_refresh,
             resolve_token_request,
             start_merod,
@@ -5232,11 +4409,7 @@ fn main() {
             autostart_enable,
             autostart_disable,
             autostart_is_enabled,
-            close_current_window,
             open_url_in_browser,
-            secure_store_token,
-            secure_get_token,
-            secure_delete_token,
             write_mcp_agent_credentials,
             get_pending_cloud_auth,
             clear_pending_cloud_auth,
@@ -5263,26 +4436,10 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::LockUnpoisoned;
-
-    #[test]
-    fn lock_unpoisoned_locks_and_recovers() {
-        let m = std::sync::Mutex::new(1);
-        *m.lock_unpoisoned() = 2;
-        // Poison it, then confirm recovery instead of panic.
-        let _ = std::panic::catch_unwind(|| {
-            let _g = m.lock().unwrap();
-            panic!("poison");
-        });
-        assert_eq!(*m.lock_unpoisoned(), 2);
-    }
-
     use super::{
-        is_textual_content_type, launcher_bundle_is_removable, merod_target_triple,
-        parse_app_deep_link, parse_node_ports, replace_multiaddr_port, score_merod_asset,
-        validate_allowed_url, DEFAULT_NODE_PORTS,
+        launcher_bundle_is_removable, merod_target_triple, parse_app_deep_link, parse_node_ports,
+        replace_multiaddr_port, score_merod_asset, DEFAULT_NODE_PORTS,
     };
-    use base64::Engine as _;
     use std::path::Path;
 
     /// Two node homes that differ, for the tests that match tracked state on one.
@@ -5501,248 +4658,6 @@ listen = ["/ip4/0.0.0.0/udp/4001/quic-v1", "/ip4/0.0.0.0/tcp/4002"]
     }
 
     #[test]
-    fn test_allowed_localhost_urls() {
-        // Valid localhost URLs (backwards compatibility - no configured URL)
-        assert!(validate_allowed_url("http://localhost:2528/", None).is_ok());
-        assert!(validate_allowed_url("http://localhost:2528/api/test", None).is_ok());
-        assert!(validate_allowed_url("http://localhost:2528", None).is_ok());
-        assert!(validate_allowed_url("http://127.0.0.1:2528/", None).is_ok());
-        assert!(validate_allowed_url("http://127.0.0.1:2528/api/test", None).is_ok());
-        assert!(validate_allowed_url("http://127.0.0.1:2528", None).is_ok());
-    }
-
-    #[test]
-    fn test_reject_https_urls() {
-        // HTTPS URLs should not be proxied (no mixed content issues)
-        assert!(validate_allowed_url("https://apps.calimero.network/", None).is_err());
-        assert!(validate_allowed_url("https://apps.calimero.network/api/test", None).is_err());
-        assert!(validate_allowed_url("https://localhost:2528/", None).is_err());
-    }
-
-    #[test]
-    fn test_configured_node_url() {
-        // Test with configured node URL
-        assert!(
-            validate_allowed_url("http://localhost:8080/", Some("http://localhost:8080")).is_ok()
-        );
-        assert!(validate_allowed_url(
-            "http://192.168.1.100:2528/",
-            Some("http://192.168.1.100:2528")
-        )
-        .is_ok());
-        assert!(validate_allowed_url(
-            "http://node.example.com:2528/",
-            Some("http://node.example.com:2528")
-        )
-        .is_ok());
-        // Should still reject wrong URLs even with configured node URL
-        assert!(
-            validate_allowed_url("http://localhost:2528/", Some("http://localhost:8080")).is_err()
-        );
-    }
-
-    #[test]
-    fn test_allow_any_localhost_port() {
-        // Any localhost port should be allowed (needed for multi-node setups)
-        assert!(validate_allowed_url("http://localhost:80/", None).is_ok());
-        assert!(validate_allowed_url("http://localhost:8080/", None).is_ok());
-        assert!(validate_allowed_url("http://localhost:2529/", None).is_ok());
-        assert!(validate_allowed_url("http://127.0.0.1:80/", None).is_ok());
-        assert!(validate_allowed_url("http://127.0.0.1:8080/", None).is_ok());
-        assert!(validate_allowed_url("http://127.0.0.1:2529/", None).is_ok());
-    }
-
-    #[test]
-    fn test_reject_wrong_hostnames() {
-        // Hostname spoofing attempts
-        assert!(validate_allowed_url("http://localhost:2528.evil.com/", None).is_err());
-        assert!(validate_allowed_url("http://127.0.0.1:2528.evil.com/", None).is_err());
-        assert!(validate_allowed_url("http://evil.com:2528/", None).is_err());
-        assert!(validate_allowed_url("http://localhost.evil.com:2528/", None).is_err());
-    }
-
-    #[test]
-    fn test_reject_wrong_schemes() {
-        // Wrong schemes
-        assert!(validate_allowed_url("ftp://localhost:2528/", None).is_err());
-        assert!(validate_allowed_url("file://localhost:2528/", None).is_err());
-        assert!(validate_allowed_url("ws://localhost:2528/", None).is_err());
-    }
-
-    #[test]
-    fn test_reject_malformed_urls() {
-        // Malformed URLs
-        assert!(validate_allowed_url("not-a-url", None).is_err());
-        assert!(validate_allowed_url("http://", None).is_err());
-        assert!(validate_allowed_url("http://localhost", None).is_ok()); // localhost port 80 is valid
-        assert!(validate_allowed_url("http://:2528/", None).is_err()); // Missing hostname
-    }
-
-    #[test]
-    fn test_reject_case_variations() {
-        // Case variations should be handled (hostname is lowercased)
-        assert!(validate_allowed_url("http://LOCALHOST:2528/", None).is_ok());
-        assert!(validate_allowed_url("http://LocalHost:2528/", None).is_ok());
-    }
-
-    #[test]
-    fn test_reject_subdomain_attacks() {
-        // Subdomain attacks
-        assert!(validate_allowed_url("http://subdomain.localhost:2528/", None).is_err());
-        assert!(validate_allowed_url("http://subdomain.127.0.0.1:2528/", None).is_err());
-    }
-
-    #[test]
-    fn test_reject_url_encoding_attacks() {
-        // URL encoding attacks
-        assert!(validate_allowed_url("http://localhost%3A2528/", None).is_err());
-        assert!(validate_allowed_url("http://localhost:2528%2Fevil.com/", None).is_err());
-    }
-
-    #[test]
-    fn test_reject_userinfo_attacks() {
-        // Userinfo attacks
-        assert!(validate_allowed_url("http://user@localhost:2528/", None).is_err());
-        assert!(validate_allowed_url("http://localhost:2528@evil.com/", None).is_err());
-    }
-
-    // SSE streaming tests — spin up a real TCP listener and drive reqwest's
-    // bytes_stream() + tokio::select! cancellation, verifying the mechanism
-    // used by proxy_sse_stream without needing a live tauri::Window.
-
-    #[tokio::test]
-    async fn test_sse_stream_delivers_chunks() {
-        use futures_util::StreamExt;
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        use tokio::net::TcpListener;
-
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-
-        tokio::spawn(async move {
-            let (mut sock, _) = listener.accept().await.unwrap();
-            // drain request headers
-            let mut buf = vec![0u8; 4096];
-            let mut total = Vec::new();
-            loop {
-                let n = sock.read(&mut buf).await.unwrap_or(0);
-                if n == 0 {
-                    break;
-                }
-                total.extend_from_slice(&buf[..n]);
-                if total.windows(4).any(|w| w == b"\r\n\r\n") {
-                    break;
-                }
-            }
-            // send SSE headers + two chunked events + terminal chunk
-            sock.write_all(
-                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n"
-            ).await.unwrap();
-            for event in &["data: hello\n\n", "data: world\n\n"] {
-                let frame = format!("{:x}\r\n{}\r\n", event.len(), event);
-                sock.write_all(frame.as_bytes()).await.unwrap();
-            }
-            sock.write_all(b"0\r\n\r\n").await.unwrap();
-        });
-
-        let client = reqwest::Client::new();
-        let resp = client
-            .get(format!("http://127.0.0.1:{port}/sse"))
-            .header("Accept", "text/event-stream")
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(resp.status().as_u16(), 200);
-
-        let mut body = String::new();
-        let mut stream = resp.bytes_stream();
-        while let Some(Ok(chunk)) = stream.next().await {
-            body.push_str(&String::from_utf8_lossy(&chunk));
-        }
-
-        assert!(body.contains("data: hello"), "unexpected body: {body:?}");
-        assert!(body.contains("data: world"), "unexpected body: {body:?}");
-    }
-
-    #[tokio::test]
-    async fn test_sse_stream_stops_on_cancel() {
-        use futures_util::StreamExt;
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        use tokio::net::TcpListener;
-        use tokio::sync::oneshot;
-
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-
-        // Server sends one chunk then stalls (infinite stream)
-        tokio::spawn(async move {
-            let (mut sock, _) = listener.accept().await.unwrap();
-            let mut buf = vec![0u8; 4096];
-            let mut total = Vec::new();
-            loop {
-                let n = sock.read(&mut buf).await.unwrap_or(0);
-                if n == 0 {
-                    break;
-                }
-                total.extend_from_slice(&buf[..n]);
-                if total.windows(4).any(|w| w == b"\r\n\r\n") {
-                    break;
-                }
-            }
-            sock.write_all(
-                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n"
-            ).await.unwrap();
-            let event = "data: first\n\n";
-            let frame = format!("{:x}\r\n{}\r\n", event.len(), event);
-            sock.write_all(frame.as_bytes()).await.unwrap();
-            sock.flush().await.unwrap();
-            // stall until the test drops the connection
-            tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
-        });
-
-        let (cancel_tx, mut cancel_rx) = oneshot::channel::<()>();
-        let mut cancel_tx_opt = Some(cancel_tx);
-
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(5))
-            .build()
-            .unwrap();
-        let resp = client
-            .get(format!("http://127.0.0.1:{port}/sse"))
-            .header("Accept", "text/event-stream")
-            .send()
-            .await
-            .unwrap();
-
-        let mut received: Vec<String> = Vec::new();
-        let mut stream = resp.bytes_stream();
-        loop {
-            tokio::select! {
-                chunk = stream.next() => {
-                    match chunk {
-                        Some(Ok(bytes)) => {
-                            received.push(String::from_utf8_lossy(&bytes).into_owned());
-                            if let Some(tx) = cancel_tx_opt.take() {
-                                let _ = tx.send(());
-                            }
-                        }
-                        Some(Err(_)) | None => break,
-                    }
-                }
-                _ = &mut cancel_rx => break,
-            }
-        }
-
-        assert!(
-            !received.is_empty(),
-            "expected at least one chunk before cancel"
-        );
-        let body = received.concat();
-        assert!(body.contains("data: first"), "unexpected: {body:?}");
-    }
-
-
-    #[test]
     fn test_score_merod_asset_windows() {
         let triple = "x86_64-pc-windows-msvc";
         assert!(score_merod_asset("merod-x86_64-pc-windows-msvc.zip", triple).is_some());
@@ -5841,7 +4756,6 @@ listen = ["/ip4/0.0.0.0/udp/4001/quic-v1", "/ip4/0.0.0.0/tcp/4002"]
     fn tracked(pid: u32, home: &str, node: &str) -> super::MerodProcess {
         super::MerodProcess {
             pid,
-            port: 2528,
             home: std::path::PathBuf::from(home),
             node: Some(node.to_string()),
             owned: true,
@@ -6035,52 +4949,6 @@ listen = ["/ip4/0.0.0.0/udp/4001/quic-v1", "/ip4/0.0.0.0/tcp/4002"]
     }
 
     #[test]
-    fn test_is_textual_content_type() {
-        // Text — carried as a UTF-8 string.
-        for ct in [
-            "application/json",
-            "application/json; charset=utf-8",
-            "text/plain",
-            "text/html; charset=utf-8",
-            "application/xml",
-            "application/javascript",
-            "application/x-www-form-urlencoded",
-            "text/csv",
-            "multipart/form-data; boundary=xyz",
-            "image/svg+xml",              // +xml suffix
-            "application/problem+json",   // +json suffix
-            "text/xml",
-        ] {
-            assert!(is_textual_content_type(ct), "should be textual: {ct}");
-        }
-        // Binary — must go over IPC as base64, not lossy UTF-8.
-        for ct in [
-            "application/octet-stream",
-            "image/png",
-            "image/jpeg",
-            "image/webp",
-            "video/mp4",
-            "application/pdf",
-            // Office Open XML / vendor types are ZIP binaries despite "xml" in the name.
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            "application/vnd.ms-excel",
-        ] {
-            assert!(!is_textual_content_type(ct), "should be binary: {ct}");
-        }
-    }
-
-    #[test]
-    fn test_base64_roundtrip_preserves_binary() {
-        // Bytes that are NOT valid UTF-8 (a PNG-ish header) — the exact case
-        // response.text() used to corrupt.
-        let raw: Vec<u8> = vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0xff, 0x00, 0xfe];
-        let encoded = base64::engine::general_purpose::STANDARD.encode(&raw);
-        let decoded = base64::engine::general_purpose::STANDARD.decode(encoded.as_bytes()).unwrap();
-        assert_eq!(raw, decoded, "base64 round-trip must be byte-exact");
-    }
-
-    #[test]
     fn mcp_agent_file_is_under_dot_config() {
         assert_eq!(
             super::mcp_agent_file(Path::new("/Users/x")),
@@ -6204,63 +5072,56 @@ listen = ["/ip4/0.0.0.0/udp/4001/quic-v1", "/ip4/0.0.0.0/tcp/4002"]
             .split(',')
             .map(str::trim)
             .filter(|s| !s.is_empty())
+            // A path-qualified entry registers under its last segment.
+            .map(|s| s.rsplit("::").next().unwrap_or(s))
             .collect();
 
-        let declared_permissions: std::collections::BTreeSet<&str> = ACL_TOML
-            .lines()
-            .filter(|line| line.trim_start().starts_with("commands.allow"))
-            .flat_map(|line| line.split('"').skip(1).step_by(2))
-            .collect();
+        #[derive(serde::Deserialize)]
+        struct Acl {
+            permission: Vec<Perm>,
+        }
+        #[derive(serde::Deserialize)]
+        struct Perm {
+            identifier: String,
+            commands: Commands,
+        }
+        #[derive(serde::Deserialize)]
+        struct Commands {
+            allow: Vec<String>,
+        }
+        fn granted<'a>(acl: &'a Acl, id: &str) -> std::collections::BTreeSet<&'a str> {
+            acl.permission
+                .iter()
+                .find(|p| p.identifier == id)
+                .unwrap_or_else(|| panic!("{id} is gone from app-commands.toml"))
+                .commands
+                .allow
+                .iter()
+                .map(String::as_str)
+                .collect()
+        }
 
-        let missing_permission: Vec<_> =
-            handler_commands.difference(&declared_permissions).collect();
-        let missing_handler: Vec<_> =
-            declared_permissions.difference(&handler_commands).collect();
+        let acl: Acl = toml::from_str(ACL_TOML).expect("app-commands.toml does not parse");
 
+        // The main window is granted `allow-app-commands` and nothing else, so a
+        // command missing from that list is unreachable at runtime.
+        let main_window = granted(&acl, "allow-app-commands");
+        let ungranted: Vec<_> = handler_commands.difference(&main_window).collect();
+        let stale: Vec<_> = main_window.difference(&handler_commands).collect();
         assert!(
-            missing_permission.is_empty() && missing_handler.is_empty(),
-            "generate_handler! and permissions/app-commands.toml are out of sync.\n\
-             In generate_handler! but missing a permission in app-commands.toml: {missing_permission:?}\n\
-             In app-commands.toml but missing from generate_handler!: {missing_handler:?}"
+            ungranted.is_empty() && stale.is_empty(),
+            "generate_handler! and allow-app-commands are out of sync.\n\
+             In generate_handler! but not granted: {ungranted:?}\n\
+             Granted but not a command: {stale:?}"
         );
-    }
 
-    // A permission left out of the aggregate [[set]] is never granted, so its
-    // command fails at runtime exactly as if it had no permission at all.
-    #[test]
-    fn acl_permissions_are_all_granted_to_the_main_window() {
-        const ACL_TOML: &str = include_str!("../permissions/app-commands.toml");
-
-        let (permission_blocks, set_block) = ACL_TOML
-            .split_once("[[set]]")
-            .expect("aggregate [[set]] not found in app-commands.toml");
-
-        let declared: std::collections::BTreeSet<&str> = permission_blocks
-            .lines()
-            .filter_map(|line| line.trim().strip_prefix("identifier = "))
-            .map(|value| value.trim_matches('"'))
-            .collect();
-
-        let granted: std::collections::BTreeSet<&str> = set_block
-            .split_once("permissions = [")
-            .expect("the [[set]] has no permissions list")
-            .1
-            .split_once(']')
-            .expect("unterminated permissions list in the [[set]]")
-            .0
-            .split('"')
-            .skip(1)
-            .step_by(2)
-            .collect();
-
-        let ungranted: Vec<_> = declared.difference(&granted).collect();
-        let unknown: Vec<_> = granted.difference(&declared).collect();
-
+        // Nothing checks a command name inside a permission at build time, so a
+        // typo here would surface only as a failed fetch in an app window.
+        let remote = granted(&acl, "allow-remote-proxy");
+        let unknown: Vec<_> = remote.difference(&handler_commands).collect();
         assert!(
-            ungranted.is_empty() && unknown.is_empty(),
-            "the allow-app-commands set does not match the declared permissions.\n\
-             Declared as [[permission]] but not in the set: {ungranted:?}\n\
-             In the set but not declared as a [[permission]]: {unknown:?}"
+            unknown.is_empty(),
+            "allow-remote-proxy grants commands that do not exist: {unknown:?}"
         );
     }
 }

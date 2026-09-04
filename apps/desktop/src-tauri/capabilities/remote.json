@@ -19,9 +19,6 @@
     "core:window:allow-hide",
     "core:window:allow-close",
     "core:window:allow-set-focus",
-    "allow-proxy-http-request",
-    "allow-proxy-sse-stream",
-    "allow-cancel-sse-stream",
-    "allow-broker-token-refresh"
+    "allow-remote-proxy"
   ]
 }

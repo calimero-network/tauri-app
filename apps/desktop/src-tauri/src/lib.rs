@@ -1,12 +1,6 @@
-//! Shared library for the Calimero desktop crate. Both binaries — the host
-//! (`src/main.rs`) and the per-app shell (`calimero-shell/src/main.rs`) — build
+//! Shared library for the Calimero desktop crate. Both binaries - the host
+//! (`src/main.rs`) and the per-app shell (`calimero-shell/src/main.rs`) - build
 //! on these modules.
-//!
-//! The host keeps its own inline v2 proxy/webview/errors in `main.rs` (untouched,
-//! including the #152/#156 fixes and the in-flight-request drain for graceful
-//! merod shutdown). These lib copies exist so the separate `calimero-shell`
-//! binary can serve the same proxy commands + open the app webview without
-//! reaching into the host binary.
 
 /// Data directory name; must match `identifier` in tauri.conf.json / tauri.dev.json.
 /// Debug builds get their own so a dev run cannot take over the installed app's socket.
@@ -15,6 +9,17 @@ pub fn app_dir_name() -> &'static str {
         "network.calimero.desktop.dev"
     } else {
         "network.calimero.desktop"
+    }
+}
+
+/// Chain-style poison recovery: every mutex here guards a plain collection with
+/// no cross-field invariant, so the pre-poison data is always safe to reuse.
+pub trait LockUnpoisoned<T> {
+    fn lock_unpoisoned(&self) -> std::sync::MutexGuard<'_, T>;
+}
+impl<T> LockUnpoisoned<T> for std::sync::Mutex<T> {
+    fn lock_unpoisoned(&self) -> std::sync::MutexGuard<'_, T> {
+        self.lock().unwrap_or_else(|p| p.into_inner())
     }
 }
 
@@ -40,3 +45,20 @@ pub mod host_ipc;
 
 #[cfg(target_os = "macos")]
 pub use host_ipc::{ensure_host_running, host_socket_path, shell_instance_socket_path};
+
+#[cfg(test)]
+mod tests {
+    use super::LockUnpoisoned;
+
+    #[test]
+    fn lock_unpoisoned_locks_and_recovers() {
+        let m = std::sync::Mutex::new(1);
+        *m.lock_unpoisoned() = 2;
+        // Poison it, then confirm recovery instead of panic.
+        let _ = std::panic::catch_unwind(|| {
+            let _g = m.lock().unwrap();
+            panic!("poison");
+        });
+        assert_eq!(*m.lock_unpoisoned(), 2);
+    }
+}

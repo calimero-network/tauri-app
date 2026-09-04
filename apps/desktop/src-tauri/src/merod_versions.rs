@@ -4,6 +4,7 @@
 use crate::LockUnpoisoned;
 use crate::{TauriError, TauriErrorCode};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use tauri::Manager;
 use tokio::process::Command;
@@ -27,7 +28,6 @@ const LOCAL_PREFIX: &str = "local:";
 /// Check a download against the `sha256:...` digest GitHub publishes for the
 /// asset. Catches corruption and a tampered CDN, not a malicious release itself.
 pub(crate) fn verify_sha256(bytes: &[u8], expected: &str) -> Result<(), TauriError> {
-    use sha2::{Digest, Sha256};
     // Refuse an algorithm we cannot compute: a digest we are unable to check is
     // not a digest that passed. An absent digest is handled by the caller.
     let Some(want) = expected.strip_prefix("sha256:") else {

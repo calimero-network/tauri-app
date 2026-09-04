@@ -1,326 +1,68 @@
-# App command permissions for the Tauri v2 ACL.
-#
-# WHY THIS FILE EXISTS:
-# Remote `app-*` windows are deny-by-default and can only call app commands
-# that a capability grants (see capabilities/remote.json for the proxy commands).
-# But the moment ANY app-command permission is defined, Tauri switches out of
-# its implicit "allow every command for local windows" mode: it then only
-# recognises commands that have a permission, and unlisted ones fail with
-# "<cmd> not allowed. Command not found". So every command in main.rs's
-# generate_handler! MUST be declared here, and the main window must be granted
-# them (via the `allow-app-commands` set below, referenced from
-# capabilities/migrated.json). Keep this list in sync with generate_handler!.
+# Defining any app-command permission turns off Tauri's implicit "allow everything
+# locally", so allow-app-commands must list every generate_handler! entry.
 
+# The subset remote `app-*` windows get, for the injected proxy script.
+# Granted by capabilities/remote.json.
 [[permission]]
-identifier = "allow-get-pending-open-app"
-description = "Enables the get_pending_open_app command."
-commands.allow = ["get_pending_open_app"]
+identifier = "allow-remote-proxy"
+description = "Proxy and token-broker commands for app windows."
+commands.allow = [
+  "proxy_http_request",
+  "proxy_sse_stream",
+  "cancel_sse_stream",
+  "broker_token_refresh",
+]
 
+# Everything, for the trusted local (main) window.
+# Granted by capabilities/migrated.json.
 [[permission]]
-identifier = "allow-clear-pending-open-app"
-description = "Enables the clear_pending_open_app command."
-commands.allow = ["clear_pending_open_app"]
-
-[[permission]]
-identifier = "allow-hide-main-window"
-description = "Enables the hide_main_window command."
-commands.allow = ["hide_main_window"]
-
-[[permission]]
-identifier = "allow-focus-window"
-description = "Enables the focus_window command."
-commands.allow = ["focus_window"]
-
-[[permission]]
-identifier = "allow-create-desktop-shortcut"
-description = "Enables the create_desktop_shortcut command."
-commands.allow = ["create_desktop_shortcut"]
-
-[[permission]]
-identifier = "allow-open-app-launcher"
-description = "Enables the open_app_launcher command."
-commands.allow = ["open_app_launcher"]
-
-[[permission]]
-identifier = "allow-create-app-window"
-description = "Enables the create_app_window command."
-commands.allow = ["create_app_window"]
-
-[[permission]]
-identifier = "allow-webview-isolation-supported"
-description = "Enables the webview_isolation_supported command."
-commands.allow = ["webview_isolation_supported"]
-
-[[permission]]
-identifier = "allow-open-devtools"
-description = "Enables the open_devtools command."
-commands.allow = ["open_devtools"]
-
-[[permission]]
-identifier = "allow-proxy-http-request"
-description = "Enables the proxy_http_request command."
-commands.allow = ["proxy_http_request"]
-
-[[permission]]
-identifier = "allow-proxy-sse-stream"
-description = "Enables the proxy_sse_stream command."
-commands.allow = ["proxy_sse_stream"]
-
-[[permission]]
-identifier = "allow-cancel-sse-stream"
-description = "Enables the cancel_sse_stream command."
-commands.allow = ["cancel_sse_stream"]
-
-[[permission]]
-identifier = "allow-broker-token-refresh"
-description = "Enables the broker_token_refresh command."
-commands.allow = ["broker_token_refresh"]
-
-[[permission]]
-identifier = "allow-resolve-token-request"
-description = "Enables the resolve_token_request command."
-commands.allow = ["resolve_token_request"]
-
-[[permission]]
-identifier = "allow-start-merod"
-description = "Enables the start_merod command."
-commands.allow = ["start_merod"]
-
-[[permission]]
-identifier = "allow-restart-merod"
-description = "Enables the restart_merod command."
-commands.allow = ["restart_merod"]
-
-[[permission]]
-identifier = "allow-stop-merod"
-description = "Enables the stop_merod command."
-commands.allow = ["stop_merod"]
-
-[[permission]]
-identifier = "allow-stop-merod-by-pid-command"
-description = "Enables the stop_merod_by_pid_command command."
-commands.allow = ["stop_merod_by_pid_command"]
-
-[[permission]]
-identifier = "allow-list-merod-nodes"
-description = "Enables the list_merod_nodes command."
-commands.allow = ["list_merod_nodes"]
-
-[[permission]]
-identifier = "allow-check-merod-health"
-description = "Enables the check_merod_health command."
-commands.allow = ["check_merod_health"]
-
-[[permission]]
-identifier = "allow-pick-directory"
-description = "Enables the pick_directory command."
-commands.allow = ["pick_directory"]
-
-[[permission]]
-identifier = "allow-pick-merod-binary"
-description = "Enables the pick_merod_binary command."
-commands.allow = ["pick_merod_binary"]
-
-[[permission]]
-identifier = "allow-init-merod-node"
-description = "Enables the init_merod_node command."
-commands.allow = ["init_merod_node"]
-
-[[permission]]
-identifier = "allow-detect-running-merod-nodes"
-description = "Enables the detect_running_merod_nodes command."
-commands.allow = ["detect_running_merod_nodes"]
-
-[[permission]]
-identifier = "allow-get-merod-logs"
-description = "Enables the get_merod_logs command."
-commands.allow = ["get_merod_logs"]
-
-[[permission]]
-identifier = "allow-clear-merod-logs"
-description = "Enables the clear_merod_logs command."
-commands.allow = ["clear_merod_logs"]
-
-[[permission]]
-identifier = "allow-export-merod-logs"
-description = "Enables the export_merod_logs command."
-commands.allow = ["export_merod_logs"]
-
-[[permission]]
-identifier = "allow-get-merod-binary-version"
-description = "Enables the get_merod_binary_version command."
-commands.allow = ["get_merod_binary_version"]
-
-[[permission]]
-identifier = "allow-download-and-replace-merod"
-description = "Enables the download_and_replace_merod command."
-commands.allow = ["download_and_replace_merod"]
-
-[[permission]]
-identifier = "allow-list-merod-releases"
-description = "Enables the list_merod_releases command."
-commands.allow = ["list_merod_releases"]
-
-[[permission]]
-identifier = "allow-list-installed-merod-versions"
-description = "Enables the list_installed_merod_versions command."
-commands.allow = ["list_installed_merod_versions"]
-
-[[permission]]
-identifier = "allow-remove-merod-version"
-description = "Enables the remove_merod_version command."
-commands.allow = ["remove_merod_version"]
-
-[[permission]]
-identifier = "allow-repoint-local-build"
-description = "Enables the repoint_local_build command."
-commands.allow = ["repoint_local_build"]
-
-[[permission]]
-identifier = "allow-set-tray-icon-connected"
-description = "Enables the set_tray_icon_connected command."
-commands.allow = ["set_tray_icon_connected"]
-
-[[permission]]
-identifier = "allow-delete-calimero-data-dir"
-description = "Enables the delete_calimero_data_dir command."
-commands.allow = ["delete_calimero_data_dir"]
-
-[[permission]]
-identifier = "allow-clear-app-sessions"
-description = "Enables the clear_app_sessions command."
-commands.allow = ["clear_app_sessions"]
-
-[[permission]]
-identifier = "allow-remove-app-launchers"
-description = "Enables the remove_app_launchers command."
-commands.allow = ["remove_app_launchers"]
-
-[[permission]]
-identifier = "allow-autostart-enable"
-description = "Enables the autostart_enable command."
-commands.allow = ["autostart_enable"]
-
-[[permission]]
-identifier = "allow-autostart-disable"
-description = "Enables the autostart_disable command."
-commands.allow = ["autostart_disable"]
-
-[[permission]]
-identifier = "allow-autostart-is-enabled"
-description = "Enables the autostart_is_enabled command."
-commands.allow = ["autostart_is_enabled"]
-
-[[permission]]
-identifier = "allow-close-current-window"
-description = "Enables the close_current_window command."
-commands.allow = ["close_current_window"]
-
-[[permission]]
-identifier = "allow-open-url-in-browser"
-description = "Enables the open_url_in_browser command."
-commands.allow = ["open_url_in_browser"]
-
-[[permission]]
-identifier = "allow-secure-store-token"
-description = "Enables the secure_store_token command."
-commands.allow = ["secure_store_token"]
-
-[[permission]]
-identifier = "allow-secure-get-token"
-description = "Enables the secure_get_token command."
-commands.allow = ["secure_get_token"]
-
-[[permission]]
-identifier = "allow-secure-delete-token"
-description = "Enables the secure_delete_token command."
-commands.allow = ["secure_delete_token"]
-
-[[permission]]
-identifier = "allow-write-mcp-agent-credentials"
-description = "Enables the write_mcp_agent_credentials command."
-commands.allow = ["write_mcp_agent_credentials"]
-
-[[permission]]
-identifier = "allow-get-pending-cloud-auth"
-description = "Enables the get_pending_cloud_auth command."
-commands.allow = ["get_pending_cloud_auth"]
-
-[[permission]]
-identifier = "allow-clear-pending-cloud-auth"
-description = "Enables the clear_pending_cloud_auth command."
-commands.allow = ["clear_pending_cloud_auth"]
-
-[[permission]]
-identifier = "allow-get-pending-app-deep-link"
-description = "Enables the get_pending_app_deep_link command."
-commands.allow = ["get_pending_app_deep_link"]
-
-[[permission]]
-identifier = "allow-clear-pending-app-deep-link"
-description = "Enables the clear_pending_app_deep_link command."
-commands.allow = ["clear_pending_app_deep_link"]
-
-[[permission]]
-identifier = "allow-get-current-app-deep-link"
-description = "Enables the get_current_app_deep_link command."
-commands.allow = ["get_current_app_deep_link"]
-
-# Aggregate set so the main window can be granted every command with a single
-# permission reference instead of enumerating all of them in the capability.
-[[set]]
 identifier = "allow-app-commands"
 description = "All application commands, for trusted local (main) windows."
-permissions = [
-  "allow-get-pending-open-app",
-  "allow-clear-pending-open-app",
-  "allow-hide-main-window",
-  "allow-focus-window",
-  "allow-create-desktop-shortcut",
-  "allow-open-app-launcher",
-  "allow-create-app-window",
-  "allow-webview-isolation-supported",
-  "allow-open-devtools",
-  "allow-proxy-http-request",
-  "allow-proxy-sse-stream",
-  "allow-cancel-sse-stream",
-  "allow-broker-token-refresh",
-  "allow-resolve-token-request",
-  "allow-start-merod",
-  "allow-restart-merod",
-  "allow-stop-merod",
-  "allow-stop-merod-by-pid-command",
-  "allow-list-merod-nodes",
-  "allow-check-merod-health",
-  "allow-pick-directory",
-  "allow-pick-merod-binary",
-  "allow-init-merod-node",
-  "allow-detect-running-merod-nodes",
-  "allow-get-merod-logs",
-  "allow-clear-merod-logs",
-  "allow-export-merod-logs",
-  "allow-get-merod-binary-version",
-  "allow-download-and-replace-merod",
-  "allow-list-merod-releases",
-  "allow-list-installed-merod-versions",
-  "allow-remove-merod-version",
-  "allow-repoint-local-build",
-  "allow-set-tray-icon-connected",
-  "allow-delete-calimero-data-dir",
-  "allow-clear-app-sessions",
-  "allow-remove-app-launchers",
-  "allow-autostart-enable",
-  "allow-autostart-disable",
-  "allow-autostart-is-enabled",
-  "allow-close-current-window",
-  "allow-open-url-in-browser",
-  "allow-secure-store-token",
-  "allow-secure-get-token",
-  "allow-secure-delete-token",
-  "allow-write-mcp-agent-credentials",
-  "allow-get-pending-cloud-auth",
-  "allow-clear-pending-cloud-auth",
-  "allow-get-pending-app-deep-link",
-  "allow-clear-pending-app-deep-link",
-  "allow-get-current-app-deep-link",
+commands.allow = [
+  "get_pending_open_app",
+  "clear_pending_open_app",
+  "hide_main_window",
+  "focus_window",
+  "create_desktop_shortcut",
+  "open_app_launcher",
+  "create_app_window",
+  "webview_isolation_supported",
+  "proxy_http_request",
+  "proxy_sse_stream",
+  "cancel_sse_stream",
+  "broker_token_refresh",
+  "resolve_token_request",
+  "start_merod",
+  "restart_merod",
+  "stop_merod",
+  "stop_merod_by_pid_command",
+  "list_merod_nodes",
+  "check_merod_health",
+  "pick_directory",
+  "pick_merod_binary",
+  "init_merod_node",
+  "detect_running_merod_nodes",
+  "get_merod_logs",
+  "clear_merod_logs",
+  "export_merod_logs",
+  "get_merod_binary_version",
+  "download_and_replace_merod",
+  "list_merod_releases",
+  "list_installed_merod_versions",
+  "remove_merod_version",
+  "repoint_local_build",
+  "set_tray_icon_connected",
+  "delete_calimero_data_dir",
+  "clear_app_sessions",
+  "remove_app_launchers",
+  "autostart_enable",
+  "autostart_disable",
+  "autostart_is_enabled",
+  "open_url_in_browser",
+  "write_mcp_agent_credentials",
+  "get_pending_cloud_auth",
+  "clear_pending_cloud_auth",
+  "get_pending_app_deep_link",
+  "clear_pending_app_deep_link",
+  "get_current_app_deep_link",
 ]

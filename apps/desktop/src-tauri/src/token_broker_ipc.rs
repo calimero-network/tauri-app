@@ -1,6 +1,5 @@
 //! macOS-only: Unix-socket token broker. Newline-delimited JSON.
 //! The ONLY thing crossing this socket is "give me a fresh access token".
-#![allow(dead_code)] // server/client are wired into the host in later tasks/plans.
 
 use serde::{Deserialize, Serialize};
 use std::path::Path;

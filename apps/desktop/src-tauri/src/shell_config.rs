@@ -1,5 +1,4 @@
 //! macOS-only: the shell learns which app it is from `--app-config <path>`.
-#![allow(dead_code)]
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 

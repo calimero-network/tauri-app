@@ -1,7 +1,7 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use log::{debug, info, warn};
+use log::{info, warn};
 use serde::Serialize;
 #[cfg(target_os = "macos")]
 use sha2::{Digest, Sha256};
@@ -2616,28 +2616,7 @@ fn is_process_running(pid: u32) -> bool {
 #[tauri::command]
 async fn list_merod_nodes(home_dir: Option<String>) -> Result<Vec<String>, TauriError> {
     // Merod stores nodes in ~/.calimero/ as directories (node1, node2, etc.)
-    let calimero_home = if let Some(dir) = home_dir {
-        // Expand ~ if present
-        let expanded = if dir.starts_with("~") {
-            if let Some(home) = dirs::home_dir() {
-                dir.replacen("~", &home.to_string_lossy(), 1)
-            } else {
-                dir
-            }
-        } else {
-            dir
-        };
-        std::path::PathBuf::from(expanded)
-    } else {
-        dirs::home_dir()
-            .ok_or_else(|| {
-                TauriError::new(
-                    TauriErrorCode::HomeDirNotFound,
-                    "Failed to get home directory",
-                )
-            })?
-            .join(".calimero")
-    };
+    let calimero_home = resolve_home_dir(home_dir)?;
 
     if !calimero_home.exists() {
         return Ok(vec![]);
@@ -2651,58 +2630,24 @@ async fn list_merod_nodes(home_dir: Option<String>) -> Result<Vec<String>, Tauri
         )
     })?;
 
-    let mut nodes = Vec::new();
-    for entry in entries {
-        let entry = entry.map_err(|e| {
-            TauriError::with_details(
-                TauriErrorCode::DirectoryError,
-                "Failed to read directory entry",
-                e.to_string(),
-            )
-        })?;
-        let file_type = entry.file_type().map_err(|e| {
-            TauriError::with_details(
-                TauriErrorCode::DirectoryError,
-                "Failed to get file type",
-                e.to_string(),
-            )
-        })?;
-        if file_type.is_dir() {
-            if let Some(name) = entry.file_name().to_str() {
-                // Skip hidden directories
-                if !name.starts_with('.') {
-                    let node_path = entry.path();
-                    let config_path = node_path.join("config.toml");
-
-                    // Check if config.toml exists and is valid TOML
-                    // Include nodes with valid config.toml even if they don't have bootstrap nodes yet
-                    // Bootstrap nodes are only required when starting the node, not for listing
-                    if config_path.exists() {
-                        if let Ok(config_content) = std::fs::read_to_string(&config_path) {
-                            if config_content.parse::<toml::Value>().is_ok() {
-                                // Valid config.toml found, include the node
-                                nodes.push(name.to_string());
-                            } else {
-                                debug!(
-                                    "[Merod] Skipping node '{}': invalid TOML in config.toml",
-                                    name
-                                );
-                            }
-                        } else {
-                            debug!(
-                                "[Merod] Skipping node '{}': failed to read config.toml",
-                                name
-                            );
-                        }
-                    } else {
-                        debug!("[Merod] Skipping node '{}': config.toml not found", name);
-                    }
-                }
+    // A node is a non-hidden directory holding a parseable config.toml. An entry
+    // that cannot be read is skipped rather than failing the whole listing.
+    let mut nodes: Vec<String> = entries
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            if !entry.file_type().ok()?.is_dir() {
+                return None;
             }
-        }
-    }
+            let name = entry.file_name().to_str()?.to_string();
+            if name.starts_with('.') {
+                return None;
+            }
+            let config = std::fs::read_to_string(entry.path().join("config.toml")).ok()?;
+            config.parse::<toml::Value>().ok()?;
+            Some(name)
+        })
+        .collect();
 
-    // Sort nodes alphabetically
     nodes.sort();
 
     Ok(nodes)
@@ -2754,28 +2699,7 @@ async fn init_merod_node(
     validate_node_name(&node_name).map_err(|e| TauriError::new(TauriErrorCode::InvalidInput, e))?;
 
     // Prepare home directory (where .calimero folder will be)
-    let home_dir_path = if let Some(dir) = home_dir {
-        // Expand ~ if present
-        let expanded = if dir.starts_with("~") {
-            if let Some(home) = dirs::home_dir() {
-                dir.replacen("~", &home.to_string_lossy(), 1)
-            } else {
-                dir
-            }
-        } else {
-            dir
-        };
-        std::path::PathBuf::from(expanded)
-    } else {
-        dirs::home_dir()
-            .ok_or_else(|| {
-                TauriError::new(
-                    TauriErrorCode::HomeDirNotFound,
-                    "Failed to get home directory",
-                )
-            })?
-            .join(".calimero")
-    };
+    let home_dir_path = resolve_home_dir(home_dir)?;
 
     std::fs::create_dir_all(&home_dir_path).map_err(|e| {
         TauriError::with_details(
@@ -3373,20 +3297,9 @@ async fn pick_directory(
 
     let mut dialog = app_handle.dialog().file();
 
-    // Set default directory if provided
-    if let Some(path_str) = default_path {
-        // Expand ~ to home directory
-        let expanded_path = if path_str.starts_with("~") {
-            if let Some(home) = dirs::home_dir() {
-                path_str.replacen("~", &home.to_string_lossy(), 1)
-            } else {
-                path_str
-            }
-        } else {
-            path_str
-        };
-
-        let path_buf = std::path::PathBuf::from(&expanded_path);
+    // Best-effort default directory: an unresolvable path just leaves the picker
+    // where the OS would have opened it.
+    if let Some(path_buf) = default_path.and_then(|p| resolve_home_dir(Some(p)).ok()) {
         if path_buf.exists() && path_buf.is_dir() {
             dialog = dialog.set_directory(path_buf);
         } else if let Some(parent) = path_buf.parent() {
@@ -3487,20 +3400,8 @@ struct DeleteOutcome {
 
 #[tauri::command]
 async fn delete_calimero_data_dir(data_dir: String) -> Result<DeleteOutcome, TauriError> {
-    let expanded = if data_dir.starts_with("~") {
-        if let Some(home) = dirs::home_dir() {
-            data_dir.replacen("~", &home.to_string_lossy(), 1)
-        } else {
-            return Err(TauriError::new(
-                TauriErrorCode::HomeDirNotFound,
-                "Could not resolve home directory",
-            ));
-        }
-    } else {
-        data_dir
-    };
-
-    let path = std::path::PathBuf::from(&expanded);
+    let path = resolve_home_dir(Some(data_dir))?;
+    let expanded = path.to_string_lossy().into_owned();
 
     // If path doesn't exist, nothing to delete
     if !path.exists() {

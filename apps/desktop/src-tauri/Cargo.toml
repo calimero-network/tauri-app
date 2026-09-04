@@ -63,7 +63,6 @@ path = "src/bin/launcher_trampoline.rs"
 default = ["custom-protocol", "autostart"]
 custom-protocol = ["tauri/custom-protocol"]
 autostart = ["dep:tauri-plugin-autostart"]
-devtools = ["tauri/devtools"]
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-updater = "2"

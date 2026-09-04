@@ -1238,7 +1238,6 @@ async fn create_app_window(
     window_label: String,
     url: String,
     title: String,
-    open_devtools: Option<bool>,
     node_url: Option<String>,
     isolation_key: Option<String>,
 ) -> Result<(), TauriError> {
@@ -1380,35 +1379,6 @@ async fn create_app_window(
     })?;
     // Bring app window to front so user sees it instead of the main dashboard
     let _ = window.set_focus();
-
-    // Open devtools if flag is set (defaults to debug mode only, or TAURI_OPEN_DEVTOOLS env var)
-    // IMPORTANT: Release builds NEVER enable devtools, even if env var is set
-    let should_open_devtools = {
-        #[cfg(not(debug_assertions))]
-        {
-            // Release builds: NEVER enable devtools (security)
-            false
-        }
-        #[cfg(debug_assertions)]
-        {
-            // Debug builds: Check explicit parameter first, then env var, then default to true
-            open_devtools.unwrap_or_else(|| {
-                // Check environment variable (allows override via script)
-                if let Ok(env_value) = std::env::var("TAURI_OPEN_DEVTOOLS") {
-                    env_value == "true" || env_value == "1"
-                } else {
-                    // Default to true in debug builds
-                    true
-                }
-            })
-        }
-    };
-
-    #[cfg(feature = "devtools")]
-    if should_open_devtools {
-        tokio::time::sleep(tokio::time::Duration::from_millis(800)).await;
-        window.open_devtools();
-    }
 
     Ok(())
 }
@@ -4457,35 +4427,6 @@ fn main() {
                     tauri_plugin_autostart::MacosLauncher::LaunchAgent,
                     None,
                 ));
-            }
-
-            // Enable devtools for main window based on TAURI_OPEN_DEVTOOLS env var
-            // IMPORTANT: Release builds NEVER enable devtools, even if env var is set
-            // Debug builds also default to false - only open if explicitly requested
-            let should_open_main_devtools = {
-                #[cfg(not(debug_assertions))]
-                {
-                    // Release builds: NEVER enable devtools (security)
-                    false
-                }
-                #[cfg(debug_assertions)]
-                {
-                    // Debug builds: Only open if explicitly requested via env var
-                    if let Ok(env_value) = std::env::var("TAURI_OPEN_DEVTOOLS") {
-                        env_value == "true" || env_value == "1"
-                    } else {
-                        // Default to false - don't open devtools automatically
-                        false
-                    }
-                }
-            };
-
-            #[cfg(feature = "devtools")]
-            if should_open_main_devtools {
-                use tauri::Manager;
-                if let Some(window) = app.get_webview_window("main") {
-                    window.open_devtools();
-                }
             }
 
             Ok(())

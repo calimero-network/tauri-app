@@ -602,7 +602,7 @@ function Onboarding({ onComplete, onSettings }: OnboardingProps) {
               disabled={nuking}
               onClick={handleNukeAll}
             >
-              {nuking ? 'Stopping & resetting...' : '⚠ Reset everything'}
+              {nuking ? 'Stopping & resetting...' : 'Reset everything'}
             </button>
           </div>
         )}
@@ -1251,7 +1251,7 @@ function Onboarding({ onComplete, onSettings }: OnboardingProps) {
                       setCurrentStep('install-app');
                     }}
                     onError={(error) => {
-                      console.error("❌ Onboarding login failed:", error);
+                      console.error("Onboarding login failed:", error);
                     }}
                   />
                 )}

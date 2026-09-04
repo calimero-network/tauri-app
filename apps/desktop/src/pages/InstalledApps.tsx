@@ -115,7 +115,7 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
 
       if (response.error) {
         if (response.error.code === '401') {
-          console.warn("📦 InstalledApps: 401 Unauthorized - token may be expired");
+          console.warn("InstalledApps: 401 Unauthorized - token may be expired");
           onAuthRequired?.();
           return;
         }

@@ -124,7 +124,7 @@ function Marketplace({ clientReady = true }: MarketplaceProps) {
       const response = await listInstalledApps();
       if (response.error) {
         if (response.error.code === '401') {
-          console.warn("📦 Marketplace: 401 Unauthorized - token may be expired");
+          console.warn("Marketplace: 401 Unauthorized - token may be expired");
           window.location.reload();
           return new Set();
         }
@@ -155,7 +155,7 @@ function Marketplace({ clientReady = true }: MarketplaceProps) {
       }
     } catch (err: any) {
       if (err?.status === 401 || err?.code === '401') {
-        console.warn("📦 Marketplace: 401 Unauthorized - reloading to trigger login");
+        console.warn("Marketplace: 401 Unauthorized - reloading to trigger login");
         window.location.reload();
         return new Set();
       }
@@ -212,7 +212,7 @@ function Marketplace({ clientReady = true }: MarketplaceProps) {
             const freshApps = await fetchMarketplaceApps(registries, installed);
             if (mountedRef.current) setApps(freshApps);
           } catch (err) {
-            console.warn("📦 Marketplace: Background refresh failed, using cached data:", err);
+            console.warn("Marketplace: Background refresh failed, using cached data:", err);
             // Cache data is still valid, just touch timestamp to avoid retry spam
             touchMarketplaceCache();
           } finally {
@@ -333,7 +333,7 @@ function Marketplace({ clientReady = true }: MarketplaceProps) {
       
 
       if (response.error) {
-        console.error("📦 Marketplace: Install error:", response.error);
+        console.error("Marketplace: Install error:", response.error);
         const msg = response.error.message ? truncateText(response.error.message, 120) : 'Unknown error';
         toast.error(`Failed to install: ${msg}`);
         return;
@@ -352,7 +352,7 @@ function Marketplace({ clientReady = true }: MarketplaceProps) {
       // Refresh the open modal so it shows "Installed" instead of "Install".
       setSelectedApp((prev) => prev?.id === app.id ? { ...prev, installed: true } : prev);
     } catch (err) {
-      console.error("📦 Marketplace: Install exception:", err);
+      console.error("Marketplace: Install exception:", err);
       const msg = truncateText(err instanceof Error ? err.message : "Unknown error", 120);
       toast.error(`Failed to install: ${msg}`);
     } finally {

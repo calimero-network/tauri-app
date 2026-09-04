@@ -27,7 +27,7 @@ export async function checkOnboardingState(): Promise<OnboardingState> {
       ),
     ]);
     if (healthResponse.error) {
-      console.error('❌ Auth health error:', healthResponse.error);
+      console.error('Auth health error:', healthResponse.error);
       state.error = healthResponse.error.message;
       return state;
     }
@@ -44,7 +44,7 @@ export async function checkOnboardingState(): Promise<OnboardingState> {
     ]);
     if (providersResponse.error) {
       // If providers endpoint fails, auth might not be fully configured
-      console.error('❌ Providers error:', providersResponse.error);
+      console.error('Providers error:', providersResponse.error);
       state.error = providersResponse.error.message;
       // Still mark as available if health check passed
       return state;
@@ -56,12 +56,12 @@ export async function checkOnboardingState(): Promise<OnboardingState> {
     // Check if any providers are configured (have users/keys)
     const configuredProviders = providers.filter((p) => p.configured === true);
     state.hasConfiguredProviders = configuredProviders.length > 0;
-    console.log('✅ Configured providers:', state.hasConfiguredProviders, configuredProviders.length);
-    console.log('📝 Provider details:', providers.map((p) => ({ name: p.name, configured: p.configured })));
+    console.log('Configured providers:', state.hasConfiguredProviders, configuredProviders.length);
+    console.log('Provider details:', providers.map((p) => ({ name: p.name, configured: p.configured })));
 
     return state;
   } catch (error) {
-    console.error('💥 Onboarding check error:', error);
+    console.error('Onboarding check error:', error);
     state.error = error instanceof Error ? error.message : "Unknown error";
     return state;
   }

@@ -251,8 +251,8 @@ jobs:
           DMG_FILE=$(find apps/desktop/src-tauri/target -name "*.dmg" 2>/dev/null | head -1)
 
           if [ -z "$DMG_FILE" ]; then
-            echo "No DMG found to notarize"
-            exit 0
+            echo "No DMG found to notarize - failing the release"
+            exit 1
           fi
 
           SUBMIT_JSON=$(xcrun notarytool submit "$DMG_FILE" \

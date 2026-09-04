@@ -190,9 +190,12 @@ class NodeApi {
   }
 
   listApplications(): Promise<ApiResponse<Application[]>> {
-    return wrap('Failed to list applications', async () =>
-      (await this.meroJs.admin.listApplications()).apps ?? [],
-    );
+    return wrap('Failed to list applications', async () => {
+      const { apps } = await this.meroJs.admin.listApplications();
+      // The node keys these `applicationId` while mero-js types the field as
+      // `id`, which is what every consumer here reads.
+      return (apps ?? []).map((app: any) => ({ ...app, id: app.id ?? app.applicationId }));
+    });
   }
 
   /** By coordinates: the node resolves them against its own registry and takes

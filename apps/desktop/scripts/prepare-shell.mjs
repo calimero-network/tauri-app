@@ -3,7 +3,7 @@
 // host extracts it to a loose path + ad-hoc-signs it at runtime.
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { existsSync, statSync, mkdirSync, copyFileSync } from "node:fs";
+import { existsSync, statSync, mkdirSync, copyFileSync, writeFileSync } from "node:fs";
 
 const desktopDir = path.resolve(import.meta.dirname, "..");
 const tauriDir = path.join(desktopDir, "src-tauri");
@@ -42,6 +42,12 @@ function cargo(args) {
 const trampolineName = process.platform === "win32" ? "launcher-trampoline.exe" : "launcher-trampoline";
 const trampolineDest = path.join(shellDir, trampolineName);
 mkdirSync(shellDir, { recursive: true });
+
+// The shell is a declared resource of the crate that builds it, so tauri-build
+// rejects the cold build below unless the file already exists. src-tauri/build.rs
+// stubs these too, but under their Unix names only.
+if (!existsSync(dest)) writeFileSync(dest, "");
+if (!existsSync(trampolineDest)) writeFileSync(trampolineDest, "");
 
 // `universal-apple-darwin` is not a real rustc target - build both arches and
 // `lipo` them, matching what Tauri does for the main binary.

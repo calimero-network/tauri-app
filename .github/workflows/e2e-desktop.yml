@@ -8,10 +8,10 @@ on:
   pull_request:
 
 concurrency:
-  # Key by event_name + ref so push runs on master and pull_request runs
-  # targeting master don't cancel each other (they're independently valuable).
+  # PR pushes supersede each other; master pushes each need a verdict, and a
+  # cancelled run renders as a red X on the commit.
   group: e2e-desktop-${{ github.event_name }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
 
 jobs:
   playwright:

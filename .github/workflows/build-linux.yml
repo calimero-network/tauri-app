@@ -1,10 +1,7 @@
 name: Build Linux
 
-# Two targets share this pipeline: x86_64 desktop Linux, and the ARM64 build that
-# ARM Chromebooks need under the Crostini (Debian) container. Intel/AMD
-# Chromebooks are already covered by the x86_64 build. The ARM64 deliverable is
-# the .deb (double-click install in the ChromeOS Files app); its AppImage feeds
-# the Tauri updater (linux-aarch64).
+# Covers x86_64 desktop Linux and the ARM64 build ARM Chromebooks need under the
+# Crostini (Debian) container; Intel/AMD Chromebooks use the x86_64 build.
 
 on:
   workflow_call:

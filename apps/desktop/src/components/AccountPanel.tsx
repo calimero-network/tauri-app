@@ -81,8 +81,9 @@ export function widenSummary({ linkedIn }: RelinkResult, added: number): string 
 }
 
 /** Only the holder of an account's root can certify a device into it, so a node
- *  paired into someone else's account is offered no invite. A node too old to say
- *  keeps the offer: refusing on a missing field would withdraw a working feature. */
+ *  paired into someone else's account is offered no invite - being certified into
+ *  that account does not hand it the root. A node too old to say keeps the offer:
+ *  refusing on a missing field would withdraw a working feature. */
 export function canInviteDevices(identity: NodeIdentity | null): boolean {
   return identity?.holdsAccountRoot !== false;
 }
@@ -92,7 +93,12 @@ export function canInviteDevices(identity: NodeIdentity | null): boolean {
 export function devicesEmptyMessage(identity: NodeIdentity | null): string {
   if (!identity) return "This node is not part of an account yet.";
   if (identity.holdsAccountRoot === false) {
-    return "This device is linked to an account held on another device. Its devices are managed there.";
+    // `pair-init` mints the device and only `pair-complete` certifies it, and
+    // the root is gone in both - so an unfinished pairing would otherwise read
+    // as a finished one.
+    return identity.deviceCertified === false
+      ? "Pairing is not finished. Finish the pairing on the computer that holds the account."
+      : "This device is linked to an account held on another device. Its devices are managed there.";
   }
   if (identity.deviceId) {
     return "This device is on the account. The account's other devices have not reached it yet.";

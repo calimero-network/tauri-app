@@ -13,6 +13,9 @@ export interface NodeIdentity {
   accountRootPublicKey?: string;
   /** Whether this node can certify another device into its account. */
   holdsAccountRoot?: boolean;
+  /** Whether the account has certified this node's device. False between
+   *  `pair-init` and `pair-complete`; absent on a node too old to report it. */
+  deviceCertified?: boolean;
 }
 
 /**

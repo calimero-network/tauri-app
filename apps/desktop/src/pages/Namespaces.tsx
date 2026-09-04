@@ -1097,11 +1097,7 @@ function Namespaces() {
       for (const nsId of enabledIds) {
         if (cancelled) return;
         try {
-          const outcome = await ensureTeeAdmissionPolicy(
-            settings.nodeUrl,
-            idToken,
-            nsId,
-          );
+          const outcome = await ensureTeeAdmissionPolicy(idToken, nsId);
           if (outcome === "reasserted") reasserted += 1;
         } catch (e) {
           // Best-effort: one namespace failing (transient merod/cloud error)
@@ -1222,7 +1218,7 @@ function Namespaces() {
         // group list keeps the request on the server-verified
         // namespace-ownership gate (UserNamespace); core admits the
         // ReadOnlyTee fleet member at the root and auto-follows contexts.
-        await enableHaForNamespace(token, settings.nodeUrl, nsId, []);
+        await enableHaForNamespace(token, nsId, []);
         setHaEnabled((prev) => ({ ...prev, [nsId]: true }));
         toast.success('HA enabled — TEE fleet nodes will join');
       }

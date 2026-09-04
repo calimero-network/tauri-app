@@ -1,5 +1,5 @@
-import { getAccessToken } from '../lib/token-storage';
-import { fetchNodeIdentity } from './nodeIdentity';
+import type { GetTeeAdmissionPolicyResponseData } from '@calimero-network/mero-js';
+import { apiClient } from '../lib/mero-client';
 import { getSettings, saveSettings } from './settings';
 import { isMdmaSessionToken, isTokenExpired, parseJwtPayload } from './jwt';
 
@@ -231,55 +231,31 @@ export async function disableHaNamespace(
 
 // ── Local Node Admin API ──
 
+/** The configured node, reached through the app's shared token store so an
+ *  expired access token refreshes rather than 401ing. */
+const admin = () => apiClient.meroJs.admin;
+
 /**
- * Set the TEE admission policy on a group via the local node's admin API.
- * This must be called after enabling HA so that fleet TEE nodes can be
- * admitted into the group's governance DAG.
+ * Set the TEE admission policy on a group. Called after enabling HA so fleet
+ * TEE nodes can be admitted into the group's governance DAG.
  *
- * accept_mock is always false — only real TDX attestations are accepted.
- * allowedMrtd should be populated from the cloud's fleet measurements;
- * an empty list means any MRTD is accepted (not recommended for production).
+ * `acceptMock` is always false — only real TDX attestations are accepted.
+ * `allowedMrtd` comes from the cloud's fleet measurements; core rejects an
+ * empty set with "at least one MRTD must be specified".
  */
-export async function setTeeAdmissionPolicy(
-  nodeUrl: string,
+export function setTeeAdmissionPolicy(
   groupId: string,
   allowedMrtd?: string[],
 ): Promise<void> {
-  const accessToken = getAccessToken();
-  if (!accessToken) {
-    throw new Error('Not authenticated to local node — sign in first');
-  }
-  const res = await fetch(
-    `${nodeUrl}/admin-api/groups/${encodeURIComponent(groupId)}/settings/tee-admission-policy`,
-    {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${accessToken}`,
-      },
-      body: JSON.stringify({
-        // The merod admin API deserialises this request with
-        // `#[serde(rename_all = "camelCase")]` (see
-        // SetTeeAdmissionPolicyApiRequest in
-        // calimero-network/core: crates/server/primitives/src/admin/mod.rs).
-        // Snake_case keys are silently ignored as unknown fields and every
-        // field falls through to its #[serde(default)] — so the server sees
-        // allowed_mrtd: [] and accept_mock: false, and validation rejects
-        // with a misleading "at least one MRTD must be specified" error.
-        allowedMrtd: allowedMrtd ?? [],
-        allowedRtmr0: [],
-        allowedRtmr1: [],
-        allowedRtmr2: [],
-        allowedRtmr3: [],
-        allowedTcbStatuses: [],
-        acceptMock: false,
-      }),
-    },
-  );
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    throw new Error(`Failed to set TEE admission policy: ${text}`);
-  }
+  return admin().setTeeAdmissionPolicy(groupId, {
+    allowedMrtd: allowedMrtd ?? [],
+    allowedRtmr0: [],
+    allowedRtmr1: [],
+    allowedRtmr2: [],
+    allowedRtmr3: [],
+    allowedTcbStatuses: [],
+    acceptMock: false,
+  });
 }
 
 /** The subset of the merod GET tee-admission-policy response we act on. */
@@ -291,37 +267,21 @@ export interface TeeAdmissionPolicyState {
 /**
  * Read the current TEE admission policy for a group from the local merod.
  *
- * merod's GET returns 200 with the `disabled()` shape (`enabled:false`,
- * empty lists) when no policy is set — NOT a 404 — so an absent policy is
- * `{ enabled:false, allowedMrtd:[] }`, distinguishable from a set one.
- * Response keys are camelCase (GetTeeAdmissionPolicyApiResponse has
- * `#[serde(rename_all="camelCase")]`) and, like the members endpoint, the
- * payload is returned directly with no `{ data }` envelope.
+ * merod answers 200 with the `disabled()` shape (`enabled:false`, empty lists)
+ * when no policy is set — NOT a 404 — so an absent policy is distinguishable
+ * from a set one.
  */
 export async function getTeeAdmissionPolicy(
-  nodeUrl: string,
   groupId: string,
 ): Promise<TeeAdmissionPolicyState> {
-  const accessToken = getAccessToken();
-  if (!accessToken) {
-    throw new Error('Not authenticated to local node — sign in first');
-  }
-  const res = await fetch(
-    `${nodeUrl}/admin-api/groups/${encodeURIComponent(groupId)}/settings/tee-admission-policy`,
-    { method: 'GET', headers: { Authorization: `Bearer ${accessToken}` } },
-  );
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    throw new Error(`Failed to read TEE admission policy: ${text || res.statusText}`);
-  }
-  const data = (await res.json().catch(() => null)) as {
-    enabled?: unknown;
-    allowedMrtd?: unknown;
-  } | null;
+  // `enabled` rides on the wire but is missing from the SDK's response type.
+  const policy = (await admin().getTeeAdmissionPolicy(groupId)) as
+    | (GetTeeAdmissionPolicyResponseData & { enabled?: unknown })
+    | null;
   return {
-    enabled: data?.enabled === true,
-    allowedMrtd: Array.isArray(data?.allowedMrtd)
-      ? (data!.allowedMrtd as unknown[]).filter((m): m is string => typeof m === 'string')
+    enabled: policy?.enabled === true,
+    allowedMrtd: Array.isArray(policy?.allowedMrtd)
+      ? policy.allowedMrtd.filter((m): m is string => typeof m === 'string')
       : [],
   };
 }
@@ -348,13 +308,12 @@ export async function getTeeAdmissionPolicy(
  * dropped, not merely supplemented.
  */
 export async function ensureTeeAdmissionPolicy(
-  nodeUrl: string,
   idToken: string,
   namespaceId: string,
 ): Promise<'ok' | 'reasserted' | 'skipped'> {
   let role: string | null;
   try {
-    role = await getSelfRoleInGroup(nodeUrl, namespaceId);
+    role = await getSelfRoleInGroup(namespaceId);
   } catch {
     // Not a member of the namespace root (actor bails) — not ours to author.
     return 'skipped';
@@ -364,7 +323,7 @@ export async function ensureTeeAdmissionPolicy(
   const desired = (await getFleetMeasurements(idToken)).allowed_mrtd;
   if (!desired.length) return 'skipped';
 
-  const current = await getTeeAdmissionPolicy(nodeUrl, namespaceId);
+  const current = await getTeeAdmissionPolicy(namespaceId);
   const currentSet = current.enabled ? new Set(current.allowedMrtd) : null;
   const matches =
     currentSet !== null &&
@@ -372,7 +331,7 @@ export async function ensureTeeAdmissionPolicy(
     desired.every((m) => currentSet.has(m));
   if (matches) return 'ok';
 
-  await setTeeAdmissionPolicy(nodeUrl, namespaceId, desired);
+  await setTeeAdmissionPolicy(namespaceId, desired);
   return 'reasserted';
 }
 
@@ -403,15 +362,6 @@ interface IssueOwnershipProofResponseData {
   signature: string;
 }
 
-interface GroupMemberEntry {
-  identity: string;
-  role: string;
-}
-
-interface ListGroupMembersResponse {
-  members: GroupMemberEntry[];
-}
-
 /**
  * Generate a 32-char hex nonce (16 random bytes). Used as the
  * audience-binding nonce on the local ownership-proof request — the
@@ -436,238 +386,81 @@ function generateProofNonce(): string {
  */
 const PROOF_AUDIENCE_CLAIM_CONTEXT = 'mdma:claim-context';
 const PROOF_AUDIENCE_ENABLE_HA_NAMESPACE = 'mdma:enable-ha-namespace';
+const PROOF_TTL_MS = 60_000; // a request only: merod clamps it to now+5min
 
 /**
- * Look up the caller's role in a group via the merod admin API.
- *
- * Throws on auth failure, a non-2xx response (core's actor bails with
- * an error when the node isn't a member of the group, so "not a
- * member" surfaces here as a thrown error, not `null`), or a 200 whose
- * body doesn't match the expected `{ members }` shape — a silent `null`
- * on a malformed body would later masquerade as "not the namespace
- * admin", which is exactly the failure mode that masked the earlier
- * `{data}`-envelope bug. Returns `null` only for the degenerate case of
- * a well-formed response with no member entry for this node's account.
- *
- * `selfIdentity` used to come back on this response and is gone as of
- * core 0.11.0-rc.23 (#3522) — "who am I" is a node-level question, and the
- * member list of one group was a strange place to answer it. Requiring it
- * here made this throw the "incompatible version" error against every
- * rc.23 node, which took the TEE eviction path down with it. The answer
- * now comes from `GET /admin-api/identity`, and the match is on the
- * ACCOUNT, which is what the rows are keyed by.
- *
- * Co-located here rather than in a dedicated admin-api module because
- * this is the only consumer right now — the moment a second caller
- * appears, lift it out.
+ * The caller's role in a group. `null` means a well-formed listing with no row
+ * for this node's account; a node that is a member of nothing throws instead,
+ * because core's actor bails rather than answering with an empty list.
  */
-async function getSelfRoleInGroup(
-  nodeUrl: string,
-  groupId: string,
-): Promise<string | null> {
-  const accessToken = getAccessToken();
-  if (!accessToken) {
-    throw new Error('Not authenticated to local node — sign in first');
-  }
-  const res = await fetch(
-    `${nodeUrl}/admin-api/groups/${encodeURIComponent(groupId)}/members`,
-    {
-      method: 'GET',
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-      },
-    },
-  );
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    throw new Error(`Failed to list group members: ${text || res.statusText}`);
-  }
-  // Core's ApiResponse serializes the payload struct directly — there is
-  // no `{ data: ... }` envelope (see ApiResponse::into_response in
-  // calimero-network/core crates/server/src/admin/service.rs, with its
-  // `//TODO add data to response`). The members payload is
-  // `{ members }` — rc.23 removed `selfIdentity` from it (#3522).
-  // A non-JSON body parses to null here (not a throw), so the shapeOk
-  // check below produces the descriptive error rather than a raw
-  // SyntaxError escaping as an unhandled rejection.
-  const body = (await res
-    .json()
-    .catch(() => null)) as ListGroupMembersResponse | null;
-  // Negated inline guard (not a separate `shapeOk` const) so TS narrows
-  // `body` to non-null afterwards. Each member entry must be a
-  // well-formed { identity, role } — a `null`/partial entry would
-  // otherwise blow up the `.find` below with a raw TypeError instead of
-  // this descriptive error.
-  if (
-    !body ||
-    !Array.isArray(body.members) ||
-    !body.members.every(
-      (m) =>
-        m != null &&
-        typeof m.identity === 'string' &&
-        typeof m.role === 'string',
-    )
-  ) {
-    throw new Error(
-      'Unexpected response from local node members endpoint — ' +
-        'expected { members: [{ identity, role }] }. ' +
-        'The node may be an incompatible version.',
-    );
-  }
-
-  // Deliberately after the shape check, so a malformed member list still
-  // reports itself rather than being blamed on the identity lookup.
-  const identity = await fetchNodeIdentity();
+async function getSelfRoleInGroup(groupId: string): Promise<string | null> {
+  const { members } = await admin().listGroupMembers(groupId);
+  // After the listing deliberately, so a malformed member list reports itself
+  // rather than being blamed on the identity lookup.
+  const identity = await admin().getNodeIdentity();
   if (!identity?.accountId) {
     throw new Error(
       'Could not resolve this node’s account from /admin-api/identity — ' +
         'cannot tell which member row is this node.',
     );
   }
-  const me = body.members.find((m) => m.identity === identity.accountId);
-  return me?.role ?? null;
+  return members.find((m) => m?.identity === identity.accountId)?.role ?? null;
+}
+
+/** merod signs the triplet in camelCase; the cloud request body takes snake_case. */
+function ownershipProof(data: IssueOwnershipProofResponseData | null): OwnershipProof {
+  if (
+    !data ||
+    typeof data.signerPublicKey !== 'string' ||
+    typeof data.signedPayload !== 'string' ||
+    typeof data.signature !== 'string'
+  ) {
+    throw new Error('Malformed ownership proof response from local node');
+  }
+  return {
+    signer_public_key: data.signerPublicKey,
+    signed_payload: data.signedPayload,
+    signature: data.signature,
+  };
 }
 
 /**
- * Ask the local merod to issue a signed ownership proof for a context
- * scoped to the given group. The proof is bound to {audience, subject,
- * nonce, expiresAtMs} so a leaked proof can't be replayed against a
- * different cloud user or after a short window.
- *
- * Returns the wire-snake-case triplet the cloud claim endpoint expects;
- * the camelCase merod response is re-keyed inline. Note expiresAtMs is
- * a *requested* expiry — the merod handler clamps to now+5min server
- * side, so a generous client value is harmless. We ask for 60s to keep
- * the window small.
+ * A signed ownership proof for a context scoped to the given group, bound to
+ * {audience, subject, nonce, expiresAtMs} so a leaked one cannot be replayed
+ * against a different cloud user or after a short window.
  */
 export async function requestOwnershipProof(
-  nodeUrl: string,
   groupId: string,
   opts: { contextId: string; subject: string },
 ): Promise<OwnershipProof> {
-  const accessToken = getAccessToken();
-  if (!accessToken) {
-    throw new Error('Not authenticated to local node — sign in first');
-  }
-  const nonce = generateProofNonce();
-  const expiresAtMs = Date.now() + 60_000;
-  const res = await fetch(
-    `${nodeUrl}/admin-api/groups/${encodeURIComponent(groupId)}/issue-ownership-proof`,
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${accessToken}`,
-      },
-      body: JSON.stringify({
-        // Same camelCase contract as setTeeAdmissionPolicy: the merod
-        // admin types deserialise with #[serde(rename_all = "camelCase")].
-        // The audience is part of the proof-binding agreed with the
-        // cloud verifier (see PROOF_AUDIENCE_* above).
-        audience: PROOF_AUDIENCE_CLAIM_CONTEXT,
-        contextId: opts.contextId,
-        subject: opts.subject,
-        nonce,
-        expiresAtMs,
-      }),
-    },
-  );
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    throw new Error(`Failed to issue ownership proof: ${text || res.statusText}`);
-  }
-  // No `{ data: ... }` envelope — ApiResponse serializes the payload
-  // struct directly and IssueOwnershipProofApiResponse has no `data`
-  // field. Keys are camelCase (#[serde(rename_all = "camelCase")]).
-  const data = (await res.json()) as IssueOwnershipProofResponseData;
-  if (
-    !data ||
-    typeof data.signerPublicKey !== 'string' ||
-    typeof data.signedPayload !== 'string' ||
-    typeof data.signature !== 'string'
-  ) {
-    throw new Error('Malformed ownership proof response from local node');
-  }
-  // Re-key camelCase → snake_case for the cloud request.
-  return {
-    signer_public_key: data.signerPublicKey,
-    signed_payload: data.signedPayload,
-    signature: data.signature,
-  };
+  const data = await admin().issueOwnershipProof(groupId, {
+    audience: PROOF_AUDIENCE_CLAIM_CONTEXT,
+    contextId: opts.contextId,
+    subject: opts.subject,
+    nonce: generateProofNonce(),
+    expiresAtMs: Date.now() + PROOF_TTL_MS,
+  });
+  return ownershipProof(data as IssueOwnershipProofResponseData | null);
 }
 
 /**
- * Ask the local merod to issue a signed ownership proof scoped to a
- * *namespace root* with no context. This is the authoritative signal
- * that the caller is a direct admin of the namespace: merod gates the
- * issuance on `is_direct_group_admin(namespaceId)` and signs with the
- * namespace root's signing key — there is no context to bind, so the
- * payload's context_id is empty.
+ * A proof scoped to a *namespace root* with no context: merod gates issuance on
+ * `is_direct_group_admin(namespaceId)`, which is the authoritative signal that
+ * the caller owns the namespace, and signs with the root's signing key.
  *
- * Used by the context-less HA-enable path: a namespace with no context
- * yet has nothing to claim per-context, but the cloud still needs a
- * server-verifiable proof that this user owns the namespace before it
- * will enable HA (the cloud-side namespace-ownership gate / IDOR fix).
- *
- * Distinct audience from requestOwnershipProof so a context-claim proof
- * can never be replayed against the enable-ha endpoint. Same camelCase
- * request / camelCase response contract as requestOwnershipProof; the
- * triplet is re-keyed to snake_case for the cloud body.
+ * Its own audience, so a context-claim proof can never be replayed here.
  */
 export async function requestNamespaceOwnershipProof(
-  nodeUrl: string,
   namespaceId: string,
   opts: { subject: string },
 ): Promise<OwnershipProof> {
-  const accessToken = getAccessToken();
-  if (!accessToken) {
-    throw new Error('Not authenticated to local node — sign in first');
-  }
-  const nonce = generateProofNonce();
-  const expiresAtMs = Date.now() + 60_000;
-  const res = await fetch(
-    `${nodeUrl}/admin-api/groups/${encodeURIComponent(namespaceId)}/issue-namespace-ownership-proof`,
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${accessToken}`,
-      },
-      body: JSON.stringify({
-        // camelCase per the merod admin contract (#[serde(rename_all =
-        // "camelCase")]). No contextId field — this proof is scoped to
-        // the namespace root only; the audience binds it to the cloud's
-        // enable-ha-namespace endpoint.
-        audience: PROOF_AUDIENCE_ENABLE_HA_NAMESPACE,
-        subject: opts.subject,
-        nonce,
-        expiresAtMs,
-      }),
-    },
-  );
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    throw new Error(
-      `Failed to issue namespace ownership proof: ${text || res.statusText}`,
-    );
-  }
-  // Same response shape as issue-ownership-proof: no `{ data }` envelope,
-  // camelCase keys (#[serde(rename_all = "camelCase")]).
-  const data = (await res.json()) as IssueOwnershipProofResponseData;
-  if (
-    !data ||
-    typeof data.signerPublicKey !== 'string' ||
-    typeof data.signedPayload !== 'string' ||
-    typeof data.signature !== 'string'
-  ) {
-    throw new Error('Malformed ownership proof response from local node');
-  }
-  // Re-key camelCase → snake_case for the cloud request.
-  return {
-    signer_public_key: data.signerPublicKey,
-    signed_payload: data.signedPayload,
-    signature: data.signature,
-  };
+  const data = await admin().issueNamespaceOwnershipProof(namespaceId, {
+    audience: PROOF_AUDIENCE_ENABLE_HA_NAMESPACE,
+    subject: opts.subject,
+    nonce: generateProofNonce(),
+    expiresAtMs: Date.now() + PROOF_TTL_MS,
+  });
+  return ownershipProof(data as IssueOwnershipProofResponseData | null);
 }
 
 /**
@@ -696,7 +489,6 @@ export async function requestNamespaceOwnershipProof(
  */
 export async function enableHaForNamespace(
   idToken: string,
-  nodeUrl: string,
   namespaceId: string,
   groups: NamespaceHaGroup[],
 ): Promise<EnableHaNamespaceResponse> {
@@ -761,7 +553,7 @@ export async function enableHaForNamespace(
   // UX fail-fast; the authoritative gate is server-side.
   // Wire format is locked: GroupMemberRole in core serialises as
   // {Admin, Member, ReadOnly, ReadOnlyTee}. We require Admin only.
-  const role = await getSelfRoleInGroup(nodeUrl, namespaceId);
+  const role = await getSelfRoleInGroup(namespaceId);
   if (role === null) {
     // Well-formed response but our identity isn't among the members —
     // distinct from "you're a Member not an Admin": this usually means
@@ -786,7 +578,7 @@ export async function enableHaForNamespace(
 
   // The namespace root's group_id equals the namespaceId. Set the policy
   // there and only there — subgroups inherit it via resolve-to-root.
-  await setTeeAdmissionPolicy(nodeUrl, namespaceId, measurements.allowed_mrtd);
+  await setTeeAdmissionPolicy(namespaceId, measurements.allowed_mrtd);
 
   // Namespace path: send an empty group list plus exactly ONE
   // namespace-scoped ownership proof. merod gates proof
@@ -796,9 +588,7 @@ export async function enableHaForNamespace(
   // before any write — this server-side check is the authoritative
   // namespace-ownership gate. Core admits a ReadOnlyTee fleet member at
   // the root and auto-follows contexts created later.
-  const proof = await requestNamespaceOwnershipProof(nodeUrl, namespaceId, {
-    subject,
-  });
+  const proof = await requestNamespaceOwnershipProof(namespaceId, { subject });
   return enableHaNamespace(idToken, namespaceId, [], proof);
 }
 

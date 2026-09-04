@@ -5044,61 +5044,31 @@ listen = ["/ip4/0.0.0.0/udp/4001/quic-v1", "/ip4/0.0.0.0/tcp/4002"]
             .map(|s| s.rsplit("::").next().unwrap_or(s))
             .collect();
 
-        let declared_permissions: std::collections::BTreeSet<&str> = ACL_TOML
-            .lines()
-            .filter(|line| line.trim_start().starts_with("commands.allow"))
-            .flat_map(|line| line.split('"').skip(1).step_by(2))
-            .collect();
-
-        let missing_permission: Vec<_> =
-            handler_commands.difference(&declared_permissions).collect();
-        let missing_handler: Vec<_> =
-            declared_permissions.difference(&handler_commands).collect();
-
-        assert!(
-            missing_permission.is_empty() && missing_handler.is_empty(),
-            "generate_handler! and permissions/app-commands.toml are out of sync.\n\
-             In generate_handler! but missing a permission in app-commands.toml: {missing_permission:?}\n\
-             In app-commands.toml but missing from generate_handler!: {missing_handler:?}"
-        );
-    }
-
-    // A permission left out of the aggregate [[set]] is never granted, so its
-    // command fails at runtime exactly as if it had no permission at all.
-    #[test]
-    fn acl_permissions_are_all_granted_to_the_main_window() {
-        const ACL_TOML: &str = include_str!("../permissions/app-commands.toml");
-
-        let (permission_blocks, set_block) = ACL_TOML
-            .split_once("[[set]]")
-            .expect("aggregate [[set]] not found in app-commands.toml");
-
-        let declared: std::collections::BTreeSet<&str> = permission_blocks
-            .lines()
-            .filter_map(|line| line.trim().strip_prefix("identifier = "))
-            .map(|value| value.trim_matches('"'))
-            .collect();
-
-        let granted: std::collections::BTreeSet<&str> = set_block
-            .split_once("permissions = [")
-            .expect("the [[set]] has no permissions list")
+        // The main window is granted `allow-app-commands` and nothing else, so a
+        // command missing from that one list is unreachable at runtime.
+        let granted: std::collections::BTreeSet<&str> = ACL_TOML
+            .split_once("identifier = \"allow-app-commands\"")
+            .expect("the allow-app-commands permission is gone from app-commands.toml")
+            .1
+            .split_once("commands.allow = [")
+            .expect("allow-app-commands has no commands.allow list")
             .1
             .split_once(']')
-            .expect("unterminated permissions list in the [[set]]")
+            .expect("unterminated commands.allow list")
             .0
             .split('"')
             .skip(1)
             .step_by(2)
             .collect();
 
-        let ungranted: Vec<_> = declared.difference(&granted).collect();
-        let unknown: Vec<_> = granted.difference(&declared).collect();
+        let ungranted: Vec<_> = handler_commands.difference(&granted).collect();
+        let unknown: Vec<_> = granted.difference(&handler_commands).collect();
 
         assert!(
             ungranted.is_empty() && unknown.is_empty(),
-            "the allow-app-commands set does not match the declared permissions.\n\
-             Declared as [[permission]] but not in the set: {ungranted:?}\n\
-             In the set but not declared as a [[permission]]: {unknown:?}"
+            "generate_handler! and permissions/app-commands.toml are out of sync.\n\
+             In generate_handler! but not granted by allow-app-commands: {ungranted:?}\n\
+             Granted by allow-app-commands but not in generate_handler!: {unknown:?}"
         );
     }
 }

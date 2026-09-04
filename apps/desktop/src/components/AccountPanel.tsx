@@ -157,8 +157,10 @@ export default function AccountPanel() {
     const controller = new AbortController();
     setDevicesLoading(true);
     setDevicesError("");
-    listAccountDevices(controller.signal)
-      .then(setDevices)
+    listAccountDevices()
+      .then((rows) => {
+        if (!controller.signal.aborted) setDevices(rows);
+      })
       .catch((err: unknown) => {
         if (controller.signal.aborted) return;
         setDevicesError(parseTauriError(err, "Could not list the devices on this account"));

@@ -10,6 +10,22 @@ vi.mock('./token-broker', () => ({
   brokerAccessToken: () => brokerAccessToken(),
 }));
 
+// A real MeroJs behind the app's singleton, so these tests still assert what
+// reaches the wire: the SDK's own routes, bodies and bearer header.
+vi.mock('./mero-client', async () => {
+  const { MeroJs, MemoryTokenStore } = await import('@calimero-network/mero-js');
+  const meroJs = new MeroJs({
+    baseUrl: 'http://localhost:2528',
+    tokenStore: new MemoryTokenStore(),
+  });
+  meroJs.setTokenData({
+    access_token: 'desktop-access-token',
+    refresh_token: 'desktop-refresh-token',
+    expires_at: Date.now() + 3_600_000,
+  });
+  return { apiClient: { meroJs } };
+});
+
 // Imported once, unlike agent-connect's suite: device-link.ts keeps no module state.
 import {
   listAccountApplications,
@@ -302,10 +318,12 @@ describe('pairInit', () => {
     await expect(pairInit(HEX_64, ['ns-1'])).rejects.toThrow('no account root on this node');
   });
 
-  it('reports a revoked token family as terminal', async () => {
+  it('reports a revoked token family as terminal, in words a user can act on', async () => {
     installFetch(new Response('{}', { status: 401, headers: { 'x-auth-error': 'token_reuse' } }));
 
-    await expect(pairInit(HEX_64, ['ns-1'])).rejects.toThrow(/revoked/i);
+    await expect(pairInit(HEX_64, ['ns-1'])).rejects.toThrow(
+      'Your node session was revoked. Sign in again, then try again.',
+    );
   });
 
   it('falls back to the status when the body carries no message', async () => {

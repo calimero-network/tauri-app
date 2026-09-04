@@ -158,7 +158,15 @@ describe("canInviteDevices", () => {
   });
 
   it("withholds it from a device paired into an account held elsewhere", () => {
-    expect(canInviteDevices(id({ holdsAccountRoot: false }))).toBe(false);
+    expect(canInviteDevices(id({ holdsAccountRoot: false, deviceCertified: true }))).toBe(false);
+  });
+
+  it("withholds it from a device still awaiting its certificate", () => {
+    expect(canInviteDevices(id({ holdsAccountRoot: false, deviceCertified: false }))).toBe(false);
+  });
+
+  it("offers it on a root holder that has not enrolled a device yet", () => {
+    expect(canInviteDevices(id({ holdsAccountRoot: true, deviceCertified: false }))).toBe(true);
   });
 
   it("keeps offering it against a node too old to report the field", () => {
@@ -171,8 +179,22 @@ describe("canInviteDevices", () => {
 });
 
 describe("devicesEmptyMessage on a device held elsewhere", () => {
-  it("says the account is managed on the other device", () => {
-    const identity = { accountId: "a", deviceId: "d", holdsAccountRoot: false } as never;
-    expect(devicesEmptyMessage(identity)).toContain("held on another device");
+  const paired = (extra: Record<string, unknown>) =>
+    ({ accountId: "a", deviceId: "d", holdsAccountRoot: false, ...extra }) as never;
+
+  it("says the account is managed on the other device once pairing completed", () => {
+    expect(devicesEmptyMessage(paired({ deviceCertified: true }))).toContain(
+      "held on another device",
+    );
+  });
+
+  it("sends an abandoned pair-init back to finish the pairing, not to another account", () => {
+    const message = devicesEmptyMessage(paired({ deviceCertified: false }));
+    expect(message).toContain("Finish the pairing");
+    expect(message).not.toContain("held on another device");
+  });
+
+  it("keeps the old wording against a node too old to report certification", () => {
+    expect(devicesEmptyMessage(paired({}))).toContain("held on another device");
   });
 });

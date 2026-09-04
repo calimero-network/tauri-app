@@ -56,19 +56,6 @@ export function decodeMetadata(metadata: any): any {
 }
 
 /**
- * Kebab-cases an app display name for deep-link slug matching.
- * "Mero Chat" → "mero-chat". Collapses any run of non-alphanumeric chars to a
- * single hyphen and trims leading/trailing hyphens.
- */
-export function kebabCase(name: string): string {
-  return name
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '');
-}
-
-/**
  * Appends a raw query string (without leading `?`) to a URL, preserving any
  * query already present on the base URL. Deep-link params take precedence on
  * key collisions. Returns the base URL unchanged when `params` is empty.

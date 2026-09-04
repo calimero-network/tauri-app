@@ -239,8 +239,7 @@ function Namespaces() {
     if (view.type !== "namespace" || !activeNsRootId) { setNsMembers([]); return; }
     const controller = new AbortController();
     setNsMembersLoading(true);
-    // TODO: replace with mero.admin.listGroupMembers once mero-react hook parsing is fixed
-    void fetchGroupMembers(activeNsRootId, controller.signal)
+    void fetchGroupMembers(activeNsRootId)
       .then((members) => { if (!controller.signal.aborted) setNsMembers(members ?? []); })
       .finally(() => { if (!controller.signal.aborted) setNsMembersLoading(false); });
     return () => controller.abort();
@@ -258,7 +257,7 @@ function Namespaces() {
     if (view.type !== "group" || !activeGroupId) { setActiveGroupMembers([]); return; }
     const controller = new AbortController();
     setActiveGroupMembersLoading(true);
-    void fetchGroupMembers(activeGroupId, controller.signal)
+    void fetchGroupMembers(activeGroupId)
       .then((members) => { if (!controller.signal.aborted) setActiveGroupMembers(members ?? []); })
       .finally(() => { if (!controller.signal.aborted) setActiveGroupMembersLoading(false); });
     return () => controller.abort();
@@ -820,12 +819,7 @@ function Namespaces() {
     const settings = getSettings();
     if (!settings.nodeUrl) return { evicted: 0, failed: 0, listFailed: true, groupsVisited: 0 };
 
-    const deps = buildEvictionDeps({
-      mero,
-      nodeUrl: settings.nodeUrl,
-      getNodeToken: getAccessToken,
-    });
-    return evictTeeMembersFromTree(deps, nsId);
+    return evictTeeMembersFromTree(buildEvictionDeps({ mero }), nsId);
   };
 
   const handleJoinNamespace = async (invitationText: string) => {
@@ -972,12 +966,7 @@ function Namespaces() {
     const controller = new AbortController();
     reconcileBusyRef.current += 1;
     reconcilePendingRef.current = false;
-    const deps = buildEvictionDeps({
-      mero,
-      nodeUrl: settings.nodeUrl,
-      getNodeToken: getAccessToken,
-      signal: controller.signal,
-    });
+    const deps = buildEvictionDeps({ mero, signal: controller.signal });
     reconcileDisabledNamespaces(deps, haEnabled, {
       shouldAbort: () => controller.signal.aborted,
     })

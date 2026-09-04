@@ -11,10 +11,21 @@ vi.mock('../utils/settings', () => ({
   },
 }));
 
-const brokerAccessToken = vi.fn();
-vi.mock('./token-broker', () => ({
-  brokerAccessToken: () => brokerAccessToken(),
-}));
+// A real MeroJs behind the app's singleton, so these tests still assert what
+// reaches the wire: the SDK's own routes, bodies and bearer header.
+vi.mock('./mero-client', async () => {
+  const { MeroJs, MemoryTokenStore } = await import('@calimero-network/mero-js');
+  const meroJs = new MeroJs({
+    baseUrl: 'http://localhost:2528',
+    tokenStore: new MemoryTokenStore(),
+  });
+  meroJs.setTokenData({
+    access_token: 'desktop-access-token',
+    refresh_token: 'desktop-refresh-token',
+    expires_at: Date.now() + 3_600_000,
+  });
+  return { apiClient: { meroJs } };
+});
 
 // Imported fresh for every test: the module keeps the in-flight connect and the
 // last-attempt second in module scope, and a test must never inherit either.
@@ -55,7 +66,6 @@ beforeEach(async () => {
   vi.clearAllMocks();
   settings = { nodeUrl: 'http://localhost:2528/' };
   originalFetch = globalThis.fetch;
-  brokerAccessToken.mockResolvedValue('desktop-access-token');
   invoke.mockResolvedValue('/home/x/.config/calimero/mcp/agent.json');
 
   vi.resetModules();
@@ -174,24 +184,14 @@ describe('connectAiAgent', () => {
     expect(rendered).not.toContain('super-secret-refresh');
   });
 
-  it('accepts an unwrapped response body', async () => {
-    const accessToken = tokenFor('client-1');
-    installFetch(json({ access_token: accessToken, refresh_token: 'mcp-rt' }));
-
-    await agentConnect.connectAiAgent();
-
-    expect(invoke).toHaveBeenCalledWith(
-      'write_mcp_agent_credentials',
-      expect.objectContaining({ accessToken }),
-    );
-  });
-
   it('reports a revoked family as terminal and writes nothing', async () => {
     installFetch(
       new Response('{}', { status: 401, headers: { 'x-auth-error': 'token_reuse' } }),
     );
 
-    await expect(agentConnect.connectAiAgent()).rejects.toThrow(/revoked/i);
+    await expect(agentConnect.connectAiAgent()).rejects.toThrow(
+      'Your node session was revoked. Sign in again, then reconnect the agent.',
+    );
     expect(invoke).not.toHaveBeenCalled();
   });
 

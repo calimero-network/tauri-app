@@ -3,12 +3,10 @@
  * client key, since sharing ours risks rotating away the desktop's own session (see token-broker.ts).
  */
 import { invoke } from '@tauri-apps/api/core';
+import { AuthRevokedError, type ClientKey } from '@calimero-network/mero-js';
 import { getSettings, saveSettings } from '../utils/settings';
 import { parseJwtPayload } from '../utils/jwt';
-import { brokerAccessToken } from './token-broker';
-
-/** The node revoked our token family; no retry can succeed. */
-const REVOKED_AUTH_ERRORS = ['token_reuse', 'token_revoked'];
+import { apiClient } from './mero-client';
 
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
 
@@ -28,13 +26,6 @@ function nonLoopbackOrigin(url: string): string | null {
   return parsed.origin === 'null' ? parsed.protocol : parsed.origin;
 }
 
-/** A client key as `GET /admin/keys/clients` reports it. */
-interface ClientKeyEntry {
-  client_id: string;
-  root_key_id: string;
-  is_valid: boolean;
-}
-
 /** Client keys are keyed by the `sub` of the tokens they mint. */
 function clientIdFromToken(accessToken: string): string | null {
   const sub = parseJwtPayload(accessToken)?.sub;
@@ -45,29 +36,26 @@ function clientIdFromToken(accessToken: string): string | null {
  * Revoke the key an earlier connect minted. `root_key_id` comes from the list
  * response, not our own token - the node rejects a delete whose root key doesn't match.
  */
-async function revokeClientKey(
-  nodeUrl: string,
-  accessToken: string,
-  clientId: string,
-): Promise<boolean> {
-  const headers = { Authorization: `Bearer ${accessToken}` };
-  const response = await fetch(`${nodeUrl}/admin/keys/clients`, { headers });
-  if (!response.ok) return false;
-
-  const json = await response.json().catch(() => null);
-  const entries: ClientKeyEntry[] | undefined = json?.data ?? json;
-  // An unreadable body is not evidence the key is gone - reporting "revoked" here
-  // would leave an admin-scoped, never-expiring key valid while the UI claims otherwise.
-  if (!Array.isArray(entries)) return false;
-
-  const entry = entries.find((e) => e?.client_id === clientId);
+async function revokeClientKey(clientId: string): Promise<boolean> {
+  let entry: ClientKey | undefined;
+  try {
+    entry = (await apiClient.meroJs.auth.listClientKeys()).find(
+      (e) => e?.client_id === clientId,
+    );
+  } catch {
+    // An unreadable listing is not evidence the key is gone - reporting "revoked"
+    // here would leave an admin-scoped, never-expiring key valid while the UI
+    // claims otherwise.
+    return false;
+  }
   if (!entry || !entry.is_valid) return true; // already gone
 
-  const deleteResponse = await fetch(`${nodeUrl}/admin/keys/${entry.root_key_id}/clients/${clientId}`, {
-    method: 'DELETE',
-    headers,
-  });
-  return deleteResponse.ok;
+  try {
+    await apiClient.meroJs.auth.deleteClientKey(entry.root_key_id, clientId);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -170,31 +158,16 @@ async function mintAndWriteCredential(): Promise<ConnectAiAgentResult> {
   }
 
   const previousClientId = settings.mcpAgentClientId;
-  // Rotates only if ours has expired, and through the broker's single flight.
-  const accessToken = await brokerAccessToken();
 
-  const response = await fetch(`${nodeUrl}/admin/client-key`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${accessToken}`,
-    },
-    body: JSON.stringify({ permissions: ['admin'] }),
-  });
-
-  const json = await response.json().catch(() => null);
-
-  if (!response.ok) {
-    const authError = response.headers.get('x-auth-error');
-    if (authError && REVOKED_AUTH_ERRORS.includes(authError)) {
+  let key;
+  try {
+    key = (await apiClient.meroJs.auth.generateClientKey({ permissions: ['admin'] })).data;
+  } catch (error) {
+    if (error instanceof AuthRevokedError) {
       throw new Error('Your node session was revoked. Sign in again, then reconnect the agent.');
     }
-    const message =
-      json?.error?.message ?? json?.error ?? json?.message ?? `HTTP ${response.status}`;
-    throw new Error(String(message));
+    throw error;
   }
-
-  const key = json?.data ?? json;
   if (!key?.access_token || !key?.refresh_token) {
     throw new Error('Node returned no credential for the agent');
   }
@@ -221,7 +194,7 @@ async function mintAndWriteCredential(): Promise<ConnectAiAgentResult> {
     });
   } catch (error) {
     // Nothing records this key now, so no later connect could find it to revoke.
-    await revokeClientKey(nodeUrl, accessToken, clientId).catch(() => {});
+    await revokeClientKey(clientId).catch(() => {});
     throw error;
   }
   // The path and the node go with the id: the agent tab has no other way back to
@@ -242,7 +215,7 @@ async function mintAndWriteCredential(): Promise<ConnectAiAgentResult> {
   // admin-scoped key valid on the node forever.
   if (replacedPrevious) {
     try {
-      revokeFailed = !(await revokeClientKey(nodeUrl, accessToken, previousClientId as string));
+      revokeFailed = !(await revokeClientKey(previousClientId as string));
     } catch {
       // The new credential is already in place; a failed cleanup must not fail the connect.
       revokeFailed = true;

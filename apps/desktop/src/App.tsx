@@ -262,7 +262,7 @@ function App() {
         
         // PRIORITY: Check for existing tokens FIRST
         const existingToken = getAccessToken();
-        console.log('🔑 Existing token check:', existingToken ? 'EXISTS' : 'NONE');
+        console.log('Existing token check:', existingToken ? 'EXISTS' : 'NONE');
 
         if (!existingToken) {
           // No token — always show login. Onboarding is only shown when
@@ -270,7 +270,7 @@ function App() {
           // Node switching, new nodes with no accounts, auth unavailable — all
           // go to login. LoginView handles both "create first account" and
           // "sign in with existing account" via requestToken.
-          console.log('🔐 No token, showing login screen');
+          console.log('No token, showing login screen');
           setShowLogin(true);
         }
       } catch (err) {
@@ -562,7 +562,7 @@ function App() {
                 checkConnection();
               }}
               onError={(error) => {
-                console.error('❌ Login failed:', error);
+                console.error('Login failed:', error);
               }}
             />
           </main>
@@ -603,7 +603,7 @@ function App() {
 
   const shellPage: ShellPage = currentPage === 'confirm' ? 'home' : currentPage;
 
-  const PAGES: Record<ShellPage, { title: string; element: ReactNode }> = {
+  const pages: Record<ShellPage, { title: string; element: ReactNode }> = {
     home: {
       title: 'Home',
       element: (
@@ -662,7 +662,7 @@ function App() {
         <div className="app-content">
           <header className="header">
             <div className="header-title">
-              <h1 data-testid="shell-page-title">{PAGES[shellPage].title}</h1>
+              <h1 data-testid="shell-page-title">{pages[shellPage].title}</h1>
               {shellPage === 'home' && appVersion && (
                 <span className="version-badge">v{appVersion}</span>
               )}
@@ -678,7 +678,7 @@ function App() {
 
           {/* Own boundary so a page chunk loads under a painted shell, not a blank window. */}
           <main className="main">
-            <Suspense fallback={null}>{PAGES[shellPage].element}</Suspense>
+            <Suspense fallback={null}>{pages[shellPage].element}</Suspense>
           </main>
         </div>
       </div>

@@ -15,12 +15,14 @@ interface HomeProps {
 
 function Home({ connected, error, clientReady, onReconnect, onNavigate, onOpenSettings, onAuthRequired }: HomeProps) {
   const [installedApps, setInstalledApps] = useState<any[]>([]);
-  const [loadingApps, setLoadingApps] = useState(false);
+  // Starts true: Home remounts on every navigation back, and a false start
+  // renders the "no applications" card for a frame at users who have apps.
+  const [loadingApps, setLoadingApps] = useState(true);
 
   useEffect(() => {
     // Until the client is configured, the singleton falls back to its hardcoded
     // localhost:2528, so a node on any other port answers 401 and forces login.
-    if (!clientReady) return;
+    if (!clientReady) { setLoadingApps(false); return; }
     setLoadingApps(true);
     listInstalledApps()
       .then((response) => {
@@ -29,7 +31,7 @@ function Home({ connected, error, clientReady, onReconnect, onNavigate, onOpenSe
             onAuthRequired();
             return;
           }
-          console.error('❌ Apps error:', response.error.message);
+          console.error('Apps error:', response.error.message);
           return;
         }
         if (response.data && Array.isArray(response.data)) {

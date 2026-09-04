@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import './UsernamePasswordForm.css';
 
 const USERNAME_REGEX = /^[a-zA-Z0-9_]+$/;
 const MIN_PASSWORD_LENGTH = 8;
@@ -18,17 +19,6 @@ function validatePassword(value: string): string | null {
   return null;
 }
 
-const DARK = {
-  bgCard: '#18181b',
-  bgInput: '#27272a',
-  bgButton: '#27272a',
-  bgButtonPrimary: '#a5ff11',
-  text: '#f4f4f5',
-  textMuted: '#a1a1aa',
-  border: '#27272a',
-  error: '#ef4444',
-};
-
 export interface UsernamePasswordFormProps {
   onSubmit: (username: string, password: string) => void;
   onBack?: () => void;
@@ -36,6 +26,7 @@ export interface UsernamePasswordFormProps {
   error?: string | null;
   containerClassName?: string;
   cardClassName?: string;
+  /** Retained for the call sites; the card now follows the document theme. */
   variant?: 'light' | 'dark';
 }
 
@@ -46,14 +37,11 @@ export function UsernamePasswordForm({
   error = null,
   containerClassName,
   cardClassName,
-  variant = 'light',
 }: UsernamePasswordFormProps) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [usernameError, setUsernameError] = useState<string | null>(null);
   const [passwordError, setPasswordError] = useState<string | null>(null);
-
-  const isDark = variant === 'dark';
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -67,47 +55,75 @@ export function UsernamePasswordForm({
   };
 
   const isEmpty = !username.trim() || !password.trim();
-
-  const containerStyle: React.CSSProperties = { maxWidth: 420, width: '100%' };
-  const cardStyle: React.CSSProperties = isDark
-    ? { background: DARK.bgCard, borderRadius: '16px', padding: '32px', boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)', border: `1px solid ${DARK.border}` }
-    : { background: 'var(--bg-secondary)', borderRadius: '12px', padding: '32px', boxShadow: 'var(--shadow-lg)', border: '1px solid var(--border-color)' };
+  const submitDisabled = loading || isEmpty || !!usernameError || !!passwordError;
 
   const containerClass = containerClassName ? `username-password-form-container ${containerClassName}` : 'username-password-form-container';
+  const cardClass = cardClassName ? `username-password-form-card ${cardClassName}` : 'username-password-form-card';
 
   return (
-    <div className={containerClass} style={containerStyle}>
-      <div className={cardClassName ? `username-password-form-card ${cardClassName}` : 'username-password-form-card'} style={cardStyle}>
-        <h2 style={{ marginTop: 0, marginBottom: '24px', fontSize: '18px', fontWeight: 600, color: isDark ? DARK.text : 'var(--text-primary)' }}>Sign in</h2>
+    <div className={containerClass}>
+      <div className={cardClass}>
+        <h2>Sign in</h2>
         <form onSubmit={handleSubmit}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+          <div className="username-password-form-fields">
             <div>
-              <label htmlFor="username" style={{ display: 'block', marginBottom: '8px', fontSize: '13px', fontWeight: 500, color: isDark ? '#e2e8f0' : 'var(--text-primary)' }}>
-                Username <span style={{ color: isDark ? DARK.error : 'var(--error)' }}>*</span>
+              <label htmlFor="username">
+                Username <span className="username-password-form-required">*</span>
               </label>
-              <input id="username" type="text" value={username} onChange={(e) => { setUsername(e.target.value); setUsernameError(null); }} onBlur={() => setUsernameError(validateUsername(username))} placeholder="Letters, numbers, underscores only" disabled={loading} autoComplete="username" autoCorrect="off" autoCapitalize="off" spellCheck={false} style={{ width: '100%', padding: '14px 16px', border: `1px solid ${usernameError ? (isDark ? DARK.error : 'var(--error)') : isDark ? DARK.border : 'var(--border-color)'}`, borderRadius: '10px', fontSize: '15px', boxSizing: 'border-box', background: isDark ? DARK.bgInput : 'var(--bg-tertiary)', color: isDark ? DARK.text : 'var(--text-primary)' }} />
-              {usernameError && <p style={{ margin: '6px 0 0 0', fontSize: '12px', color: isDark ? DARK.error : 'var(--error)' }}>{usernameError}</p>}
+              <input
+                id="username"
+                type="text"
+                className={usernameError ? 'is-invalid' : undefined}
+                value={username}
+                onChange={(e) => { setUsername(e.target.value); setUsernameError(null); }}
+                onBlur={() => setUsernameError(validateUsername(username))}
+                placeholder="Letters, numbers, underscores only"
+                disabled={loading}
+                autoComplete="username"
+                autoCorrect="off"
+                autoCapitalize="off"
+                spellCheck={false}
+              />
+              {usernameError && <p className="field-error">{usernameError}</p>}
             </div>
             <div>
-              <label htmlFor="password" style={{ display: 'block', marginBottom: '8px', fontSize: '13px', fontWeight: 500, color: isDark ? '#e2e8f0' : 'var(--text-primary)' }}>
-                Password <span style={{ color: isDark ? DARK.error : 'var(--error)' }}>*</span>
+              <label htmlFor="password">
+                Password <span className="username-password-form-required">*</span>
               </label>
-              <input id="password" type="password" value={password} onChange={(e) => { setPassword(e.target.value); setPasswordError(null); }} onBlur={() => setPasswordError(validatePassword(password))} placeholder={`At least ${MIN_PASSWORD_LENGTH} characters`} disabled={loading} autoComplete="current-password" autoCorrect="off" autoCapitalize="off" spellCheck={false} style={{ width: '100%', padding: '14px 16px', border: `1px solid ${passwordError ? (isDark ? DARK.error : 'var(--error)') : isDark ? DARK.border : 'var(--border-color)'}`, borderRadius: '10px', fontSize: '15px', boxSizing: 'border-box', background: isDark ? DARK.bgInput : 'var(--bg-tertiary)', color: isDark ? DARK.text : 'var(--text-primary)' }} />
-              {passwordError && <p style={{ margin: '6px 0 0 0', fontSize: '12px', color: isDark ? DARK.error : 'var(--error)' }}>{passwordError}</p>}
+              <input
+                id="password"
+                type="password"
+                className={passwordError ? 'is-invalid' : undefined}
+                value={password}
+                onChange={(e) => { setPassword(e.target.value); setPasswordError(null); }}
+                onBlur={() => setPasswordError(validatePassword(password))}
+                placeholder={`At least ${MIN_PASSWORD_LENGTH} characters`}
+                disabled={loading}
+                autoComplete="current-password"
+                autoCorrect="off"
+                autoCapitalize="off"
+                spellCheck={false}
+              />
+              {passwordError && <p className="field-error">{passwordError}</p>}
             </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '8px' }}>
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
+            <div className="username-password-form-actions">
+              <div className="username-password-form-buttons">
                 {onBack && (
-                  <button type="button" onClick={onBack} disabled={loading} style={{ padding: '12px 24px', background: isDark ? DARK.bgButton : 'var(--bg-tertiary)', color: isDark ? DARK.text : 'var(--text-primary)', border: `1px solid ${isDark ? '#475569' : 'var(--border-color)'}`, borderRadius: '10px', fontSize: '15px', fontWeight: 500, cursor: loading ? 'not-allowed' : 'pointer', opacity: loading ? 0.6 : 1 }}>
+                  <button
+                    type="button"
+                    className="button button-secondary"
+                    onClick={onBack}
+                    disabled={loading}
+                  >
                     Back
                   </button>
                 )}
-                <button type="submit" disabled={loading || isEmpty || !!usernameError || !!passwordError} style={{ padding: '12px 24px', background: loading || isEmpty || !!usernameError || !!passwordError ? (isDark ? DARK.bgButton : 'var(--bg-tertiary)') : (isDark ? DARK.bgButtonPrimary : 'var(--accent-primary)'), color: loading || isEmpty || !!usernameError || !!passwordError ? (isDark ? DARK.textMuted : 'var(--text-tertiary)') : '#09090b', border: 'none', borderRadius: '10px', fontSize: '15px', fontWeight: 600, cursor: loading || isEmpty || !!usernameError || !!passwordError ? 'not-allowed' : 'pointer', opacity: loading ? 0.6 : 1 }}>
+                <button type="submit" className="button button-primary" disabled={submitDisabled}>
                   {loading ? 'Signing In...' : 'Sign In'}
                 </button>
               </div>
               {error && !usernameError && !passwordError && (
-                <p style={{ margin: 0, fontSize: '13px', color: isDark ? DARK.error : 'var(--error)', textAlign: 'right' }}>{error}</p>
+                <p className="username-password-form-error">{error}</p>
               )}
             </div>
           </div>

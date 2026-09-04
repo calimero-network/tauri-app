@@ -122,20 +122,6 @@
   z-index: 1;
 }
 
-.login-screen-main .provider-selector,
-.login-screen-main .username-password-form-container {
-  width: 100%;
-  max-width: 420px;
-}
-
-.login-screen-main .provider-selector,
-.login-screen-main .username-password-form-container,
-.login-screen-main .login-provider-container,
-.login-screen-main .login-form-container {
-  max-width: 400px;
-  width: 100%;
-}
-
 /* ── App Layout ── */
 .app-layout {
   display: flex;

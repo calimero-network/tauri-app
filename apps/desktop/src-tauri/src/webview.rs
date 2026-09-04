@@ -1,13 +1,8 @@
 //! Shared app-webview builder: creates a window pointed at an external app URL and
 //! injects the node-proxy script so the page can reach the Tauri proxy commands.
 //! Used by the `calimero-shell` binary (the host builds its app windows inline via
-//! its own `create_app_window` command).
-//!
-//! Tauri v2 note: remote-URL IPC access is granted statically via the capabilities
-//! system (see each binary's `capabilities/*.json`), not the v1 runtime
-//! `RemoteDomainAccessScope`/`ipc_scope().configure_remote_access()` API, which no
-//! longer exists. IP-hosted pages (127.0.0.1) still fall back to native fetch via
-//! the injected proxy script.
+//! its own `create_app_window` command). A remote page reaches the proxy commands
+//! only through the capability granting them, in each binary's `capabilities/`.
 
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 
@@ -51,11 +46,8 @@ pub fn open_app_webview(
     .build()
     .map_err(|e| format!("Failed to create window '{}' for URL '{}': {}", title, url, e))?;
 
-    // Camera/microphone for WebRTC (e.g. Mero Meet) needs no extra work here: wry's
-    // own WKUIDelegate grants requestMediaCapturePermissionForOrigin on macOS.
-    // Installing a custom delegate would replace wry's, breaking its
-    // `<input type=file>` open-panel handler.
-
+    // No custom WKUIDelegate: wry's own already grants WebRTC capture on macOS, and
+    // replacing it would break its `<input type=file>` open-panel handler.
     window
         .show()
         .map_err(|e| format!("Failed to display window '{}': {}", title, e))?;

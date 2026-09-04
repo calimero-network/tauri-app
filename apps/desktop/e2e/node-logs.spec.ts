@@ -1,5 +1,4 @@
 import { test, expect } from "./fixtures/test";
-import { describeAfter35 } from "./fixtures/e2e-cap";
 import {
   getInvokeCalls,
   mockContextAPIs,
@@ -29,7 +28,7 @@ async function openLogs(page: import("@playwright/test").Page) {
   await expect(page.getByRole("heading", { name: `Logs: ${NODE}` })).toBeVisible();
 }
 
-describeAfter35("Nodes – logs viewer", () => {
+test.describe("Nodes – logs viewer", () => {
   test.beforeEach(async ({ page }) => {
     await stubTauriInvoke(page, {
       list_merod_nodes: [NODE],

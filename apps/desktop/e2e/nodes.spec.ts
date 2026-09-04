@@ -1,5 +1,4 @@
 import { test, expect } from "./fixtures/test";
-import { describeAfter35 } from "./fixtures/e2e-cap";
 import { setupDeveloperPage, navigateVia } from "./fixtures/helpers";
 
 /**
@@ -14,7 +13,7 @@ import { setupDeveloperPage, navigateVia } from "./fixtures/helpers";
  * rather than backend side-effects.
  */
 
-describeAfter35("Nodes – page rendering", () => {
+test.describe("Nodes – page rendering", () => {
   test.beforeEach(async ({ page }) => {
     await setupDeveloperPage(page);
     await navigateVia(page, "Nodes");
@@ -50,7 +49,7 @@ describeAfter35("Nodes – page rendering", () => {
 
 // ─── Data directory (local nodes) ───────────────────────────────────────────
 
-describeAfter35("Nodes – data directory", () => {
+test.describe("Nodes – data directory", () => {
   test.beforeEach(async ({ page }) => {
     await setupDeveloperPage(page);
     await navigateVia(page, "Nodes");
@@ -77,7 +76,7 @@ describeAfter35("Nodes – data directory", () => {
 
 // ─── Create node form ───────────────────────────────────────────────────────
 
-describeAfter35("Nodes – create node form", () => {
+test.describe("Nodes – create node form", () => {
   test.beforeEach(async ({ page }) => {
     await setupDeveloperPage(page);
     await navigateVia(page, "Nodes");
@@ -120,7 +119,7 @@ describeAfter35("Nodes – create node form", () => {
 
 // ─── Available nodes section ────────────────────────────────────────────────
 
-describeAfter35("Nodes – available nodes (empty state)", () => {
+test.describe("Nodes – available nodes (empty state)", () => {
   test("shows empty message when no nodes exist", async ({ page }) => {
     await setupDeveloperPage(page);
     await navigateVia(page, "Nodes");
@@ -133,7 +132,7 @@ describeAfter35("Nodes – available nodes (empty state)", () => {
 
 // ─── Port inputs ────────────────────────────────────────────────────────────
 
-describeAfter35("Nodes – port inputs (when nodes available)", () => {
+test.describe("Nodes – port inputs (when nodes available)", () => {
   test("port inputs have correct defaults when the select is visible", async ({
     page,
   }) => {
@@ -152,7 +151,7 @@ describeAfter35("Nodes – port inputs (when nodes available)", () => {
 
 // ─── Manage section (only when nodes exist) ─────────────────────────────────
 
-describeAfter35("Nodes – manage section", () => {
+test.describe("Nodes – manage section", () => {
   test("Manage Nodes heading appears only when merod reports nodes", async ({
     page,
   }) => {
@@ -179,7 +178,7 @@ describeAfter35("Nodes – manage section", () => {
 
 // ─── Back button ────────────────────────────────────────────────────────────
 
-describeAfter35("Nodes – navigation", () => {
+test.describe("Nodes – navigation", () => {
   test("Nodes is accessible from the sidebar", async ({ page }) => {
     await setupDeveloperPage(page);
 

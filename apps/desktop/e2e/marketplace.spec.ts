@@ -13,7 +13,6 @@ import {
   mockCoreAPIs,
   seedAuthenticatedState,
 } from "./fixtures/helpers";
-import { describeAfter35 } from "./fixtures/e2e-cap";
 
 // ─── Marketplace page ─────────────────────────────────────────────────────────
 
@@ -168,7 +167,7 @@ test.describe("Installed Applications – empty state", () => {
 // Uninstall → confirm → API is exercised manually; the in-app confirm screen and
 // real client make that flow brittle in e2e. We instead assert metadata-driven actions.
 
-describeAfter35("Installed Applications – row variants", () => {
+test.describe("Installed Applications – row variants", () => {
   test("app without frontend URL shows Uninstall but not Open or Shortcut", async ({
     page,
   }) => {
@@ -189,7 +188,7 @@ describeAfter35("Installed Applications – row variants", () => {
 
 // ─── Open & Shortcut buttons ─────────────────────────────────────────────────
 
-describeAfter35("Installed Applications – actions", () => {
+test.describe("Installed Applications – actions", () => {
   test.beforeEach(async ({ page }) => {
     await setupAuthenticatedPage(page);
     await navigateVia(page, "Applications");
@@ -233,7 +232,7 @@ describeAfter35("Installed Applications – actions", () => {
 
 // ─── Cross-page navigation ───────────────────────────────────────────────────
 
-describeAfter35("Marketplace ↔ Applications navigation", () => {
+test.describe("Marketplace ↔ Applications navigation", () => {
   test("can navigate between Marketplace and Applications", async ({
     page,
   }) => {

@@ -1,5 +1,4 @@
 import { test, expect } from "./fixtures/test";
-import { describeAfter35 } from "./fixtures/e2e-cap";
 import {
   STORAGE_KEYS,
   DEFAULT_SETTINGS,
@@ -9,7 +8,7 @@ import {
   listApplicationsWireBody,
 } from "./fixtures/mock-data";
 
-describeAfter35("onboarding flow", () => {
+test.describe("onboarding flow", () => {
   test("fresh profile shows welcome screen", async ({ page }) => {
     await page.goto("/");
     await expect(

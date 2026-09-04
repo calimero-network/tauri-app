@@ -1,5 +1,4 @@
 import { test, expect } from "./fixtures/test";
-import { describeAfter35 } from "./fixtures/e2e-cap";
 import type { Page } from "@playwright/test";
 import {
   setupAuthenticatedPage,
@@ -33,7 +32,7 @@ import {
 
 // ─── Navigate to Settings ──────────────────────────────────────────────────
 
-describeAfter35("Settings page access", () => {
+test.describe("Settings page access", () => {
   test.beforeEach(async ({ page }) => {
     await setupAuthenticatedPage(page);
   });
@@ -73,7 +72,7 @@ describeAfter35("Settings page access", () => {
 
 // ─── General tab — toggles ──────────────────────────────────────────────────
 
-describeAfter35("General tab toggles", () => {
+test.describe("General tab toggles", () => {
   test.beforeEach(async ({ page }) => {
     await setupAuthenticatedPage(page);
     await page.click('button[title="Settings"]');
@@ -156,7 +155,7 @@ describeAfter35("General tab toggles", () => {
 
 // ─── Developer mode effect on sidebar ───────────────────────────────────────
 
-describeAfter35("Developer mode enables sidebar links", () => {
+test.describe("Developer mode enables sidebar links", () => {
   test("enabling developer mode reveals Namespaces & Nodes links", async ({
     page,
   }) => {
@@ -196,7 +195,7 @@ describeAfter35("Developer mode enables sidebar links", () => {
 
 // ─── Developer mode pre-seeded ──────────────────────────────────────────────
 
-describeAfter35("Developer mode pre-seeded", () => {
+test.describe("Developer mode pre-seeded", () => {
   test.beforeEach(async ({ page }) => {
     await setupDeveloperPage(page);
     await page.click('button[title="Settings"]');
@@ -212,7 +211,7 @@ describeAfter35("Developer mode pre-seeded", () => {
 
 // ─── Registries tab ─────────────────────────────────────────────────────────
 
-describeAfter35("Registries tab", () => {
+test.describe("Registries tab", () => {
   test.beforeEach(async ({ page }) => {
     await setupAuthenticatedPage(page);
     await page.click('button[title="Settings"]');
@@ -280,7 +279,7 @@ describeAfter35("Registries tab", () => {
 
 // ─── Reset / Nuke sections ──────────────────────────────────────────────────
 
-describeAfter35("Reset and Nuke sections", () => {
+test.describe("Reset and Nuke sections", () => {
   test.beforeEach(async ({ page }) => {
     await setupAuthenticatedPage(page);
     await page.click('button[title="Settings"]');
@@ -339,7 +338,7 @@ describeAfter35("Reset and Nuke sections", () => {
 
 // ─── Tab switching ──────────────────────────────────────────────────────────
 
-describeAfter35("Tab switching", () => {
+test.describe("Tab switching", () => {
   test.beforeEach(async ({ page }) => {
     await setupAuthenticatedPage(page);
     await page.click('button[title="Settings"]');
@@ -366,7 +365,7 @@ const json = (body: unknown) => ({
   body: JSON.stringify(body),
 });
 
-describeAfter35("Account tab", () => {
+test.describe("Account tab", () => {
   test.beforeEach(async ({ page }) => {
     await setupAuthenticatedPage(page);
     await page.route(API_ROUTES.identity, (route) =>
@@ -472,7 +471,7 @@ async function inviteNamespacesOnScreen(page: Page): Promise<string[]> {
   return JSON.parse(atob(blob.replace("mero-pair:", ""))).namespaces;
 }
 
-describeAfter35("Account tab - pairing needs no developer mode", () => {
+test.describe("Account tab - pairing needs no developer mode", () => {
   test("both halves of the exchange are offered on an ordinary session", async ({
     page,
   }) => {
@@ -487,7 +486,7 @@ describeAfter35("Account tab - pairing needs no developer mode", () => {
   });
 });
 
-describeAfter35("Account tab - device listing", () => {
+test.describe("Account tab - device listing", () => {
   test.beforeEach(async ({ page }) => {
     await setupDeveloperPage(page);
     await mockPairingAPIs(page);
@@ -553,7 +552,7 @@ describeAfter35("Account tab - device listing", () => {
   });
 });
 
-describeAfter35("Account tab - pairing wizard", () => {
+test.describe("Account tab - pairing wizard", () => {
   test.beforeEach(async ({ page }) => {
     await setupDeveloperPage(page);
     await mockPairingAPIs(page);
@@ -666,7 +665,7 @@ describeAfter35("Account tab - pairing wizard", () => {
   });
 });
 
-describeAfter35("Account tab - pairing responder", () => {
+test.describe("Account tab - pairing responder", () => {
   test.beforeEach(async ({ page }) => {
     await setupDeveloperPage(page);
     await mockPairingAPIs(page);
@@ -777,7 +776,7 @@ describeAfter35("Account tab - pairing responder", () => {
   });
 });
 
-describeAfter35("Settings toasts render", () => {
+test.describe("Settings toasts render", () => {
   test.beforeEach(async ({ page }) => {
     await setupAuthenticatedPage(page);
     await page.click('button[title="Settings"]');

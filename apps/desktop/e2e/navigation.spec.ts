@@ -1,5 +1,4 @@
 import { test, expect } from "./fixtures/test";
-import { describeAfter35 } from "./fixtures/e2e-cap";
 import {
   setupAuthenticatedPage,
   setupDeveloperPage,
@@ -11,7 +10,7 @@ import { DEFAULT_SETTINGS, AUTHENTICATED_SETTINGS, DEVELOPER_SETTINGS } from "./
 
 const shellTitleTimeout = 20_000;
 
-describeAfter35("Sidebar navigation", () => {
+test.describe("Sidebar navigation", () => {
   test.beforeEach(async ({ page }) => {
     await setupAuthenticatedPage(page);
   });
@@ -79,7 +78,7 @@ describeAfter35("Sidebar navigation", () => {
   });
 });
 
-describeAfter35("Sidebar navigation — developer mode", () => {
+test.describe("Sidebar navigation — developer mode", () => {
   test.beforeEach(async ({ page }) => {
     await setupDeveloperPage(page);
   });
@@ -140,7 +139,7 @@ describeAfter35("Sidebar navigation — developer mode", () => {
   });
 });
 
-describeAfter35("Settings navigation", () => {
+test.describe("Settings navigation", () => {
   test.beforeEach(async ({ page }) => {
     await setupAuthenticatedPage(page);
   });
@@ -163,7 +162,7 @@ describeAfter35("Settings navigation", () => {
   });
 });
 
-describeAfter35("Home page content", () => {
+test.describe("Home page content", () => {
   test.beforeEach(async ({ page }) => {
     await setupAuthenticatedPage(page);
   });
@@ -192,7 +191,7 @@ describeAfter35("Home page content", () => {
   });
 });
 
-describeAfter35("Applications page — empty state", () => {
+test.describe("Applications page — empty state", () => {
   test.beforeEach(async ({ page }) => {
     await setupAuthenticatedPage(page, { installedApps: [] });
   });

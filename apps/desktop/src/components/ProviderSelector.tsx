@@ -1,13 +1,5 @@
 import type { Provider } from '../lib/mero-client';
-
-const DARK = {
-  bgCard: '#18181b',
-  bgButton: '#09090b',
-  text: '#f4f4f5',
-  textMuted: '#a1a1aa',
-  border: '#27272a',
-  accent: '#a5ff11',
-};
+import './ProviderSelector.css';
 
 export interface ProviderSelectorProps {
   providers: Provider[];
@@ -16,6 +8,7 @@ export interface ProviderSelectorProps {
   error?: string | null;
   containerClassName?: string;
   cardClassName?: string;
+  /** Retained for the call sites; the card now follows the document theme. */
   variant?: 'light' | 'dark';
 }
 
@@ -31,132 +24,52 @@ export function ProviderSelector({
   error,
   containerClassName,
   cardClassName,
-  variant = 'light',
 }: ProviderSelectorProps) {
-  const isDark = variant === 'dark';
-
-  const containerStyle: React.CSSProperties = {
-    maxWidth: 480,
-    width: '100%',
-  };
-
-  const cardStyle: React.CSSProperties = isDark
-    ? {
-        background: DARK.bgCard,
-        borderRadius: '16px',
-        padding: '32px',
-        boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)',
-        border: `1px solid ${DARK.border}`,
-      }
-    : {
-        background: 'var(--bg-secondary)',
-        borderRadius: '12px',
-        padding: '32px',
-        boxShadow: 'var(--shadow-lg)',
-        border: '1px solid var(--border-color)',
-      };
-
   const containerClass = containerClassName ? `provider-selector ${containerClassName}` : 'provider-selector';
+  const cardClass = cardClassName ? `provider-selector-card ${cardClassName}` : 'provider-selector-card';
 
   if (loading) {
     return (
-      <div className={containerClass} style={containerStyle}>
-        <div className="provider-selector-loading" style={{ color: isDark ? DARK.textMuted : 'var(--text-secondary)' }}>Loading...</div>
+      <div className={containerClass}>
+        <div className="provider-selector-loading">Loading...</div>
       </div>
     );
   }
 
   if (providers.length === 0) {
     return (
-      <div className={containerClass} style={containerStyle}>
-        <div className={cardClassName ? `provider-selector-card ${cardClassName}` : 'provider-selector-card'} style={{ ...cardStyle, textAlign: 'center' as const }}>
-          <h3 style={{ marginTop: 0, color: isDark ? DARK.text : 'var(--text-primary)' }}>No providers available</h3>
-          <p style={{ color: isDark ? DARK.textMuted : 'var(--text-secondary)' }}>
-            No authentication providers are configured on this node.
-          </p>
+      <div className={containerClass}>
+        <div className={`${cardClass} provider-selector-empty`}>
+          <h3>No providers available</h3>
+          <p>No authentication providers are configured on this node.</p>
         </div>
       </div>
     );
   }
 
   return (
-    <div className={containerClass} style={containerStyle}>
-      <div className={cardClassName ? `provider-selector-card ${cardClassName}` : 'provider-selector-card'} style={cardStyle}>
-        <h2 style={{
-          marginTop: 0,
-          marginBottom: '8px',
-          fontSize: '18px',
-          fontWeight: 600,
-          color: isDark ? DARK.text : 'var(--text-primary)',
-        }}>
-          Sign in
-        </h2>
-        <p style={{
-          margin: '0 0 24px 0',
-          fontSize: '13px',
-          color: isDark ? DARK.textMuted : 'var(--text-secondary)',
-        }}>
-          Choose an authentication method
-        </p>
+    <div className={containerClass}>
+      <div className={cardClass}>
+        <h2>Sign in</h2>
+        <p className="provider-selector-subtitle">Choose an authentication method</p>
 
-        {error && (
-          <div
-            style={{
-              padding: '12px 16px',
-              background: 'rgba(248, 113, 113, 0.15)',
-              color: isDark ? '#f87171' : 'var(--error)',
-              borderRadius: '8px',
-              fontSize: '14px',
-              marginBottom: '20px',
-              border: '1px solid #f87171',
-            }}
-          >
-            {error}
-          </div>
-        )}
+        {error && <div className="error-message">{error}</div>}
 
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+        <div className="provider-selector-list">
           {providers.map((provider) => (
             <button
               key={provider.name}
+              className="provider-selector-option"
               onClick={() => onProviderSelect(provider)}
-              style={{
-                padding: '14px 18px',
-                background: isDark ? DARK.bgButton : 'var(--bg-tertiary)',
-                border: `1px solid ${isDark ? DARK.border : 'var(--border-color)'}`,
-                borderRadius: '10px',
-                textAlign: 'left',
-                cursor: 'pointer',
-                transition: 'all 0.15s',
-                color: isDark ? DARK.text : 'var(--text-primary)',
-              }}
-              onMouseEnter={(e) => {
-                if (isDark) {
-                  e.currentTarget.style.background = DARK.bgCard;
-                  e.currentTarget.style.borderColor = DARK.accent;
-                  e.currentTarget.style.boxShadow = '0 0 0 2px rgba(165, 255, 17, 0.12)';
-                } else {
-                  e.currentTarget.style.background = 'var(--bg-secondary)';
-                  e.currentTarget.style.borderColor = 'var(--accent-primary)';
-                  e.currentTarget.style.boxShadow = '0 0 0 2px var(--accent-light)';
-                }
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.background = isDark ? DARK.bgButton : 'var(--bg-tertiary)';
-                e.currentTarget.style.borderColor = isDark ? DARK.border : 'var(--border-color)';
-                e.currentTarget.style.boxShadow = 'none';
-              }}
             >
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                <div style={{ fontWeight: 600, fontSize: '15px' }}>
-                  {PROVIDER_DISPLAY_NAMES[provider.name] ||
-                    provider.description ||
-                    provider.name}
-                </div>
-                {provider.name !== provider.description && (
-                  <div style={{ fontSize: '12px', color: isDark ? DARK.textMuted : 'var(--text-tertiary)' }}>{provider.name}</div>
-                )}
+              <div className="provider-selector-option-name">
+                {PROVIDER_DISPLAY_NAMES[provider.name] ||
+                  provider.description ||
+                  provider.name}
               </div>
+              {provider.name !== provider.description && (
+                <div className="provider-selector-option-id">{provider.name}</div>
+              )}
             </button>
           ))}
         </div>

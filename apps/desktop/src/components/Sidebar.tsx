@@ -1,5 +1,5 @@
 import { getSettings } from "../utils/settings";
-import { Home, Layers, Package, Store, SettingsIcon, Server } from "./Icons";
+import { Home, Layers, Package, Store, Settings2 as SettingsIcon, Server } from "lucide-react";
 import calimeroLogo from "../assets/calimero-logo.svg";
 import "./Sidebar.css";
 

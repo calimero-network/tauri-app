@@ -859,9 +859,9 @@ function Settings({ onBack }: SettingsProps) {
                         fontSize: '0.75rem',
                         fontWeight: 600,
                         textTransform: 'capitalize',
-                        background: 'var(--accent-bg, #1a3a1a)',
-                        color: 'var(--accent-color, #4ade80)',
-                        border: '1px solid var(--accent-border, #2d5a2d)',
+                        background: 'var(--accent-light)',
+                        color: 'var(--accent-primary)',
+                        border: '1px solid var(--accent-dim)',
                       }}>
                         {cloudPlan} plan
                       </span>

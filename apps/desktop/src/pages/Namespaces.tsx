@@ -25,7 +25,7 @@ import {
   CloudSessionExpiredError,
 } from "../utils/cloudApi";
 import { getCloudIdToken } from "../utils/cloudAuth";
-import { getAccessToken } from "../lib/token-storage";
+import { apiClient } from "../lib/mero-client";
 import {
   fetchGroupMembers,
   isInheritedMembershipError,
@@ -230,9 +230,11 @@ function Namespaces() {
   // resolves to the same account: the route took a namespace and answered with
   // the node's account whichever one you passed.
   const { identity: myNodeIdentity } = useNodeIdentity();
-  const { members: nsMembers, loading: nsMembersLoading } = useGroupMembers(
-    view.type === "namespace" ? activeNsRootId : null,
-  );
+  const {
+    members: nsMembers,
+    loading: nsMembersLoading,
+    refetch: refetchNsMembers,
+  } = useGroupMembers(view.type === "namespace" ? activeNsRootId : null);
 
   // My role on the active namespace, resolved from its member list, matched on
   // the ACCOUNT. rc.23 made the member listing answer with accounts (#3522) —
@@ -296,7 +298,7 @@ function Namespaces() {
     const controller = new AbortController();
     setChildGroupRolesLoading(true);
     void Promise.all(
-      ids.map(async (id) => [id, roleOf(await fetchGroupMembers(id, controller.signal), myAccountId)] as const),
+      ids.map(async (id) => [id, roleOf(await fetchGroupMembers(id), myAccountId)] as const),
     )
       .then((entries) => {
         if (!controller.signal.aborted) setChildGroupRoles(Object.fromEntries(entries));
@@ -442,7 +444,7 @@ function Namespaces() {
 
   const [myIdentity, setMyIdentity] = useState<string | null>(null);
   useEffect(() => {
-    const payload = parseJwtPayload(getAccessToken());
+    const payload = parseJwtPayload(apiClient.meroJs.getTokenData()?.access_token);
     const id = payload?.sub || payload?.identity || payload?.public_key;
     if (id && typeof id === 'string') setMyIdentity(id);
   }, []);
@@ -763,13 +765,11 @@ function Namespaces() {
    *     owner still shows the fleet node in private channels — the exact
    *     symptom this fixes (Bug 2).
    *
-   * Auth: the per-group members listing uses the **local node access
-   * token** (`getAccessToken()`), NOT the cloud session token — the same
-   * canonical path the list-members `useEffect` uses (tauri-app#107
-   * review). A missing/expired node token, a hung merod (5s timeout), or
-   * an unreadable subgroup surfaces as `listFailed: true`; the reconcile
-   * on the next namespace/HA-status load retries automatically, so a
-   * single transient failure no longer strands the TEE forever (Bug 1).
+   * Auth: every call goes through the shared admin client, so it carries the
+   * node token the rest of the app uses and refreshes it the same way. A
+   * refusal, a hung merod (5s timeout), or an unreadable subgroup surfaces as
+   * `listFailed: true`; the reconcile on the next namespace/HA-status load
+   * retries automatically, so one transient failure no longer strands the TEE.
    *
    * Best-effort: never throws. The tree walk + idempotent removals live
    * in `utils/teeEviction.ts` (pure, unit-tested). Returns counts +
@@ -978,7 +978,7 @@ function Namespaces() {
         const evicted = touched.reduce((n, r) => n + r.evicted, 0);
         if (evicted > 0) {
           // We changed local membership — mirror it into the UI.
-          setNsMembersVersion((v) => v + 1);
+          refetchNsMembers?.();
           refetchGroupMembers?.();
           toast.success(
             `Cleaned up ${evicted} stranded TEE member(s) from HA-disabled namespace(s)`,
@@ -1120,7 +1120,7 @@ function Namespaces() {
           // tauri-app#107 v3 review (cursor) + v5 review (defensive
           // `failed > 0` arm per meroreviewer).
           if (evictResult.evicted > 0 || evictResult.failed > 0) {
-            setNsMembersVersion((v) => v + 1);
+            refetchNsMembers?.();
             refetchGroupMembers?.();
           }
           // Toast tiers — honest about what happened. Unlike v1, a transient
@@ -1853,7 +1853,7 @@ function Namespaces() {
                               groupId: ns.namespaceId,
                               identity: m.identity,
                               name: m.name || truncateId(m.identity),
-                              onSuccess: () => setNsMembersVersion((v) => v + 1),
+                              onSuccess: () => refetchNsMembers?.(),
                             });
                           }}
                         >

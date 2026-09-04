@@ -332,7 +332,7 @@ function withDeadline<T>(p: Promise<T>, ms: number, signal?: AbortSignal): Promi
  * module stays free of the heavyweight mero-js type graph and its unit
  * tests can pass a plain object.
  */
-interface MeroAdminLike {
+export interface MeroAdminLike {
   admin: {
     listGroupMembers: (groupId: string) => Promise<{ members: unknown[] }>;
     listSubgroups: (groupId: string) => Promise<{ groupId: string }[]>;

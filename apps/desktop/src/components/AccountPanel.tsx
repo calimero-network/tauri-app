@@ -545,7 +545,7 @@ export default function AccountPanel() {
 
       <div className="settings-card">
         <h2>Pair this computer into an account</h2>
-        <DevicePairResponder enrolledDeviceId={identity?.deviceId} />
+        <DevicePairResponder enrolledDeviceId={identity?.deviceId ?? undefined} />
       </div>
     </>
   );

@@ -127,14 +127,8 @@ class AuthApi {
       if (!at || !rt) {
         return { error: { message: r.error ?? r.data?.error ?? 'Failed to generate tokens' } };
       }
-      let expiresAt: number;
-      try {
-        const jwt = JSON.parse(atob(at.split('.')[1]));
-        expiresAt = jwt.exp * 1000;
-      } catch {
-        expiresAt = Date.now() + 3600 * 1000;
-      }
-      this.meroJs.setTokenData({ access_token: at, refresh_token: rt, expires_at: expiresAt });
+      // 0 asks the SDK to read `exp` off the JWT, falling back to an hour out.
+      this.meroJs.setTokenData({ access_token: at, refresh_token: rt, expires_at: 0 });
       return { data: { access_token: at, refresh_token: rt } };
     } catch (e) {
       return { error: { message: e instanceof Error ? e.message : 'Failed to request token' } };
@@ -155,14 +149,7 @@ class AuthApi {
       if (!at || !rt) {
         return { error: { message: 'Failed to refresh token' } };
       }
-      let expiresAt: number;
-      try {
-        const jwt = JSON.parse(atob(at.split('.')[1]));
-        expiresAt = jwt.exp * 1000;
-      } catch {
-        expiresAt = Date.now() + 3600 * 1000;
-      }
-      this.meroJs.setTokenData({ access_token: at, refresh_token: rt, expires_at: expiresAt });
+      this.meroJs.setTokenData({ access_token: at, refresh_token: rt, expires_at: 0 });
       return { data: { access_token: at, refresh_token: rt } };
     } catch (e) {
       return { error: { message: e instanceof Error ? e.message : 'Failed to refresh token' } };
@@ -221,9 +208,7 @@ class NodeApi {
   async getContexts(): Promise<ApiResponse<any[]>> {
     try {
       const r = await this.meroJs.admin.getContexts();
-      const raw = r as any;
-      const rows = Array.isArray(raw) ? raw : raw?.contexts ?? [];
-      return { data: rows };
+      return { data: r.contexts ?? [] };
     } catch (e: any) {
       if (e?.status === 401) return { error: { message: 'Unauthorized', code: '401' } };
       return { error: { message: e instanceof Error ? e.message : 'Failed to get contexts' } };
@@ -261,18 +246,7 @@ class NodeApi {
   async listApplications(): Promise<ApiResponse<Application[]>> {
     try {
       const r = await this.meroJs.admin.listApplications();
-      const raw = r as any;
-      const rows: unknown[] = (() => {
-        if (Array.isArray(raw)) return raw;
-        if (raw && typeof raw === 'object') {
-          if (Array.isArray(raw.apps)) return raw.apps;
-          if (raw.data && Array.isArray(raw.data)) return raw.data;
-          if (raw.data?.apps && Array.isArray(raw.data.apps)) return raw.data.apps;
-        }
-        return [];
-      })();
-      const normalized = rows.map((app: any) => ({ ...app, id: app.id ?? app.applicationId }));
-      return { data: normalized };
+      return { data: r.apps ?? [] };
     } catch (e: any) {
       if (e?.status === 401) return { error: { message: 'Unauthorized', code: '401' } };
       return { error: { message: e instanceof Error ? e.message : 'Failed to list applications' } };

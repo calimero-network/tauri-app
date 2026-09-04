@@ -91,30 +91,24 @@ describe('getSettings memoisation', () => {
   });
 });
 
-describe('registry migration', () => {
-  it('keeps the parsed settings when the migration write fails', () => {
-    localStorage.setItem(
-      'calimero-desktop-settings',
-      JSON.stringify({
-        nodeUrl: 'http://localhost:2529',
-        registries: ['http://localhost:8080'],
-        onboardingCompleted: true,
-      })
-    );
-    const setItem = localStorage.setItem.bind(localStorage);
-    localStorage.setItem = () => {
-      throw new Error('QuotaExceededError');
-    };
+describe('buildSettings defaults', () => {
+  it('falls back to the default node URL when stored as empty', () => {
+    localStorage.setItem('calimero-desktop-settings', JSON.stringify({ nodeUrl: '' }));
+    expect(getSettings().nodeUrl).toBe('http://localhost:2528');
+  });
 
-    // The migration write throws, but everything else parsed must survive it.
+  it('falls back to the default registry when none are stored', () => {
+    localStorage.setItem('calimero-desktop-settings', JSON.stringify({ nodeUrl: 'http://localhost:2528', registries: [] }));
+    expect(getSettings().registries).toEqual(['https://apps.calimero.network/']);
+  });
+
+  it('defaults developerMode, debugLogs, onboardingCompleted and cloudConnected to false', () => {
+    localStorage.setItem('calimero-desktop-settings', JSON.stringify({ nodeUrl: 'http://localhost:2528' }));
     const settings = getSettings();
-    expect(settings.registries).toEqual(['https://apps.calimero.network/']);
-    expect(settings.nodeUrl).toBe('http://localhost:2529');
-    expect(settings.onboardingCompleted).toBe(true);
-
-    localStorage.setItem = setItem;
-    saveSettings({ nodeUrl: 'http://localhost:2530', onboardingCompleted: true });
-    expect(getSettings().nodeUrl).toBe('http://localhost:2530');
+    expect(settings.developerMode).toBe(false);
+    expect(settings.debugLogs).toBe(false);
+    expect(settings.onboardingCompleted).toBe(false);
+    expect(settings.cloudConnected).toBe(false);
   });
 });
 

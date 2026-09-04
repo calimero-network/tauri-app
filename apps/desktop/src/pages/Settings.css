@@ -927,18 +927,5 @@
 }
 
 .account-spin {
-  animation: account-spin 1s linear infinite;
   flex: none;
-}
-
-@keyframes account-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .account-spin {
-    animation: none;
-  }
 }

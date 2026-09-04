@@ -475,10 +475,6 @@
   border-color: var(--accent-primary);
 }
 
-.spinning {
-  animation: spin 1s linear infinite;
-}
-
 @media (max-width: 768px) {
   .marketplace-controls {
     gap: 12px;
@@ -507,11 +503,6 @@
   z-index: 200;
   padding: 24px;
   animation: fadeIn 0.15s ease-out;
-}
-
-@keyframes fadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
 }
 
 .app-detail-modal {

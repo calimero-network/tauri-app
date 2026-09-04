@@ -168,6 +168,19 @@ body {
   to { transform: rotate(360deg); }
 }
 
+/* Two class names for one spinner; the call sites differ, the rule does not. */
+.spinning,
+.account-spin {
+  animation: spin 1s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinning,
+  .account-spin {
+    animation: none;
+  }
+}
+
 /* ── Buttons ── */
 .button {
   background: var(--button-glass);

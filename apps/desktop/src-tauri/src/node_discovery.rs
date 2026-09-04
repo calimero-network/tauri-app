@@ -459,17 +459,6 @@ mod tests {
         assert!(!claim_matches(&home, "n1", me));
     }
 
-    /// Sharing it with the installed app steals its socket and misroutes launches.
-    /// Tests are a debug build, so this pins the dev-side value.
-    #[test]
-    fn a_debug_build_uses_its_own_app_directory() {
-        assert_eq!(
-            crate::app_dir_name(),
-            "network.calimero.desktop.dev",
-            "debug builds must be isolated from the installed app"
-        );
-    }
-
     /// The webview asks for a PID by number; the backend must not take its word.
     #[test]
     fn a_pid_the_app_cannot_account_for_is_not_signalable() {

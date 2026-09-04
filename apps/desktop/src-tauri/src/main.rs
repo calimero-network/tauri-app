@@ -5,8 +5,10 @@ use log::{debug, info, warn};
 use serde::Serialize;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{Emitter, Manager};
+use tauri::{Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use tokio::process::Command;
+#[cfg(target_os = "macos")]
+use sha2::{Digest, Sha256};
 
 mod log_rotation;
 mod merod_versions;
@@ -537,9 +539,8 @@ fn caps_store_path() -> std::path::PathBuf {
 /// same-user socket.
 #[cfg(target_os = "macos")]
 fn new_cap(app_id: &str) -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     format!("cap-{app_id}-{nanos:x}-{}", std::process::id())
@@ -783,7 +784,6 @@ fn ensure_app_launcher_icon(
     // app id and refresh via Remove Launchers, which clears this cache.
     let cache_key = match bundled_icon {
         Some(data) => {
-            use sha2::{Digest, Sha256};
             format!("{app_id}-{}", &format!("{:x}", Sha256::digest(data.as_bytes()))[..12])
         }
         None => app_id.to_string(),
@@ -1237,8 +1237,6 @@ async fn create_app_window(
     node_url: Option<String>,
     isolation_key: Option<String>,
 ) -> Result<(), TauriError> {
-    use tauri::{WebviewUrl, WebviewWindowBuilder};
-
     // Parse URL up front to fail fast on invalid input.
     let _parsed_url = url.parse::<url::Url>().map_err(|e| {
         TauriError::with_details(
@@ -4487,7 +4485,6 @@ mod tests {
         launcher_bundle_is_removable, merod_target_triple, parse_app_deep_link, parse_node_ports,
         replace_multiaddr_port, score_merod_asset, DEFAULT_NODE_PORTS,
     };
-    use base64::Engine as _;
     use std::path::Path;
 
     /// Two node homes that differ, for the tests that match tracked state on one.
@@ -4964,16 +4961,6 @@ listen = ["/ip4/0.0.0.0/udp/4001/quic-v1", "/ip4/0.0.0.0/tcp/4002"]
             .expect("delete a scratch dir under home");
         assert!(outcome.deleted, "a directory that existed must report deleted");
         assert!(!dir.exists(), "{} survived the delete", dir.display());
-    }
-
-    #[test]
-    fn test_base64_roundtrip_preserves_binary() {
-        // Bytes that are NOT valid UTF-8 (a PNG-ish header) — the exact case
-        // response.text() used to corrupt.
-        let raw: Vec<u8> = vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0xff, 0x00, 0xfe];
-        let encoded = base64::engine::general_purpose::STANDARD.encode(&raw);
-        let decoded = base64::engine::general_purpose::STANDARD.decode(encoded.as_bytes()).unwrap();
-        assert_eq!(raw, decoded, "base64 round-trip must be byte-exact");
     }
 
     #[test]

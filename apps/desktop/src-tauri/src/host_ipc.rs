@@ -1,6 +1,7 @@
 //! macOS-only: shared host-socket location + host auto-boot, used by both the
 //! host bin (which binds the socket) and the shell bin (which connects to it).
 
+use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
 /// Unix-domain socket the shell processes reach the host on (0700 dir, no TCP port).
@@ -19,7 +20,6 @@ pub fn host_socket_path() -> PathBuf {
 /// Per-app single-instance socket, one per app id. Ids are hashed short: a raw
 /// 44-char id overflows sockaddr_un's ~104-byte sun_path.
 pub fn shell_instance_socket_path(app_id: &str) -> PathBuf {
-    use sha2::{Digest, Sha256};
     let short = &format!("{:x}", Sha256::digest(app_id.as_bytes()))[..12];
     host_socket_path().with_file_name(format!("shell-{short}.sock"))
 }

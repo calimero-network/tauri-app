@@ -1,5 +1,3 @@
-import type { Page } from "@playwright/test";
-
 // ─── localStorage keys ───────────────────────────────────────────────────────
 
 export const STORAGE_KEYS = {

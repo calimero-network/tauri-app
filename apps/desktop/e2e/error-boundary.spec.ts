@@ -60,14 +60,7 @@ test.describe("ErrorBoundary — Try Again", () => {
   });
 
   test("clicking Try Again re-renders the app", async ({ page }) => {
-    await mockCoreAPIs(page);
-    await page.goto("/");
-    await page.evaluate(
-      ([key, val]: [string, any]) => localStorage.setItem(key, JSON.stringify(val)),
-      [STORAGE_KEYS.settings, AUTHENTICATED_SETTINGS] as const,
-    );
-    await page.reload();
-
+    await seedAndLoad(page);
     await triggerRootError(page);
     await page.getByTestId("error-boundary-retry").click();
 
@@ -180,13 +173,7 @@ test.describe("ErrorBoundary — Copy Error", () => {
 test.describe("ErrorBoundary — authenticated app sections", () => {
   test("login screen is wrapped — error boundary test hook is registered", async ({ page }) => {
     // Verify root ErrorBoundary hook is always available after app boots
-    await mockCoreAPIs(page);
-    await page.goto("/");
-    await page.evaluate(
-      ([key, val]: [string, any]) => localStorage.setItem(key, JSON.stringify(val)),
-      [STORAGE_KEYS.settings, AUTHENTICATED_SETTINGS] as const,
-    );
-    await page.reload();
+    await seedAndLoad(page);
 
     const hookExists = await page.waitForFunction(
       () => typeof (window as any).__triggerErrorBoundary === "function",

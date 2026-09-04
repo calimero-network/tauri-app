@@ -9,7 +9,6 @@ import {
   mockCoreAPIs,
   clearAllStorage,
 } from "./fixtures/helpers";
-import { EMBEDDED_NODE_SETTINGS } from "./fixtures/mock-data";
 
 /**
  * Node lifecycle tests.

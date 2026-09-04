@@ -3,15 +3,10 @@ import type { Page } from "@playwright/test";
 import {
   setupAuthenticatedPage,
   setupDeveloperPage,
-  seedSettings,
-  seedAuthTokens,
-  mockCoreAPIs,
   scrollSettingsControlIntoView,
 } from "./fixtures/helpers";
 import {
   STORAGE_KEYS,
-  AUTHENTICATED_SETTINGS,
-  DEVELOPER_SETTINGS,
   DEFAULT_REGISTRY_URL,
   API_ROUTES,
   MOCK_ACCOUNT_APPLICATIONS,

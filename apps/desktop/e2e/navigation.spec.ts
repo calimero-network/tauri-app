@@ -1,12 +1,5 @@
 import { test, expect } from "./fixtures/test";
-import {
-  setupAuthenticatedPage,
-  setupDeveloperPage,
-  seedSettings,
-  seedAuthTokens,
-  clearAllStorage,
-} from "./fixtures/helpers";
-import { DEFAULT_SETTINGS, AUTHENTICATED_SETTINGS, DEVELOPER_SETTINGS } from "./fixtures/mock-data";
+import { setupAuthenticatedPage, setupDeveloperPage } from "./fixtures/helpers";
 
 const shellTitleTimeout = 20_000;
 

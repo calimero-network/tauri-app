@@ -111,24 +111,3 @@
   box-shadow: var(--shadow-sm);
 }
 
-.skeleton-card-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 12px;
-}
-
-.skeleton-card-body {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  flex: 1;
-  margin-bottom: 16px;
-}
-
-.skeleton-card-actions {
-  display: flex;
-  gap: 8px;
-  padding-top: 12px;
-  border-top: 1px solid var(--border-color);
-}

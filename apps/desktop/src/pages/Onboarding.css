@@ -214,27 +214,6 @@
   width: 100%;
 }
 
-.step-icon-wrapper {
-  width: 100px;
-  height: 100px;
-  border-radius: 30px;
-  background: var(--surface-glass-soft);
-  border: 1px solid var(--border-color);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin-bottom: 24px;
-  color: var(--accent-primary);
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  padding: 20px;
-  box-sizing: border-box;
-}
-
-.step-icon-wrapper svg {
-  width: 60px;
-  height: 60px;
-}
-
 .step-logo-wrapper {
   display: flex;
   align-items: center;
@@ -254,30 +233,6 @@
   filter: brightness(0);
 }
 
-.step-icon-success {
-  background: rgba(34, 197, 94, 0.1);
-  border-color: var(--success);
-  animation: iconPulse 2s ease-in-out infinite;
-}
-
-@keyframes iconFloat {
-  0%, 100% {
-    transform: translateY(0px);
-  }
-  50% {
-    transform: translateY(-8px);
-  }
-}
-
-@keyframes iconPulse {
-  0%, 100% {
-    transform: scale(1);
-  }
-  50% {
-    transform: scale(1.05);
-  }
-}
-
 .step-title {
   margin: 0 0 10px 0;
   font-size: 24px;
@@ -295,41 +250,6 @@
   max-width: 460px;
   font-weight: 400;
   width: 100%;
-}
-
-/* Step Features (for welcome screen) */
-.step-features {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  margin-top: 40px;
-  width: 100%;
-  max-width: 400px;
-}
-
-.step-feature {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  padding: 12px 20px;
-  background: var(--surface-glass-soft);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-lg);
-  color: var(--text-primary);
-  font-size: 14px;
-  font-weight: 500;
-  transition: all 0.2s;
-}
-
-.step-feature:hover {
-  border-color: var(--accent-dim);
-  transform: translateY(-1px);
-}
-
-.step-feature svg {
-  color: var(--accent-primary);
-  flex-shrink: 0;
 }
 
 /* Step Principles (for explanation screens) */
@@ -388,17 +308,6 @@
     font-size: 14px;
   }
 
-  .step-features {
-    margin-top: 32px;
-    gap: 10px;
-    max-width: 100%;
-  }
-
-  .step-feature {
-    padding: 10px 16px;
-    font-size: 13px;
-  }
-
   .step-description {
     max-width: 100%;
   }
@@ -423,9 +332,6 @@
     font-size: 28px;
   }
 
-  .step-features {
-    max-width: 460px;
-  }
 }
 
 /* Step Messages */
@@ -566,13 +472,6 @@
   font-size: 11.5px;
   line-height: 1.4;
   color: var(--text-tertiary);
-}
-
-/* Step Login Wrapper */
-.step-login-wrapper {
-  width: 100%;
-  max-width: 500px;
-  margin-top: 32px;
 }
 
 /* Step Actions */
@@ -725,17 +624,6 @@
     padding-bottom: 100px;
   }
 
-  .step-icon-wrapper {
-    width: 100px;
-    height: 100px;
-    margin-bottom: 24px;
-  }
-
-  .step-icon-wrapper svg {
-    width: 60px;
-    height: 60px;
-  }
-
   .step-title {
     font-size: 28px;
     margin-bottom: 12px;
@@ -829,17 +717,6 @@
     padding-bottom: 120px;
   }
 
-  .step-icon-wrapper {
-    width: 80px;
-    height: 80px;
-    margin-bottom: 16px;
-  }
-
-  .step-icon-wrapper svg {
-    width: 48px;
-    height: 48px;
-  }
-
   .step-logo-wrapper .calimero-logo {
     width: 180px;
   }
@@ -921,17 +798,6 @@
     padding-bottom: 140px;
   }
 
-  .step-icon-wrapper {
-    width: 70px;
-    height: 70px;
-    margin-bottom: 16px;
-  }
-
-  .step-icon-wrapper svg {
-    width: 40px;
-    height: 40px;
-  }
-
   .step-logo-wrapper .calimero-logo {
     width: 160px;
   }
@@ -995,16 +861,6 @@
     padding: 12px 20px;
     font-size: 14px;
     min-width: auto;
-  }
-
-  .step-features {
-    gap: 8px;
-    margin-top: 24px;
-  }
-
-  .step-feature {
-    padding: 10px 16px;
-    font-size: 13px;
   }
 
   .advanced-options-toggle {
@@ -1124,18 +980,6 @@
   color: var(--text-primary) !important;
 }
 
-.onboarding-header {
-  display: none;
-}
-
-.onboarding-subtitle {
-  display: none;
-}
-
-.node-setup-form {
-  display: contents;
-}
-
 .form-group {
   margin-bottom: 24px;
 }
@@ -1174,14 +1018,6 @@
 .form-group input:disabled {
   opacity: 0.5;
   cursor: not-allowed;
-}
-
-.existing-nodes-section {
-  margin-bottom: 24px;
-  padding: 16px;
-  background: var(--surface-glass-soft);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-lg);
 }
 
 .existing-node-select {
@@ -1257,7 +1093,6 @@
   to { opacity: 1; }
 }
 
-.success-message,
 .error-details {
   display: none;
 }
@@ -1394,45 +1229,6 @@
 }
 
 /* App installation step styles */
-.onboarding-app-search {
-  position: relative;
-  width: 100%;
-  max-width: 500px;
-  margin: 24px auto 0;
-}
-
-.search-icon {
-  position: absolute;
-  left: 16px;
-  top: 50%;
-  transform: translateY(-50%);
-  color: var(--text-tertiary);
-  pointer-events: none;
-}
-
-.app-search-input {
-  width: 100%;
-  padding: 14px 16px 14px 44px;
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-lg);
-  font-size: 15px;
-  background: var(--surface-glass-soft);
-  color: var(--text-primary);
-  transition: all 0.2s;
-  box-sizing: border-box;
-}
-
-.app-search-input::placeholder {
-  color: var(--text-tertiary);
-}
-
-.app-search-input:focus {
-  outline: none;
-  border-color: var(--accent-primary);
-  background: var(--surface-glass);
-  box-shadow: 0 0 0 4px var(--accent-light);
-}
-
 .onboarding-apps-grid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
@@ -1446,10 +1242,6 @@
 }
 
 @media (max-width: 768px) {
-  .onboarding-app-search {
-    margin-top: 20px;
-  }
-
   .onboarding-apps-grid {
     grid-template-columns: 1fr;
     gap: 12px;
@@ -1458,21 +1250,6 @@
 }
 
 @media (max-width: 480px) {
-  .onboarding-app-search {
-    margin-top: 16px;
-  }
-
-  .app-search-input {
-    padding: 12px 14px 12px 40px;
-    font-size: 14px;
-  }
-
-  .search-icon {
-    left: 14px;
-    width: 16px;
-    height: 16px;
-  }
-
   .onboarding-apps-grid {
     gap: 10px;
     margin-top: 16px;

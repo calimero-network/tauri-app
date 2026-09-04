@@ -33,7 +33,6 @@
   --shadow-glow: 0 0 20px rgba(165, 255, 17, 0.08);
   --gradient-primary: linear-gradient(135deg, #a5ff11 0%, #73b30c 100%);
   --gradient-secondary: linear-gradient(135deg, #73b30c 0%, #2d380b 100%);
-  --gradient-text: linear-gradient(135deg, #ffffff 30%, rgba(165, 255, 17, 0.85) 100%);
   --gradient-surface: linear-gradient(180deg, rgba(255,255,255,0.025) 0%, transparent 100%);
   --surface-glass: rgba(22, 27, 34, 0.55);
   --surface-glass-soft: rgba(13, 17, 23, 0.5);
@@ -81,7 +80,6 @@
   --shadow-glow: 0 0 20px rgba(106, 171, 0, 0.06);
   --gradient-primary: linear-gradient(135deg, #6aab00 0%, #4d7d00 100%);
   --gradient-secondary: linear-gradient(135deg, #4d7d00 0%, #2d4700 100%);
-  --gradient-text: linear-gradient(135deg, #6aab00 0%, #4d7d00 100%);
   --gradient-surface: linear-gradient(180deg, rgba(0,0,0,0.02) 0%, transparent 100%);
   --surface-glass: rgba(255, 255, 255, 0.7);
   --surface-glass-soft: rgba(255, 255, 255, 0.55);
@@ -365,24 +363,6 @@ body {
   border: 1px solid var(--error-border);
   border-radius: var(--radius-md);
   color: var(--error);
-}
-
-/* ── Gradient text utility ── */
-.gradient-text {
-  background: var(--gradient-text);
-  background-size: 200% auto;
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-}
-
-/* ── Glow card variant ── */
-.card-glow {
-  border-color: var(--accent-dim) !important;
-  box-shadow: var(--shadow-glow) !important;
-}
-.card-glow:hover {
-  box-shadow: 0 0 30px rgba(165, 255, 17, 0.12) !important;
 }
 
 /* Scrollbar */

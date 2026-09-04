@@ -4,9 +4,9 @@ import {
   evictTeeMembersFromTree,
   reconcileDisabledNamespaces,
   teeIdentitiesFromMembers,
-  extractMembersFromResponse,
   buildEvictionDeps,
   type EvictionDeps,
+  type MeroAdminLike,
 } from './teeEviction';
 
 // ── A tiny in-memory merod model ──────────────────────────────────────
@@ -43,24 +43,6 @@ function makeModel(spec: {
   };
   return { deps, removed };
 }
-
-describe('extractMembersFromResponse', () => {
-  it('reads a direct members array', () => {
-    expect(extractMembersFromResponse({ members: [{ identity: 'a' }] })).toEqual([
-      { identity: 'a' },
-    ]);
-  });
-  it('reads a wrapped data.members array', () => {
-    expect(
-      extractMembersFromResponse({ data: { members: [{ identity: 'b' }] } }),
-    ).toEqual([{ identity: 'b' }]);
-  });
-  it('returns null on unrecognised shape (fail-closed)', () => {
-    expect(extractMembersFromResponse({})).toBeNull();
-    expect(extractMembersFromResponse(null)).toBeNull();
-    expect(extractMembersFromResponse({ members: 'nope' })).toBeNull();
-  });
-});
 
 describe('teeIdentitiesFromMembers', () => {
   it('keeps only ReadOnlyTee identities', () => {
@@ -295,79 +277,76 @@ describe('buildEvictionDeps', () => {
     warn.mockRestore();
   });
 
-  it('lists members via the local node token (fail-closed when no token)', async () => {
-    const fetchImpl = vi.fn();
-    const deps = buildEvictionDeps({
-      mero: { admin: { listSubgroups: async () => [], removeGroupMembers: async () => {} } },
-      nodeUrl: 'http://node',
-      getNodeToken: () => null,
-      fetchImpl: fetchImpl as unknown as typeof fetch,
-    });
-    const res = await deps.listGroupMembers('ns');
-    expect(res).toBeNull();
-    // No token → we must not even hit the network.
-    expect(fetchImpl).not.toHaveBeenCalled();
+  const fakeMero = (
+    admin: Partial<MeroAdminLike['admin']>,
+  ): MeroAdminLike => ({
+    admin: {
+      listGroupMembers: async () => ({ members: [] }),
+      listSubgroups: async () => [],
+      removeGroupMembers: async () => {},
+      ...admin,
+    },
   });
 
-  it('fails closed without touching the network when nodeUrl is not http(s)', async () => {
-    const fetchImpl = vi.fn();
-    for (const nodeUrl of ['javascript:alert(1)', 'data:text/html,x', 'not a url', '']) {
-      const deps = buildEvictionDeps({
-        mero: { admin: { listSubgroups: async () => [], removeGroupMembers: async () => {} } },
-        nodeUrl,
-        getNodeToken: () => 'node-tok',
-        fetchImpl: fetchImpl as unknown as typeof fetch,
-      });
-      expect(await deps.listGroupMembers('ns')).toBeNull();
-    }
-    // An invalid base URL must never reach a token-bearing fetch.
-    expect(fetchImpl).not.toHaveBeenCalled();
+  it('hands back the members the admin client listed', async () => {
+    const deps = buildEvictionDeps({
+      mero: fakeMero({
+        listGroupMembers: async () => ({
+          members: [{ identity: 'fleet', role: 'ReadOnlyTee' }],
+        }),
+      }),
+    });
+    expect(await deps.listGroupMembers('ns')).toEqual([
+      { identity: 'fleet', role: 'ReadOnlyTee' },
+    ]);
   });
 
-  it('lists members with a Bearer node token and normalises the body', async () => {
-    const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
-      expect((init?.headers as Record<string, string>).Authorization).toBe(
-        'Bearer node-tok',
-      );
-      return new Response(
-        JSON.stringify({ members: [{ identity: 'fleet', role: 'ReadOnlyTee' }] }),
-        { status: 200 },
-      );
-    });
+  it('fails closed (null, not a throw) when the admin client refuses', async () => {
     const deps = buildEvictionDeps({
-      mero: { admin: { listSubgroups: async () => [], removeGroupMembers: async () => {} } },
-      nodeUrl: 'http://node',
-      getNodeToken: () => 'node-tok',
-      fetchImpl: fetchImpl as unknown as typeof fetch,
-    });
-    const res = await deps.listGroupMembers('ns');
-    expect(res).toEqual([{ identity: 'fleet', role: 'ReadOnlyTee' }]);
-    expect(fetchImpl).toHaveBeenCalledOnce();
-  });
-
-  it('returns null on a non-ok members response', async () => {
-    const fetchImpl = vi.fn(async () => new Response('nope', { status: 401 }));
-    const deps = buildEvictionDeps({
-      mero: { admin: { listSubgroups: async () => [], removeGroupMembers: async () => {} } },
-      nodeUrl: 'http://node',
-      getNodeToken: () => 'node-tok',
-      fetchImpl: fetchImpl as unknown as typeof fetch,
+      mero: fakeMero({
+        listGroupMembers: async () => {
+          throw new Error('HTTP 401 Unauthorized');
+        },
+      }),
     });
     expect(await deps.listGroupMembers('ns')).toBeNull();
+  });
+
+  it('fails closed without a call once the caller is superseded', async () => {
+    const listGroupMembers = vi.fn(async () => ({ members: [] }));
+    const controller = new AbortController();
+    controller.abort();
+    const deps = buildEvictionDeps({
+      mero: fakeMero({ listGroupMembers }),
+      signal: controller.signal,
+    });
+    expect(await deps.listGroupMembers('ns')).toBeNull();
+    expect(listGroupMembers).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when the members call hangs (deadline)', async () => {
+    vi.useFakeTimers();
+    try {
+      const deps = buildEvictionDeps({
+        mero: fakeMero({
+          listGroupMembers: () => new Promise<{ members: unknown[] }>(() => {}),
+        }),
+      });
+      const pending = deps.listGroupMembers('ns');
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(await pending).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('rejects listSubgroups when the admin call hangs (deadline)', async () => {
     vi.useFakeTimers();
     try {
       const deps = buildEvictionDeps({
-        mero: {
-          admin: {
-            listSubgroups: () => new Promise<{ groupId: string }[]>(() => {}), // never resolves
-            removeGroupMembers: async () => {},
-          },
-        },
-        nodeUrl: 'http://node',
-        getNodeToken: () => 'node-tok',
+        mero: fakeMero({
+          listSubgroups: () => new Promise<{ groupId: string }[]>(() => {}), // never resolves
+        }),
       });
       const pending = deps.listSubgroups('ns');
       const assertion = expect(pending).rejects.toThrow();
@@ -380,29 +359,20 @@ describe('buildEvictionDeps', () => {
 
   it('maps SubgroupEntry[] to a string[] of group ids', async () => {
     const deps = buildEvictionDeps({
-      mero: {
-        admin: {
-          listSubgroups: async () => [
-            { groupId: 'a', name: 'A' },
-            { groupId: 'b' },
-            { groupId: '' }, // dropped
-          ],
-          removeGroupMembers: async () => {},
-        },
-      },
-      nodeUrl: 'http://node',
-      getNodeToken: () => 'node-tok',
+      mero: fakeMero({
+        listSubgroups: async () => [
+          { groupId: 'a', name: 'A' },
+          { groupId: 'b' },
+          { groupId: '' }, // dropped
+        ],
+      }),
     });
     expect(await deps.listSubgroups('ns')).toEqual(['a', 'b']);
   });
 
   it('forwards removals to mero.admin.removeGroupMembers', async () => {
     const removeGroupMembers = vi.fn(async () => {});
-    const deps = buildEvictionDeps({
-      mero: { admin: { listSubgroups: async () => [], removeGroupMembers } },
-      nodeUrl: 'http://node',
-      getNodeToken: () => 'node-tok',
-    });
+    const deps = buildEvictionDeps({ mero: fakeMero({ removeGroupMembers }) });
     await deps.removeGroupMembers('ns', ['fleet']);
     expect(removeGroupMembers).toHaveBeenCalledWith('ns', { members: ['fleet'] });
   });

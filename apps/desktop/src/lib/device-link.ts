@@ -2,53 +2,34 @@
  * Pair a second device into this node's account, and withdraw one - the calls
  * behind the Account / Devices panel.
  */
+import {
+  AuthRevokedError,
+  HTTPError,
+  type AccountApplicationEntry,
+  type AccountDeviceEntry,
+  type AccountPairCompleteResponseData,
+  type AccountPairInitResponseData,
+  type NodeIdentity,
+} from '@calimero-network/mero-js';
 import { getSettings } from '../utils/settings';
+import { apiClient, nodeBodyMessage, nodeErrorMessage } from './mero-client';
 import { brokerAccessToken } from './token-broker';
-
-/** The node revoked our token family; no retry can succeed. */
-const REVOKED_AUTH_ERRORS = ['token_reuse', 'token_revoked'];
 
 /** Core's own ceiling for a list page; its default of 100 would truncate in silence. */
 const LIST_LIMIT = 1000;
+/** The node revoked our token family; no retry can succeed. */
+const REVOKED_AUTH_ERRORS = ['token_reuse', 'token_revoked'];
+const REVOKED_MESSAGE = 'Your node session was revoked. Sign in again, then try again.';
 
 const HEX_64 = /^[0-9a-fA-F]{64}$/;
 const ALL_ZERO = /^0{64}$/;
 const HEX_128 = /^[0-9a-fA-F]{128}$/;
 
 /** What the pairing device mints, to be read across to the account holder. */
-export interface PairInitResult {
-  accountId: string;
-  deviceId: string;
-  kemPublicKey: string;
-  signPublicKey: string;
-  statement: string;
-  confirmationCode: string;
-}
-
-export interface PairCompleteResult {
-  accountId: string;
-  deviceId: string;
-  keyDelivered: boolean;
-  confirmationCode: string;
-}
-
-export interface AccountDevice {
-  /** 64 hex characters, the form `revokeDevice` and `relinkDevice` take. */
-  deviceId: string;
-  /** 64 hex characters, the same key `signPublicKey` carries in a pairing payload. */
-  signingKey: string;
-  isSelf: boolean;
-  revoked: boolean;
-  /** Hex application ids. Empty means every application, not none. */
-  applications: string[];
-  /** Hex ids of the namespaces holding a live binding for this device. */
-  namespaces: string[];
-}
-
-export interface AccountApplication {
-  applicationId: string;
-  namespaces: string[];
-}
+export type PairInitResult = AccountPairInitResponseData;
+export type PairCompleteResult = AccountPairCompleteResponseData;
+export type AccountDevice = AccountDeviceEntry;
+export type AccountApplication = AccountApplicationEntry;
 
 /** Namespaces a relink published the device into, and those it left alone. */
 export interface RelinkResult {
@@ -63,70 +44,88 @@ export interface NamespaceSummary {
   targetApplicationId: string;
 }
 
+/** The node's admin API, over the app's shared token store and its refresh. */
+const admin = () => apiClient.meroJs.admin;
+
 /**
- * One authenticated admin-api call. Core wraps some payloads in `{ data }` and
- * serializes others straight, so unwrap only where the wrapper is.
+ * Surface what the node said, and treat a revoked family as terminal. The
+ * message is reworded in place rather than re-wrapped, because `refusalStatus`
+ * and the 404 check below read fields only the original error carries.
  */
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+async function nodeCall<T>(call: Promise<T>): Promise<T> {
+  try {
+    return await call;
+  } catch (error) {
+    if (error instanceof AuthRevokedError) throw new Error(REVOKED_MESSAGE);
+    if (error instanceof HTTPError) error.message = nodeErrorMessage(error);
+    throw error;
+  }
+}
+
+/**
+ * Who this node is, or `null` for a node that has taken part in nothing yet -
+ * it holds neither a device nor an account root, so the route 404s, and that is
+ * a normal state rather than a failure.
+ *
+ * `?? null` because mero-js types this as non-optional but reads `response.data`.
+ */
+export async function nodeIdentity(): Promise<NodeIdentity | null> {
+  try {
+    return (await admin().getNodeIdentity()) ?? null;
+  } catch (error) {
+    if (error instanceof HTTPError && error.status === 404) return null;
+    throw error;
+  }
+}
+
+/**
+ * The one call still made by hand: `listNamespaces()` sends no `limit` and core
+ * defaults to 100, which would silently narrow an invite.
+ */
+export async function listNamespaces(signal?: AbortSignal): Promise<NamespaceSummary[]> {
   const nodeUrl = (getSettings().nodeUrl ?? '').replace(/\/$/, '');
   // Rotates only if ours has expired, and through the broker's single flight.
   const accessToken = await brokerAccessToken();
 
-  const response = await fetch(`${nodeUrl}/admin-api${path}`, {
-    ...init,
+  const response = await fetch(`${nodeUrl}/admin-api/namespaces?limit=${LIST_LIMIT}`, {
+    signal,
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${accessToken}`,
     },
   });
-
-  const json = await response.json().catch(() => null);
-
   if (!response.ok) {
     const authError = response.headers.get('x-auth-error');
-    if (authError && REVOKED_AUTH_ERRORS.includes(authError)) {
-      throw new Error('Your node session was revoked. Sign in again, then try again.');
-    }
-    const message =
-      json?.error?.message ?? json?.error ?? json?.message ?? `HTTP ${response.status}`;
-    const error = new Error(String(message)) as Error & { status?: number };
+    if (authError && REVOKED_AUTH_ERRORS.includes(authError)) throw new Error(REVOKED_MESSAGE);
+    // Fails like the SDK calls beside it: the node's own sentence, and a status
+    // a caller can branch on.
+    const detail = nodeBodyMessage(await response.text().catch(() => ''));
+    const error = new Error(
+      detail || response.statusText || `HTTP ${response.status}`,
+    ) as Error & { status?: number };
     error.status = response.status;
     throw error;
   }
 
-  return (json?.data ?? json) as T;
-}
-
-export async function listNamespaces(signal?: AbortSignal): Promise<NamespaceSummary[]> {
-  const namespaces = await request<NamespaceSummary[]>(`/namespaces?limit=${LIST_LIMIT}`, {
-    signal,
-  });
+  const body = await response.json().catch(() => null);
+  const namespaces = body?.data ?? body;
   return Array.isArray(namespaces) ? namespaces : [];
 }
 
-export async function listAccountDevices(signal?: AbortSignal): Promise<AccountDevice[]> {
-  // Top-level `{ devices }`, with no `{ data }` wrapper.
-  const body = await request<{ devices?: AccountDevice[] }>('/account/devices', { signal });
-  return body?.devices ?? [];
+export async function listAccountDevices(): Promise<AccountDevice[]> {
+  return (await nodeCall(admin().listAccountDevices())) ?? [];
 }
 
-export async function listAccountApplications(
-  signal?: AbortSignal,
-): Promise<AccountApplication[]> {
-  const body = await request<{ applications?: AccountApplication[] }>('/account/applications', {
-    signal,
-  });
-  return (body?.applications ?? []).filter((app) => !ALL_ZERO.test(app.applicationId));
+export async function listAccountApplications(): Promise<AccountApplication[]> {
+  const applications = (await nodeCall(admin().listAccountApplications())) ?? [];
+  return applications.filter((app) => !ALL_ZERO.test(app.applicationId));
 }
 
 export function pairInit(
   accountRootPublicKey: string,
   namespaces: string[],
 ): Promise<PairInitResult> {
-  return request<PairInitResult>('/account/pair-init', {
-    method: 'POST',
-    body: JSON.stringify({ accountRootPublicKey, namespaces }),
-  });
+  return nodeCall(admin().initAccountPairing({ accountRootPublicKey, namespaces }));
 }
 
 export function pairComplete(
@@ -138,10 +137,7 @@ export function pairComplete(
 
   // Undefined drops out of the JSON, which is core's "every application"; an
   // empty array would say the same thing, so neither is written explicitly.
-  return request<PairCompleteResult>('/account/pair-complete', {
-    method: 'POST',
-    body: JSON.stringify({ ...payload, applications }),
-  });
+  return nodeCall(admin().completeAccountPairing({ ...payload, applications }));
 }
 
 /** Without `applications` this repairs the scope already stored, which is what
@@ -150,13 +146,9 @@ export async function relinkDevice(
   deviceId: string,
   applications?: string[],
 ): Promise<RelinkResult> {
-  const result = await request<{
-    linkedIn?: { namespaceId: string }[];
-    skipped?: { namespaceId: string }[];
-  }>(`/account/devices/${encodeURIComponent(deviceId)}/relink`, {
-    method: 'POST',
-    body: JSON.stringify({ applications }),
-  });
+  const result = await nodeCall(
+    admin().relinkAccountDevice(deviceId, { applications }),
+  );
   return {
     linkedIn: (result?.linkedIn ?? []).map((entry) => entry.namespaceId),
     skipped: (result?.skipped ?? []).map((entry) => entry.namespaceId),
@@ -167,9 +159,8 @@ export async function revokeDevice(
   namespaceId: string,
   deviceId: string,
 ): Promise<{ revokedIn: string[] }> {
-  const result = await request<{ revokedIn?: { namespaceId: string }[] }>(
-    `/namespaces/${encodeURIComponent(namespaceId)}/account/revoke`,
-    { method: 'POST', body: JSON.stringify({ deviceId }) },
+  const result = await nodeCall(
+    admin().revokeAccountDevice(namespaceId, { deviceId }),
   );
   return { revokedIn: (result?.revokedIn ?? []).map((entry) => entry.namespaceId) };
 }

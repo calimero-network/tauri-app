@@ -1,6 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
 import { apiClient } from '../lib/mero-client';
-import { setAccessToken, setRefreshToken, setTokenExpiresAt } from '../lib/token-storage';
 import type { Provider } from '../lib/mero-client';
 import { ProviderSelector } from './ProviderSelector';
 import { UsernamePasswordForm } from './UsernamePasswordForm';
@@ -96,15 +95,8 @@ export function LoginView({ onSuccess, onError, variant = 'light' }: LoginViewPr
         return;
       }
 
+      // `requestToken` has already stored the pair, expiry read off the JWT.
       if (tokenResponse.data?.access_token && tokenResponse.data?.refresh_token) {
-        setAccessToken(tokenResponse.data.access_token);
-        setRefreshToken(tokenResponse.data.refresh_token);
-        try {
-          const payload = JSON.parse(atob(tokenResponse.data.access_token.split('.')[1]));
-          setTokenExpiresAt(payload.exp * 1000);
-        } catch {
-          setTokenExpiresAt(Date.now() + 3600 * 1000);
-        }
         onSuccess?.();
       } else {
         throw new Error('Failed to get access token');

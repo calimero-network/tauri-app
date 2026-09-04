@@ -6,6 +6,7 @@ import {
   useGroupInfo,
   useGroupMembers,
   useGroupContexts,
+  useNodeIdentity,
   useSubgroups,
   useCreateNamespace,
   type Namespace,
@@ -24,8 +25,7 @@ import {
   CloudSessionExpiredError,
 } from "../utils/cloudApi";
 import { getCloudIdToken } from "../utils/cloudAuth";
-import { getAccessToken } from "../lib/token-storage";
-import { fetchNodeIdentity, type NodeIdentity } from "../utils/nodeIdentity";
+import { apiClient } from "../lib/mero-client";
 import {
   fetchGroupMembers,
   isInheritedMembershipError,
@@ -215,7 +215,13 @@ function Namespaces() {
   // Remove this cast once mero-js is bumped to expose the field.
   const groupInfo = groupInfoRaw as GroupInfoExt | null;
   const nsRootGroupInfo = nsRootGroupInfoRaw as GroupInfoExt | null;
-  const { members: groupMembers, refetch: refetchGroupMembers } = useGroupMembers(activeGroupId) as any;
+  // One listing per open group: this feeds the Group Detail Members list AND the
+  // Delete-vs-Leave decision for that subgroup and the contexts it owns.
+  const {
+    members: groupMembers,
+    loading: groupMembersLoading,
+    refetch: refetchGroupMembers,
+  } = useGroupMembers(activeGroupId);
   // Who this NODE is — used to find my ROLE in the member list (admin → may
   // Delete; member → may only Leave) and to self-remove.
   //
@@ -223,46 +229,12 @@ function Namespaces() {
   // which `useNamespaceIdentity` calls, because every namespace on a node
   // resolves to the same account: the route took a namespace and answered with
   // the node's account whichever one you passed.
-  const [myNodeIdentity, setMyNodeIdentity] = useState<NodeIdentity | null>(null);
-  useEffect(() => {
-    const controller = new AbortController();
-    void fetchNodeIdentity(controller.signal)
-      .then(setMyNodeIdentity)
-      .catch(() => setMyNodeIdentity(null));
-    return () => controller.abort();
-  }, []);
-  const [nsMembers, setNsMembers] = useState<any[]>([]);
-  const [nsMembersLoading, setNsMembersLoading] = useState(false);
-  const [nsMembersVersion, setNsMembersVersion] = useState(0);
-
-  useEffect(() => {
-    if (view.type !== "namespace" || !activeNsRootId) { setNsMembers([]); return; }
-    const controller = new AbortController();
-    setNsMembersLoading(true);
-    // TODO: replace with mero.admin.listGroupMembers once mero-react hook parsing is fixed
-    void fetchGroupMembers(activeNsRootId, controller.signal)
-      .then((members) => { if (!controller.signal.aborted) setNsMembers(members ?? []); })
-      .finally(() => { if (!controller.signal.aborted) setNsMembersLoading(false); });
-    return () => controller.abort();
-  }, [activeNsRootId, nsMembersVersion, view.type]);
-
-  // Members of the subgroup currently open in the Group Detail view. Fetched
-  // separately from `useGroupMembers` (which feeds that view's Members list)
-  // for the same reason the namespace root's list is: the hook's parsing of
-  // this route is still wrong, and a role read wrong here silently offers the
-  // wrong destructive button.
-  const [activeGroupMembers, setActiveGroupMembers] = useState<any[]>([]);
-  const [activeGroupMembersLoading, setActiveGroupMembersLoading] = useState(false);
-
-  useEffect(() => {
-    if (view.type !== "group" || !activeGroupId) { setActiveGroupMembers([]); return; }
-    const controller = new AbortController();
-    setActiveGroupMembersLoading(true);
-    void fetchGroupMembers(activeGroupId, controller.signal)
-      .then((members) => { if (!controller.signal.aborted) setActiveGroupMembers(members ?? []); })
-      .finally(() => { if (!controller.signal.aborted) setActiveGroupMembersLoading(false); });
-    return () => controller.abort();
-  }, [activeGroupId, view.type]);
+  const { identity: myNodeIdentity } = useNodeIdentity();
+  const {
+    members: nsMembers,
+    loading: nsMembersLoading,
+    refetch: refetchNsMembers,
+  } = useGroupMembers(view.type === "namespace" ? activeNsRootId : null);
 
   // My role on the active namespace, resolved from its member list, matched on
   // the ACCOUNT. rc.23 made the member listing answer with accounts (#3522) —
@@ -280,9 +252,9 @@ function Namespaces() {
 
   // Same decision for the subgroup open in the Group Detail view, and for the
   // contexts it owns (`delete_context` gates on the OWNING group).
-  const myActiveGroupRole = roleOf(activeGroupMembers, myNodeIdentity?.accountId);
+  const myActiveGroupRole = roleOf(groupMembers, myNodeIdentity?.accountId);
   const groupAction: GroupAction = resolveGroupAction({
-    loading: activeGroupMembersLoading,
+    loading: groupMembersLoading,
     accountId: myNodeIdentity?.accountId,
     role: myActiveGroupRole,
   });
@@ -326,7 +298,7 @@ function Namespaces() {
     const controller = new AbortController();
     setChildGroupRolesLoading(true);
     void Promise.all(
-      ids.map(async (id) => [id, roleOf(await fetchGroupMembers(id, controller.signal), myAccountId)] as const),
+      ids.map(async (id) => [id, roleOf(await fetchGroupMembers(id), myAccountId)] as const),
     )
       .then((entries) => {
         if (!controller.signal.aborted) setChildGroupRoles(Object.fromEntries(entries));
@@ -344,7 +316,7 @@ function Namespaces() {
       return;
     }
     let cancelled = false;
-    const admin: any = mero.admin;
+    const admin = mero.admin;
     // When the namespace itself changes, drop the previous tree so we don't
     // briefly show the wrong namespace's structure; a same-namespace refresh
     // keeps the current tree on screen (no flicker, no collapse).
@@ -472,7 +444,7 @@ function Namespaces() {
 
   const [myIdentity, setMyIdentity] = useState<string | null>(null);
   useEffect(() => {
-    const payload = parseJwtPayload(getAccessToken());
+    const payload = parseJwtPayload(apiClient.meroJs.getTokenData()?.access_token);
     const id = payload?.sub || payload?.identity || payload?.public_key;
     if (id && typeof id === 'string') setMyIdentity(id);
   }, []);
@@ -550,7 +522,7 @@ function Namespaces() {
     setCreatingContext(true);
     try {
       const argsJson = initArgs.trim() || '{}';
-      const result = await (mero.admin as any).createContext({
+      const result = await mero.admin.createContext({
         applicationId,
         groupId: namespaceId,
         serviceName: serviceName.trim() || undefined,
@@ -611,7 +583,7 @@ function Namespaces() {
     if (!mero) return;
     setActionLoading(true);
     try {
-      await (mero.admin as any).deleteNamespace(ns.namespaceId, {});
+      await mero.admin.deleteNamespace(ns.namespaceId);
       toast.success('Namespace deleted');
       setDeleteNsTarget(null);
       setView({ type: 'list' });
@@ -655,7 +627,7 @@ function Namespaces() {
     if (!mero) return;
     setActionLoading(true);
     try {
-      await (mero.admin as any).deleteGroup(groupId, {});
+      await mero.admin.deleteGroup(groupId);
       toast.success('Group deleted');
       setDeleteGroupTarget(null);
       if (view.type === 'group') setView({ type: 'namespace', ns: view.ns });
@@ -793,13 +765,11 @@ function Namespaces() {
    *     owner still shows the fleet node in private channels — the exact
    *     symptom this fixes (Bug 2).
    *
-   * Auth: the per-group members listing uses the **local node access
-   * token** (`getAccessToken()`), NOT the cloud session token — the same
-   * canonical path the list-members `useEffect` uses (tauri-app#107
-   * review). A missing/expired node token, a hung merod (5s timeout), or
-   * an unreadable subgroup surfaces as `listFailed: true`; the reconcile
-   * on the next namespace/HA-status load retries automatically, so a
-   * single transient failure no longer strands the TEE forever (Bug 1).
+   * Auth: every call goes through the shared admin client, so it carries the
+   * node token the rest of the app uses and refreshes it the same way. A
+   * refusal, a hung merod (5s timeout), or an unreadable subgroup surfaces as
+   * `listFailed: true`; the reconcile on the next namespace/HA-status load
+   * retries automatically, so one transient failure no longer strands the TEE.
    *
    * Best-effort: never throws. The tree walk + idempotent removals live
    * in `utils/teeEviction.ts` (pure, unit-tested). Returns counts +
@@ -815,17 +785,11 @@ function Namespaces() {
     // then honestly says cleanup is pending instead of claiming success;
     // the reconcile retries. A missing node token is handled inside the
     // deps (→ listFailed), not here, so the reconcile path shares it.
-    // tauri-app#107 v3 review (cursor + meroreviewer).
     if (!mero) return { evicted: 0, failed: 0, listFailed: true, groupsVisited: 0 };
     const settings = getSettings();
     if (!settings.nodeUrl) return { evicted: 0, failed: 0, listFailed: true, groupsVisited: 0 };
 
-    const deps = buildEvictionDeps({
-      mero,
-      nodeUrl: settings.nodeUrl,
-      getNodeToken: getAccessToken,
-    });
-    return evictTeeMembersFromTree(deps, nsId);
+    return evictTeeMembersFromTree(buildEvictionDeps({ mero }), nsId);
   };
 
   const handleJoinNamespace = async (invitationText: string) => {
@@ -972,12 +936,7 @@ function Namespaces() {
     const controller = new AbortController();
     reconcileBusyRef.current += 1;
     reconcilePendingRef.current = false;
-    const deps = buildEvictionDeps({
-      mero,
-      nodeUrl: settings.nodeUrl,
-      getNodeToken: getAccessToken,
-      signal: controller.signal,
-    });
+    const deps = buildEvictionDeps({ mero, signal: controller.signal });
     reconcileDisabledNamespaces(deps, haEnabled, {
       shouldAbort: () => controller.signal.aborted,
     })
@@ -1018,7 +977,7 @@ function Namespaces() {
         const evicted = touched.reduce((n, r) => n + r.evicted, 0);
         if (evicted > 0) {
           // We changed local membership — mirror it into the UI.
-          setNsMembersVersion((v) => v + 1);
+          refetchNsMembers?.();
           refetchGroupMembers?.();
           toast.success(
             `Cleaned up ${evicted} stranded TEE member(s) from HA-disabled namespace(s)`,
@@ -1097,11 +1056,7 @@ function Namespaces() {
       for (const nsId of enabledIds) {
         if (cancelled) return;
         try {
-          const outcome = await ensureTeeAdmissionPolicy(
-            settings.nodeUrl,
-            idToken,
-            nsId,
-          );
+          const outcome = await ensureTeeAdmissionPolicy(idToken, nsId);
           if (outcome === "reasserted") reasserted += 1;
         } catch (e) {
           // Best-effort: one namespace failing (transient merod/cloud error)
@@ -1161,10 +1116,8 @@ function Namespaces() {
           // changed in mero before the failure, and refetching reflects
           // truth. On pure `listFailed` we have no removals to mirror, so
           // skip the refresh. Mirrors the `handleRemoveMember` pattern.
-          // tauri-app#107 v3 review (cursor) + v5 review (defensive
-          // `failed > 0` arm per meroreviewer).
           if (evictResult.evicted > 0 || evictResult.failed > 0) {
-            setNsMembersVersion((v) => v + 1);
+            refetchNsMembers?.();
             refetchGroupMembers?.();
           }
           // Toast tiers — honest about what happened. Unlike v1, a transient
@@ -1222,7 +1175,7 @@ function Namespaces() {
         // group list keeps the request on the server-verified
         // namespace-ownership gate (UserNamespace); core admits the
         // ReadOnlyTee fleet member at the root and auto-follows contexts.
-        await enableHaForNamespace(token, settings.nodeUrl, nsId, []);
+        await enableHaForNamespace(token, nsId, []);
         setHaEnabled((prev) => ({ ...prev, [nsId]: true }));
         toast.success('HA enabled — TEE fleet nodes will join');
       }
@@ -1897,7 +1850,7 @@ function Namespaces() {
                               groupId: ns.namespaceId,
                               identity: m.identity,
                               name: m.name || truncateId(m.identity),
-                              onSuccess: () => setNsMembersVersion((v) => v + 1),
+                              onSuccess: () => refetchNsMembers?.(),
                             });
                           }}
                         >

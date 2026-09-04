@@ -23,12 +23,10 @@
  * node stays the enforcement point, and `isPermissionError` catches what the
  * guess gets wrong.
  *
- * Kept as pure functions plus one fetch so the decision logic is unit-testable
- * without a node (the fetch is the only part the e2e mocks stand in for).
+ * Kept as pure functions plus one listing so the decision logic is unit-testable
+ * without a node (the listing is the only part the e2e mocks stand in for).
  */
-import { getSettings } from './settings';
-import { getAccessToken } from '../lib/token-storage';
-import { extractMembersFromResponse } from './teeEviction';
+import { apiClient } from '../lib/mero-client';
 
 interface GroupMember {
   /** The ACCOUNT, 64 hex. rc.23 (#3522) made the member listing answer with
@@ -162,32 +160,15 @@ export function isInheritedMembershipError(
 }
 
 /**
- * `GET /admin-api/groups/:id/members`.
- *
- * A raw fetch rather than `mero.admin.listGroupMembers()` for the same reason
- * the namespace-root member list next to it is: the mero-react hook's parsing
- * of this route is still wrong (see the TODO in Namespaces.tsx). Both collapse
- * onto the SDK together once that is fixed.
- *
- * Resolves to `null` — never throws — when the node is unreachable, the token
- * is missing, or the response shape is unrecognised, so a caller cannot
- * mistake "couldn't tell" for "you have no role here".
+ * A group's members, or `null` - never a throw - when the node is unreachable
+ * or refuses, so a caller cannot mistake "couldn't tell" for "you have no role
+ * here". The SDK already rejects a body carrying no `members` array.
  */
 export async function fetchGroupMembers(
   groupId: string,
-  signal?: AbortSignal,
 ): Promise<GroupMember[] | null> {
-  const settings = getSettings();
-  const token = getAccessToken();
-  if (!settings.nodeUrl || !token) return null;
   try {
-    const res = await fetch(
-      `${settings.nodeUrl}/admin-api/groups/${encodeURIComponent(groupId)}/members`,
-      { headers: { Authorization: `Bearer ${token}` }, ...(signal ? { signal } : {}) },
-    );
-    if (!res.ok) return null;
-    const json = await res.json().catch(() => null);
-    return (extractMembersFromResponse(json) as GroupMember[] | null) ?? null;
+    return (await apiClient.meroJs.admin.listGroupMembers(groupId)).members;
   } catch {
     return null;
   }

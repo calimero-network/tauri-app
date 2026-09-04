@@ -236,7 +236,7 @@ export function DevicePairWizard({ rootKey, onLinked, onClose }: WizardProps) {
     setLoadError("");
     Promise.all([
       listNamespaces(controller.signal),
-      listAccountApplications(controller.signal),
+      listAccountApplications(),
       // A name is a nicety; the invite must still work when the lookup fails.
       listInstalledApps()
         .then((r) => (Array.isArray(r.data) ? (r.data as InstalledApp[]) : []))

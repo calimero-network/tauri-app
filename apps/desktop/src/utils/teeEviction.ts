@@ -20,23 +20,8 @@
 //
 // See: tauri-app#106/#107, core ADR 0002, core PR #2653.
 
-/**
- * Extract the `members` array from a merod
- * `GET /admin-api/groups/{id}/members` response. Mero-js's admin response
- * shape varies across versions — a direct `members` array on some routes,
- * a wrapped `data.members` on others — so every consumer hits the
- * dual-path lookup. Centralised here so a future shape change is one edit.
- *
- * Returns `null` (not `[]`) when the response shape is unrecognised, so
- * callers can distinguish "no members" from "couldn't tell" and fail
- * closed where appropriate. tauri-app#107 v4 review.
- */
-export function extractMembersFromResponse(json: unknown): unknown[] | null {
-  const raw =
-    (json as { members?: unknown; data?: { members?: unknown } })?.members ??
-    (json as { data?: { members?: unknown } })?.data?.members;
-  return Array.isArray(raw) ? raw : null;
-}
+/** A hung merod must not wedge the walk; neither admin call carries a bound. */
+const ADMIN_TIMEOUT_MS = 5000;
 
 /**
  * Filter a raw member array down to the `ReadOnlyTee` identities. The
@@ -306,14 +291,9 @@ function short(id: string): string {
 }
 
 /**
- * Race a promise against a deadline (and an optional abort signal). Used to
- * bound the `mero.admin.listSubgroups` admin call, which — unlike the members
- * fetch — carries no timeout of its own, so a hung merod could otherwise wedge
- * the whole eviction walk and leave the HA toggle stuck (cursor). Racing the
- * signal in as well means an abort mid-call is honoured immediately rather
- * than only at the next `shouldAbort` poll (meroreviewer). On timeout/abort it
- * rejects; `enumerateGroupTree` treats either as "couldn't enumerate this
- * branch" (incomplete → the reconcile retries).
+ * Race a promise against a deadline (and an optional abort signal). Racing the
+ * signal in as well means an abort mid-call is honoured immediately rather than
+ * only at the next `shouldAbort` poll.
  */
 function withDeadline<T>(p: Promise<T>, ms: number, signal?: AbortSignal): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -352,8 +332,9 @@ function withDeadline<T>(p: Promise<T>, ms: number, signal?: AbortSignal): Promi
  * module stays free of the heavyweight mero-js type graph and its unit
  * tests can pass a plain object.
  */
-interface MeroAdminLike {
+export interface MeroAdminLike {
   admin: {
+    listGroupMembers: (groupId: string) => Promise<{ members: unknown[] }>;
     listSubgroups: (groupId: string) => Promise<{ groupId: string }[]>;
     removeGroupMembers: (
       groupId: string,
@@ -363,124 +344,47 @@ interface MeroAdminLike {
 }
 
 /**
- * Build `EvictionDeps` from the live runtime pieces.
+ * Build `EvictionDeps` from the live `mero` admin client, so every call here
+ * shares the app's one token store and its refresh rather than reading an
+ * access token that may already have expired.
  *
- * Auth: the members listing hits the local node's admin API directly via
- * `fetch` with the **local node access token** — the same canonical path
- * the list-members `useEffect` uses (NOT the cloud session token; that
- * was the Bug-1-adjacent mistake caught in tauri-app#107 review). A
- * missing/expired node token surfaces as a `listFailed` result, which
- * the reconcile retries — it no longer silently strands the TEE.
- *
- * The members fetch carries a 5s `AbortSignal.timeout` so a hung merod
- * doesn't wedge the disable / reconcile flow. An optional caller `signal`
- * (the reconcile pass's AbortController) is merged in, so a superseded
- * pass cancels its in-flight fetch immediately rather than waiting out the
- * 5s timeout (meroreviewer). Removal + subgroup enumeration go through the
- * mero admin client (which manages its own auth/headers).
- *
- * `nodeToken` is read lazily via the supplied getter on every listing so
- * a token that rotates between reconcile passes is picked up fresh.
+ * The caller's `signal` (the reconcile pass's AbortController) is raced into
+ * both listings, so a superseded pass cancels immediately rather than waiting
+ * out the deadline. A failure surfaces as `listFailed` and the reconcile on the
+ * next load retries it.
  */
 export function buildEvictionDeps(args: {
   mero: MeroAdminLike;
-  nodeUrl: string;
-  getNodeToken: () => string | null;
-  fetchImpl?: typeof fetch;
   signal?: AbortSignal;
 }): EvictionDeps {
-  const { mero, nodeUrl, getNodeToken, signal } = args;
-  const doFetch = args.fetchImpl ?? fetch;
-  // Validate the node URL once up front: it is interpolated into the
-  // members fetch URL right next to the local node bearer token, so a
-  // malformed / non-http(s) value (e.g. a `javascript:` or `data:` scheme
-  // from a tampered settings store) must never reach `fetch`. We accept any
-  // http/https origin and deliberately do NOT pin loopback — merod can be
-  // configured on a remote/LAN host (the rest of the app interpolates the
-  // same `settings.nodeUrl` without a loopback constraint), so pinning it
-  // would break valid remote-node setups. An invalid URL fails closed
-  // (listGroupMembers → null → listFailed) and the reconcile surfaces it as
-  // "cleanup pending". (meroreviewer review.)
-  let nodeUrlOk = false;
-  try {
-    const proto = new URL(nodeUrl).protocol;
-    nodeUrlOk = proto === 'http:' || proto === 'https:';
-  } catch {
-    nodeUrlOk = false;
-  }
+  const { mero, signal } = args;
   return {
     listGroupMembers: async (groupId) => {
-      if (!nodeUrlOk) {
-        // Never interpolate an unvalidated URL into a token-bearing fetch.
-        console.warn(
-          'buildEvictionDeps: nodeUrl is not a valid http(s) URL — cleanup pending',
-        );
-        return null;
-      }
-      if (signal?.aborted) {
-        // Caller already superseded (e.g. HA re-enabled) — don't start a
-        // token-bearing fetch we'd only discard.
-        return null;
-      }
-      const token = getNodeToken();
-      if (!token) {
-        // No node token → fail-closed. Reconcile retries once a token
-        // is available. Never log the (absent) token.
-        return null;
-      }
-      // Merge the caller's abort signal with the per-request 5s timeout so
-      // the fetch is cancelled the moment either fires. `AbortSignal.any`
-      // is used when available; otherwise we fall back to the timeout
-      // (caller abort is still honoured at the walk's `shouldAbort` checks).
-      const timeout = AbortSignal.timeout(5000);
-      const fetchSignal =
-        signal && typeof AbortSignal.any === 'function'
-          ? AbortSignal.any([signal, timeout])
-          : timeout;
-      // Build via `new URL` rather than string interpolation so a nodeUrl
-      // with a trailing slash (or base path) doesn't produce a double-slash
-      // / double-path URL (meroreviewer).
-      const membersUrl = new URL(
-        `/admin-api/groups/${encodeURIComponent(groupId)}/members`,
-        nodeUrl,
-      ).toString();
-      let resp: Response;
+      // Caller already superseded (e.g. HA re-enabled) - don't start a call
+      // whose answer we would only discard.
+      if (signal?.aborted) return null;
       try {
-        resp = await doFetch(membersUrl, {
-          headers: { Authorization: `Bearer ${token}` },
-          signal: fetchSignal,
-        });
+        const response = await withDeadline(
+          mero.admin.listGroupMembers(groupId),
+          ADMIN_TIMEOUT_MS,
+          signal,
+        );
+        return response.members;
       } catch (e) {
-        // Don't log the raw error — it can carry headers/URL with the
-        // bearer token. Redacted summary only.
         console.warn(
-          `buildEvictionDeps: members fetch threw for group=${short(groupId)} ` +
-            `(${(e as Error)?.name ?? 'unknown'})`,
+          `buildEvictionDeps: list-members failed for group=${short(groupId)} ` +
+            `(${(e as Error)?.name ?? 'unknown'}) - cleanup pending`,
         );
         return null;
       }
-      if (!resp.ok) {
-        console.warn(
-          `buildEvictionDeps: members http=${resp.status} for group=${short(groupId)}`,
-        );
-        return null;
-      }
-      const json = await resp.json().catch(() => null);
-      return extractMembersFromResponse(json);
     },
     listSubgroups: async (groupId) => {
-      // Mirror the fetch-side abort check: stop enumerating the tree via the
-      // mero admin client once the caller is superseded. Throwing makes
-      // `enumerateGroupTree` mark the walk incomplete and stop descending,
-      // so a cancelled pass doesn't keep issuing admin calls down a deep
-      // tree (meroreviewer).
+      // Throwing makes `enumerateGroupTree` mark the walk incomplete and stop
+      // descending, so a cancelled pass issues no further admin calls.
       if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
-      // Bound the admin call: it carries no timeout of its own, so a hung
-      // merod must not wedge the walk (cursor). The signal is raced in too,
-      // so an abort mid-call is honoured immediately (meroreviewer).
       const entries = await withDeadline(
         mero.admin.listSubgroups(groupId),
-        5000,
+        ADMIN_TIMEOUT_MS,
         signal,
       );
       return (entries ?? [])

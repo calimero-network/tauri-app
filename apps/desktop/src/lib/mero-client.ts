@@ -8,7 +8,14 @@
  * Provides the same apiClient.auth.* / apiClient.node.* surface the desktop
  * app relies on, while the Namespaces page uses mero-react hooks directly.
  */
-import { MeroJs, type TokenStore, type TokenData, type Application } from '@calimero-network/mero-js';
+import {
+  AuthRevokedError,
+  HTTPError,
+  MeroJs,
+  type TokenStore,
+  type TokenData,
+  type Application,
+} from '@calimero-network/mero-js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -26,7 +33,7 @@ export interface Provider {
   configured?: boolean;
 }
 
-export interface TokenResponse {
+interface TokenResponse {
   access_token: string;
   refresh_token: string;
 }
@@ -36,6 +43,52 @@ export interface ClientConfig {
   authBaseUrl?: string;
   requestCredentials?: RequestCredentials;
   timeoutMs?: number;
+}
+
+/** Core answers some refusals as JSON and some as plain text. */
+export function nodeBodyMessage(body: string | undefined): string | undefined {
+  if (!body) return undefined;
+  try {
+    const parsed = JSON.parse(body);
+    const value = parsed?.error?.message ?? parsed?.error ?? parsed?.message;
+    return typeof value === 'string' && value.trim() ? value : undefined;
+  } catch {
+    return body.trim() || undefined;
+  }
+}
+
+/**
+ * The sentence a user should read. `HTTPError.message` prefixes its own status
+ * line and drops both a `{ message }` body and a plain-text one, so the body is
+ * re-read here. `action` names the step that failed, as the raw fetches did.
+ */
+export function nodeErrorMessage(error: unknown, action?: string): string {
+  const detail =
+    error instanceof HTTPError
+      ? nodeBodyMessage(error.bodyText) || error.statusText || `HTTP ${error.status}`
+      : error instanceof Error
+        ? error.message
+        : String(error);
+  return action ? `${action}: ${detail}` : detail;
+}
+
+/**
+ * Every wrapper answers with `{ data }` or `{ error }` instead of throwing, so
+ * one place turns a rejection into the shape a caller reads. `code` is what
+ * distinguishes "sign in again" from any other failure.
+ */
+async function wrap<T>(label: string, call: () => Promise<T>): Promise<ApiResponse<T>> {
+  try {
+    return { data: await call() };
+  } catch (e) {
+    if (e instanceof AuthRevokedError) {
+      return { error: { message: 'Session revoked', code: '401' } };
+    }
+    if (e instanceof HTTPError && e.status === 401) {
+      return { error: { message: 'Unauthorized', code: '401' } };
+    }
+    return { error: { message: nodeErrorMessage(e) || label } };
+  }
 }
 
 // ─── Token store (localStorage, individual keys for compat) ─────────────────
@@ -79,19 +132,16 @@ class DesktopTokenStore implements TokenStore {
 class AuthApi {
   constructor(private meroJs: MeroJs) {}
 
-  async getHealth(): Promise<ApiResponse<{ status: string }>> {
-    try {
-      const r = await this.meroJs.auth.getHealth();
-      return { data: { status: r.status } };
-    } catch (e) {
-      return { error: { message: e instanceof Error ? e.message : 'Failed to get auth health' } };
-    }
+  getHealth(): Promise<ApiResponse<{ status: string }>> {
+    return wrap('Failed to get auth health', async () => ({
+      status: (await this.meroJs.auth.getHealth()).status,
+    }));
   }
 
-  async getProviders(): Promise<ApiResponse<{ providers: Provider[]; count: number }>> {
-    try {
+  getProviders(): Promise<ApiResponse<{ providers: Provider[]; count: number }>> {
+    return wrap('Failed to get providers', async () => {
       const r = await this.meroJs.auth.getProviders();
-      const list = (r.providers || []).map((p: any) => ({
+      const providers = (r.providers || []).map((p: any) => ({
         id: p.id ?? p.name,
         name: p.name,
         enabled: p.enabled ?? p.configured ?? false,
@@ -99,13 +149,11 @@ class AuthApi {
         description: p.description ?? '',
         configured: p.enabled ?? p.configured ?? false,
       }));
-      return { data: { providers: list, count: r.count ?? list.length } };
-    } catch (e) {
-      return { error: { message: e instanceof Error ? e.message : 'Failed to get providers' } };
-    }
+      return { providers, count: r.count ?? providers.length };
+    });
   }
 
-  async requestToken(payload: {
+  requestToken(payload: {
     auth_method: string;
     public_key: string;
     client_name: string;
@@ -113,7 +161,7 @@ class AuthApi {
     permissions: string[];
     provider_data?: Record<string, unknown>;
   }): Promise<ApiResponse<TokenResponse>> {
-    try {
+    return wrap('Failed to request token', async () => {
       const r = await this.meroJs.auth.generateTokens({
         auth_method: payload.auth_method,
         public_key: payload.public_key,
@@ -125,79 +173,29 @@ class AuthApi {
       const at = r.data?.access_token;
       const rt = r.data?.refresh_token;
       if (!at || !rt) {
-        return { error: { message: r.error ?? r.data?.error ?? 'Failed to generate tokens' } };
+        throw new Error(r.error ?? r.data?.error ?? 'Failed to generate tokens');
       }
-      let expiresAt: number;
-      try {
-        const jwt = JSON.parse(atob(at.split('.')[1]));
-        expiresAt = jwt.exp * 1000;
-      } catch {
-        expiresAt = Date.now() + 3600 * 1000;
-      }
-      this.meroJs.setTokenData({ access_token: at, refresh_token: rt, expires_at: expiresAt });
-      return { data: { access_token: at, refresh_token: rt } };
-    } catch (e) {
-      return { error: { message: e instanceof Error ? e.message : 'Failed to request token' } };
-    }
+      // 0 asks the SDK to read `exp` off the JWT, falling back to an hour out.
+      this.meroJs.setTokenData({ access_token: at, refresh_token: rt, expires_at: 0 });
+      return { access_token: at, refresh_token: rt };
+    });
   }
 
-  async refreshToken(payload: {
+  refreshToken(payload: {
     access_token: string;
     refresh_token: string;
   }): Promise<ApiResponse<TokenResponse>> {
-    try {
+    return wrap('Failed to refresh token', async () => {
       const r = await this.meroJs.auth.refreshToken({
         access_token: payload.access_token,
         refresh_token: payload.refresh_token,
       });
       const at = r.data?.access_token;
       const rt = r.data?.refresh_token;
-      if (!at || !rt) {
-        return { error: { message: 'Failed to refresh token' } };
-      }
-      let expiresAt: number;
-      try {
-        const jwt = JSON.parse(atob(at.split('.')[1]));
-        expiresAt = jwt.exp * 1000;
-      } catch {
-        expiresAt = Date.now() + 3600 * 1000;
-      }
-      this.meroJs.setTokenData({ access_token: at, refresh_token: rt, expires_at: expiresAt });
-      return { data: { access_token: at, refresh_token: rt } };
-    } catch (e) {
-      return { error: { message: e instanceof Error ? e.message : 'Failed to refresh token' } };
-    }
-  }
-
-  // NOTE: mero-js's generateClientKey now issues a token (access_token/
-  // refresh_token), not a bare key id — the request fields are also
-  // snake_case (context_id/context_identity) rather than keyId/clientName.
-  // See @calimero-network/mero-js auth-types.ts GenerateClientKeyRequest/TokenResponse.
-  //
-  // UNCALLED as of this writing: kept because issuing a per-context client key
-  // is a capability the desktop will want, and re-deriving the wire shape later
-  // is the expensive part. It is therefore not covered by any test — if you wire
-  // it up, verify it against a real node first rather than trusting these types.
-  async generateClientKey(payload: {
-    context_id: string;
-    context_identity: string;
-    permissions: string[];
-  }): Promise<ApiResponse<TokenResponse>> {
-    try {
-      const r = await this.meroJs.auth.generateClientKey({
-        context_id: payload.context_id,
-        context_identity: payload.context_identity,
-        permissions: payload.permissions,
-      });
-      const at = r.data?.access_token;
-      const rt = r.data?.refresh_token;
-      if (!at || !rt) {
-        return { error: { message: r.error ?? r.data?.error ?? 'Failed to generate client key' } };
-      }
-      return { data: { access_token: at, refresh_token: rt } };
-    } catch (e) {
-      return { error: { message: e instanceof Error ? e.message : 'Failed to generate client key' } };
-    }
+      if (!at || !rt) throw new Error('Failed to refresh token');
+      this.meroJs.setTokenData({ access_token: at, refresh_token: rt, expires_at: 0 });
+      return { access_token: at, refresh_token: rt };
+    });
   }
 }
 
@@ -206,102 +204,43 @@ class AuthApi {
 class NodeApi {
   constructor(private meroJs: MeroJs) {}
 
-  async healthCheck(): Promise<ApiResponse<{ status: string }>> {
-    try {
-      const h = await this.meroJs.admin.healthCheck();
-      return { data: { status: h.status } };
-    } catch (e: any) {
-      if (e?.status === 401 || (e instanceof Error && e.message.includes('401'))) {
-        return { error: { message: 'Unauthorized', code: '401' } };
-      }
-      return { error: { message: e instanceof Error ? e.message : 'Failed to check health' } };
-    }
+  healthCheck(): Promise<ApiResponse<{ status: string }>> {
+    return wrap('Failed to check health', async () => ({
+      status: (await this.meroJs.admin.healthCheck()).status,
+    }));
   }
 
-  async getContexts(): Promise<ApiResponse<any[]>> {
-    try {
-      const r = await this.meroJs.admin.getContexts();
-      const raw = r as any;
-      const rows = Array.isArray(raw) ? raw : raw?.contexts ?? [];
-      return { data: rows };
-    } catch (e: any) {
-      if (e?.status === 401) return { error: { message: 'Unauthorized', code: '401' } };
-      return { error: { message: e instanceof Error ? e.message : 'Failed to get contexts' } };
-    }
+  getContexts(): Promise<ApiResponse<any[]>> {
+    return wrap('Failed to get contexts', async () =>
+      (await this.meroJs.admin.getContexts()).contexts ?? [],
+    );
   }
 
-  async deleteContext(contextId: string): Promise<ApiResponse<{ contextId: string }>> {
-    try {
-      await this.meroJs.admin.deleteContext(contextId);
-      return { data: { contextId } };
-    } catch (e: any) {
-      if (e?.status === 401) return { error: { message: 'Unauthorized', code: '401' } };
-      return { error: { message: e instanceof Error ? e.message : 'Failed to delete context' } };
-    }
-  }
-
-  async fetchContextIdentities(contextId: string): Promise<ApiResponse<string[]>> {
-    try {
-      const r = await this.meroJs.admin.getContextIdentitiesOwned(contextId);
-      return { data: ((r as any).identities || []) as string[] };
-    } catch (e) {
-      return { error: { message: e instanceof Error ? e.message : 'Failed to fetch context identities' } };
-    }
-  }
-
-  async getInstalledApplicationDetails(applicationId: string): Promise<ApiResponse<any>> {
-    try {
-      const r = await this.meroJs.admin.getApplication(applicationId);
-      return { data: r };
-    } catch (e) {
-      return { error: { message: e instanceof Error ? e.message : 'Failed to get application details' } };
-    }
-  }
-
-  async listApplications(): Promise<ApiResponse<Application[]>> {
-    try {
-      const r = await this.meroJs.admin.listApplications();
-      const raw = r as any;
-      const rows: unknown[] = (() => {
-        if (Array.isArray(raw)) return raw;
-        if (raw && typeof raw === 'object') {
-          if (Array.isArray(raw.apps)) return raw.apps;
-          if (raw.data && Array.isArray(raw.data)) return raw.data;
-          if (raw.data?.apps && Array.isArray(raw.data.apps)) return raw.data.apps;
-        }
-        return [];
-      })();
-      const normalized = rows.map((app: any) => ({ ...app, id: app.id ?? app.applicationId }));
-      return { data: normalized };
-    } catch (e: any) {
-      if (e?.status === 401) return { error: { message: 'Unauthorized', code: '401' } };
-      return { error: { message: e instanceof Error ? e.message : 'Failed to list applications' } };
-    }
+  listApplications(): Promise<ApiResponse<Application[]>> {
+    return wrap('Failed to list applications', async () => {
+      const { apps } = await this.meroJs.admin.listApplications();
+      // The node keys these `applicationId` while mero-js types the field as
+      // `id`, which is what every consumer here reads.
+      return (apps ?? []).map((app: any) => ({ ...app, id: app.id ?? app.applicationId }));
+    });
   }
 
   /** By coordinates: the node resolves them against its own registry and takes
    *  no URL, so a body carrying one is refused outright. */
-  async installApplication(request: {
+  installApplication(request: {
     package: string;
     version: string;
   }): Promise<ApiResponse<{ applicationId: string }>> {
-    try {
-      const r = await this.meroJs.admin.installApplication(request);
-      return { data: { applicationId: r.applicationId } };
-    } catch (e: any) {
-      if (e?.status === 401) return { error: { message: 'Unauthorized', code: '401' } };
-      return { error: { message: e instanceof Error ? e.message : 'Failed to install application' } };
-    }
+    return wrap('Failed to install application', async () => ({
+      applicationId: (await this.meroJs.admin.installApplication(request)).applicationId,
+    }));
   }
 
-  async uninstallApplication(applicationId: string): Promise<ApiResponse<{ applicationId: string }>> {
-    try {
+  uninstallApplication(applicationId: string): Promise<ApiResponse<{ applicationId: string }>> {
+    return wrap('Failed to uninstall application', async () => {
       await this.meroJs.admin.uninstallApplication(applicationId);
-      return { data: { applicationId } };
-    } catch (e: any) {
-      if (e?.status === 401) return { error: { message: 'Unauthorized', code: '401' } };
-      return { error: { message: e instanceof Error ? e.message : 'Failed to uninstall application' } };
-    }
+      return { applicationId };
+    });
   }
 }
 
@@ -341,14 +280,7 @@ export const apiClient = new Proxy({} as Client, {
   },
 });
 
-export function createClient(config: ClientConfig): Client {
-  clientInstance = new Client(config);
-  return clientInstance;
-}
-
 export async function createClientAsync(config: ClientConfig): Promise<Client> {
   clientInstance = new Client(config);
   return clientInstance;
 }
-
-export type { ClientConfig as MeroClientConfig };

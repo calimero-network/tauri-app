@@ -10,6 +10,25 @@ vi.mock('./token-broker', () => ({
   brokerAccessToken: () => brokerAccessToken(),
 }));
 
+// A real MeroJs behind the app's singleton, so these tests still assert what
+// reaches the wire: the SDK's own routes, bodies and bearer header.
+vi.mock('./mero-client', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./mero-client')>();
+  const { MeroJs, MemoryTokenStore } = await import('@calimero-network/mero-js');
+  const meroJs = new MeroJs({
+    baseUrl: 'http://localhost:2528',
+    tokenStore: new MemoryTokenStore(),
+  });
+  meroJs.setTokenData({
+    access_token: 'desktop-access-token',
+    refresh_token: 'desktop-refresh-token',
+    expires_at: Date.now() + 3_600_000,
+  });
+  // Only the singleton is stood in for; the error-message helpers are the real
+  // ones, since the copy they produce is what these tests assert.
+  return { ...actual, apiClient: { meroJs } };
+});
+
 // Imported once, unlike agent-connect's suite: device-link.ts keeps no module state.
 import {
   listAccountApplications,
@@ -296,22 +315,39 @@ describe('pairInit', () => {
     });
   });
 
-  it('surfaces the node error message', async () => {
+  // The message is compared whole, not by substring: a substring match passes
+  // against the SDK's own `HTTP 400 : ...`, which is the copy this must not
+  // regress to. `status` rides along because `refusalStatus` reads it.
+  it('surfaces the node error message, with no status line in front of it', async () => {
     installFetch(json({ error: 'no account root on this node' }, { status: 400 }));
 
-    await expect(pairInit(HEX_64, ['ns-1'])).rejects.toThrow('no account root on this node');
+    await expect(pairInit(HEX_64, ['ns-1'])).rejects.toMatchObject({
+      message: 'no account root on this node',
+      status: 400,
+    });
   });
 
-  it('reports a revoked token family as terminal', async () => {
+  it('reports a revoked token family as terminal, in words a user can act on', async () => {
     installFetch(new Response('{}', { status: 401, headers: { 'x-auth-error': 'token_reuse' } }));
 
-    await expect(pairInit(HEX_64, ['ns-1'])).rejects.toThrow(/revoked/i);
+    await expect(pairInit(HEX_64, ['ns-1'])).rejects.toThrow(
+      'Your node session was revoked. Sign in again, then try again.',
+    );
   });
 
   it('falls back to the status when the body carries no message', async () => {
-    installFetch(new Response('not json', { status: 503 }));
+    installFetch(new Response('', { status: 503 }));
 
     await expect(pairInit(HEX_64, ['ns-1'])).rejects.toThrow('HTTP 503');
+  });
+
+  it('quotes a plain-text refusal verbatim, which the sdk message drops', async () => {
+    installFetch(new Response('this node takes part in none of those namespaces', { status: 409 }));
+
+    await expect(pairInit(HEX_64, ['ns-1'])).rejects.toMatchObject({
+      message: 'this node takes part in none of those namespaces',
+      status: 409,
+    });
   });
 });
 

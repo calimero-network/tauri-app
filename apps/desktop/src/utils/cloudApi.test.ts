@@ -1,16 +1,27 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
-// The token-storage module reads from window.localStorage on import;
-// mock it before the SUT is required so getAccessToken() returns a
-// predictable value across tests.
-vi.mock('../lib/token-storage', () => ({
-  getAccessToken: () => 'test-access-token',
-  getRefreshToken: () => null,
-}));
+// The local-node calls go through the app's shared MeroJs. A real instance is
+// used so the routes and bodies under test are the SDK's own, not a stub's.
+vi.mock('../lib/mero-client', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/mero-client')>();
+  const { MeroJs, MemoryTokenStore } = await import('@calimero-network/mero-js');
+  const meroJs = new MeroJs({
+    baseUrl: 'http://node',
+    tokenStore: new MemoryTokenStore(),
+  });
+  meroJs.setTokenData({
+    access_token: 'test-access-token',
+    refresh_token: 'test-refresh-token',
+    expires_at: Date.now() + 3_600_000,
+  });
+  // Only the singleton is stood in for; the error-message helpers are the real
+  // ones, since the copy they produce is what these tests assert.
+  return { ...actual, apiClient: { meroJs } };
+});
 
-// settings.ts touches localStorage too — keep it inert.
+// settings.ts touches localStorage - keep it inert.
 vi.mock('./settings', () => ({
-  getSettings: () => ({ nodeUrl: 'http://localhost:2528' }),
+  getSettings: () => ({ nodeUrl: 'http://node' }),
   saveSettings: () => {},
 }));
 
@@ -77,7 +88,7 @@ function route(
   // test keeps stating only the thing it is about; a test that cares about
   // the identity lookup overrides it.
   const withDefaults: Record<string, () => Response> = {
-    '/admin-api/identity': () => jsonResponse({ accountId: 'me' }),
+    '/admin-api/identity': () => jsonResponse({ data: { accountId: 'me' } }),
     ...handlers,
   };
   for (const [pattern, h] of Object.entries(withDefaults)) {
@@ -102,7 +113,7 @@ describe('requestOwnershipProof', () => {
     );
     restore = r;
 
-    const out = await requestOwnershipProof('http://node', 'group-1', {
+    const out = await requestOwnershipProof('group-1', {
       contextId: 'ctx-1',
       subject: 'user@example.com',
     });
@@ -131,24 +142,30 @@ describe('requestOwnershipProof', () => {
     const { restore: r } = installFetch(() => jsonResponse({}));
     restore = r;
     await expect(
-      requestOwnershipProof('http://node', 'group-1', {
-        contextId: 'ctx',
-        subject: 'u@e',
-      }),
+      requestOwnershipProof('group-1', { contextId: 'ctx', subject: 'u@e' }),
     ).rejects.toThrow(/Malformed ownership proof/);
   });
 
-  it('throws with body text when merod returns non-ok', async () => {
+  // Exact, not a substring: a substring match passes against the SDK's own
+  // `HTTP 404 : group not found`, which is the copy this must not regress to.
+  it('names the step and quotes a plain-text refusal verbatim', async () => {
     const { restore: r } = installFetch(
       () => new Response('group not found', { status: 404 }),
     );
     restore = r;
     await expect(
-      requestOwnershipProof('http://node', 'group-1', {
-        contextId: 'ctx',
-        subject: 'u@e',
-      }),
-    ).rejects.toThrow(/group not found/);
+      requestOwnershipProof('group-1', { contextId: 'ctx', subject: 'u@e' }),
+    ).rejects.toThrow(new Error('Failed to issue ownership proof: group not found'));
+  });
+
+  it('names the step and quotes a JSON refusal', async () => {
+    const { restore: r } = installFetch(
+      () => jsonResponse({ error: { message: 'not a direct admin' } }, 403),
+    );
+    restore = r;
+    await expect(
+      requestOwnershipProof('group-1', { contextId: 'ctx', subject: 'u@e' }),
+    ).rejects.toThrow(new Error('Failed to issue ownership proof: not a direct admin'));
   });
 });
 
@@ -219,7 +236,7 @@ describe('enableHaForNamespace', () => {
     );
     restore = r;
     await expect(
-      enableHaForNamespace(makeJwt({ iss: 'mdma', email: 'u@e' }), 'http://node', 'ns-root', []),
+      enableHaForNamespace(makeJwt({ iss: 'mdma', email: 'u@e' }), 'ns-root', []),
     ).rejects.toThrow(/Only the namespace admin can enable HA/);
   });
 
@@ -234,7 +251,7 @@ describe('enableHaForNamespace', () => {
     );
     restore = r;
     await expect(
-      enableHaForNamespace(makeJwt({ iss: 'mdma', email: 'u@e' }), 'http://node', 'ns-root', []),
+      enableHaForNamespace(makeJwt({ iss: 'mdma', email: 'u@e' }), 'ns-root', []),
     ).rejects.toThrow(/Could not determine your role in this namespace/);
   });
 
@@ -251,8 +268,8 @@ describe('enableHaForNamespace', () => {
     );
     restore = r;
     await expect(
-      enableHaForNamespace(makeJwt({ iss: 'mdma', email: 'u@e' }), 'http://node', 'ns-root', []),
-    ).rejects.toThrow(/Unexpected response from local node members endpoint/);
+      enableHaForNamespace(makeJwt({ iss: 'mdma', email: 'u@e' }), 'ns-root', []),
+    ).rejects.toThrow(/Invalid listGroupMembers response/);
   });
 
   it('real-context path is rejected fail-fast with no network calls (mdma#162)', async () => {
@@ -271,7 +288,6 @@ describe('enableHaForNamespace', () => {
     await expect(
       enableHaForNamespace(
         makeJwt({ iss: 'mdma', email: 'u@e' }),
-        'http://node',
         'ns-root',
         [
           { group_id: 'ns-root', context_id: 'ctx-1' },
@@ -326,7 +342,6 @@ describe('enableHaForNamespace', () => {
 
     const res = await enableHaForNamespace(
       makeJwt({ iss: 'mdma', email: 'u@e' }),
-      'http://node',
       'ns-root',
       [], // zero-context namespace
     );
@@ -362,7 +377,6 @@ describe('enableHaForNamespace', () => {
     await expect(
       enableHaForNamespace(
         makeJwt({ iss: 'mdma' }), // no email, no sub
-        'http://node',
         'ns-root',
         [],
       ),
@@ -404,7 +418,6 @@ describe('enableHaForNamespace', () => {
     restore = r;
     await enableHaForNamespace(
       makeJwt({ iss: 'mdma', email: 'u@e' }),
-      'http://node',
       'ns-root',
       [],
     );
@@ -421,13 +434,12 @@ describe('enableHaForNamespace', () => {
     restore = r;
     // iss != "mdma"
     await expect(
-      enableHaForNamespace(makeJwt({ iss: 'google', email: 'u@e' }), 'http://node', 'ns', []),
+      enableHaForNamespace(makeJwt({ iss: 'google', email: 'u@e' }), 'ns', []),
     ).rejects.toThrow(/Not signed in to Calimero Cloud/);
     // mdma but expired
     await expect(
       enableHaForNamespace(
         makeJwt({ iss: 'mdma', email: 'u@e', exp: Math.floor(Date.now() / 1000) - 10 }),
-        'http://node',
         'ns',
         [],
       ),
@@ -444,11 +456,11 @@ describe('enableHaForNamespace', () => {
     );
     restore = r;
     await expect(
-      enableHaForNamespace(makeJwt({ iss: 'mdma', email: 'u@e' }), 'http://node', 'ns-root', []),
-    ).rejects.toThrow(/Unexpected response from local node members endpoint/);
+      enableHaForNamespace(makeJwt({ iss: 'mdma', email: 'u@e' }), 'ns-root', []),
+    ).rejects.toThrow(/Expected a JSON response/);
   });
 
-  it('throws a descriptive error (not a raw TypeError) on a malformed member entry', async () => {
+  it('names no role (not a raw TypeError) for a malformed member entry', async () => {
     const { restore: r } = installFetch((url, init) =>
       route(url, init, {
         '/admin-api/groups/ns-root/members': () =>
@@ -457,8 +469,8 @@ describe('enableHaForNamespace', () => {
     );
     restore = r;
     await expect(
-      enableHaForNamespace(makeJwt({ iss: 'mdma', email: 'u@e' }), 'http://node', 'ns-root', []),
-    ).rejects.toThrow(/Unexpected response from local node members endpoint/);
+      enableHaForNamespace(makeJwt({ iss: 'mdma', email: 'u@e' }), 'ns-root', []),
+    ).rejects.toThrow(/Could not determine your role in this namespace/);
   });
 });
 
@@ -487,7 +499,7 @@ describe('ensureTeeAdmissionPolicy', () => {
     );
     restore = r;
     await expect(
-      ensureTeeAdmissionPolicy('http://node', idToken(), 'ns-root'),
+      ensureTeeAdmissionPolicy(idToken(), 'ns-root'),
     ).resolves.toBe('skipped');
     // A member must never fetch measurements or PUT a policy it cannot sign.
     expect(calls.some((c) => c.url.includes('/fleet/measurements'))).toBe(false);
@@ -504,7 +516,7 @@ describe('ensureTeeAdmissionPolicy', () => {
     );
     restore = r;
     await expect(
-      ensureTeeAdmissionPolicy('http://node', idToken(), 'ns-root'),
+      ensureTeeAdmissionPolicy(idToken(), 'ns-root'),
     ).resolves.toBe('skipped');
   });
 
@@ -519,7 +531,7 @@ describe('ensureTeeAdmissionPolicy', () => {
     );
     restore = r;
     await expect(
-      ensureTeeAdmissionPolicy('http://node', idToken(), 'ns-root'),
+      ensureTeeAdmissionPolicy(idToken(), 'ns-root'),
     ).resolves.toBe('skipped');
     expect(calls.some((c) => c.url.includes('/tee-admission-policy'))).toBe(
       false,
@@ -535,7 +547,7 @@ describe('ensureTeeAdmissionPolicy', () => {
     );
     restore = r;
     await expect(
-      ensureTeeAdmissionPolicy('http://node', idToken(), 'ns-root'),
+      ensureTeeAdmissionPolicy(idToken(), 'ns-root'),
     ).resolves.toBe('skipped');
   });
 
@@ -550,7 +562,7 @@ describe('ensureTeeAdmissionPolicy', () => {
     );
     restore = r;
     await expect(
-      ensureTeeAdmissionPolicy('http://node', idToken(), 'ns-root'),
+      ensureTeeAdmissionPolicy(idToken(), 'ns-root'),
     ).resolves.toBe('ok');
     expect(
       calls.some(
@@ -577,7 +589,7 @@ describe('ensureTeeAdmissionPolicy', () => {
     );
     restore = r;
     await expect(
-      ensureTeeAdmissionPolicy('http://node', idToken(), 'ns-root'),
+      ensureTeeAdmissionPolicy(idToken(), 'ns-root'),
     ).resolves.toBe('reasserted');
     // PUT uses the load-bearing camelCase key with the current MRTD set.
     expect(putBody?.allowedMrtd).toEqual(['mrtd-1']);
@@ -600,7 +612,7 @@ describe('ensureTeeAdmissionPolicy', () => {
     );
     restore = r;
     await expect(
-      ensureTeeAdmissionPolicy('http://node', idToken(), 'ns-root'),
+      ensureTeeAdmissionPolicy(idToken(), 'ns-root'),
     ).resolves.toBe('reasserted');
     expect(putBody?.allowedMrtd).toEqual(['mrtd-NEW']);
   });

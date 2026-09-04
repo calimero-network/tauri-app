@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
 /** The three keys the desktop has always persisted. Renaming one, or changing
  *  what it holds, logs every existing user out on upgrade. */
@@ -28,7 +28,16 @@ globalThis.localStorage = {
 
 const { createClientAsync } = await import('./mero-client');
 
+const realFetch = globalThis.fetch;
+
+function respondWith(response: () => Response): void {
+  globalThis.fetch = async () => response();
+}
+
 beforeEach(() => store.clear());
+afterEach(() => {
+  globalThis.fetch = realFetch;
+});
 
 describe('the persisted token format', () => {
   it('writes the three keys the app has always written', async () => {
@@ -74,5 +83,39 @@ describe('the persisted token format', () => {
     expect(store.has(ACCESS_KEY)).toBe(false);
     expect(store.has(REFRESH_KEY)).toBe(false);
     expect(store.has(EXPIRES_KEY)).toBe(false);
+  });
+});
+
+describe('unauthorized detection', () => {
+  it('names a 401 with the code the app routes back to login on', async () => {
+    const client = await createClientAsync({ baseUrl: 'http://node' });
+    respondWith(() => new Response('{}', { status: 401 }));
+
+    expect(await client.node.healthCheck()).toEqual({
+      error: { message: 'Unauthorized', code: '401' },
+    });
+  });
+
+  it('reads the status, not the message: a 500 that mentions 401 is not a sign-out', async () => {
+    const client = await createClientAsync({ baseUrl: 'http://node' });
+    respondWith(
+      () => new Response(JSON.stringify({ error: 'upstream answered 401' }), { status: 500 }),
+    );
+
+    const response = await client.node.healthCheck();
+
+    expect(response.error?.code).toBeUndefined();
+    expect(response.error?.message).toContain('upstream answered 401');
+  });
+
+  it('carries the same code for a revoked family, which no retry can recover', async () => {
+    const client = await createClientAsync({ baseUrl: 'http://node' });
+    respondWith(
+      () => new Response('{}', { status: 401, headers: { 'x-auth-error': 'token_reuse' } }),
+    );
+
+    expect(await client.node.healthCheck()).toEqual({
+      error: { message: 'Session revoked', code: '401' },
+    });
   });
 });

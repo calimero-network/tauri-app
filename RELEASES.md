@@ -183,7 +183,7 @@ release has already passed those. What is left is to confirm the URLs resolve:
 
 ```bash
 gh release download vX.Y.Z -D release-assets/
-jq -r '.platforms[].url, .downloads[].url' release-assets/latest.json release-assets/release.json \
+jq -r '(.platforms // {})[].url, (.downloads // [])[].url' release-assets/latest.json release-assets/release.json \
   | sort -u | xargs -n1 curl -sSfI -o /dev/null -w '%{http_code} %{url_effective}\n'
 ```
 

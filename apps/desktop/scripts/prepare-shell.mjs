@@ -11,7 +11,9 @@ const shellDir = path.join(tauriDir, "shell");
 const binName = process.platform === "win32" ? "calimero-shell.exe" : "calimero-shell";
 const dest = path.join(shellDir, binName);
 
-const target = (process.env.TAURI_TARGET_TRIPLE || "").trim();
+// cargo itself honours CARGO_BUILD_TARGET when no --target flag is passed, so a
+// developer who sets it would otherwise get a binary this script can't find.
+const target = (process.env.TAURI_TARGET_TRIPLE || process.env.CARGO_BUILD_TARGET || "").trim();
 
 function envTruthy(name) {
   const v = String(process.env[name] ?? "").trim().toLowerCase();

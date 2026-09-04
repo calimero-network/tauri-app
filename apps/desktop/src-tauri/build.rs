@@ -34,9 +34,8 @@ fn main() {
     }
     println!("cargo:rerun-if-changed=../../../merod-config.json");
 
-    // The triple the release assets are named after. Cargo knows it exactly;
-    // deriving it from cfg! at runtime only reproduces it for the platforms
-    // someone remembered to list.
+    // The triple the release assets are named after. Cargo knows it exactly; a
+    // cfg! chain only covers the platforms someone remembered to list.
     println!(
         "cargo:rustc-env=TARGET_TRIPLE={}",
         std::env::var("TARGET").expect("cargo sets TARGET for every build script")

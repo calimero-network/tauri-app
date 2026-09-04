@@ -1,7 +1,7 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use log::{info, warn};
+use log::{debug, info, warn};
 use serde::Serialize;
 #[cfg(target_os = "macos")]
 use sha2::{Digest, Sha256};
@@ -69,9 +69,8 @@ const MEROD_CONFIG_VERSION: &str = match option_env!("MEROD_CONFIG_VERSION") {
     None => "unknown",
 };
 
-/// Windows gives every console child of a GUI process its own window, so merod
-/// would sit beside a black one all session and each short-lived helper would
-/// flash one. Wrap with `Command::from` where a tokio child is wanted.
+/// Windows gives every console child of a GUI process its own window; merod would
+/// sit beside a black one all session. `Command::from` it for a tokio child.
 #[cfg(windows)]
 fn hidden_command(program: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
     use std::os::windows::process::CommandExt as _;
@@ -506,9 +505,8 @@ fn focus_window(app_handle: tauri::AppHandle, window_label: String) -> Result<()
 // ad-hoc-signed `calimero-shell` with `--app-config <bundle>/…/app.json`; the
 // shell owns that app's dock identity and brokers refresh back to this host.
 
-/// An app name reduced to what can be a `.app` bundle or a `.lnk` filename on
-/// every platform we ship to. Empty after trimming means a name that was all
-/// punctuation, which would otherwise leave the launcher unnamed.
+/// An app name reduced to what can be a `.app` bundle or a `.lnk` filename
+/// anywhere we ship. All punctuation trims to empty, which would leave it unnamed.
 fn safe_launcher_name(app_name: &str) -> String {
     let mapped: String = app_name
         .chars()
@@ -2584,8 +2582,13 @@ async fn list_merod_nodes(home_dir: Option<String>) -> Result<Vec<String>, Tauri
             if name.starts_with('.') {
                 return None;
             }
-            let config = std::fs::read_to_string(entry.path().join("config.toml")).ok()?;
-            config.parse::<toml::Value>().ok()?;
+            let config = std::fs::read_to_string(entry.path().join("config.toml"))
+                .inspect_err(|e| debug!("[Merod] Skipping '{name}': config.toml unreadable: {e}"))
+                .ok()?;
+            config
+                .parse::<toml::Value>()
+                .inspect_err(|e| debug!("[Merod] Skipping '{name}': invalid config.toml: {e}"))
+                .ok()?;
             Some(name)
         })
         .collect();
@@ -2903,10 +2906,28 @@ async fn detect_running_merod_nodes() -> Result<Vec<serde_json::Value>, TauriErr
     }
 }
 
+/// The phrase `utils/updater.ts` aborts the app update on. Every other error from
+/// this command is warned and swallowed, so a merod that verifies wrong has to
+/// keep saying this or the new app ships over a stale binary.
+const VERSION_MISMATCH: &str = "Version mismatch after replace";
+
+/// Restate the installer's version-verification failure in the words the updater
+/// recognises. Other install failures keep the installer's own text.
+fn merod_install_failure(e: TauriError, expected: &str) -> TauriError {
+    if e.code != TauriErrorCode::MerodVersionMismatch {
+        return e;
+    }
+    TauriError::with_details(
+        e.code,
+        format!("{VERSION_MISMATCH}: expected 'merod {expected}'"),
+        e.message,
+    )
+}
+
 /// Install the merod release matching `MEROD_CONFIG_VERSION` and put it where the
 /// bundled binary lives, so a build whose bundled merod is stale self-corrects.
-///
-/// Returns `{ replaced, expected_version, current_version, message }`.
+/// Returns `{ replaced, expected_version, current_version, message }`, with
+/// `replaced` false when the bundled binary was already at the expected version.
 #[tauri::command]
 async fn download_and_replace_merod(
     app_handle: tauri::AppHandle,
@@ -2937,7 +2958,9 @@ async fn download_and_replace_merod(
     // allowlist and a `merod --version` check against the tag; all that is left
     // here is putting a copy where the bundle expects to find it.
     let app_data_dir = merod_versions::app_data(&app_handle)?;
-    let installed = merod_versions::ensure_release_installed(&app_data_dir, expected).await?;
+    let installed = merod_versions::ensure_release_installed(&app_data_dir, expected)
+        .await
+        .map_err(|e| merod_install_failure(e, expected))?;
 
     let tmp_path = binary_path.with_extension("tmp");
     tokio::fs::copy(&installed, &tmp_path).await.map_err(|e| {
@@ -2981,9 +3004,9 @@ async fn download_and_replace_merod(
     if !merod_versions::version_matches_tag(&new_version, expected) {
         let _ = tokio::fs::rename(&bak_path, &binary_path).await;
         return Err(TauriError::new(
-            TauriErrorCode::InternalError,
+            TauriErrorCode::MerodVersionMismatch,
             format!(
-                "Version mismatch after replace: expected 'merod {}', binary reports '{}'",
+                "{VERSION_MISMATCH}: expected 'merod {}', binary reports '{}'",
                 expected, new_version
             ),
         ));
@@ -4072,6 +4095,13 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_launcher_name_of_pure_punctuation_falls_back_instead_of_going_blank() {
+        assert_eq!(super::safe_launcher_name("Mero Drive"), "Mero Drive");
+        assert_eq!(super::safe_launcher_name("a/b:c"), "a_b_c");
+        assert_eq!(super::safe_launcher_name("!!!"), "Calimero App");
+    }
+
     /// Two node homes that differ, for the tests that match tracked state on one.
     const HOME_A: &str = "/tmp/calimero-test-home-a";
     const HOME_B: &str = "/tmp/calimero-test-home-b";
@@ -4312,6 +4342,45 @@ listen = ["/ip4/0.0.0.0/udp/4001/quic-v1", "/ip4/0.0.0.0/tcp/4002"]
         );
 
         assert!(super::merod_supports_stdin_stop(&new).await);
+    }
+
+    /// `utils/updater.ts` rethrows on one phrase and warns on every other error
+    /// from this command, so a merod that downloads wrong has to keep producing
+    /// it - otherwise the app updates over a binary it knows is stale. The phrase
+    /// is spelled out here rather than read from the constant: the contract is
+    /// with a string literal in TypeScript that this test cannot change.
+    #[tokio::test]
+    async fn a_mismatched_merod_keeps_the_phrase_the_app_updater_aborts_on() {
+        let dir = tempfile::tempdir().unwrap();
+        let wrong = fake_merod(dir.path(), "wrong-merod", "merod 0.0.1\n");
+
+        // A real binary reporting the wrong version, put through the check the
+        // installer makes before it refuses to install.
+        let reported = super::get_merod_version_at(&wrong)
+            .await
+            .expect("the fake merod reports a version");
+        assert!(!crate::merod_versions::version_matches_tag(&reported, "0.11.0"));
+        let refused = super::TauriError::new(
+            super::TauriErrorCode::MerodVersionMismatch,
+            format!("Downloaded binary reports '{reported}', expected 'merod 0.11.0'"),
+        );
+
+        let surfaced = super::merod_install_failure(refused, "0.11.0");
+        assert!(
+            surfaced.message.contains("Version mismatch after replace"),
+            "the updater aborts only on that phrase; got {:?}",
+            surfaced.message
+        );
+
+        // Every other install failure keeps the installer's own words.
+        let other = super::TauriError::new(
+            super::TauriErrorCode::InternalError,
+            "GitHub API: timed out",
+        );
+        assert_eq!(
+            super::merod_install_failure(other, "0.11.0").message,
+            "GitHub API: timed out"
+        );
     }
 
     /// A probe that cannot run answers "no". Guessing "yes" would pass an

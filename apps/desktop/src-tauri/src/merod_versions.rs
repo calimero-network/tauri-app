@@ -27,7 +27,7 @@ const LOCAL_PREFIX: &str = "local:";
 
 /// Check a download against the `sha256:...` digest GitHub publishes for the
 /// asset. Catches corruption and a tampered CDN, not a malicious release itself.
-pub(crate) fn verify_sha256(bytes: &[u8], expected: &str) -> Result<(), TauriError> {
+fn verify_sha256(bytes: &[u8], expected: &str) -> Result<(), TauriError> {
     // Refuse an algorithm we cannot compute: a digest we are unable to check is
     // not a digest that passed. An absent digest is handled by the caller.
     let Some(want) = expected.strip_prefix("sha256:") else {
@@ -228,7 +228,8 @@ static RELEASE_CACHE: Mutex<Option<(Instant, ReleaseListing)>> = Mutex::new(None
 /// The parts of GitHub's release JSON this app reads. Everything but the tag and
 /// the asset name defaults, so one unusual release cannot fail a whole listing.
 #[derive(Debug, Deserialize)]
-pub(crate) struct GhRelease {
+struct GhRelease {
+    #[serde(default)]
     tag_name: String,
     #[serde(default)]
     prerelease: bool,
@@ -238,13 +239,14 @@ pub(crate) struct GhRelease {
 
 #[derive(Debug, Deserialize)]
 struct GhAsset {
+    #[serde(default)]
     name: String,
     #[serde(default)]
     browser_download_url: String,
     digest: Option<String>,
 }
 
-pub(crate) fn releases_from_json(releases: &[GhRelease], target: &str) -> Vec<ReleaseInfo> {
+fn releases_from_json(releases: &[GhRelease], target: &str) -> Vec<ReleaseInfo> {
     releases
         .iter()
         .filter(|r| is_safe_tag(&r.tag_name))
@@ -498,6 +500,7 @@ pub(crate) async fn ensure_release_installed(
     let asset = release
         .assets
         .iter()
+        .filter(|a| !a.browser_download_url.is_empty())
         .filter_map(|a| Some((score_merod_asset(&a.name, target)?, a)))
         .min_by_key(|(score, _)| *score)
         .map(|(_, a)| a)
@@ -628,9 +631,11 @@ pub(crate) async fn ensure_release_installed(
             let expected = format!("merod {}", tag);
             match reported {
                 Some(ref v) if version_matches_tag(v, tag) => {}
+                // Its own code: `download_and_replace_merod` has to recognise this
+                // one failure to keep the phrase the app updater aborts on.
                 other => {
                     return Err(TauriError::new(
-                        TauriErrorCode::InternalError,
+                        TauriErrorCode::MerodVersionMismatch,
                         format!(
                             "Downloaded binary reports '{}', expected '{}'",
                             other.unwrap_or_else(|| "nothing".to_string()),
@@ -841,14 +846,14 @@ pub async fn remove_merod_version(
 
 /// The Rust target triple this binary was built for, which is how the GitHub
 /// release assets are named. Emitted by build.rs from cargo's own `TARGET`.
-pub(crate) fn merod_target_triple() -> &'static str {
+fn merod_target_triple() -> &'static str {
     env!("TARGET_TRIPLE")
 }
 
 
 /// Scores a GitHub release asset name for the given target triple.
 /// Lower score = better match. Returns `None` if the asset is not for this platform.
-pub(crate) fn score_merod_asset(name: &str, target_triple: &str) -> Option<u32> {
+fn score_merod_asset(name: &str, target_triple: &str) -> Option<u32> {
     let lower = name.to_lowercase();
     // Releases use "merod-<triple>" or "merod_<triple>"; require a separator so
     // a name that merely starts with "merod" with no delimiter after it is rejected.
@@ -872,7 +877,7 @@ pub(crate) fn score_merod_asset(name: &str, target_triple: &str) -> Option<u32> 
 
 
 /// Recursively finds a `merod` / `merod.exe` binary inside a directory tree.
-pub(crate) fn find_merod_binary_in_dir(dir: &std::path::Path) -> Option<std::path::PathBuf> {
+fn find_merod_binary_in_dir(dir: &std::path::Path) -> Option<std::path::PathBuf> {
     let entries = std::fs::read_dir(dir).ok()?;
     for entry in entries.flatten() {
         let path = entry.path();
@@ -923,7 +928,7 @@ pub(crate) async fn get_merod_version_at(path: &std::path::Path) -> Option<Strin
 
 /// Extracts the merod binary from an archive (`.tar.gz` / `.zip`) into `temp_dir`.
 /// Returns the path to the extracted binary.
-pub(crate) async fn extract_merod_binary(
+async fn extract_merod_binary(
     archive_path: &std::path::Path,
     asset_name: &str,
     temp_dir: &std::path::Path,

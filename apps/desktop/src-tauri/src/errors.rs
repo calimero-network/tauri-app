@@ -24,6 +24,7 @@ pub enum TauriErrorCode {
     MerodStopFailed,
     MerodInitFailed,
     MerodProcessExited,
+    MerodVersionMismatch,
     // Window errors
     WindowCreationFailed,
     WindowOperationFailed,

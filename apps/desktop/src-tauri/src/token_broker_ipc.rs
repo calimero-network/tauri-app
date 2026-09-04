@@ -2,6 +2,7 @@
 //! The ONLY thing crossing this socket is "give me a fresh access token".
 
 use serde::{Deserialize, Serialize};
+use std::os::unix::io::AsRawFd;
 use std::path::Path;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -31,14 +32,10 @@ use tokio::net::{UnixListener, UnixStream};
 
 /// True iff the connected peer runs as the same OS user as us.
 pub fn same_user_peer(stream: &UnixStream) -> bool {
-    use std::os::unix::io::AsRawFd;
-    extern "C" {
-        fn getpeereid(fd: i32, euid: *mut u32, egid: *mut u32) -> i32;
-        fn geteuid() -> u32;
-    }
-    let (mut euid, mut egid) = (0u32, 0u32);
-    let rc = unsafe { getpeereid(stream.as_raw_fd(), &mut euid, &mut egid) };
-    rc == 0 && euid == unsafe { geteuid() }
+    let (mut euid, mut egid) = (0, 0);
+    // SAFETY: both out-params are live locals, and the fd outlives the call.
+    let rc = unsafe { libc::getpeereid(stream.as_raw_fd(), &mut euid, &mut egid) };
+    rc == 0 && euid == unsafe { libc::geteuid() }
 }
 
 async fn handle_conn<F, Fut>(stream: UnixStream, handler: F) -> std::io::Result<()>

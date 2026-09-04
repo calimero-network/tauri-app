@@ -1578,9 +1578,7 @@ async fn kill_pids(pids: &[u32], patience: TermPatience) {
     tokio::task::spawn_blocking(move || {
         for pid in &pids_owned {
             #[cfg(unix)]
-            let _ = std::process::Command::new("kill")
-                .args(["-TERM", &pid.to_string()])
-                .output();
+            signal_pid(*pid, libc::SIGTERM);
             #[cfg(windows)]
             let _ = hidden_command("taskkill")
                 .args(["/PID", &pid.to_string()])
@@ -1604,18 +1602,8 @@ async fn kill_pids(pids: &[u32], patience: TermPatience) {
         }
         for pid in &poll_only {
             #[cfg(unix)]
-            {
-                let still_alive = std::process::Command::new("ps")
-                    .arg("-p")
-                    .arg(pid.to_string())
-                    .output()
-                    .map(|o| o.status.success())
-                    .unwrap_or(false);
-                if still_alive {
-                    let _ = std::process::Command::new("kill")
-                        .args(["-9", &pid.to_string()])
-                        .output();
-                }
+            if is_process_running(*pid) {
+                signal_pid(*pid, libc::SIGKILL);
             }
             #[cfg(windows)]
             if is_process_running(*pid) {
@@ -2585,18 +2573,25 @@ async fn stop_merod_by_pid_command(
     Ok(format!("Merod stopped successfully (PID: {})", pid))
 }
 
+/// Deliver `signal` to one process. Signal 0 delivers nothing and only reports
+/// whether the process is there, which is what `is_process_running` asks.
+#[cfg(unix)]
+fn signal_pid(pid: u32, signal: i32) -> bool {
+    // kill(2) reads pid <= 0 as a process-group target, so anything that is not
+    // a positive pid_t must never reach it.
+    let pid = match libc::pid_t::try_from(pid) {
+        Ok(pid) if pid > 0 => pid,
+        _ => return false,
+    };
+    // SAFETY: plain FFI call, no pointers; the guard above keeps pid a single
+    // positive process.
+    unsafe { libc::kill(pid, signal) == 0 }
+}
+
 fn is_process_running(pid: u32) -> bool {
     #[cfg(unix)]
     {
-        // kill(2) reads pid <= 0 as a process-group target, so anything that is
-        // not a positive pid_t must never reach it.
-        let pid = match libc::pid_t::try_from(pid) {
-            Ok(pid) if pid > 0 => pid,
-            _ => return false,
-        };
-        // SAFETY: plain FFI call, no pointers; the guard above keeps pid a single
-        // positive process and signal 0 delivers nothing.
-        unsafe { libc::kill(pid, 0) == 0 }
+        signal_pid(pid, 0)
     }
     #[cfg(windows)]
     {

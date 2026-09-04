@@ -228,13 +228,6 @@
   color: var(--text-primary);
 }
 
-.empty-state {
-  text-align: center;
-  padding: 60px 20px;
-  color: var(--text-secondary);
-  animation: fadeUp 0.5s ease-out;
-}
-
 .saved-indicator {
   display: inline-flex;
   align-items: center;

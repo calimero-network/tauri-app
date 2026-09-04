@@ -3,6 +3,7 @@ packages:
 
 overrides:
   postcss: '>=8.5.18'
+  browserslist: '>=4.28.7'
   # mero-react declares an older mero-js range; hold it to the app's so both
   # share one MeroJs class. Keep in step with apps/desktop/package.json.
   '@calimero-network/mero-react>@calimero-network/mero-js': '^18.1.0'

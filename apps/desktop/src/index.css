@@ -41,7 +41,7 @@
   --button-glass: rgba(165, 255, 17, 0.06);
   --button-glass-hover: rgba(165, 255, 17, 0.1);
   --header-height: 56px;
-  --z-modal: 1000; /* every full-screen backdrop; toasts and context menus sit above at 10000 */
+  --z-modal: 1000; /* full-screen backdrops, alongside the update notice; toasts and menus stay above at 10000 */
   --radius-sm: 6px;
   --radius-md: 10px;
   --radius-lg: 16px;
@@ -231,6 +231,15 @@ body {
   background: var(--accent-hover);
   border-color: var(--accent-hover);
   color: #09090b;
+}
+
+/* Inert surface rather than a dimmed accent: a translucent accent fill still reads
+   as the live call to action, and halves the label's contrast doing it. */
+.button.button-primary:disabled {
+  background: var(--bg-tertiary);
+  border-color: var(--border-color);
+  color: var(--text-secondary);
+  opacity: 1;
 }
 
 /* Recedes next to a primary action. */

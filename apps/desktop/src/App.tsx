@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef, lazy, Suspense } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef, lazy, Suspense, type ReactNode } from "react";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { createClientAsync, apiClient } from "./lib/mero-client";
 import { MeroContext, type MeroContextValue } from "@calimero-network/mero-react";
@@ -42,6 +42,12 @@ const Namespaces = lazy(() => import("./pages/Namespaces"));
 const NodeManagement = lazy(() => import("./pages/NodeManagement"));
 const ConfirmAction = lazy(() => import("./pages/ConfirmAction"));
 
+type Page = 'home' | 'marketplace' | 'installed' | 'namespaces' | 'nodes' | 'confirm';
+
+// 'confirm' takes over the window instead of rendering in the shell, so it has
+// no entry here and falls back to Home's.
+type ShellPage = Exclude<Page, 'confirm'>;
+
 function App() {
   const toast = useToast();
   const { theme } = useTheme();
@@ -51,7 +57,7 @@ function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [showLogin, setShowLogin] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
-  const [currentPage, setCurrentPage] = useState<'home' | 'marketplace' | 'installed' | 'namespaces' | 'nodes' | 'confirm'>('home');
+  const [currentPage, setCurrentPage] = useState<Page>('home');
   const [checkingOnboarding, setCheckingOnboarding] = useState(true);
   const [clientReady, setClientReady] = useState(false);
   const [clientVersion, setClientVersion] = useState(0);
@@ -520,34 +526,6 @@ function App() {
     );
   }
 
-  // Calculate page title and sidebar page before early returns
-  const sidebarPage: 'home' | 'marketplace' | 'installed' | 'namespaces' | 'nodes' =
-    currentPage === 'confirm' ? 'home' : currentPage;
-
-  let pageTitle: string;
-  switch (currentPage) {
-    case 'home':
-      pageTitle = 'Home';
-      break;
-    case 'nodes':
-      pageTitle = 'Nodes';
-      break;
-    case 'namespaces':
-      pageTitle = 'Namespaces';
-      break;
-    case 'installed':
-      pageTitle = 'Applications';
-      break;
-    case 'marketplace':
-      pageTitle = 'Marketplace';
-      break;
-    case 'confirm':
-      pageTitle = 'Confirm Action';
-      break;
-    default:
-      pageTitle = 'Home';
-  }
-
   if (showOnboarding) {
     return (
       <Onboarding
@@ -598,167 +576,11 @@ function App() {
   if (showSettings) {
     return (
       <ErrorBoundary componentName="Settings" onReset={() => setShowSettings(true)}>
-        {/* Settings short-circuits the page shells, which are where every other
-            ToastContainer is mounted, so it needs its own or its toasts never render. */}
+        {/* Settings short-circuits the page shell, where the ToastContainer is
+            mounted, so it needs its own or its toasts never render. */}
         <ToastContainer />
         <Settings onBack={handleSettingsBack} />
       </ErrorBoundary>
-    );
-  }
-
-  // Show Marketplace if selected
-  if (currentPage === 'marketplace') {
-    return (
-      <div className="app">
-        <ToastContainer />
-        <div className="app-layout">
-          <Sidebar 
-            currentPage={currentPage} 
-            onNavigate={setCurrentPage}
-            onOpenSettings={() => setShowSettings(true)}
-            nodeDisconnected={!connected && !!error}
-          />
-          <div className="app-content">
-        <header className="header">
-              <div className="header-title">
-                <h1 data-testid="shell-page-title">Marketplace</h1>
-              </div>
-              <NodeStatusIndicator
-                connected={connected}
-                error={error}
-                onClick={handleRestartNode}
-                developerMode={getSettings().developerMode}
-                runningNodes={runningNodes}
-                currentNodeUrl={getSettings().nodeUrl}
-                onSelectNode={handleSelectNode}
-              />
-            </header>
-            <main className="main">
-                <Marketplace clientReady={clientReady} />
-            </main>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // Show Installed Apps if selected
-  if (currentPage === 'installed') {
-    return (
-      <div className="app">
-        <ToastContainer />
-        <div className="app-layout">
-          <Sidebar 
-            currentPage={currentPage} 
-            onNavigate={setCurrentPage}
-            onOpenSettings={() => setShowSettings(true)}
-            nodeDisconnected={!connected && !!error}
-          />
-          <div className="app-content">
-        <header className="header">
-              <div className="header-title">
-                <h1 data-testid="shell-page-title">Applications</h1>
-              </div>
-              <NodeStatusIndicator
-                connected={connected}
-                error={error}
-                onClick={handleRestartNode}
-                developerMode={getSettings().developerMode}
-                runningNodes={runningNodes}
-                currentNodeUrl={getSettings().nodeUrl}
-                onSelectNode={handleSelectNode}
-              />
-            </header>
-            <main className="main">
-        <InstalledApps
-          clientReady={clientReady}
-          onAuthRequired={handleAuthRequired}
-          onConfirmUninstall={handleConfirmUninstall}
-        />
-            </main>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // Show Node Management if selected
-  if (currentPage === 'nodes') {
-    return (
-      <div className="app">
-        <ToastContainer />
-        <div className="app-layout">
-          <Sidebar 
-            currentPage="nodes" 
-            onNavigate={(p) => {
-              if (p === 'nodes') setCurrentPage('nodes');
-              else if (p === 'namespaces') setCurrentPage('namespaces');
-              else if (p === 'marketplace') setCurrentPage('marketplace');
-              else if (p === 'installed') setCurrentPage('installed');
-              else if (p === 'home') setCurrentPage('home');
-            }}
-            onOpenSettings={() => setShowSettings(true)}
-            nodeDisconnected={!connected && !!error}
-          />
-          <div className="app-content">
-            <header className="header">
-              <div className="header-title">
-                <h1 data-testid="shell-page-title">Nodes</h1>
-              </div>
-              <NodeStatusIndicator
-                connected={connected}
-                error={error}
-                onClick={handleRestartNode}
-                developerMode={getSettings().developerMode}
-                runningNodes={runningNodes}
-                currentNodeUrl={getSettings().nodeUrl}
-                onSelectNode={handleSelectNode}
-              />
-            </header>
-            <main className="main">
-                <NodeManagement />
-            </main>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // Show Namespaces if selected
-  if (currentPage === 'namespaces') {
-    return (
-      <div className="app">
-        <ToastContainer />
-        <div className="app-layout">
-          <Sidebar
-            currentPage={currentPage}
-            onNavigate={setCurrentPage}
-            onOpenSettings={() => setShowSettings(true)}
-            nodeDisconnected={!connected && !!error}
-          />
-          <div className="app-content">
-            <header className="header">
-              <div className="header-title">
-                <h1 data-testid="shell-page-title">Namespaces</h1>
-              </div>
-              <NodeStatusIndicator
-                connected={connected}
-                error={error}
-                onClick={handleRestartNode}
-                developerMode={getSettings().developerMode}
-                runningNodes={runningNodes}
-                currentNodeUrl={getSettings().nodeUrl}
-                onSelectNode={handleSelectNode}
-              />
-            </header>
-            <main className="main">
-              <MeroContext.Provider value={meroContextValue}>
-                  <Namespaces />
-              </MeroContext.Provider>
-            </main>
-          </div>
-        </div>
-      </div>
     );
   }
 
@@ -781,33 +603,69 @@ function App() {
   }
 
 
+  const shellPage: ShellPage = currentPage === 'confirm' ? 'home' : currentPage;
+
+  const PAGES: Record<ShellPage, { title: string; element: ReactNode }> = {
+    home: {
+      title: 'Home',
+      element: (
+        <Home
+          connected={connected}
+          error={error}
+          clientReady={clientReady}
+          onReconnect={handleRestartNode}
+          onNavigate={setCurrentPage}
+          onOpenSettings={handleOpenSettings}
+          onAuthRequired={handleAuthRequired}
+        />
+      ),
+    },
+    marketplace: {
+      title: 'Marketplace',
+      element: <Marketplace clientReady={clientReady} />,
+    },
+    installed: {
+      title: 'Applications',
+      element: (
+        <InstalledApps
+          clientReady={clientReady}
+          onAuthRequired={handleAuthRequired}
+          onConfirmUninstall={handleConfirmUninstall}
+        />
+      ),
+    },
+    namespaces: {
+      title: 'Namespaces',
+      element: (
+        <MeroContext.Provider value={meroContextValue}>
+          <Namespaces />
+        </MeroContext.Provider>
+      ),
+    },
+    nodes: {
+      title: 'Nodes',
+      element: <NodeManagement />,
+    },
+  };
+
   return (
     <div className="app">
-      {/* Toast notifications */}
       <ToastContainer />
-      
-      {/* Auto-update notification */}
       <UpdateNotification checkOnMount={true} checkInterval={3600000} />
 
       <div className="app-layout">
-        <Sidebar 
-          currentPage={sidebarPage} 
-          onNavigate={(p) => {
-            if (p === 'nodes') setCurrentPage('nodes');
-            else if (p === 'namespaces') setCurrentPage('namespaces');
-            else if (p === 'marketplace') setCurrentPage('marketplace');
-            else if (p === 'installed') setCurrentPage('installed');
-            else if (p === 'home') setCurrentPage('home');
-          }}
-          onOpenSettings={() => setShowSettings(true)}
+        <Sidebar
+          currentPage={shellPage}
+          onNavigate={setCurrentPage}
+          onOpenSettings={handleOpenSettings}
           nodeDisconnected={!connected && !!error}
         />
-        
+
         <div className="app-content">
-      <header className="header">
+          <header className="header">
             <div className="header-title">
-              <h1 data-testid="shell-page-title">{pageTitle}</h1>
-              {appVersion && (
+              <h1 data-testid="shell-page-title">{PAGES[shellPage].title}</h1>
+              {shellPage === 'home' && appVersion && (
                 <span className="version-badge">v{appVersion}</span>
               )}
             </div>
@@ -820,22 +678,12 @@ function App() {
               currentNodeUrl={getSettings().nodeUrl}
               onSelectNode={handleSelectNode}
             />
-      </header>
+          </header>
 
-      {/* Own boundary so a page chunk loads under a painted shell, not a blank window. */}
-      <main className="main">
-        <Suspense fallback={null}>
-          <Home
-            connected={connected}
-            error={error}
-            clientReady={clientReady}
-            onReconnect={handleRestartNode}
-            onNavigate={setCurrentPage}
-            onOpenSettings={handleOpenSettings}
-            onAuthRequired={handleAuthRequired}
-          />
-        </Suspense>
-      </main>
+          {/* Own boundary so a page chunk loads under a painted shell, not a blank window. */}
+          <main className="main">
+            <Suspense fallback={null}>{PAGES[shellPage].element}</Suspense>
+          </main>
         </div>
       </div>
     </div>

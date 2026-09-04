@@ -4,6 +4,23 @@ import { getSettings } from "./settings";
 import { getAccessToken, getRefreshToken, getTokenExpiresAt } from "../lib/token-storage";
 import { BROKERED_REFRESH_TOKEN } from "../lib/token-broker";
 
+export function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Calls `check` every `intervalMs` until it resolves true or `deadlineMs` elapses. */
+export async function pollUntil(
+  check: () => Promise<boolean>,
+  { deadlineMs, intervalMs }: { deadlineMs: number; intervalMs: number }
+): Promise<boolean> {
+  const start = Date.now();
+  while (Date.now() - start < deadlineMs) {
+    if (await check()) return true;
+    await sleep(intervalMs);
+  }
+  return false;
+}
+
 /**
  * Extract a human-readable message from a Tauri command error.
  * Tauri commands returning Result<T, TauriError> throw a plain object

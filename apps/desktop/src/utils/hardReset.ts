@@ -31,6 +31,7 @@ import {
 } from './merod';
 import { getSettings, clearAllAppData, DEFAULT_NODE_HOME_DIR } from './settings';
 import { revokeMdmaSession } from './cloudAuth';
+import { sleep, pollUntil } from './appUtils';
 
 /** How long to wait for targeted nodes to disappear from the process scan. */
 const NODE_STOP_TIMEOUT_MS = 10_000;
@@ -154,13 +155,15 @@ async function stopNodesUnder(dirs: string[], osHomeDir: string): Promise<void> 
 /** Wait for the process scan to stop reporting nodes under `dirs`. Throws rather than
  *  let the delete run: in-memory status is useless here, the stop already cleared it. */
 async function waitForNodesGone(dirs: string[], osHomeDir: string, timeoutMs: number): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  let stillRunning = nodesUnderPaths(await detectRunningMerodNodes(), dirs, osHomeDir);
-  while (stillRunning.length > 0 && Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, NODE_STOP_POLL_MS));
-    stillRunning = nodesUnderPaths(await detectRunningMerodNodes(), dirs, osHomeDir);
-  }
-  if (stillRunning.length > 0) {
+  let stillRunning: RunningMerodNode[] = [];
+  const gone = await pollUntil(
+    async () => {
+      stillRunning = nodesUnderPaths(await detectRunningMerodNodes(), dirs, osHomeDir);
+      return stillRunning.length === 0;
+    },
+    { deadlineMs: timeoutMs, intervalMs: NODE_STOP_POLL_MS }
+  );
+  if (!gone) {
     throw new Error(
       `Node ${describeNode(stillRunning[0])} is still running - aborting the delete to avoid corrupting its store.`
     );
@@ -171,7 +174,7 @@ async function waitForNodesGone(dirs: string[], osHomeDir: string, timeoutMs: nu
  *  `deleted` only if a surviving writer has repopulated the directory. */
 async function deleteAndVerifyGone(dir: string): Promise<void> {
   await deleteCalimeroDataDir(dir);
-  await new Promise((r) => setTimeout(r, FILE_HANDLE_SETTLE_MS));
+  await sleep(FILE_HANDLE_SETTLE_MS);
   if ((await deleteCalimeroDataDir(dir)).deleted) {
     throw new Error(`${dir} reappeared after being deleted - a live writer is repopulating it.`);
   }
@@ -191,7 +194,7 @@ export async function hardReset({
 
   onStatus?.('Waiting for nodes to stop...');
   await waitForNodesGone(dirsToDelete, osHomeDir, stopTimeoutMs ?? NODE_STOP_TIMEOUT_MS);
-  await new Promise((r) => setTimeout(r, FILE_HANDLE_SETTLE_MS));
+  await sleep(FILE_HANDLE_SETTLE_MS);
 
   onStatus?.('Deleting...');
   for (const dir of dirsToDelete) {

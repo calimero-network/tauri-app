@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { pollUntil } from './appUtils';
 
 export interface MerodHealth {
   status: number;
@@ -61,15 +62,15 @@ const HEALTH_POLL_INTERVAL_MS = 500;
  * the node is actually ready before advancing to login/auth steps.
  */
 export async function waitForNodeHealthy(nodeUrl: string, timeoutMs: number): Promise<void> {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    const health = await checkMerodHealth(nodeUrl);
-    if (health.healthy) return;
-    await new Promise((r) => setTimeout(r, HEALTH_POLL_INTERVAL_MS));
+  const healthy = await pollUntil(async () => (await checkMerodHealth(nodeUrl)).healthy, {
+    deadlineMs: timeoutMs,
+    intervalMs: HEALTH_POLL_INTERVAL_MS,
+  });
+  if (!healthy) {
+    throw new Error(
+      'Node did not become healthy in time. The node process may have crashed - check the logs.'
+    );
   }
-  throw new Error(
-    'Node did not become healthy in time. The node process may have crashed - check the logs.'
-  );
 }
 
 const RESTART_READY_POLL_INTERVAL_MS = 250;
@@ -82,13 +83,13 @@ export async function pollUntilNodeReady(
   deadlineMs = RESTART_READY_DEADLINE_MS,
   intervalMs = RESTART_READY_POLL_INTERVAL_MS
 ): Promise<boolean> {
-  const start = Date.now();
-  while (Date.now() - start < deadlineMs) {
-    const result = await healthCheck().catch(() => ({ error: { code: undefined as string | undefined } }));
-    if (!result.error || result.error.code === '401') return true;
-    await new Promise((r) => setTimeout(r, intervalMs));
-  }
-  return false;
+  return pollUntil(
+    async () => {
+      const result = await healthCheck().catch(() => ({ error: { code: undefined as string | undefined } }));
+      return !result.error || result.error.code === '401';
+    },
+    { deadlineMs, intervalMs }
+  );
 }
 
 export interface RunningMerodNode {

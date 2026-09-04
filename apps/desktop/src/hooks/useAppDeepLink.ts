@@ -6,6 +6,7 @@ import {
   appendParamsToUrl,
   decodeMetadata,
   openAppFrontend,
+  sleep,
 } from '../utils/appUtils';
 import { listInstalledApps, invalidateInstalledApps } from '../utils/installedAppsCache';
 import { fetchAppsFromRegistry } from '../utils/registry';
@@ -194,7 +195,7 @@ export function useAppDeepLink(enabled: boolean): void {
         }
         const wait = DRAIN_BACKOFF_MS[attempt];
         if (cancelled || wait === undefined) return;
-        await new Promise((r) => setTimeout(r, wait));
+        await sleep(wait);
       }
     })();
 

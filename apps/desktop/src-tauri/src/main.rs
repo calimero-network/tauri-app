@@ -2227,8 +2227,10 @@ async fn merod_supports_stdin_stop(binary: &std::path::Path) -> bool {
     let supported = match cmd.output().await {
         Ok(out) => String::from_utf8_lossy(&out.stdout).contains("--exit-on-stdin-close"),
         Err(e) => {
+            // A failed probe may be transient (e.g. the binary momentarily busy),
+            // so its answer is not cached - only a successful probe is trustworthy.
             warn!("[Merod] could not probe for --exit-on-stdin-close: {e}");
-            false
+            return false;
         }
     };
 
@@ -5783,7 +5785,7 @@ listen = ["/ip4/0.0.0.0/udp/4001/quic-v1", "/ip4/0.0.0.0/tcp/4002"]
             "Usage: merod run\n  --exit-on-stdin-close  Stop when stdin reaches EOF\n",
         );
 
-        assert!(super::merod_supports_stdin_stop(&new).await);
+        assert!(probe_until_supported(&new).await);
     }
 
     /// A probe that cannot run answers "no". Guessing "yes" would pass an
@@ -5795,6 +5797,24 @@ listen = ["/ip4/0.0.0.0/udp/4001/quic-v1", "/ip4/0.0.0.0/tcp/4002"]
         assert!(!super::merod_supports_stdin_stop(&dir.path().join("does-not-exist")).await);
     }
 
+    /// A failed probe (e.g. the binary momentarily busy) must not poison the
+    /// cache, or a genuinely supported merod would be stuck reporting false.
+    #[tokio::test]
+    async fn a_failed_probe_is_not_remembered() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("late");
+
+        assert!(!super::merod_supports_stdin_stop(&missing).await);
+
+        let late = fake_merod(
+            dir.path(),
+            "late",
+            "Usage: merod run\n  --exit-on-stdin-close  Stop when stdin reaches EOF\n",
+        );
+
+        assert!(probe_until_supported(&late).await);
+    }
+
     /// A shell stand-in for merod that prints the given `run --help` text.
     #[cfg(unix)]
     fn fake_merod(dir: &std::path::Path, name: &str, help: &str) -> std::path::PathBuf {
@@ -5804,6 +5824,18 @@ listen = ["/ip4/0.0.0.0/udp/4001/quic-v1", "/ip4/0.0.0.0/tcp/4002"]
         std::fs::write(&path, format!("#!/bin/sh\nprintf '%s' '{help}'\n")).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
         path
+    }
+
+    /// Retries a probe a few times before giving up, since a sibling test's
+    /// exec can transiently fail it with `ETXTBSY` on a loaded runner.
+    async fn probe_until_supported(binary: &std::path::Path) -> bool {
+        for _ in 0..5 {
+            if super::merod_supports_stdin_stop(binary).await {
+                return true;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        false
     }
 
     fn tracked(pid: u32, home: &str, node: &str) -> super::MerodProcess {

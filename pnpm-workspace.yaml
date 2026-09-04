@@ -12,7 +12,6 @@ overrides:
 # ship native binaries and were already being built under pnpm 9.
 allowBuilds:
   esbuild: true
-  sharp: true
 
 # First-party packages: the bump bot opens its PR seconds after publish, so the
 # 24h quarantine would fail `--frozen-lockfile` on every one of them.

@@ -1,7 +1,6 @@
 import { test, expect } from "./fixtures/test";
 import {
   getInvokeCalls,
-  mockContextAPIs,
   mockCoreAPIs,
   navigateVia,
   seedDeveloperState,
@@ -45,7 +44,6 @@ test.describe("Nodes – logs viewer", () => {
       export_merod_logs: { path: `/Users/tester/Downloads/merod-${NODE}.txt`, bytes: 5 * 1024 * 1024 },
     });
     await mockCoreAPIs(page);
-    await mockContextAPIs(page);
     await page.goto("/");
     await seedDeveloperState(page);
     await page.reload();

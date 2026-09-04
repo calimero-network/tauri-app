@@ -6,7 +6,6 @@ import {
   setupAuthenticatedPage,
   seedAuthenticatedState,
   seedSettings,
-  stubTauriIPC,
   waitForAppShellReady,
 } from "./fixtures/helpers";
 import {
@@ -66,7 +65,6 @@ test.describe("single-use refresh token rotation", () => {
   test("desktop keeps the rotated refresh token and never replays a consumed one", async ({
     page,
   }) => {
-    await stubTauriIPC(page);
     await mockCoreAPIs(page);
     const refresh = await mockSingleUseRefresh(page);
 
@@ -120,7 +118,6 @@ test.describe("single-use refresh token rotation", () => {
   test("node rejects a replayed refresh token with token_reuse and revokes the family", async ({
     page,
   }) => {
-    await stubTauriIPC(page);
     await mockCoreAPIs(page);
     const refresh = await mockSingleUseRefresh(page);
     await page.goto("/");
@@ -188,7 +185,7 @@ test.describe("401 redirect to login", () => {
       route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: listContextsWireBody([]),
+        body: listContextsWireBody(),
       }),
     );
 
@@ -243,7 +240,7 @@ test.describe("Node disconnected state", () => {
       route.fulfill({ status: 200, contentType: "application/json", body: listApplicationsWireBody([]) }),
     );
     await page.route(API_ROUTES.listContexts, (route) =>
-      route.fulfill({ status: 200, contentType: "application/json", body: listContextsWireBody([]) }),
+      route.fulfill({ status: 200, contentType: "application/json", body: listContextsWireBody() }),
     );
 
     await page.goto("/");

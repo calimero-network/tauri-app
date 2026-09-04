@@ -1,6 +1,6 @@
 import { test, expect } from "./fixtures/test";
 import {
-  setupConnectedPage,
+  setupAuthenticatedPage,
   setupDisconnectedPage,
   setupEmbeddedNodePage,
   waitForNodeStatus,
@@ -9,10 +9,7 @@ import {
   mockCoreAPIs,
   clearAllStorage,
 } from "./fixtures/helpers";
-import {
-  EMBEDDED_NODE_SETTINGS,
-  DISCONNECTED_SETTINGS,
-} from "./fixtures/mock-data";
+import { EMBEDDED_NODE_SETTINGS } from "./fixtures/mock-data";
 
 /**
  * Node lifecycle tests.
@@ -29,7 +26,7 @@ import {
 
 test.describe("Node lifecycle – connected", () => {
   test.beforeEach(async ({ page }) => {
-    await setupConnectedPage(page);
+    await setupAuthenticatedPage(page);
   });
 
   test("shows the Connected status indicator", async ({ page }) => {
@@ -121,7 +118,7 @@ test.describe("Node lifecycle – connection loss", () => {
   test("transitions to Disconnected when health endpoint starts failing", async ({
     page,
   }) => {
-    await setupConnectedPage(page);
+    await setupAuthenticatedPage(page);
     await waitForNodeStatus(page, "connected");
 
     await page.unroute("**/auth/health");

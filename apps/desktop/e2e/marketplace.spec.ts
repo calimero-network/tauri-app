@@ -8,7 +8,6 @@ import {
 import {
   setupAuthenticatedPage,
   mockRegistryAPIs,
-  mockInstallAPIs,
   navigateVia,
   mockCoreAPIs,
   seedAuthenticatedState,
@@ -77,7 +76,6 @@ test.describe("Marketplace – install flow", () => {
     page,
   }) => {
     await mockRegistryAPIs(page);
-    await mockInstallAPIs(page);
     await setupAuthenticatedPage(page);
     await navigateVia(page, "Marketplace");
     await expect(

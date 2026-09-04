@@ -1,6 +1,5 @@
 //! macOS-only per-app launcher bundles: an ad-hoc-signed `.app` whose Mach-O
 //! trampoline execs the shared, loose shell binary.
-#![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
 

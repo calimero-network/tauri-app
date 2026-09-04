@@ -5,7 +5,6 @@
 //! Both binaries serve these commands. The host wraps `proxy_http_request_inner`
 //! in its own command so it can count in-flight requests for graceful merod
 //! shutdown; the shell owns no merod and registers `proxy_http_request` directly.
-#![allow(dead_code)]
 
 use crate::errors::{TauriError, TauriErrorCode};
 use crate::LockUnpoisoned;
@@ -203,36 +202,6 @@ pub async fn proxy_http_request_inner(
     validate_allowed_url(&request.url, configured_node_url.as_deref())
         .map_err(|e| TauriError::new(TauriErrorCode::UrlNotAllowed, e))?;
 
-    let parsed_original = url::Url::parse(&request.url).map_err(|e| {
-        TauriError::with_details(
-            TauriErrorCode::InvalidUrl,
-            format!("Failed to parse URL '{}'", request.url),
-            e.to_string(),
-        )
-    })?;
-    let original_host = parsed_original.host_str().ok_or_else(|| {
-        TauriError::new(
-            TauriErrorCode::InvalidUrl,
-            format!("Invalid URL '{}': missing hostname", request.url),
-        )
-    })?;
-    let original_port = parsed_original
-        .port()
-        .or_else(|| match parsed_original.scheme() {
-            "http" => Some(2528),
-            "https" => Some(443),
-            _ => None,
-        })
-        .ok_or_else(|| {
-            TauriError::new(
-                TauriErrorCode::InvalidUrl,
-                "Could not determine port from URL",
-            )
-        })?;
-    let host_header = format!("{}:{}", original_host, original_port);
-
-    let normalized_url = request.url.clone();
-
     info!(
         "[Tauri Proxy] Proxying request: {} {}",
         request.method, request.url
@@ -246,13 +215,13 @@ pub async fn proxy_http_request_inner(
 
     let client = http_client();
     let mut req_builder = match request.method.as_str() {
-        "GET" => client.get(&normalized_url),
-        "POST" => client.post(&normalized_url),
-        "PUT" => client.put(&normalized_url),
-        "DELETE" => client.delete(&normalized_url),
-        "PATCH" => client.patch(&normalized_url),
-        "OPTIONS" => client.request(reqwest::Method::OPTIONS, &normalized_url),
-        "HEAD" => client.head(&normalized_url),
+        "GET" => client.get(&request.url),
+        "POST" => client.post(&request.url),
+        "PUT" => client.put(&request.url),
+        "DELETE" => client.delete(&request.url),
+        "PATCH" => client.patch(&request.url),
+        "OPTIONS" => client.request(reqwest::Method::OPTIONS, &request.url),
+        "HEAD" => client.head(&request.url),
         _ => return Err(TauriError::new(
             TauriErrorCode::UnsupportedMethod,
             format!("Unsupported HTTP method: '{}'. Supported methods are: GET, POST, PUT, DELETE, PATCH, OPTIONS, HEAD", request.method),
@@ -261,14 +230,10 @@ pub async fn proxy_http_request_inner(
 
     if let Some(headers) = request.headers.as_ref() {
         let mut has_content_type = false;
-        let mut has_host = false;
         for (key, value) in headers {
             let key_lower = key.to_lowercase();
             if key_lower == "content-type" {
                 has_content_type = true;
-            }
-            if key_lower == "host" {
-                has_host = true;
             }
             let is_sensitive = key_lower == "authorization"
                 || key_lower == "cookie"
@@ -293,9 +258,6 @@ pub async fn proxy_http_request_inner(
                 );
             }
             req_builder = req_builder.header(key, value);
-        }
-        if !has_host {
-            debug!("[Tauri Proxy] Original Host would be: {}", host_header);
         }
         debug!("[Tauri Proxy] Total headers processed: {}", headers.len());
         if !has_content_type {

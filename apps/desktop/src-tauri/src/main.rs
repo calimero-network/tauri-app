@@ -911,12 +911,8 @@ fn ensure_app_launcher(
         &store,
         &app_registry::InstalledApp {
             id: app_id.to_string(),
-            name: safe.to_string(),
-            url: frontend_url.to_string(),
-            node_url: node_url.to_string(),
             cap: cap.clone(),
             bundle_path: bundle.to_string_lossy().into_owned(),
-            host_version: env!("CARGO_PKG_VERSION").to_string(),
         },
     )
     .map_err(|e| TauriError::new(TauriErrorCode::ShortcutCreationFailed, e.to_string()))?;
@@ -1678,7 +1674,6 @@ async fn kill_pids(pids: &[u32], patience: TermPatience) {
 #[derive(Debug, Clone)]
 struct MerodProcess {
     pid: u32,
-    port: u16,
     /// The data directory this node owns, which identifies it without a name match.
     home: std::path::PathBuf,
     node: Option<String>,
@@ -1789,19 +1784,6 @@ impl Drop for NodeInitReservation {
             .lock_unpoisoned()
             .remove(&self.0);
     }
-}
-
-/// Get the app data directory for storing merod data
-fn get_app_data_dir(app_handle: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
-    let app_data_dir = app_handle
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Failed to get app data directory: {e}"))?;
-
-    std::fs::create_dir_all(&app_data_dir)
-        .map_err(|e| format!("Failed to create app data directory: {}", e))?;
-
-    Ok(app_data_dir)
 }
 
 /// Drain a child stdout/stderr stream into the rotating log writer.
@@ -1941,7 +1923,6 @@ fn adopt_running_node(
     if !state.iter().any(|p| p.pid == pid) {
         state.push(MerodProcess {
             pid,
-            port,
             home: home.to_path_buf(),
             node: Some(node.to_string()),
             owned,
@@ -2499,7 +2480,6 @@ async fn start_node(
         let mut state = merod_state.lock_unpoisoned();
         state.push(MerodProcess {
             pid,
-            port: server_port,
             home: home_dir_path.clone(),
             node: node_name.clone(),
             owned: true,
@@ -4794,7 +4774,6 @@ listen = ["/ip4/0.0.0.0/udp/4001/quic-v1", "/ip4/0.0.0.0/tcp/4002"]
     fn tracked(pid: u32, home: &str, node: &str) -> super::MerodProcess {
         super::MerodProcess {
             pid,
-            port: 2528,
             home: std::path::PathBuf::from(home),
             node: Some(node.to_string()),
             owned: true,

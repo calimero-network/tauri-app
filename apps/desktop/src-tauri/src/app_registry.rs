@@ -1,5 +1,4 @@
 //! Host-side registry of generated per-app launchers (persists caps across restarts).
-#![allow(dead_code)]
 
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -7,12 +6,8 @@ use std::path::Path;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct InstalledApp {
     pub id: String,
-    pub name: String,
-    pub url: String,
-    pub node_url: String,
     pub cap: String,
     pub bundle_path: String,
-    pub host_version: String,
 }
 
 pub fn installed_apps(store: &Path) -> Vec<InstalledApp> {
@@ -54,12 +49,8 @@ mod tests {
     fn app(id: &str, cap: &str) -> InstalledApp {
         InstalledApp {
             id: id.into(),
-            name: id.into(),
-            url: "u".into(),
-            node_url: "n".into(),
             cap: cap.into(),
             bundle_path: "/b".into(),
-            host_version: "0.0.70".into(),
         }
     }
 

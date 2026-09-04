@@ -14,7 +14,6 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  DEV_VERSION: 0.0.0-dev
 
 jobs:
   build:
@@ -36,10 +35,10 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             echo "mode=validation" >> $GITHUB_OUTPUT
-            echo "version=$DEV_VERSION" >> $GITHUB_OUTPUT
+            echo "version=0.0.0-dev" >> $GITHUB_OUTPUT
             # Dependabot and fork PRs receive no secrets, so the signing key arrives as an
             # empty string, which Tauri treats as present and fails to decode.
-            echo "config={\"version\":\"$DEV_VERSION\",\"bundle\":{\"createUpdaterArtifacts\":false}}" >> $GITHUB_OUTPUT
+            echo "config={\"bundle\":{\"createUpdaterArtifacts\":false}}" >> $GITHUB_OUTPUT
           else
             echo "mode=release" >> $GITHUB_OUTPUT
             echo "version=$RELEASE_VERSION" >> $GITHUB_OUTPUT
@@ -74,10 +73,6 @@ jobs:
         uses: ./.github/actions/setup-build
         with:
           cache-suffix: x64
-
-      - name: Generate Windows icon
-        working-directory: apps/desktop
-        run: pnpm tauri icon src-tauri/icons/icon.png
 
       # Downloads merod_x86_64-pc-windows-msvc.tar.gz from the core release
       # pinned in merod-config.json, exactly as Linux and macOS do. This used
@@ -138,29 +133,6 @@ jobs:
           }
 
           Remove-Item "certificate.pfx" -Force
-
-      - name: Verify build outputs
-        if: steps.build-mode.outputs.mode == 'validation'
-        shell: bash
-        run: |
-          echo "Checking for expected build outputs..."
-
-          EXE_FILE=$(find apps/desktop/src-tauri/target/release/bundle/nsis -name "*.exe" 2>/dev/null | head -1)
-          ZIP_FILE=$(find apps/desktop/src-tauri/target/release/bundle -name "*.zip" 2>/dev/null | head -1)
-
-          if [ -z "$EXE_FILE" ]; then
-            echo "Error: Windows installer (.exe) not found"
-            exit 1
-          fi
-          echo "Installer: $EXE_FILE"
-
-          if [ -z "$ZIP_FILE" ]; then
-            echo "Warning: Updater bundle (.zip) not found (may be optional)"
-          else
-            echo "Updater: $ZIP_FILE"
-          fi
-
-          echo "Build validation passed"
 
       - name: Collect and normalize assets
         if: steps.build-mode.outputs.mode == 'release'

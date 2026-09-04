@@ -61,8 +61,19 @@ beforeEach(async () => {
   fetchMock = vi.fn().mockImplementation(async () =>
     refreshResponse({ access_token: 'access-2', refresh_token: 'refresh-2' }),
   );
-  vi.stubGlobal('window', { fetch: fetchMock, location: { href: 'http://localhost:1420/' } });
   vi.stubGlobal('fetch', fetchMock);
+  // `window.fetch` and the global are the same slot in a browser, so patching one
+  // patches the other. Modelled here, or a client built on the global would
+  // silently miss the patch and the re-entrancy test below could not fail.
+  vi.stubGlobal('window', {
+    location: { href: 'http://localhost:1420/' },
+    get fetch() {
+      return globalThis.fetch;
+    },
+    set fetch(next: typeof globalThis.fetch) {
+      globalThis.fetch = next;
+    },
+  });
 
   vi.resetModules();
   broker = await import('./token-broker');
@@ -137,6 +148,19 @@ describe('rotateTokens', () => {
     );
 
     await expect(broker.rotateTokens()).rejects.toThrow('token_reuse');
+  });
+
+  // The rotation must never go through the fetch this module patches: that patch
+  // routes /auth/refresh back here, where `if (inflight) return inflight` would
+  // make the rotation await itself and never settle.
+  it('rotates through the original fetch, which the patch cannot re-enter', async () => {
+    broker.installRefreshSingleFlight();
+
+    await expect(broker.rotateTokens()).resolves.toEqual({
+      access_token: 'access-2',
+      refresh_token: 'refresh-2',
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
 

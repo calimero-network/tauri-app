@@ -40,6 +40,10 @@
  */
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
+import {
+  createAuthApiClientFromHttpClient,
+  createHttpClient,
+} from '@calimero-network/mero-js';
 import { getSettings } from '../utils/settings';
 import {
   getAccessToken,
@@ -128,20 +132,18 @@ export function rotateTokens(): Promise<TokenPair> {
       throw new Error('Desktop is not authenticated');
     }
 
-    const doFetch = originalFetch ?? fetch;
+    // Built on the ORIGINAL fetch: a client on the patched one would route this
+    // very call back into `rotateTokens`, join its own in-flight promise and hang.
     const baseUrl = (getSettings().nodeUrl ?? '').replace(/\/$/, '');
-    const response = await doFetch(`${baseUrl}/auth/refresh`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ access_token: accessToken, refresh_token: refreshToken }),
+    const auth = createAuthApiClientFromHttpClient(
+      createHttpClient({ fetch: originalFetch ?? fetch, baseUrl }),
+      { baseUrl },
+    );
+
+    const body = await auth.refreshToken({
+      access_token: accessToken,
+      refresh_token: refreshToken,
     });
-
-    if (!response.ok) {
-      const reason = response.headers.get('x-auth-error') ?? String(response.status);
-      throw new Error(`Token refresh failed: ${reason}`);
-    }
-
-    const body = await response.json();
     const rotated: TokenPair | undefined = body?.data;
     if (!rotated?.access_token || !rotated?.refresh_token) {
       throw new Error('Token refresh returned no tokens');

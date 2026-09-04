@@ -1413,22 +1413,6 @@ async fn create_app_window(
     Ok(())
 }
 
-#[tauri::command]
-async fn open_devtools(_window_label: String, _app_handle: tauri::AppHandle) {
-    #[cfg(feature = "devtools")]
-    {
-        // Try multiple times with delays in case window isn't ready yet
-        for _i in 0..5 {
-            if let Some(window) = _app_handle.get_webview_window(&_window_label) {
-                window.open_devtools();
-                return;
-            }
-            // Wait a bit before retrying (use async sleep to avoid blocking runtime)
-            tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
-        }
-    }
-}
-
 // Merod process management using bundled resource
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -3801,13 +3785,6 @@ async fn autostart_is_enabled(_app: tauri::AppHandle) -> Result<bool, TauriError
 }
 
 #[tauri::command]
-async fn close_current_window(window: tauri::Window) -> Result<(), TauriError> {
-    window
-        .close()
-        .map_err(|e| TauriError::new(TauriErrorCode::WindowOperationFailed, e.to_string()))
-}
-
-#[tauri::command]
 async fn open_url_in_browser(url: String, app_handle: tauri::AppHandle) -> Result<(), TauriError> {
     use tauri_plugin_shell::ShellExt;
     app_handle
@@ -4246,61 +4223,6 @@ fn write_mcp_agent_credentials(
     Ok(path.to_string_lossy().into_owned())
 }
 
-// ─── Secure Token Storage ──────────────────────────────────────────────────────
-// Stores JWT tokens in the OS keychain (Keychain on macOS, Credential Manager
-// on Windows, libsecret on Linux) instead of plaintext localStorage.
-
-const KEYRING_SERVICE: &str = "calimero-desktop";
-
-#[tauri::command]
-fn secure_store_token(key: String, value: String) -> Result<(), String> {
-    let entry = keyring::Entry::new(KEYRING_SERVICE, &key)
-        .map_err(|e| format!("Failed to create keyring entry: {}", e))?;
-    entry
-        .set_password(&value)
-        .map_err(|e| format!("Failed to store token: {}", e))?;
-    debug!("[SecureStorage] Stored token for key: {}", key);
-    Ok(())
-}
-
-#[tauri::command]
-fn secure_get_token(key: String) -> Result<Option<String>, String> {
-    let entry = keyring::Entry::new(KEYRING_SERVICE, &key)
-        .map_err(|e| format!("Failed to create keyring entry: {}", e))?;
-    match entry.get_password() {
-        Ok(password) => {
-            debug!("[SecureStorage] Retrieved token for key: {}", key);
-            Ok(Some(password))
-        }
-        Err(keyring::Error::NoEntry) => {
-            debug!("[SecureStorage] No token found for key: {}", key);
-            Ok(None)
-        }
-        Err(e) => Err(format!("Failed to retrieve token: {}", e)),
-    }
-}
-
-#[tauri::command]
-fn secure_delete_token(key: String) -> Result<(), String> {
-    let entry = keyring::Entry::new(KEYRING_SERVICE, &key)
-        .map_err(|e| format!("Failed to create keyring entry: {}", e))?;
-    match entry.delete_password() {
-        Ok(()) => {
-            debug!("[SecureStorage] Deleted token for key: {}", key);
-            Ok(())
-        }
-        Err(keyring::Error::NoEntry) => {
-            // Token doesn't exist — deletion is idempotent
-            debug!(
-                "[SecureStorage] Token for key {} didn't exist, nothing to delete",
-                key
-            );
-            Ok(())
-        }
-        Err(e) => Err(format!("Failed to delete token: {}", e)),
-    }
-}
-
 fn main() {
     // Initialize logger - reads from RUST_LOG environment variable
     // Default: info level in release, debug level in debug builds
@@ -4582,7 +4504,6 @@ fn main() {
             open_app_launcher,
             create_app_window,
             webview_isolation_supported,
-            open_devtools,
             proxy_http_request,
             proxy::proxy_sse_stream,
             proxy::cancel_sse_stream,
@@ -4614,11 +4535,7 @@ fn main() {
             autostart_enable,
             autostart_disable,
             autostart_is_enabled,
-            close_current_window,
             open_url_in_browser,
-            secure_store_token,
-            secure_get_token,
-            secure_delete_token,
             write_mcp_agent_credentials,
             get_pending_cloud_auth,
             clear_pending_cloud_auth,

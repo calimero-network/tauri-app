@@ -44,8 +44,7 @@ const ConfirmAction = lazy(() => import("./pages/ConfirmAction"));
 
 type Page = 'home' | 'marketplace' | 'installed' | 'namespaces' | 'nodes' | 'confirm';
 
-// 'confirm' takes over the window instead of rendering in the shell, so it has
-// no entry here and falls back to Home's.
+// 'confirm' takes over the whole window rather than rendering inside the shell.
 type ShellPage = Exclude<Page, 'confirm'>;
 
 function App() {
@@ -538,7 +537,7 @@ function App() {
   // Show login if needed
   if (showLogin) {
     return (
-      <ErrorBoundary componentName="Login" onReset={() => setShowLogin(true)}>
+      <ErrorBoundary componentName="Login">
         <div className="app login-screen" data-testid="login-screen">
           <header className="login-screen-header">
             <div className="login-screen-brand">
@@ -575,7 +574,7 @@ function App() {
 
   if (showSettings) {
     return (
-      <ErrorBoundary componentName="Settings" onReset={() => setShowSettings(true)}>
+      <ErrorBoundary componentName="Settings">
         {/* Settings short-circuits the page shell, where the ToastContainer is
             mounted, so it needs its own or its toasts never render. */}
         <ToastContainer />
@@ -601,7 +600,6 @@ function App() {
       </div>
     );
   }
-
 
   const shellPage: ShellPage = currentPage === 'confirm' ? 'home' : currentPage;
 

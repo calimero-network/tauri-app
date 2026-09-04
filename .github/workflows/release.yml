@@ -41,17 +41,7 @@ jobs:
     uses: ./.github/workflows/build-macos.yml
     with:
       version: ${{ needs.prepare.outputs.version }}
-    secrets:
-      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-      APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-      APPLE_ID: ${{ secrets.APPLE_ID }}
-      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-      APPLE_PROVISIONING_PROFILE: ${{ secrets.APPLE_PROVISIONING_PROFILE }}
-      TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
-      TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
-      TAURI_PUBLIC_KEY: ${{ secrets.TAURI_PUBLIC_KEY }}
+    secrets: inherit
 
   build-windows:
     name: Build Windows
@@ -59,12 +49,7 @@ jobs:
     uses: ./.github/workflows/build-windows.yml
     with:
       version: ${{ needs.prepare.outputs.version }}
-    secrets:
-      TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
-      TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
-      TAURI_PUBLIC_KEY: ${{ secrets.TAURI_PUBLIC_KEY }}
-      WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
-      WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+    secrets: inherit
 
   build-linux:
     name: Build Linux
@@ -72,21 +57,17 @@ jobs:
     uses: ./.github/workflows/build-linux.yml
     with:
       version: ${{ needs.prepare.outputs.version }}
-    secrets:
-      TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
-      TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
-      TAURI_PUBLIC_KEY: ${{ secrets.TAURI_PUBLIC_KEY }}
+      platform: linux
+    secrets: inherit
 
   build-chromebook:
     name: Build Chromebook
     needs: prepare
-    uses: ./.github/workflows/build-chromebook.yml
+    uses: ./.github/workflows/build-linux.yml
     with:
       version: ${{ needs.prepare.outputs.version }}
-    secrets:
-      TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
-      TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
-      TAURI_PUBLIC_KEY: ${{ secrets.TAURI_PUBLIC_KEY }}
+      platform: chromebook
+    secrets: inherit
 
   # Publish release with all platform artifacts
   publish:
@@ -130,35 +111,14 @@ jobs:
           name: chromebook-build
           path: release-assets/
 
-      - name: List collected assets
-        run: |
-          echo "Release assets:"
-          find release-assets/ -type f -ls
-
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version-file: package.json
 
-      - name: Generate latest.json (Tauri updater manifest)
+      - name: Generate latest.json and release.json
         run: |
-          node scripts/release/generate-latest-json.cjs \
-            --version "${{ needs.prepare.outputs.version }}" \
-            --repo "${{ github.repository }}" \
-            --assets release-assets/ \
-            --output release-assets/latest.json
-
-      - name: Generate release.json (download site metadata)
-        run: |
-          node scripts/release/generate-release-json.cjs \
-            --version "${{ needs.prepare.outputs.version }}" \
-            --repo "${{ github.repository }}" \
-            --assets release-assets/ \
-            --output release-assets/release.json
-
-      - name: Validate release artifacts
-        run: |
-          node scripts/release/validate-release.cjs \
+          node scripts/release/generate-manifests.cjs \
             --version "${{ needs.prepare.outputs.version }}" \
             --repo "${{ github.repository }}" \
             --assets release-assets/
@@ -224,34 +184,23 @@ jobs:
               --latest
           fi
 
-          # Upload all assets from release-assets/ (--clobber so a rerun
-          # replaces first-attempt assets and manifests instead of failing)
-          for file in release-assets/*; do
-            if [ -f "$file" ]; then
-              filename=$(basename "$file")
-              # Skip manifest files (internal use)
-              if [[ "$filename" != manifest-*.json ]]; then
-                echo "Uploading: $filename"
-                gh release upload "v$VERSION" "$file" --repo "${{ github.repository }}" --clobber
-              fi
-            fi
-          done
-
-      - name: Summary
-        run: |
-          VERSION="${{ needs.prepare.outputs.version }}"
           echo "## Release v$VERSION Published" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Artifacts" >> $GITHUB_STEP_SUMMARY
+
+          # --clobber so a rerun replaces first-attempt assets instead of failing.
+          # manifest-<platform>.json is the internal handoff from collect-assets to
+          # the generator, so it stays out of the release.
           for file in release-assets/*; do
-            if [ -f "$file" ]; then
-              filename=$(basename "$file")
-              if [[ "$filename" != manifest-*.json ]]; then
-                size=$(ls -lh "$file" | awk '{print $5}')
-                echo "- \`$filename\` ($size)" >> $GITHUB_STEP_SUMMARY
-              fi
-            fi
+            [ -f "$file" ] || continue
+            filename=$(basename "$file")
+            case "$filename" in manifest-*.json) continue ;; esac
+
+            echo "Uploading: $filename"
+            gh release upload "v$VERSION" "$file" --repo "${{ github.repository }}" --clobber
+            echo "- \`$filename\` ($(ls -lh "$file" | awk '{print $5}'))" >> $GITHUB_STEP_SUMMARY
           done
+
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Links" >> $GITHUB_STEP_SUMMARY
           echo "- [Release Page](https://github.com/${{ github.repository }}/releases/tag/v$VERSION)" >> $GITHUB_STEP_SUMMARY

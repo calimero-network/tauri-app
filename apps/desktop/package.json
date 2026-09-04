@@ -11,18 +11,13 @@
     "shell:prepare": "node scripts/prepare-shell.mjs",
     "tauri": "tauri",
     "tauri:dev": "pnpm merod:prepare && tauri dev --config src-tauri/tauri.dev.json",
-    "tauri:dev:devtools": "pnpm merod:prepare && TAURI_OPEN_DEVTOOLS=true tauri dev --config src-tauri/tauri.dev.json",
-    "tauri:dev:no-devtools": "pnpm merod:prepare && TAURI_OPEN_DEVTOOLS=false tauri dev --config src-tauri/tauri.dev.json",
     "tauri:build": "pnpm merod:prepare && tauri build --bundles app",
-    "tauri:build:app": "pnpm merod:prepare && tauri build --bundles app",
     "tauri:build:full": "pnpm merod:prepare && tauri build",
-    "icon": "node scripts/svg-to-icon.js && pnpm tauri icon src-tauri/icons/icon-1024.png",
     "clean": "rm -rf dist src-tauri/target",
     "test:unit": "vitest run",
     "test:unit:watch": "vitest",
     "test:e2e": "playwright test",
-    "test:e2e:ui": "playwright test --ui",
-    "test:e2e:install": "playwright install chromium"
+    "test:e2e:ui": "playwright test --ui"
   },
   "dependencies": {
     "@calimero-network/mero-js": "^18.1.0",

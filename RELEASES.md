@@ -177,21 +177,19 @@ After publishing a release, verify:
 
 ### 2. Manifest Validation
 
-Run the validation script:
+`generate-manifests.cjs` fails the release job when a platform's updater entry has
+no signature or when no installer would reach the download site, so a published
+release has already passed those. What is left is to confirm the URLs resolve:
 
 ```bash
-# Download artifacts locally first
 gh release download vX.Y.Z -D release-assets/
-
-# Run validation
-node scripts/release/validate-release.js --assets release-assets/ --check-urls
+jq -r '.platforms[].url, .downloads[].url' release-assets/latest.json release-assets/release.json \
+  | sort -u | xargs -n1 curl -sSfI -o /dev/null -w '%{http_code} %{url_effective}\n'
 ```
 
 Checks:
-- [ ] `latest.json` has valid structure and all platform entries
-- [ ] `release.json` has valid structure and download entries
+- [ ] `latest.json` lists every platform the release built
 - [ ] All download URLs return HTTP 200
-- [ ] Signatures exist for updater bundles
 
 ### 3. Download Site
 
@@ -243,7 +241,7 @@ Every install therefore jumps straight to the newest version in one download, re
 Set `minimumAppVersion` in the root `package.json` to hard-block installs older than that version:
 
 ```json
-"minimumAppVersion": "0.0.80"
+"minimumAppVersion": "0.0.82"
 ```
 
 The release job copies it into `latest.json` as `minimumVersion`.
@@ -314,7 +312,7 @@ Deploys automatically via `.github/workflows/deploy-download-site.yml`:
 2. **Rotate keys periodically** - Update signing keys annually
 3. **Pin action versions** - Use SHA hashes for GitHub Actions
 4. **Review before merge** - Require PR reviews for main branch
-5. **Audit releases** - Run validation script after each release
+5. **Audit releases** - Run the verification checklist after each release
 6. **Key rotation** - Use staged releases when rotating updater keys
 
 ## Workflow Files
@@ -322,17 +320,16 @@ Deploys automatically via `.github/workflows/deploy-download-site.yml`:
 | Workflow | Purpose |
 |----------|---------|
 | `.github/workflows/release.yml` | Main release orchestration (tag-triggered) |
-| `.github/workflows/build-macos.yml` | Reusable macOS build |
-| `.github/workflows/build-windows.yml` | Reusable Windows build |
-| `.github/workflows/build-linux.yml` | Reusable Linux build |
-| `.github/workflows/build-macos-dmg.yml` | PR validation (macOS only) |
+| `.github/workflows/build-macos.yml` | macOS build, reusable and PR validation |
+| `.github/workflows/build-windows.yml` | Windows build, reusable and PR validation |
+| `.github/workflows/build-linux.yml` | Linux x64 and Chromebook ARM64 builds |
+| `.github/actions/setup-build/action.yml` | Toolchain and caches the build workflows share |
 | `.github/workflows/deploy-download-site.yml` | Download page deployment |
 
 ## Scripts
 
 | Script | Purpose |
 |--------|---------|
-| `scripts/release/collect-assets.js` | Normalize artifact names |
-| `scripts/release/generate-latest-json.js` | Generate Tauri updater manifest |
-| `scripts/release/generate-release-json.js` | Generate download site metadata |
-| `scripts/release/validate-release.js` | Validate release artifacts and URLs |
+| `scripts/release/platforms.cjs` | Platform table both release scripts read |
+| `scripts/release/collect-assets.cjs` | Normalize artifact names |
+| `scripts/release/generate-manifests.cjs` | Generate `latest.json` and `release.json` |

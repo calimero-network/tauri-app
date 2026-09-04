@@ -8,8 +8,10 @@ on:
   pull_request:
 
 concurrency:
-  group: e2e-desktop-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # PR pushes supersede each other; master pushes each need a verdict, and a
+  # cancelled run renders as a red X on the commit.
+  group: e2e-desktop-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
 
 jobs:
   playwright:
@@ -27,7 +29,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version-file: package.json
           cache: "pnpm"
 
       - name: Install dependencies

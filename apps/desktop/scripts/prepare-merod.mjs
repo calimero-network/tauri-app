@@ -129,38 +129,6 @@ function resolveTarget() {
 }
 
 async function resolveRelease(config) {
-  if (process.env.MEROD_VERSION) {
-    return {
-      release: await fetchJson(
-        `https://api.github.com/repos/${CORE_REPO}/releases/tags/${encodeURIComponent(
-          process.env.MEROD_VERSION,
-        )}`,
-      ),
-      source: `MEROD_VERSION=${process.env.MEROD_VERSION}`,
-    };
-  }
-
-  if (process.env.MEROD_CHANNEL) {
-    const channel = process.env.MEROD_CHANNEL.trim().toLowerCase();
-    const releases = await fetchJson(
-      `https://api.github.com/repos/${CORE_REPO}/releases?per_page=20`,
-    );
-
-    const release =
-      channel === "prerelease"
-        ? releases.find((item) => item.prerelease)
-        : releases.find((item) => !item.prerelease);
-
-    if (!release) {
-      throw new Error(`No ${channel} release found in ${CORE_REPO}`);
-    }
-
-    return {
-      release,
-      source: `MEROD_CHANNEL=${channel}`,
-    };
-  }
-
   if (config.version) {
     return {
       release: await fetchJson(
@@ -222,27 +190,6 @@ function pickAsset(release, target) {
       assetNames || "none"
     }`,
   );
-}
-
-/**
- * When the pinned release omits a platform (e.g. no Windows zip yet), find a newer
- * release that ships merod for this target. Newest-first.
- */
-async function findReleaseWithMerodForTarget(target) {
-  const releases = await fetchJson(
-    `https://api.github.com/repos/${CORE_REPO}/releases?per_page=40`,
-  );
-
-  for (const candidate of releases) {
-    try {
-      const asset = pickAsset(candidate, target);
-      return { release: candidate, asset };
-    } catch {
-      continue;
-    }
-  }
-
-  return null;
 }
 
 async function downloadToFile(url, destination) {
@@ -348,33 +295,8 @@ async function main() {
 
   const config = await readConfig();
   const target = resolveTarget();
-  let { release, source } = await resolveRelease(config);
-  let asset;
-
-  try {
-    asset = pickAsset(release, target);
-  } catch (primaryError) {
-    const allowFallback = envTruthy("MEROD_ASSET_FALLBACK");
-    const isMissingAsset =
-      primaryError instanceof Error &&
-      primaryError.message.includes("No merod asset found");
-
-    if (!allowFallback || !isMissingAsset) {
-      throw primaryError;
-    }
-
-    const found = await findReleaseWithMerodForTarget(target);
-    if (!found) {
-      throw primaryError;
-    }
-
-    console.warn(
-      `[merod] ${release.tag_name} has no ${target.label} asset; using fallback ${found.release.tag_name}`,
-    );
-    release = found.release;
-    source = `${source} → fallback ${found.release.tag_name}`;
-    asset = found.asset;
-  }
+  const { release, source } = await resolveRelease(config);
+  const asset = pickAsset(release, target);
 
   console.log(`[merod] target: ${target.label}`);
   console.log(`[merod] release: ${release.tag_name} (${source})`);

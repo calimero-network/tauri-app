@@ -8,12 +8,10 @@ on:
   pull_request:
 
 concurrency:
-  # Key by event_name + ref so push runs on master and pull_request runs
-  # targeting master don't cancel each other (they're independently valuable).
-  # Dropping the redundant ${{ github.workflow }} since "unit-tests-" already
-  # namespaces this from other workflows' concurrency groups.
+  # PR pushes supersede each other; master pushes each need a verdict, and a
+  # cancelled run renders as a red X on the commit.
   group: unit-tests-${{ github.event_name }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
 
 jobs:
   vitest:
@@ -31,7 +29,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version-file: package.json
           cache: "pnpm"
 
       - name: Install dependencies

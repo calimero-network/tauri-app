@@ -7,38 +7,6 @@ on:
         description: "Version number (e.g., 1.0.0)"
         required: true
         type: string
-    secrets:
-      # Apple code signing (required for signed releases)
-      APPLE_CERTIFICATE:
-        required: true
-      APPLE_CERTIFICATE_PASSWORD:
-        required: true
-      APPLE_SIGNING_IDENTITY:
-        required: true
-      APPLE_TEAM_ID:
-        required: true
-      # Developer ID provisioning profile (base64 .provisionprofile) that
-      # authorizes the managed universal-links entitlements. Its embedded
-      # certificate MUST be the same Developer ID Application cert that signs the
-      # app (C=ES, serial 3F784069…) — a mismatch AMFI-kills the release at launch.
-      APPLE_PROVISIONING_PROFILE:
-        required: false
-      # Apple notarization (required for distribution)
-      APPLE_ID:
-        required: true
-      APPLE_APP_SPECIFIC_PASSWORD:
-        required: true
-      # Tauri updater signing (required for auto-updates)
-      TAURI_PRIVATE_KEY:
-        required: true
-      TAURI_KEY_PASSWORD:
-        required: false
-      TAURI_PUBLIC_KEY:
-        required: true
-    outputs:
-      artifact-name:
-        description: "Name of the uploaded artifact"
-        value: ${{ jobs.build.outputs.artifact-name }}
   pull_request:
     branches:
       - master
@@ -51,8 +19,6 @@ jobs:
   build:
     name: Build macOS Universal
     runs-on: macos-14
-    outputs:
-      artifact-name: macos-build
 
     steps:
       - name: Checkout code
@@ -62,13 +28,22 @@ jobs:
 
       - name: Determine build mode
         id: build-mode
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          TAURI_PUBLIC_KEY: ${{ secrets.TAURI_PUBLIC_KEY }}
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             echo "mode=validation" >> $GITHUB_OUTPUT
             echo "version=0.0.0-dev" >> $GITHUB_OUTPUT
+            # Dependabot and fork PRs receive no secrets, so the signing key arrives as an
+            # empty string, which Tauri treats as present and fails to decode.
+            echo "config={\"bundle\":{\"createUpdaterArtifacts\":false}}" >> $GITHUB_OUTPUT
           else
             echo "mode=release" >> $GITHUB_OUTPUT
-            echo "version=${{ inputs.version }}" >> $GITHUB_OUTPUT
+            echo "version=$RELEASE_VERSION" >> $GITHUB_OUTPUT
+            # bundle.macOS.files embeds the profile at Contents/embedded.provisionprofile so
+            # Tauri's own codesign seals it; the source path is relative to src-tauri/.
+            echo "config={\"version\":\"$RELEASE_VERSION\",\"plugins\":{\"updater\":{\"pubkey\":\"$TAURI_PUBLIC_KEY\"}},\"bundle\":{\"macOS\":{\"files\":{\"embedded.provisionprofile\":\"embedded.provisionprofile\"}}}}" >> $GITHUB_OUTPUT
           fi
 
       - name: Validate required secrets for release
@@ -98,49 +73,14 @@ jobs:
           fi
           echo "All required secrets are configured"
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - name: Setup build environment
+        uses: ./.github/actions/setup-build
         with:
-          node-version: "22"
-          cache: "pnpm"
-
-      - name: Get pnpm store directory
-        id: get-pnpm-store
-        shell: bash
-        run: |
-          STORE_PATH=$(pnpm store path --silent || echo "$HOME/.pnpm-store")
-          echo "path=$STORE_PATH" >> $GITHUB_OUTPUT
-
-      - name: Setup pnpm cache
-        uses: actions/cache@v4
-        with:
-          path: ${{ steps.get-pnpm-store.outputs.path }}
-          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pnpm-store-
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
-
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: apps/desktop/src-tauri
+          cache-suffix: universal
+          rust-targets: aarch64-apple-darwin,x86_64-apple-darwin
 
       - name: Install create-dmg
         run: brew install create-dmg
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Generate icons
-        working-directory: apps/desktop
-        run: pnpm tauri icon src-tauri/icons/icon.png
 
       - name: Prepare merod binary
         working-directory: apps/desktop
@@ -154,62 +94,12 @@ jobs:
           TAURI_TARGET_TRIPLE: universal-apple-darwin
         run: pnpm shell:prepare
 
-      - name: Update version in tauri.conf.json
-        if: steps.build-mode.outputs.mode == 'release'
-        run: |
-          VERSION="${{ steps.build-mode.outputs.version }}"
-          cd apps/desktop/src-tauri
-          node -e "
-            const fs = require('fs');
-            const config = JSON.parse(fs.readFileSync('tauri.conf.json', 'utf8'));
-            config.version = '$VERSION';
-            fs.writeFileSync('tauri.conf.json', JSON.stringify(config, null, 2));
-          "
-
-      - name: Skip updater artifacts for PR validation
-        # Dependabot and fork PRs receive no secrets, so the signing key arrives as an
-        # empty string, which Tauri treats as present and fails to decode.
-        if: steps.build-mode.outputs.mode == 'validation'
-        run: |
-          cd apps/desktop/src-tauri
-          node -e "
-            const fs = require('fs');
-            const config = JSON.parse(fs.readFileSync('tauri.conf.json', 'utf8'));
-            config.bundle.createUpdaterArtifacts = false;
-            fs.writeFileSync('tauri.conf.json', JSON.stringify(config, null, 2));
-          "
-
-      - name: Inject updater pubkey from secret
-        if: steps.build-mode.outputs.mode == 'release'
-        env:
-          TAURI_PUBLIC_KEY: ${{ secrets.TAURI_PUBLIC_KEY }}
-        run: |
-          if [ -n "$TAURI_PUBLIC_KEY" ]; then
-            cd apps/desktop/src-tauri
-            node -e "
-              const fs = require('fs');
-              const config = JSON.parse(fs.readFileSync('tauri.conf.json', 'utf8'));
-              config.plugins = config.plugins || {};
-              config.plugins.updater = config.plugins.updater || {};
-              config.plugins.updater.pubkey = process.env.TAURI_PUBLIC_KEY;
-              fs.writeFileSync('tauri.conf.json', JSON.stringify(config, null, 2));
-            "
-            echo "Injected TAURI_PUBLIC_KEY into tauri.conf.json"
-          else
-            echo "No TAURI_PUBLIC_KEY provided, using default pubkey"
-          fi
-
       - name: Import Apple codesign cert
         if: steps.build-mode.outputs.mode == 'release'
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
         run: |
-          if [ -z "$APPLE_CERTIFICATE" ]; then
-            echo "No Apple certificate provided, skipping code signing setup"
-            exit 0
-          fi
-
           echo "$APPLE_CERTIFICATE" | base64 --decode > certificate.p12
 
           security create-keychain -p "" build.keychain
@@ -228,26 +118,12 @@ jobs:
 
           rm -f certificate.p12
 
-      - name: Ensure merod binary is executable
-        run: |
-          MEROD_BINARY="apps/desktop/src-tauri/merod/merod"
-          if [ -f "$MEROD_BINARY" ]; then
-            chmod +x "$MEROD_BINARY"
-            echo "Set merod as executable"
-          fi
-
       - name: Sign merod binary before bundling
         if: steps.build-mode.outputs.mode == 'release'
         env:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         run: |
-          if [ -z "$APPLE_SIGNING_IDENTITY" ]; then
-            echo "No signing identity provided, skipping merod signing"
-            exit 0
-          fi
-
           MEROD_BINARY="apps/desktop/src-tauri/merod/merod"
-          
           ENTITLEMENTS="apps/desktop/src-tauri/merod.entitlements.plist"
 
           if [ -f "$MEROD_BINARY" ]; then
@@ -272,11 +148,6 @@ jobs:
         env:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         run: |
-          if [ -z "$APPLE_SIGNING_IDENTITY" ]; then
-            echo "No signing identity provided, skipping shell signing"
-            exit 0
-          fi
-
           SHELL_BINARY="apps/desktop/src-tauri/shell/calimero-shell"
           # Nested helper: sign WITHOUT the managed universal-links entitlements
           # (see shell.entitlements.plist). Only the main app carries those.
@@ -320,12 +191,14 @@ jobs:
           fi
 
       - name: Install provisioning profile
+        # The profile's embedded certificate MUST be the same Developer ID
+        # Application cert that signs the app; a mismatch AMFI-kills it at launch.
         if: steps.build-mode.outputs.mode == 'release'
         env:
           APPLE_PROVISIONING_PROFILE: ${{ secrets.APPLE_PROVISIONING_PROFILE }}
         run: |
           if [ -z "$APPLE_PROVISIONING_PROFILE" ]; then
-            echo "Error: APPLE_PROVISIONING_PROFILE is required — a release carrying the"
+            echo "Error: APPLE_PROVISIONING_PROFILE is required - a release carrying the"
             echo "universal-links entitlements is AMFI-killed at launch without it."
             exit 1
           fi
@@ -334,6 +207,9 @@ jobs:
           echo "Wrote embedded.provisionprofile ($BYTES bytes)"
           [ "$BYTES" -gt 0 ] || { echo "Decoded profile is empty"; exit 1; }
 
+      # Two steps, not one with conditional env: Tauri reads an empty
+      # APPLE_SIGNING_IDENTITY as "sign with identity ''" and fails, so a
+      # validation build has to leave the signing vars undefined entirely.
       - name: Build Tauri app for macOS (Universal) - Release
         if: steps.build-mode.outputs.mode == 'release'
         working-directory: apps/desktop
@@ -345,48 +221,32 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
-        id: build-app-release
-        run: |
-          if [ -n "$APPLE_SIGNING_IDENTITY" ]; then
-            echo "is_signed=true" >> $GITHUB_OUTPUT
-          else
-            echo "is_signed=false" >> $GITHUB_OUTPUT
-          fi
-
-          # Embed the profile at Contents/embedded.provisionprofile so Tauri's own
-          # codesign seals it and AMFI authorizes the managed universal-links
-          # entitlements. Source path is relative to src-tauri/ (tauri.conf.json dir).
-          pnpm tauri build --target universal-apple-darwin \
-            --config '{"bundle":{"macOS":{"files":{"embedded.provisionprofile":"embedded.provisionprofile"}}}}'
+        run: >
+          pnpm tauri build --target universal-apple-darwin
+          --config '${{ steps.build-mode.outputs.config }}'
 
       - name: Build Tauri app for macOS (Universal) - Validation
         if: steps.build-mode.outputs.mode == 'validation'
         working-directory: apps/desktop
-        id: build-app-validation
         env:
           MEROD_SKIP_IF_EXISTS: "1"
           SHELL_SKIP_IF_EXISTS: "1"
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          echo "is_signed=false" >> $GITHUB_OUTPUT
+        run: >
           pnpm tauri build --target universal-apple-darwin
+          --config '${{ steps.build-mode.outputs.config }}'
 
       - name: Cleanup keychain
         if: always() && steps.build-mode.outputs.mode == 'release'
         run: security delete-keychain build.keychain 2>/dev/null || true
 
       - name: Notarize DMG
-        if: steps.build-mode.outputs.mode == 'release' && steps.build-app-release.outputs.is_signed == 'true'
+        if: steps.build-mode.outputs.mode == 'release'
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          if [ -z "$APPLE_ID" ] || [ -z "$APPLE_APP_SPECIFIC_PASSWORD" ]; then
-            echo "Notarization credentials not provided, skipping"
-            exit 0
-          fi
-
           DMG_FILE=$(find apps/desktop/src-tauri/target -name "*.dmg" 2>/dev/null | head -1)
 
           if [ -z "$DMG_FILE" ]; then
@@ -416,23 +276,6 @@ jobs:
           fi
 
           xcrun stapler staple "$DMG_FILE"
-
-      - name: Verify build outputs
-        if: steps.build-mode.outputs.mode == 'validation'
-        run: |
-          echo "Checking for expected build outputs..."
-
-          # No .app.tar.gz here: that is the signed updater bundle, which this mode
-          # skips. The DMG is what validation exists to prove.
-          DMG_FILE=$(find apps/desktop/src-tauri/target -name "*.dmg" 2>/dev/null | head -1)
-
-          if [ -z "$DMG_FILE" ]; then
-            echo "Error: DMG file not found"
-            exit 1
-          fi
-          echo "DMG: $DMG_FILE"
-
-          echo "Build validation passed"
 
       - name: Collect and normalize assets
         if: steps.build-mode.outputs.mode == 'release'

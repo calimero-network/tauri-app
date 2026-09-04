@@ -7,23 +7,6 @@ on:
         description: "Version number (e.g., 1.0.0)"
         required: true
         type: string
-    secrets:
-      # Tauri updater signing (required for auto-updates)
-      TAURI_PRIVATE_KEY:
-        required: true
-      TAURI_KEY_PASSWORD:
-        required: false
-      TAURI_PUBLIC_KEY:
-        required: true
-      # Windows code signing (optional - recommended to avoid SmartScreen warnings)
-      WINDOWS_CERTIFICATE:
-        required: false
-      WINDOWS_CERTIFICATE_PASSWORD:
-        required: false
-    outputs:
-      artifact-name:
-        description: "Name of the uploaded artifact"
-        value: ${{ jobs.build.outputs.artifact-name }}
   pull_request:
     branches:
       - master
@@ -37,8 +20,6 @@ jobs:
   build:
     name: Build Windows x64
     runs-on: windows-latest
-    outputs:
-      artifact-name: windows-build
 
     steps:
       - name: Checkout code

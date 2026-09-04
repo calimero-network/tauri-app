@@ -17,14 +17,6 @@ on:
         description: "Target to build: linux (x86_64) or chromebook (ARM64)"
         required: true
         type: string
-    secrets:
-      # Tauri updater signing (required for auto-updates)
-      TAURI_PRIVATE_KEY:
-        required: true
-      TAURI_KEY_PASSWORD:
-        required: false
-      TAURI_PUBLIC_KEY:
-        required: true
   pull_request:
     branches:
       - master

@@ -7,38 +7,6 @@ on:
         description: "Version number (e.g., 1.0.0)"
         required: true
         type: string
-    secrets:
-      # Apple code signing (required for signed releases)
-      APPLE_CERTIFICATE:
-        required: true
-      APPLE_CERTIFICATE_PASSWORD:
-        required: true
-      APPLE_SIGNING_IDENTITY:
-        required: true
-      APPLE_TEAM_ID:
-        required: true
-      # Developer ID provisioning profile (base64 .provisionprofile) that
-      # authorizes the managed universal-links entitlements. Its embedded
-      # certificate MUST be the same Developer ID Application cert that signs the
-      # app (C=ES, serial 3F784069…) — a mismatch AMFI-kills the release at launch.
-      APPLE_PROVISIONING_PROFILE:
-        required: false
-      # Apple notarization (required for distribution)
-      APPLE_ID:
-        required: true
-      APPLE_APP_SPECIFIC_PASSWORD:
-        required: true
-      # Tauri updater signing (required for auto-updates)
-      TAURI_PRIVATE_KEY:
-        required: true
-      TAURI_KEY_PASSWORD:
-        required: false
-      TAURI_PUBLIC_KEY:
-        required: true
-    outputs:
-      artifact-name:
-        description: "Name of the uploaded artifact"
-        value: ${{ jobs.build.outputs.artifact-name }}
   pull_request:
     branches:
       - master
@@ -52,8 +20,6 @@ jobs:
   build:
     name: Build macOS Universal
     runs-on: macos-14
-    outputs:
-      artifact-name: macos-build
 
     steps:
       - name: Checkout code
@@ -256,6 +222,8 @@ jobs:
           fi
 
       - name: Install provisioning profile
+        # The profile's embedded certificate MUST be the same Developer ID
+        # Application cert that signs the app; a mismatch AMFI-kills it at launch.
         if: steps.build-mode.outputs.mode == 'release'
         env:
           APPLE_PROVISIONING_PROFILE: ${{ secrets.APPLE_PROVISIONING_PROFILE }}

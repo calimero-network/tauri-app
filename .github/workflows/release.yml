@@ -41,17 +41,7 @@ jobs:
     uses: ./.github/workflows/build-macos.yml
     with:
       version: ${{ needs.prepare.outputs.version }}
-    secrets:
-      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-      APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-      APPLE_ID: ${{ secrets.APPLE_ID }}
-      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-      APPLE_PROVISIONING_PROFILE: ${{ secrets.APPLE_PROVISIONING_PROFILE }}
-      TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
-      TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
-      TAURI_PUBLIC_KEY: ${{ secrets.TAURI_PUBLIC_KEY }}
+    secrets: inherit
 
   build-windows:
     name: Build Windows
@@ -59,12 +49,7 @@ jobs:
     uses: ./.github/workflows/build-windows.yml
     with:
       version: ${{ needs.prepare.outputs.version }}
-    secrets:
-      TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
-      TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
-      TAURI_PUBLIC_KEY: ${{ secrets.TAURI_PUBLIC_KEY }}
-      WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
-      WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+    secrets: inherit
 
   build-linux:
     name: Build Linux
@@ -73,10 +58,7 @@ jobs:
     with:
       version: ${{ needs.prepare.outputs.version }}
       platform: linux
-    secrets:
-      TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
-      TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
-      TAURI_PUBLIC_KEY: ${{ secrets.TAURI_PUBLIC_KEY }}
+    secrets: inherit
 
   build-chromebook:
     name: Build Chromebook
@@ -85,10 +67,7 @@ jobs:
     with:
       version: ${{ needs.prepare.outputs.version }}
       platform: chromebook
-    secrets:
-      TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
-      TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
-      TAURI_PUBLIC_KEY: ${{ secrets.TAURI_PUBLIC_KEY }}
+    secrets: inherit
 
   # Publish release with all platform artifacts
   publish:

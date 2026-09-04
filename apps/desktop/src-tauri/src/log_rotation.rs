@@ -49,7 +49,7 @@ fn is_log_file_name(path: &Path) -> bool {
 }
 
 /// `dest` resolved the way `File::create` would see it, or an error if it is a
-/// symlink — refused outright since a dangling link can't be canonicalized safely.
+/// symlink - refused outright since a dangling link can't be canonicalized safely.
 fn resolved_dest(dest: &Path) -> io::Result<PathBuf> {
     // symlink_metadata does not follow the link, so this sees dangling ones too.
     if dest
@@ -205,6 +205,8 @@ impl RollingLogWriter {
 }
 
 /// Every `merod.log[.N]` entry in `dir`, with `None` marking the active file.
+/// Scans the directory rather than walking `1..N`, so a gap left by age-based
+/// cleanup can't cut every caller's history short.
 fn segments(dir: &Path) -> io::Result<Vec<(Option<u32>, PathBuf)>> {
     let mut out = Vec::new();
     for entry in fs::read_dir(dir)? {
@@ -246,6 +248,7 @@ pub fn cleanup_logs_with(dir: &Path, max_segments: u32, retention_days: u64) -> 
     let retention = Duration::from_secs(retention_days.saturating_mul(24 * 60 * 60));
     let now = SystemTime::now();
 
+    // A read error here aborts this pass; the next scheduled cleanup retries.
     for (idx, path) in segments(dir)? {
         // Segments past the retained count go immediately.
         if let Some(idx) = idx {
@@ -267,7 +270,7 @@ pub fn cleanup_logs_with(dir: &Path, max_segments: u32, retention_days: u64) -> 
 }
 
 /// Truncate the active file and remove rotated segments; returns the count removed.
-/// Use only when no live writer exists for this node — a running node should clear through [`RollingLogWriter::clear`] instead, to stay serialized with its drain task.
+/// Use only when no live writer exists for this node - a running node should clear through [`RollingLogWriter::clear`] instead, to stay serialized with its drain task.
 pub fn clear_logs(dir: &Path) -> io::Result<usize> {
     if !dir.exists() {
         return Ok(0);
@@ -485,6 +488,22 @@ mod tests {
         assert!(!seg_path(&dir, 3).exists());
         assert!(!seg_path(&dir, 4).exists());
         assert!(!seg_path(&dir, 5).exists());
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn clear_truncates_active_and_removes_segments() {
+        let dir = tmp();
+        let mut w = RollingLogWriter::open_with(&dir, 40, 5).unwrap();
+        for i in 0..20 {
+            w.write_line(format!("x{:02}\n", i).as_bytes()).unwrap();
+        }
+        assert!(seg_path(&dir, 1).exists());
+        let removed = clear_logs(&dir).unwrap();
+        assert!(removed >= 1);
+        assert!(!seg_path(&dir, 1).exists());
+        assert_eq!(active_path(&dir).metadata().unwrap().len(), 0);
+        assert_eq!(read_tail(&dir, 100).unwrap(), "");
         fs::remove_dir_all(&dir).ok();
     }
 

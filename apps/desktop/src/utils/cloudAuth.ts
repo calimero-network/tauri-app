@@ -35,10 +35,9 @@ interface PendingOAuthState {
   expiresAt: number;
 }
 
+/** Opaque CSRF token; the server echoes it back. */
 function generateState(): string {
-  const buf = new Uint8Array(16);
-  crypto.getRandomValues(buf);
-  return Array.from(buf, (b) => b.toString(16).padStart(2, '0')).join('');
+  return crypto.randomUUID();
 }
 
 function savePendingState(state: string): void {
@@ -139,53 +138,21 @@ async function exchangeGoogleForMdmaSession(
       body: JSON.stringify({ id_token: googleIdToken }),
     });
     if (!res.ok) return null;
-    const body = (await res.json()) as unknown;
-    // Validate the shape before trusting the cast. A 200 with an
-    // unexpected body (deployment mid-rollout, bad proxy) would
-    // otherwise fall through as `{ session_token: undefined }` and
-    // the nullish-coalesce in startCloudLogin would silently re-use
-    // the raw Google token — masking a server regression.
-    if (
-      !body ||
-      typeof body !== 'object' ||
-      typeof (body as { session_token?: unknown }).session_token !== 'string' ||
-      !(body as { session_token: string }).session_token
-    ) {
-      return null;
-    }
-    // Belt-and-suspenders: confirm what we got back is actually an
-    // MDMA-issued JWT. A misconfigured backend (or a bug in the
-    // exchange handler) could return a 200 with a session_token that
-    // is a non-JWT string, a JWT with the wrong issuer, or even our
-    // own Google token echoed back — none of which should be allowed
-    // to land in settings.cloudIdToken. isMdmaSessionToken returns
-    // false on all of those so we reject and surface as a login
-    // failure at the call site.
-    if (!isMdmaSessionToken((body as { session_token: string }).session_token)) {
-      return null;
-    }
-    // Validate the user claim shape independently from the session_token.
-    // startCloudLogin reads exchange.user.{email,name,picture} directly
-    // into settings, so a 200 body with a missing/malformed `user` field
-    // would persist `undefined` strings and surface as a blank profile
-    // chip. Crucially we *don't* discard the whole response on a bad
-    // `user` — the session_token has already been validated as an
-    // MDMA-issued JWT above, and dropping the 7-day session because of
-    // a cosmetic profile field would silently degrade the user to the
-    // 1-hour Google fallback. Returning `user: null` lets the call site's
-    // `exchange?.user ?? decodeIdToken(googleToken)` fallback populate
-    // the profile from the ID-token claims while keeping the long session.
-    const userField = (body as { user?: unknown }).user;
+    const body = (await res.json()) as { session_token?: unknown; user?: unknown } | null;
+    // A 200 with an unexpected body must not fall through to the raw Google
+    // token, and the session_token must actually be an MDMA-issued JWT.
+    const { session_token, user } = body ?? {};
+    if (typeof session_token !== 'string' || !session_token) return null;
+    if (!isMdmaSessionToken(session_token)) return null;
+    // A malformed `user` doesn't invalidate the session: the call site falls
+    // back to decodeIdToken for the profile while keeping the 7-day token.
     const userValid =
-      !!userField &&
-      typeof userField === 'object' &&
-      typeof (userField as { email?: unknown }).email === 'string' &&
-      typeof (userField as { name?: unknown }).name === 'string' &&
-      typeof (userField as { picture?: unknown }).picture === 'string';
-    return {
-      session_token: (body as { session_token: string }).session_token,
-      user: userValid ? (userField as CloudUserInfo) : null,
-    };
+      !!user &&
+      typeof user === 'object' &&
+      typeof (user as { email?: unknown }).email === 'string' &&
+      typeof (user as { name?: unknown }).name === 'string' &&
+      typeof (user as { picture?: unknown }).picture === 'string';
+    return { session_token, user: userValid ? (user as CloudUserInfo) : null };
   } catch {
     return null;
   }
@@ -332,22 +299,13 @@ async function pollForCloudAuth(): Promise<string | null> {
  */
 function extractTokenFromCallbackUrl(url: string): string | null {
   try {
-    const hashIndex = url.indexOf('#');
-    const fragment = hashIndex === -1 ? '' : url.substring(hashIndex + 1);
-    const queryIndex = url.indexOf('?');
-    const queryEnd = hashIndex === -1 ? url.length : hashIndex;
-    const query = queryIndex === -1 || queryIndex >= queryEnd
-      ? ''
-      : url.substring(queryIndex + 1, queryEnd);
-
+    const u = new URL(url);
     // `consumePendingState` atomically reads and clears the nonce, so it
     // cannot be replayed by a second callback that arrives after the first.
     const expected = consumePendingState();
-    const got = query ? new URLSearchParams(query).get('state') : null;
-    if (!expected || got !== expected) return null;
+    if (!expected || u.searchParams.get('state') !== expected) return null;
 
-    if (!fragment) return null;
-    return new URLSearchParams(fragment).get('id_token');
+    return new URLSearchParams(u.hash.slice(1)).get('id_token');
   } catch {
     return null;
   }

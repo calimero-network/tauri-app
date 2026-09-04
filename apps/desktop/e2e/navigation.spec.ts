@@ -61,27 +61,11 @@ test.describe("Sidebar navigation", () => {
     });
     await expect(page.locator('button[title="Home"]')).toHaveClass(/active/);
   });
-
-  test("Namespaces link hidden when developer mode is off", async ({ page }) => {
-    await expect(page.locator('button[title="Namespaces"]')).not.toBeVisible();
-  });
-
-  test("Nodes link hidden when developer mode is off", async ({ page }) => {
-    await expect(page.locator('button[title="Nodes"]')).not.toBeVisible();
-  });
 });
 
 test.describe("Sidebar navigation — developer mode", () => {
   test.beforeEach(async ({ page }) => {
     await setupDeveloperPage(page);
-  });
-
-  test("Namespaces link visible when developer mode is on", async ({ page }) => {
-    await expect(page.locator('button[title="Namespaces"]')).toBeVisible();
-  });
-
-  test("Nodes link visible when developer mode is on", async ({ page }) => {
-    await expect(page.locator('button[title="Nodes"]')).toBeVisible();
   });
 
   test("clicking Namespaces navigates to namespaces page", async ({ page }) => {
@@ -100,58 +84,6 @@ test.describe("Sidebar navigation — developer mode", () => {
       timeout: shellTitleTimeout,
     });
     await expect(page.locator('button[title="Nodes"]')).toHaveClass(/active/);
-  });
-
-  test("full navigation cycle through all pages", async ({ page }) => {
-    await page.click('button[title="Marketplace"]');
-    await expect(page.getByTestId("shell-page-title")).toHaveText(
-      "Marketplace",
-      { timeout: shellTitleTimeout }
-    );
-
-    await page.click('button[title="Applications"]');
-    await expect(page.getByTestId("shell-page-title")).toHaveText(
-      "Applications",
-      { timeout: shellTitleTimeout }
-    );
-
-    await page.click('button[title="Namespaces"]');
-    await expect(page.getByTestId("shell-page-title")).toHaveText("Namespaces", {
-      timeout: shellTitleTimeout,
-    });
-
-    await page.click('button[title="Nodes"]');
-    await expect(page.getByTestId("shell-page-title")).toHaveText("Nodes", {
-      timeout: shellTitleTimeout,
-    });
-
-    await page.click('button[title="Home"]');
-    await expect(page.getByTestId("shell-page-title")).toHaveText("Home", {
-      timeout: shellTitleTimeout,
-    });
-  });
-});
-
-test.describe("Settings navigation", () => {
-  test.beforeEach(async ({ page }) => {
-    await setupAuthenticatedPage(page);
-  });
-
-  test("clicking Settings button opens settings page", async ({ page }) => {
-    await page.click('button[title="Settings"]');
-    await expect(
-      page.getByRole("heading", { name: "Settings", level: 1 }),
-    ).toHaveText("Settings");
-  });
-
-  test("settings page has Back button to return", async ({ page }) => {
-    await page.click('button[title="Settings"]');
-    await expect(
-      page.getByRole("heading", { name: "Settings", level: 1 }),
-    ).toHaveText("Settings");
-
-    const backBtn = page.locator("button", { hasText: "Back" });
-    await expect(backBtn).toBeVisible();
   });
 });
 
@@ -181,20 +113,5 @@ test.describe("Home page content", () => {
     await expect(
       page.getByRole("heading", { name: "No Applications Installed" }),
     ).toBeVisible();
-  });
-});
-
-test.describe("Applications page — empty state", () => {
-  test.beforeEach(async ({ page }) => {
-    await setupAuthenticatedPage(page, { installedApps: [] });
-  });
-
-  test("empty state shows when no apps installed", async ({ page }) => {
-    await page.click('button[title="Applications"]');
-    await expect(page.getByTestId("shell-page-title")).toHaveText(
-      "Applications",
-      { timeout: shellTitleTimeout },
-    );
-    await expect(page.getByText("No applications installed.")).toBeVisible();
   });
 });

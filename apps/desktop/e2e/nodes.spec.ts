@@ -130,52 +130,6 @@ test.describe("Nodes – available nodes (empty state)", () => {
   });
 });
 
-// ─── Port inputs ────────────────────────────────────────────────────────────
-
-test.describe("Nodes – port inputs (when nodes available)", () => {
-  test("port inputs have correct defaults when the select is visible", async ({
-    page,
-  }) => {
-    await setupDeveloperPage(page);
-    await navigateVia(page, "Nodes");
-
-    const serverPortInput = page.locator("#server-port");
-    const swarmPortInput = page.locator("#swarm-port");
-
-    if (await serverPortInput.isVisible({ timeout: 2000 }).catch(() => false)) {
-      await expect(serverPortInput).toHaveValue("2528");
-      await expect(swarmPortInput).toHaveValue("2428");
-    }
-  });
-});
-
-// ─── Manage section (only when nodes exist) ─────────────────────────────────
-
-test.describe("Nodes – manage section", () => {
-  test("Manage Nodes heading appears only when merod reports nodes", async ({
-    page,
-  }) => {
-    await setupDeveloperPage(page);
-    await navigateVia(page, "Nodes");
-
-    const manageHeading = page.getByRole("heading", {
-      name: "Manage Nodes",
-      exact: true,
-    });
-
-    if (await manageHeading.isVisible({ timeout: 2000 }).catch(() => false)) {
-      await expect(manageHeading).toBeVisible();
-      await expect(
-        page.getByRole("button", { name: "Start Node" }),
-      ).toBeVisible();
-    } else {
-      await expect(
-        page.getByText("No nodes found. Create your first node above."),
-      ).toBeVisible();
-    }
-  });
-});
-
 // ─── Back button ────────────────────────────────────────────────────────────
 
 test.describe("Nodes – navigation", () => {

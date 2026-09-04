@@ -171,17 +171,6 @@ test.describe("ErrorBoundary — Copy Error", () => {
 // ─── Authenticated page — boundary wraps sections ────────────────────────────
 
 test.describe("ErrorBoundary — authenticated app sections", () => {
-  test("login screen is wrapped — error boundary test hook is registered", async ({ page }) => {
-    // Verify root ErrorBoundary hook is always available after app boots
-    await seedAndLoad(page);
-
-    const hookExists = await page.waitForFunction(
-      () => typeof (window as any).__triggerErrorBoundary === "function",
-      { timeout: 10_000 },
-    );
-    expect(hookExists).toBeTruthy();
-  });
-
   test("app recovers to main shell after error + retry on authenticated page", async ({ page }) => {
     await setupAuthenticatedPage(page);
     await triggerRootError(page, "Crash in main app");

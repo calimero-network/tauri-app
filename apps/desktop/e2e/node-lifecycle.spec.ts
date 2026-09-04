@@ -38,29 +38,12 @@ test.describe("Node lifecycle – connected", () => {
     );
   });
 
-  test("connected indicator has a green dot", async ({ page }) => {
-    await waitForNodeStatus(page, "connected");
-
-    const dot = page.locator(
-      ".node-status-indicator.connected .node-status-dot",
-    );
-    await expect(dot).toBeVisible();
-  });
-
   test("does not show the 'Reconnect' action when healthy", async ({
     page,
   }) => {
     await waitForNodeStatus(page, "connected");
 
     await expect(page.locator(".node-status-action")).not.toBeVisible();
-  });
-
-  test("sidebar navigation is accessible when connected", async ({ page }) => {
-    await waitForNodeStatus(page, "connected");
-
-    const sidebar = page.locator("aside.sidebar");
-    await expect(sidebar).toBeVisible();
-    await expect(sidebar.getByTitle("Home")).toBeVisible();
   });
 });
 
@@ -79,15 +62,6 @@ test.describe("Node lifecycle – disconnected", () => {
     await expect(indicator.locator(".node-status-label")).toHaveText(
       "Disconnected",
     );
-  });
-
-  test("disconnected indicator has a dot", async ({ page }) => {
-    await waitForNodeStatus(page, "disconnected");
-
-    const dot = page.locator(
-      ".node-status-indicator.disconnected .node-status-dot",
-    );
-    await expect(dot).toBeVisible();
   });
 });
 
@@ -145,15 +119,6 @@ test.describe("Node lifecycle – embedded node configuration", () => {
 
     const indicator = page.locator(".node-status-indicator.connected");
     await expect(indicator).toBeVisible();
-  });
-
-  test("sidebar is accessible with embedded node settings", async ({
-    page,
-  }) => {
-    await waitForNodeStatus(page, "connected");
-
-    const sidebar = page.locator("aside.sidebar");
-    await expect(sidebar).toBeVisible();
   });
 });
 

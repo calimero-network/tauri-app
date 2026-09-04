@@ -23,8 +23,8 @@
  * node stays the enforcement point, and `isPermissionError` catches what the
  * guess gets wrong.
  *
- * Kept as pure functions plus one fetch so the decision logic is unit-testable
- * without a node (the fetch is the only part the e2e mocks stand in for).
+ * Kept as pure functions plus one listing so the decision logic is unit-testable
+ * without a node (the listing is the only part the e2e mocks stand in for).
  */
 import { apiClient } from '../lib/mero-client';
 

@@ -3,7 +3,11 @@
  * client key, since sharing ours risks rotating away the desktop's own session (see token-broker.ts).
  */
 import { invoke } from '@tauri-apps/api/core';
-import { AuthRevokedError, type ClientKey } from '@calimero-network/mero-js';
+import {
+  AuthRevokedError,
+  type ClientKey,
+  type TokenResponse,
+} from '@calimero-network/mero-js';
 import { getSettings, saveSettings } from '../utils/settings';
 import { parseJwtPayload } from '../utils/jwt';
 import { apiClient } from './mero-client';
@@ -159,7 +163,7 @@ async function mintAndWriteCredential(): Promise<ConnectAiAgentResult> {
 
   const previousClientId = settings.mcpAgentClientId;
 
-  let key;
+  let key: TokenResponse['data'];
   try {
     key = (await apiClient.meroJs.auth.generateClientKey({ permissions: ['admin'] })).data;
   } catch (error) {

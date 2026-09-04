@@ -18,7 +18,7 @@ export interface InstalledVersion {
   drifted_nodes: string[];
 }
 
-export interface ReleaseListing {
+interface ReleaseListing {
   releases: ReleaseInfo[];
   /** True when a refetch failed and this is the last list we managed to fetch. */
   stale: boolean;

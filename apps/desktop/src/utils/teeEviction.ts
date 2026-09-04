@@ -86,7 +86,7 @@ export interface EvictionDeps {
  * caller (e.g. the namespace was re-enabled mid-walk) can stop issuing
  * further `MemberRemoved` ops without leaving a half-mutated tree.
  */
-export interface EvictionOpts {
+interface EvictionOpts {
   shouldAbort?: () => boolean;
 }
 
@@ -352,7 +352,7 @@ function withDeadline<T>(p: Promise<T>, ms: number, signal?: AbortSignal): Promi
  * module stays free of the heavyweight mero-js type graph and its unit
  * tests can pass a plain object.
  */
-export interface MeroAdminLike {
+interface MeroAdminLike {
   admin: {
     listSubgroups: (groupId: string) => Promise<{ groupId: string }[]>;
     removeGroupMembers: (

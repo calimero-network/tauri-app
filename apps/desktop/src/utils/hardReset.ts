@@ -40,7 +40,7 @@ const NODE_STOP_POLL_MS = 500;
 /** Settle so file handles are released, and so a repopulating writer shows up. */
 const FILE_HANDLE_SETTLE_MS = 500;
 
-export interface HardResetOptions {
+interface HardResetOptions {
   /** Progress text for the button label ("Stopping nodes...", "Deleting...", …). */
   onStatus?: (status: string) => void;
   /** How long to wait for targeted nodes to disappear from the process scan.
@@ -48,7 +48,7 @@ export interface HardResetOptions {
   stopTimeoutMs?: number;
 }
 
-export interface WipeClientStateOptions {
+interface WipeClientStateOptions {
   /**
    * Also delete the per-app launchers, their capability store and the extracted
    * shell binary. Total-nuke only — a launcher is a dock icon the user placed,

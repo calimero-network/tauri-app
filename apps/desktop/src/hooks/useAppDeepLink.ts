@@ -52,7 +52,7 @@ async function installFromRegistry(pkg: string): Promise<string | null> {
  * Universal Link host `https://links.calimero.network/…`). The OAuth callback
  * is NOT delivered here — the host routes it to the cloud-auth path instead.
  */
-export interface AppDeepLink {
+interface AppDeepLink {
   slug: string;
   action: string;
   /** Raw query string without the leading `?`, e.g. `invitation=X`. */

@@ -7,7 +7,7 @@
 
 import type { AppSummary } from "./registry";
 
-export interface RegistryApps {
+interface RegistryApps {
   registry: string;
   apps: AppSummary[];
 }

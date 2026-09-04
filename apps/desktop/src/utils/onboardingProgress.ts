@@ -4,7 +4,7 @@ const ONBOARDING_PROGRESS_KEY = 'calimero-onboarding-progress';
 
 export type OnboardingStep = 'welcome' | 'what-is' | 'node-setup' | 'cloud-connect' | 'login' | 'install-app';
 
-export interface OnboardingProgress {
+interface OnboardingProgress {
   currentStep: OnboardingStep;
   dataDir: string;
   nodeName: string;

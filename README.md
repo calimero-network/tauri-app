@@ -4,15 +4,14 @@ Monorepo for Calimero desktop applications built with Tauri.
 
 ## Download
 
-**[Download Calimero Desktop](https://calimero-network.github.io/tauri-app/)** - Available for macOS, Windows, and Linux
+**[Download Calimero Desktop](https://calimero.network/download)** - Available for macOS, Windows, and Linux
 
 ## Structure
 
 ```
 .
 ├── apps/
-│   ├── desktop/          # Tauri desktop application
-│   └── download-site/    # Download landing page
+│   └── desktop/          # Tauri desktop application
 └── pnpm-workspace.yaml   # Workspace configuration
 ```
 
@@ -38,17 +37,6 @@ pnpm build:desktop
 
 # Run Tauri commands
 pnpm tauri:desktop [command]
-```
-
-### Download Site
-
-```bash
-# Start download site dev server
-cd apps/download-site
-pnpm dev
-
-# Build for production
-pnpm build
 ```
 
 ### SDK Packages

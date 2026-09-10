@@ -204,4 +204,4 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Links" >> $GITHUB_STEP_SUMMARY
           echo "- [Release Page](https://github.com/${{ github.repository }}/releases/tag/v$VERSION)" >> $GITHUB_STEP_SUMMARY
-          echo "- [Download Page](https://${{ github.repository_owner }}.github.io/tauri-app/)" >> $GITHUB_STEP_SUMMARY
+          echo "- [Download Page](https://calimero.network/download)" >> $GITHUB_STEP_SUMMARY

@@ -35,7 +35,7 @@ Calimero Desktop uses a fully automated, multi-platform release pipeline:
               ▼                            ▼                            ▼
     ┌─────────────────┐         ┌─────────────────┐         ┌─────────────────┐
     │  GitHub Release │         │   latest.json   │         │  release.json   │
-    │  (installers)   │         │ (Tauri updater) │         │ (download site) │
+    │  (installers)   │         │ (Tauri updater) │         │ (download page) │
     └─────────────────┘         └─────────────────┘         └─────────────────┘
 ```
 
@@ -57,7 +57,7 @@ This triggers `.github/workflows/release.yml` which:
 
 1. Builds Tauri app for macOS (universal), Windows (x64), and Linux (x64)
 2. Collects and normalizes artifacts to stable names
-3. Generates `latest.json` (Tauri updater) and `release.json` (download site)
+3. Generates `latest.json` (Tauri updater) and `release.json` (download page)
 4. Creates GitHub Release and uploads all assets
 
 ### Manual Release (workflow_dispatch)
@@ -162,7 +162,7 @@ Each release includes:
 | `*.app.tar.gz` / `*.nsis.zip` / `*.AppImage.tar.gz` | Updater bundles |
 | `*.sig` | Signatures for updater bundles |
 | `latest.json` | Tauri updater manifest |
-| `release.json` | Download site metadata |
+| `release.json` | Download page metadata, consumed by https://calimero.network/download |
 
 ## Release Verification Checklist
 
@@ -178,7 +178,7 @@ After publishing a release, verify:
 ### 2. Manifest Validation
 
 `generate-manifests.cjs` fails the release job when a platform's updater entry has
-no signature or when no installer would reach the download site, so a published
+no signature or when no installer would reach the download page, so a published
 release has already passed those. What is left is to confirm the URLs resolve:
 
 ```bash
@@ -191,9 +191,9 @@ Checks:
 - [ ] `latest.json` lists every platform the release built
 - [ ] All download URLs return HTTP 200
 
-### 3. Download Site
+### 3. Download Page
 
-- [ ] Visit https://calimero-network.github.io/tauri-app/
+- [ ] Visit https://calimero.network/download
 - [ ] Platform tabs show available platforms
 - [ ] Download buttons work for each platform
 - [ ] Version and date are correct
@@ -253,20 +253,19 @@ The floor takes effect on the next release, so an install can only unblock itsel
 
 ## Download Page
 
-The download page at `apps/download-site/`:
+The download page lives in the `landing` repo at `src/pages/download.astro` and is
+served from https://calimero.network/download. This repo publishes the data it reads;
+it does not host a page of its own.
 
-- Fetches `release.json` from latest release (falls back to GitHub API)
+The page:
+
+- Fetches `release.json` from the latest release (falls back to the GitHub API)
 - Shows platform tabs with auto-detection
 - Displays primary and alternative download formats
-- Updates automatically when new releases are published
+- Updates automatically when new releases are published, with no deploy of its own
 
-### Deployment
-
-Deploys automatically via `.github/workflows/deploy-download-site.yml`:
-
-- Triggers on push to main (if download-site changed)
-- Triggers on new release published
-- Deploys to GitHub Pages
+Because it reads published release assets directly, `release.json` must keep being
+generated and uploaded by `release.yml` — see [Scripts](#scripts).
 
 ## Troubleshooting
 
@@ -324,7 +323,6 @@ Deploys automatically via `.github/workflows/deploy-download-site.yml`:
 | `.github/workflows/build-windows.yml` | Windows build, reusable and PR validation |
 | `.github/workflows/build-linux.yml` | Linux x64 and Chromebook ARM64 builds |
 | `.github/actions/setup-build/action.yml` | Toolchain and caches the build workflows share |
-| `.github/workflows/deploy-download-site.yml` | Download page deployment |
 
 ## Scripts
 

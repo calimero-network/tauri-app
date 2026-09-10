@@ -2,7 +2,7 @@
 /**
  * Write the two release manifests from the per-platform manifests collect-assets
  * left in the assets directory: latest.json for the Tauri updater and
- * release.json for the download site.
+ * release.json for the download page at https://calimero.network/download.
  *
  * Usage:
  *   node generate-manifests.cjs --version 1.0.0 --repo owner/repo --assets release-assets/
@@ -157,7 +157,7 @@ function main() {
 
   const downloads = buildDownloads(manifests, baseUrl);
   if (downloads.length === 0) {
-    errors.push("no installer downloads: the download site would show nothing");
+    errors.push("no installer downloads: the download page would show nothing");
   }
 
   if (errors.length > 0) {

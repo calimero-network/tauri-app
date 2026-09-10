@@ -1,6 +1,6 @@
 /**
  * The one description of a release platform: where its bundles land, what they
- * are renamed to, and how the updater and the download site refer to them.
+ * are renamed to, and how the updater and the download page refer to them.
  */
 
 const PRODUCT_NAME = "CalimeroDesktop";

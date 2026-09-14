@@ -107,7 +107,8 @@
   color: var(--text-secondary);
 }
 
-.app-detail-version label {
+.app-detail-version label,
+.app-detail-version-label {
   color: var(--text-tertiary);
 }
 

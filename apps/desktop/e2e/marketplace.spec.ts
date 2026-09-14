@@ -130,6 +130,42 @@ test.describe("Marketplace – install flow", () => {
     await expect(page.locator("[data-testid='app-card']").first()).toBeVisible();
   });
 
+  test("the version picker is our own control, and works by mouse and keyboard", async ({ page }) => {
+    // ⚠️ NOT A NATIVE <select>: in a Tauri webview that renders the OS's own
+    // menu, with its own font, metrics and highlight, inside a window that is
+    // otherwise entirely our design system.
+    await mockRegistryAPIs(page);
+    await setupAuthenticatedPage(page);
+    await navigateVia(page, "Marketplace");
+    await page.locator("[data-testid='app-card']", { hasText: "Only Peers Chat" }).click();
+
+    const trigger = page.getByTestId("version-picker");
+    await expect(trigger).toBeVisible();
+    // A button with listbox semantics — not a <select> element.
+    await expect(trigger).toHaveJSProperty("tagName", "BUTTON");
+    await expect(trigger).toHaveAttribute("aria-haspopup", "listbox");
+    await expect(page.locator("select")).toHaveCount(0);
+
+    // Closed by default, opens on click, and the list is a real listbox.
+    await expect(page.getByRole("listbox")).toHaveCount(0);
+    await trigger.click();
+    await expect(page.getByRole("listbox")).toBeVisible();
+    await expect(page.getByRole("option")).toHaveCount(1);
+    await expect(page.getByRole("option").first()).toHaveAttribute("aria-selected", "true");
+
+    // Escape dismisses without changing the value.
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("listbox")).toHaveCount(0);
+    await expect(trigger).toContainText("0.3.0");
+
+    // And it is reachable from the keyboard alone.
+    await trigger.press("Enter");
+    await expect(page.getByRole("listbox")).toBeVisible();
+    await page.keyboard.press("Enter");
+    await expect(page.getByRole("listbox")).toHaveCount(0);
+    await expect(trigger).toContainText("0.3.0");
+  });
+
   test("the application page carries the structured metadata the card list never showed", async ({ page }) => {
     await mockRegistryAPIs(page);
     await setupAuthenticatedPage(page);

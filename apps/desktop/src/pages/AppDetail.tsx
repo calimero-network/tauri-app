@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import AppIcon from "../components/AppIcon";
+import VersionSelect from "../components/VersionSelect";
 import { VerifiedMark } from "../components/AppCard";
 import { formatBytes, formatCategory, formatRelativeDate, shortenKey } from "../utils/appCards";
 import { fetchPackageAssets, type AppSummary, type PackageAsset, type VersionInfo } from "../utils/registry";
@@ -154,26 +155,21 @@ export default function AppDetail({
 
       <section className="app-detail-install" aria-label="Install">
         <div className="app-detail-version">
-          <label htmlFor="app-version">Version</label>
+          {/* A plain label: the picker is a button + listbox now, not a form
+              control, so `htmlFor` would point at nothing. The trigger carries
+              its own aria-label. */}
+          <span className="app-detail-version-label">Version</span>
           {versionsLoading ? (
             <span className="app-detail-versions-loading">
               <RefreshCw size={12} className="spinning" /> Loading…
             </span>
           ) : versions.length > 0 ? (
-            <select
-              id="app-version"
-              className="app-detail-version-select"
-              data-testid="version-picker"
+            <VersionSelect
+              versions={versions}
               value={selectedVersion}
-              onChange={(e) => onSelectVersion(e.target.value)}
+              onChange={onSelectVersion}
               disabled={installing}
-            >
-              {versions.map((v, i) => (
-                <option key={v.semver} value={v.semver}>
-                  {i === 0 ? `${v.semver} (latest)` : v.semver}
-                </option>
-              ))}
-            </select>
+            />
           ) : (
             <span className="app-detail-version-static">{selectedVersion || app.latest_version}</span>
           )}

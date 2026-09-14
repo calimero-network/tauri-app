@@ -490,3 +490,43 @@ export async function fetchPackageAssets(
     return [];
   }
 }
+
+/** An organization as the registry models it. */
+export interface RegistryOrg {
+  id: string;
+  name?: string;
+  slug?: string;
+}
+
+/**
+ * Which organization published a package, or null when it belongs to an
+ * individual.
+ *
+ * ⚠️ NULL IS A NORMAL ANSWER, NOT A FAILURE. Measured against
+ * apps.calimero.network: the calimero-network packages resolve to an org while
+ * community-published ones (com.calimero.mdtest-good,
+ * com.calimero.mero-drive-migration-test) answer a literal `null`. So the
+ * caller hides the section rather than rendering an empty one.
+ *
+ * ⚠️ AND GATE ON `name`, NOT ON THE OBJECT. The lookup can answer with a body
+ * that carries only an id, which renders as a heading over a blank row — the
+ * registry's own app page carries the same note for the same reason.
+ */
+export async function fetchPackageOrg(
+  registryUrl: string,
+  packageId: string,
+): Promise<RegistryOrg | null> {
+  if (!APP_ID_RE.test(packageId)) return null;
+  try {
+    const url = new URL("/api/v2/orgs", registryUrl);
+    url.searchParams.set("package", packageId);
+    const res = await fetch(url.toString(), {
+      headers: { "Content-Type": "application/json" },
+    });
+    if (!res.ok) return null;
+    const body = await res.json();
+    return body && typeof body === "object" && body.id ? (body as RegistryOrg) : null;
+  } catch {
+    return null;
+  }
+}

@@ -166,6 +166,55 @@ test.describe("Marketplace – install flow", () => {
     await expect(trigger).toContainText("0.3.0");
   });
 
+  test("the application page names the organization that published the app", async ({ page }) => {
+    await mockRegistryAPIs(page);
+    await setupAuthenticatedPage(page);
+    await navigateVia(page, "Marketplace");
+    await page.locator("[data-testid='app-card']", { hasText: "Only Peers Chat" }).click();
+
+    const org = page.getByTestId("app-detail-org");
+    await expect(org).toBeVisible();
+    await expect(org).toContainText("Calimero Network");
+    await expect(org).toContainText("calimero-network");
+  });
+
+  test("an app with no organization shows no Organization section", async ({ page }) => {
+    // ⚠️ `null` IS A NORMAL ANSWER — a package owned by an individual rather
+    // than an org. Rendering a heading over a blank row is the failure mode
+    // this guards.
+    await mockRegistryAPIs(page);
+    await setupAuthenticatedPage(page);
+    await navigateVia(page, "Marketplace");
+    await page.locator("[data-testid='app-card']", { hasText: "Blockchain Demo" }).click();
+
+    await expect(page.getByTestId("app-detail-page")).toBeVisible();
+    await expect(page.getByTestId("app-detail-org")).toHaveCount(0);
+    await expect(page.getByText("Organization")).toHaveCount(0);
+  });
+
+  test("an organization body with no name is hidden, not rendered as an empty row", async ({ page }) => {
+    // ⚠️ THIS IS WHY THE GUARD IS `org?.name` AND NOT `org`. The lookup can
+    // answer 200 with a body that carries only an id — the registry's own app
+    // page carries the same note — and truthiness alone would then draw an
+    // "Organization" heading over a blank row with an arrow on the end of it.
+    await mockRegistryAPIs(page);
+    await page.route(
+      (url) => url.pathname.endsWith("/api/v2/orgs"),
+      (route) =>
+        route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ id: "nameless-org" }),
+        }),
+    );
+    await setupAuthenticatedPage(page);
+    await navigateVia(page, "Marketplace");
+    await page.locator("[data-testid='app-card']", { hasText: "Only Peers Chat" }).click();
+
+    await expect(page.getByTestId("app-detail-page")).toBeVisible();
+    await expect(page.getByTestId("app-detail-org")).toHaveCount(0);
+  });
+
   test("the application page carries the structured metadata the card list never showed", async ({ page }) => {
     await mockRegistryAPIs(page);
     await setupAuthenticatedPage(page);

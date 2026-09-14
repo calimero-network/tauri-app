@@ -6,6 +6,8 @@ import {
   Code2,
   Download,
   ExternalLink,
+  ArrowRight,
+  Building2,
   ImageOff,
   Monitor,
   RefreshCw,
@@ -16,7 +18,14 @@ import AppIcon from "../components/AppIcon";
 import VersionSelect from "../components/VersionSelect";
 import { VerifiedMark } from "../components/AppCard";
 import { formatBytes, formatCategory, formatRelativeDate, shortenKey } from "../utils/appCards";
-import { fetchPackageAssets, type AppSummary, type PackageAsset, type VersionInfo } from "../utils/registry";
+import {
+  fetchPackageAssets,
+  fetchPackageOrg,
+  type AppSummary,
+  type PackageAsset,
+  type RegistryOrg,
+  type VersionInfo,
+} from "../utils/registry";
 import "./AppDetail.css";
 
 export interface DetailApp extends AppSummary {
@@ -69,6 +78,19 @@ export default function AppDetail({
       if (cancelled) return;
       setAssets(list);
       setAssetsLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [app.registry, app.id]);
+
+  // Which organization published this. ⚠️ Null for a package owned by an
+  // individual, which is a normal answer — the section hides rather than
+  // rendering an empty one.
+  const [org, setOrg] = useState<RegistryOrg | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    setOrg(null);
+    void fetchPackageOrg(app.registry, app.id).then((o) => {
+      if (!cancelled) setOrg(o);
     });
     return () => { cancelled = true; };
   }, [app.registry, app.id]);
@@ -242,6 +264,41 @@ export default function AppDetail({
           </div>
         )}
       </section>
+
+      {/* ⚠️ GATED ON `name`, NOT ON THE OBJECT. The lookup can answer with a
+          body carrying only an id, which would render as a heading over an
+          empty row. */}
+      {org?.name && (
+        <section className="app-detail-section" aria-label="Organization">
+          <p className="app-detail-section-heading">Organization</p>
+          <button
+            type="button"
+            className="app-detail-org"
+            data-testid="app-detail-org"
+            title={`Open ${org.name} on the registry`}
+            onClick={() => {
+              const base = (() => {
+                try { return new URL(app.registry).origin; }
+                catch { return app.registry.replace(/\/+$/, ""); }
+              })();
+              void invoke("open_url_in_browser", {
+                url: `${base}/orgs/${encodeURIComponent(org.id)}`,
+              });
+            }}
+          >
+            <span className="app-detail-org-avatar">
+              <Building2 size={15} aria-hidden="true" />
+            </span>
+            <span className="app-detail-org-names">
+              <span className="app-detail-org-name">{org.name}</span>
+              {org.slug && (
+                <span className="app-detail-org-slug">{org.slug}</span>
+              )}
+            </span>
+            <ArrowRight size={15} className="app-detail-org-go" aria-hidden="true" />
+          </button>
+        </section>
+      )}
 
       {(app.links?.github || app.links?.docs || app.links?.frontend) && (
         <section className="app-detail-section" aria-label="Links">

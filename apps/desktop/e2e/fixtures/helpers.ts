@@ -286,6 +286,32 @@ export async function mockSingleUseRefresh(
  * Matches `fetchAppsFromRegistry`, `fetchAppVersions`, `fetchAppManifest` in registry.ts.
  */
 export async function mockRegistryAPIs(page: Page): Promise<void> {
+  // GET /api/v2/orgs?package= — which organization published a package.
+  //
+  // ⚠️ ONE OF THE TWO FIXTURE APPS ANSWERS `null` ON PURPOSE. That is what the
+  // real registry returns for a package owned by an individual rather than an
+  // org (com.calimero.mdtest-good does it today), and it is the case the
+  // Organization section has to hide for rather than render empty.
+  await page.route(
+    (url) => url.pathname.endsWith("/api/v2/orgs"),
+    (route) => {
+      const pkg = new URL(route.request().url()).searchParams.get("package");
+      const body =
+        pkg === "only-peers-chat"
+          ? JSON.stringify({
+              id: "calimero-network",
+              name: "Calimero Network",
+              slug: "calimero-network",
+            })
+          : "null";
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body,
+      });
+    },
+  );
+
   await page.route(
     (url) => url.pathname.includes("/api/v2/bundles"),
     async (route) => {

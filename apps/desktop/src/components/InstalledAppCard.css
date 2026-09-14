@@ -1,0 +1,81 @@
+/* Installed-app card: the storefront card plus its own controls. Shares
+   AppCard.css for everything above the action row. */
+
+.installed-app-card {
+  cursor: default;
+}
+
+/* The marketplace card lifts because the whole thing is one click target. This
+   one is not clickable as a whole — its buttons are — so lifting it would
+   promise an interaction that does not exist. */
+.installed-app-card:hover {
+  transform: none;
+  border-color: var(--border-hover);
+  box-shadow: none;
+}
+
+.installed-app-version {
+  font-family: 'SF Mono', ui-monospace, Menlo, Consolas, monospace;
+  color: var(--accent-primary);
+}
+
+.installed-app-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: auto;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-color);
+}
+
+.installed-app-actions-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+/* Developer mode with more than one node running adds a picker here, so this
+   row has to survive two controls plus the More button at card width. */
+.installed-app-actions-left .app-target-select {
+  max-width: 150px;
+}
+
+.installed-app-open {
+  gap: 5px;
+  padding: 6px 12px;
+  font-size: 12px;
+}
+
+.installed-app-no-frontend {
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+}
+
+.installed-app-more {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.installed-app-more-btn {
+  padding: 6px 8px;
+}
+
+/* ⚠️ THE DROPDOWN IS DELIBERATELY NOT STYLED HERE. `.app-actions-dropdown`,
+   `.dropdown-item` and `.dropdown-divider` already live in pages/InstalledApps.css
+   and are shared with the context menu — a second copy in this file would be two
+   stylesheets describing one component, which is how they drift. */
+
+.installed-apps-grid {
+  display: grid;
+  /* Same reasoning as the marketplace grid: a minimum column width rather than
+     a fixed column count, so a card is the same size on every screen. */
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 20px;
+  max-width: 1400px;
+  width: 100%;
+  box-sizing: border-box;
+}

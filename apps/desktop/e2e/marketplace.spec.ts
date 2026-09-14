@@ -84,12 +84,65 @@ test.describe("Marketplace – install flow", () => {
 
     const chatCard = page.locator("[data-testid='app-card']", { hasText: "Only Peers Chat" });
     await expect(chatCard).toBeVisible();
-    await expect(
-      chatCard.locator("button", { hasText: "Installed" }),
-    ).toBeVisible();
-    await expect(
-      chatCard.locator("button", { hasText: "Installed" }),
-    ).toBeDisabled();
+    // A pill, not a disabled button: the card is one click target now, and a
+    // disabled button inside it could not be nested legally anyway.
+    await expect(chatCard.locator(".app-card-installed")).toHaveText(/Installed/);
+  });
+
+  test("cards render the bundle icon, not a generic glyph", async ({ page }) => {
+    // The listing drew one lucide box for every app while the registry, reading
+    // the SAME endpoint, drew real launcher icons — the mapper was dropping
+    // `metadata.icon`. Assert the <img> is really there, because the component
+    // falls back to a letter tile the moment it fails to decode.
+    await mockRegistryAPIs(page);
+    await setupAuthenticatedPage(page);
+    await navigateVia(page, "Marketplace");
+    const chatCard = page.locator("[data-testid='app-card']", { hasText: "Only Peers Chat" });
+    const icon = chatCard.locator("img.app-icon-img");
+    await expect(icon).toBeVisible();
+    await expect(icon).toHaveJSProperty("naturalWidth", 1);
+  });
+
+  test("a bundle with no icon gets the lettered fallback, not a broken image", async ({ page }) => {
+    await mockRegistryAPIs(page);
+    await setupAuthenticatedPage(page);
+    await navigateVia(page, "Marketplace");
+    const demo = page.locator("[data-testid='app-card']", { hasText: "Blockchain Demo" });
+    await expect(demo.getByTestId("app-icon-fallback")).toHaveText("B");
+    await expect(demo.locator("img.app-icon-img")).toHaveCount(0);
+  });
+
+  test("opening a card replaces the listing with the application page", async ({ page }) => {
+    await mockRegistryAPIs(page);
+    await setupAuthenticatedPage(page);
+    await navigateVia(page, "Marketplace");
+
+    await page.locator("[data-testid='app-card']", { hasText: "Only Peers Chat" }).click();
+    const detail = page.getByTestId("app-detail-page");
+    await expect(detail).toBeVisible();
+    await expect(detail).toContainText("only-peers-chat");
+    await expect(detail.getByTestId("detail-install")).toBeVisible();
+    await expect(detail.getByTestId("version-picker")).toBeVisible();
+    // The grid is REPLACED, not covered — this is a page, not a modal.
+    await expect(page.locator("[data-testid='app-card']")).toHaveCount(0);
+
+    await detail.locator(".app-detail-back").click();
+    await expect(page.locator("[data-testid='app-card']").first()).toBeVisible();
+  });
+
+  test("the application page carries the structured metadata the card list never showed", async ({ page }) => {
+    await mockRegistryAPIs(page);
+    await setupAuthenticatedPage(page);
+    await navigateVia(page, "Marketplace");
+    await page.locator("[data-testid='app-card']", { hasText: "Only Peers Chat" }).click();
+
+    const detail = page.getByTestId("app-detail-page");
+    await expect(detail).toContainText("dev1.testnet");
+    await expect(detail).toContainText("42");
+    await expect(detail).toContainText("Communication");
+    // Two DIFFERENT claims, so two separately labelled marks.
+    await expect(detail.getByLabel("Verified package")).toBeVisible();
+    await expect(detail.getByLabel("Verified author")).toBeVisible();
   });
 });
 
@@ -104,13 +157,29 @@ test.describe("Installed Applications – listing", () => {
     ).toBeVisible();
   });
 
-  test("renders installed apps in a table, with version info", async ({ page }) => {
+  test("renders installed apps as cards, with version info", async ({ page }) => {
     for (const app of MOCK_INSTALLED_APPS) {
       const meta = JSON.parse(atob(app.metadata));
       const displayName = meta.name || app.name;
-      await expect(page.locator("td", { hasText: displayName })).toBeVisible();
-      await expect(page.locator("td", { hasText: app.version })).toBeVisible();
+      const card = page.locator("[data-testid='installed-app-card']", { hasText: displayName });
+      await expect(card).toBeVisible();
+      await expect(card).toContainText(`v${app.version}`);
     }
+  });
+
+  test("cards render the bundle icon instead of a row of text", async ({ page }) => {
+    // These bundles have carried a launcher icon in their metadata all along —
+    // handleCreateLauncher already passes the same field to
+    // create_desktop_shortcut — and the table never showed it.
+    const card = page.locator("[data-testid='installed-app-card']", { hasText: "Only Peers Chat" });
+    const icon = card.locator("img.app-icon-img");
+    await expect(icon).toBeVisible();
+    await expect(icon).toHaveJSProperty("naturalWidth", 1);
+  });
+
+  test("an app with no icon falls back to a letter tile", async ({ page }) => {
+    const card = page.locator("[data-testid='installed-app-card']", { hasText: "Blockchain Demo" });
+    await expect(card.getByTestId("app-icon-fallback")).toHaveText("B");
   });
 
   test("refresh button reloads the app list", async ({ page }) => {
@@ -171,11 +240,12 @@ test.describe("Installed Applications – row variants", () => {
       page.locator(".installed-apps-header h1"),
     ).toBeVisible();
 
-    const demoRow = page.locator("tr", { hasText: "Blockchain Demo" });
-    // No frontend URL → no Open button directly in row
-    await expect(demoRow.locator('button.btn-open')).toHaveCount(0);
+    const demoRow = page.locator("[data-testid='installed-app-card']", { hasText: "Blockchain Demo" });
+    // No frontend URL → no Open button on the card
+    await expect(demoRow.getByTestId("open-app")).toHaveCount(0);
+    await expect(demoRow).toContainText("No web frontend");
     // Uninstall lives inside the More dropdown
-    await demoRow.locator('.btn-more').click();
+    await demoRow.locator('.installed-app-more-btn').click();
     await expect(page.locator('.app-actions-dropdown .dropdown-item', { hasText: "Uninstall" })).toBeVisible();
   });
 });
@@ -194,9 +264,8 @@ test.describe("Installed Applications – actions", () => {
   test("Open button is visible for apps with frontend URLs", async ({
     page,
   }) => {
-    const chatRow = page.locator("tr", { hasText: "Only Peers Chat" });
-    const openBtn = chatRow.locator('button:has-text("Open")');
-    await expect(openBtn).toBeVisible();
+    const chatRow = page.locator("[data-testid='installed-app-card']", { hasText: "Only Peers Chat" });
+    await expect(chatRow.getByTestId("open-app")).toBeVisible();
   });
 
   test("Uninstall is in dropdown for all installed apps", async ({
@@ -205,8 +274,8 @@ test.describe("Installed Applications – actions", () => {
     for (const app of MOCK_INSTALLED_APPS) {
       const meta = JSON.parse(atob(app.metadata));
       const displayName = meta.name || app.name;
-      const row = page.locator("tr", { hasText: displayName });
-      await row.locator('.btn-more').click();
+      const row = page.locator("[data-testid='installed-app-card']", { hasText: displayName });
+      await row.locator('.installed-app-more-btn').click();
       await expect(
         page.locator('.app-actions-dropdown .dropdown-item', { hasText: "Uninstall" }),
       ).toBeVisible();

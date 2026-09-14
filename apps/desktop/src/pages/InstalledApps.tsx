@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { apiClient } from "../lib/mero-client";
 import { useToast } from "../contexts/ToastContext";
-import DataTable from "../components/DataTable";
 import ContextMenu from "../components/ContextMenu";
+import InstalledAppCard from "../components/InstalledAppCard";
 import Skeleton from "../components/Skeleton";
 import { decodeMetadata, openAppFrontend, parseTauriError } from "../utils/appUtils";
 import { listInstalledApps, invalidateInstalledApps } from "../utils/installedAppsCache";
@@ -13,7 +13,7 @@ import { useNodeVersions } from "../contexts/NodeVersionsContext";
 import { useMerodStatusChanged } from "../hooks/useMerodStatusChanged";
 import { useVisiblePoll } from "../hooks/useVisiblePoll";
 import { invoke } from "@tauri-apps/api/core";
-import { RefreshCw, MoreHorizontal, Trash2, Copy, Rocket } from "lucide-react";
+import { RefreshCw, Trash2, Copy, Rocket } from "lucide-react";
 import "./InstalledApps.css";
 
 interface InstalledApplication {
@@ -207,6 +207,10 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
     setContextMenu({ x: e.clientX, y: e.clientY, app });
   }, []);
 
+  // The row whose menu is open, resolved once for the dropdown that is
+  // rendered as a sibling of the grid rather than inside a card.
+  const openMenuApp = openMenuAppId ? (apps.find((a) => a.id === openMenuAppId) ?? null) : null;
+
   return (
     <div className="installed-apps-page">
       <header className="installed-apps-header">
@@ -250,213 +254,113 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
         })()}
 
         {loading ? (
-          <div className="data-table-container data-table-compact">
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th style={{ width: '25%' }}>Name</th>
-                  <th style={{ width: '12%' }}>Version</th>
-                  <th style={{ width: '10%' }}>Size</th>
-                  <th style={{ width: '33%' }}>Description</th>
-                  <th style={{ width: '20%' }}></th>
-                </tr>
-              </thead>
-              <tbody>
-                {Array.from({ length: 8 }).map((_, i) => (
-                  <tr key={i}>
-                    <td>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
-                        <Skeleton variant="text" width={`${55 + (i % 3) * 12}%`} height="13px" />
-                        <Skeleton variant="text" width={`${35 + (i % 4) * 8}%`} height="11px" />
-                      </div>
-                    </td>
-                    <td><Skeleton variant="text" width={`${40 + (i % 3) * 15}%`} height="13px" /></td>
-                    <td><Skeleton variant="text" width={`${50 + (i % 2) * 20}%`} height="13px" /></td>
-                    <td>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
-                        <Skeleton variant="text" width={`${70 + (i % 3) * 10}%`} height="13px" />
-                        <Skeleton variant="text" width={`${45 + (i % 4) * 10}%`} height="13px" />
-                      </div>
-                    </td>
-                    <td>
-                      <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end' }}>
-                        <Skeleton variant="rectangular" width="52px" height="26px" borderRadius="6px" />
-                        <Skeleton variant="rectangular" width="28px" height="26px" borderRadius="6px" />
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="installed-apps-grid">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <div key={i} className="app-card installed-app-card" aria-hidden>
+                <div className="app-card-top">
+                  <Skeleton variant="rectangular" width="48px" height="48px" borderRadius="12px" />
+                  <div className="app-card-headings">
+                    <Skeleton variant="text" width={`${55 + (i % 3) * 12}%`} height="14px" />
+                    <Skeleton variant="text" width={`${70 + (i % 4) * 6}%`} height="11px" />
+                  </div>
+                </div>
+                <Skeleton variant="text" width="100%" height="12px" />
+                <Skeleton variant="text" width={`${60 + (i % 3) * 10}%`} height="12px" />
+                <div className="installed-app-actions">
+                  <Skeleton variant="rectangular" width="72px" height="28px" borderRadius="6px" />
+                  <Skeleton variant="rectangular" width="32px" height="28px" borderRadius="6px" />
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : apps.length === 0 ? (
+          <div className="empty-state">
+            <p>No applications installed.</p>
+            <p>Visit the <a href="#marketplace">Marketplace</a> to install applications.</p>
           </div>
         ) : (
-          <DataTable
-            data={apps}
-            compact
-            onRowContextMenu={handleRowContextMenu}
-            columns={[
-              {
-                key: 'name',
-                label: 'Name',
-                sortable: true,
-                width: '25%',
-                sortValue: (app) => {
-                  const metadata = decodeMetadata(app.metadata);
-                  return metadata?.name || app.name || app.id || '';
-                },
-                render: (app) => {
-                  const metadata = decodeMetadata(app.metadata);
-                  const appName = metadata?.name || app.name || app.id;
-                  return (
-                    <div className="table-cell-name">
-                      <div className="table-cell-primary">{appName}</div>
-                      <div className="table-cell-secondary">ID: {app.id ? `${app.id.substring(0, 16)}...` : 'N/A'}</div>
-                    </div>
-                  );
-                },
-              },
-              {
-                key: 'version',
-                label: 'Version',
-                sortable: true,
-                width: '12%',
-                sortValue: (app) => {
-                  const metadata = decodeMetadata(app.metadata);
-                  return metadata?.version || app.version || "Unknown";
-                },
-                render: (app) => {
-                  const metadata = decodeMetadata(app.metadata);
-                  return metadata?.version || app.version || "Unknown";
-                },
-              },
-              {
-                key: 'size',
-                label: 'Size',
-                sortable: true,
-                width: '10%',
-                sortValue: (app) => app.size ?? 0,
-                render: (app) => {
-                  if (!app.size) return '—';
-                  const sizeKB = app.size / 1024;
-                  return sizeKB < 1024 ? `${sizeKB.toFixed(2)} KB` : `${(sizeKB / 1024).toFixed(2)} MB`;
-                },
-              },
-              {
-                key: 'description',
-                label: 'Description',
-                sortable: false,
-                width: '33%',
-                render: (app) => {
-                  const metadata = decodeMetadata(app.metadata);
-                  return metadata?.description ? (
-                    <div className="table-cell-description" title={metadata.description}>
-                      {metadata.description.length > 80
-                        ? `${metadata.description.substring(0, 80)}...`
-                        : metadata.description}
-                    </div>
-                  ) : (
-                    <span className="table-cell-empty">—</span>
-                  );
-                },
-              },
-              {
-                key: 'actions',
-                label: '',
-                sortable: false,
-                width: '20%',
-                render: (app) => {
-                  const metadata = decodeMetadata(app.metadata);
-                  const appName = metadata?.name || app.name || app.id;
-                  const frontendUrl = metadata?.links?.frontend;
-
-                  return (
-                    <div className="table-cell-actions">
-                      {frontendUrl && developerMode && runningNodes.length > 1 && (
-                        <select
-                          className="app-target-select"
-                          value={targetFor(app.id) ?? ''}
-                          disabled={!isolationOk}
-                          title={
-                            isolationOk
-                              ? "Which node this app runs against"
-                              : "Needs macOS 14 or newer, or Linux - without isolated webview storage two nodes would share one session"
-                          }
-                          onClick={(e) => e.stopPropagation()}
-                          onChange={(e) => setTargets((t) => ({ ...t, [app.id]: e.target.value }))}
-                        >
-                          {runningNodes.map((n) => (
-                            <option key={n.pid} value={optionValue(n)}>
-                              {n.node_name} - {formatVersionLabel(nodeVersions[n.node_name] ?? BUNDLED_VERSION_ID, bundledVersion)}
-                            </option>
-                          ))}
-                        </select>
-                      )}
-                      {frontendUrl && (
-                        <button
-                          onClick={(e) => { e.stopPropagation(); handleOpenFrontend(frontendUrl, appName, app.id, metadata?.icon); }}
-                          className="btn-open"
-                        >
-                          Open
-                        </button>
-                      )}
-                      <div className="app-actions-more" onClick={(e) => e.stopPropagation()}>
-                        <button
-                          className="btn-more"
-                          title="More options"
-                          onClick={(e) => {
-                            const rect = e.currentTarget.getBoundingClientRect();
-                            setMenuPos({ top: rect.bottom + 4, right: window.innerWidth - rect.right });
-                            setOpenMenuAppId(openMenuAppId === app.id ? null : app.id);
-                          }}
-                        >
-                          <MoreHorizontal size={15} />
-                        </button>
-                        {openMenuAppId === app.id && menuPos && (
-                          <div
-                            className="app-actions-dropdown"
-                            style={{ position: 'fixed', top: menuPos.top, right: menuPos.right }}
-                          >
-                            <button
-                              className="dropdown-item"
-                              onClick={() => { setOpenMenuAppId(null); navigator.clipboard.writeText(app.id); toast.success('ID copied'); }}
-                            >
-                              <Copy size={13} />
-                              Copy ID
-                            </button>
-                            {frontendUrl && (
-                              <button
-                                className="dropdown-item"
-                                onClick={() => { setOpenMenuAppId(null); handleCreateLauncher(frontendUrl, appName, app.id, metadata?.icon); }}
-                              >
-                                <Rocket size={13} />
-                                Create launcher
-                              </button>
-                            )}
-                            <div className="dropdown-divider" />
-                            <button
-                              className="dropdown-item dropdown-item-danger"
-                              onClick={() => { setOpenMenuAppId(null); handleUninstall(app.id, appName); }}
-                            >
-                              <Trash2 size={13} />
-                              Uninstall
-                            </button>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  );
-                },
-              },
-            ]}
-            keyExtractor={(app, index) => app.id || app.name || app.source || `installed-${index}`}
-            emptyMessage={
-              <div className="empty-state">
-                <p>No applications installed.</p>
-                <p>Visit the <a href="#marketplace">Marketplace</a> to install applications.</p>
-              </div>
-            }
-          />
+          <div className="installed-apps-grid" data-testid="installed-apps-grid">
+            {apps.map((app, index) => {
+              const metadata = decodeMetadata(app.metadata);
+              const appName = metadata?.name || app.name || app.id;
+              const frontendUrl = metadata?.links?.frontend;
+              return (
+                <InstalledAppCard
+                  key={app.id || app.name || app.source || `installed-${index}`}
+                  app={app}
+                  menuOpen={openMenuAppId === app.id}
+                  onContextMenu={(e: React.MouseEvent) => handleRowContextMenu(e, app)}
+                  onToggleMenu={(e: React.MouseEvent) => {
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    setMenuPos({ top: rect.bottom + 4, right: window.innerWidth - rect.right });
+                    setOpenMenuAppId(openMenuAppId === app.id ? null : app.id);
+                  }}
+                  onOpen={(url: string) => handleOpenFrontend(url, appName, app.id, metadata?.icon)}
+                  nodeSelect={
+                    frontendUrl && developerMode && runningNodes.length > 1 ? (
+                      <select
+                        className="app-target-select"
+                        value={targetFor(app.id) ?? ''}
+                        disabled={!isolationOk}
+                        title={
+                          isolationOk
+                            ? "Which node this app runs against"
+                            : "Needs macOS 14 or newer, or Linux - without isolated webview storage two nodes would share one session"
+                        }
+                        onClick={(e) => e.stopPropagation()}
+                        onChange={(e) => setTargets((t) => ({ ...t, [app.id]: e.target.value }))}
+                      >
+                        {runningNodes.map((n) => (
+                          <option key={n.pid} value={optionValue(n)}>
+                            {n.node_name} - {formatVersionLabel(nodeVersions[n.node_name] ?? BUNDLED_VERSION_ID, bundledVersion)}
+                          </option>
+                        ))}
+                      </select>
+                    ) : undefined
+                  }
+                />
+              );
+            })}
+          </div>
         )}
+
+        {/* Rendered OUTSIDE the grid on purpose — see InstalledAppCard. */}
+        {openMenuApp && menuPos && (() => {
+          const metadata = decodeMetadata(openMenuApp.metadata);
+          const appName = metadata?.name || openMenuApp.name || openMenuApp.id;
+          const frontendUrl = metadata?.links?.frontend;
+          return (
+            <div
+              className="app-actions-dropdown"
+              style={{ position: 'fixed', top: menuPos.top, right: menuPos.right }}
+            >
+              <button
+                className="dropdown-item"
+                onClick={() => { setOpenMenuAppId(null); navigator.clipboard.writeText(openMenuApp.id); toast.success('ID copied'); }}
+              >
+                <Copy size={13} />
+                Copy ID
+              </button>
+              {frontendUrl && (
+                <button
+                  className="dropdown-item"
+                  onClick={() => { setOpenMenuAppId(null); handleCreateLauncher(frontendUrl, appName, openMenuApp.id, metadata?.icon); }}
+                >
+                  <Rocket size={13} />
+                  Create launcher
+                </button>
+              )}
+              <div className="dropdown-divider" />
+              <button
+                className="dropdown-item dropdown-item-danger"
+                onClick={() => { setOpenMenuAppId(null); handleUninstall(openMenuApp.id, appName); }}
+              >
+                <Trash2 size={13} />
+                Uninstall
+              </button>
+            </div>
+          );
+        })()}
       </main>
     </div>
   );

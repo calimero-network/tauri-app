@@ -1231,7 +1231,16 @@
 /* App installation step styles */
 .onboarding-apps-grid {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  /* ⚠️ `minmax(0, 1fr)`, not `1fr`. A grid item's default `min-width` is
+     `auto` — its MIN-CONTENT width — so a `1fr` track cannot shrink below the
+     widest unbreakable thing inside it. A package id like
+     `com.calimero.mdtest-good` is one long token, so both tracks grew past
+     their share: the grid measured 500px while each card rendered 271px
+     (2 x 271 + 16 gap = 558). The row overflowed the panel on the right,
+     which reads as the whole block being pushed off-centre with too much
+     padding on the left. The card's own ellipsis rules could not help,
+     because the track had already been sized to fit the text. */
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
   margin-top: 24px;
   width: 100%;
@@ -1268,6 +1277,9 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
+  /* Belt and braces with the track's `minmax(0, …)`: as a flex container this
+     is also a grid ITEM, and both defaults resolve to its content width. */
+  min-width: 0;
   transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);

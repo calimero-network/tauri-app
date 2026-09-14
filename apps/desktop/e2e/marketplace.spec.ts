@@ -187,6 +187,56 @@ test.describe("Marketplace – install flow", () => {
     await expect(page.getByText("No preview images published")).toHaveCount(0);
   });
 
+  test("clicking a preview opens it full screen, and it really is full screen", async ({ page }) => {
+    await mockRegistryAPIs(page);
+    await setupAuthenticatedPage(page);
+    await navigateVia(page, "Marketplace");
+    await page.locator("[data-testid='app-card']", { hasText: "Only Peers Chat" }).click();
+    await page.getByTestId("app-detail-shot").first().click();
+
+    const box = page.getByTestId("lightbox");
+    await expect(box).toBeVisible();
+
+    // ⚠️ THE ASSERTION THAT EARNS ITS KEEP. The preview strip is a horizontal
+    // scroll container, so an overlay rendered inside it is CLIPPED to one
+    // tile — still "visible" while covering a 260x160 box. This checks it
+    // fills the viewport, which is what the portal is for.
+    const vp = page.viewportSize()!;
+    const rect = (await box.boundingBox())!;
+    expect(rect.width).toBeGreaterThanOrEqual(vp.width - 1);
+    expect(rect.height).toBeGreaterThanOrEqual(vp.height - 1);
+    await expect(box).toHaveJSProperty("parentElement.tagName", "BODY");
+    await expect(page.getByTestId("lightbox-image")).toHaveJSProperty("naturalWidth", 1);
+  });
+
+  test("the full-screen preview steps between images and closes", async ({ page }) => {
+    await mockRegistryAPIs(page);
+    await setupAuthenticatedPage(page);
+    await navigateVia(page, "Marketplace");
+    await page.locator("[data-testid='app-card']", { hasText: "Only Peers Chat" }).click();
+    await page.getByTestId("app-detail-shot").first().click();
+
+    const box = page.getByTestId("lightbox");
+    await expect(box).toContainText("1 / 2");
+    await page.getByTestId("lightbox-next").click();
+    await expect(box).toContainText("2 / 2");
+    // Wrapping, so the arrow never reads as a dead key at the end of the set.
+    await page.getByTestId("lightbox-next").click();
+    await expect(box).toContainText("1 / 2");
+
+    await page.keyboard.press("ArrowRight");
+    await expect(box).toContainText("2 / 2");
+    await page.keyboard.press("Escape");
+    await expect(box).toHaveCount(0);
+
+    await page.getByTestId("app-detail-shot").first().click();
+    // A click on the IMAGE must not close it — only the backdrop.
+    await page.getByTestId("lightbox-image").click();
+    await expect(box).toBeVisible();
+    await page.mouse.click(8, 8);
+    await expect(box).toHaveCount(0);
+  });
+
   test("an app with no preview images says so", async ({ page }) => {
     await mockRegistryAPIs(page);
     await setupAuthenticatedPage(page);

@@ -17,6 +17,7 @@ import { invoke } from "@tauri-apps/api/core";
 import AppIcon from "../components/AppIcon";
 import VersionSelect from "../components/VersionSelect";
 import { VerifiedMark } from "../components/AppCard";
+import { Lightbox } from "../components/Lightbox";
 import { formatBytes, formatCategory, formatRelativeDate, shortenKey } from "../utils/appCards";
 import {
   fetchPackageAssets,
@@ -71,6 +72,8 @@ export default function AppDetail({
   // empty case rather than an empty region.
   const [assets, setAssets] = useState<PackageAsset[]>([]);
   const [assetsLoading, setAssetsLoading] = useState(true);
+  /** Index of the preview opened full screen, or null when the strip is idle. */
+  const [lightboxAt, setLightboxAt] = useState<number | null>(null);
   useEffect(() => {
     let cancelled = false;
     setAssetsLoading(true);
@@ -239,11 +242,15 @@ export default function AppDetail({
         ) : assets.length > 0 ? (
           <div className="app-detail-preview-strip">
             {assets.map((a, i) => (
+              // Opens in place rather than kicking the user out to a browser
+              // tab showing a bare image on the registry's origin.
               <button
-                key={a.id ?? a.url ?? i}
+                key={a.id || a.url || i}
                 type="button"
                 className="app-detail-shot"
-                onClick={() => a.url && void invoke("open_url_in_browser", { url: a.url })}
+                data-testid="app-detail-shot"
+                aria-label={`Open ${a.alt ?? `screenshot ${i + 1}`} full screen`}
+                onClick={() => setLightboxAt(i)}
               >
                 <img
                   src={a.thumbUrl ?? a.url}
@@ -334,6 +341,20 @@ export default function AppDetail({
             </span>
           ))}
         </section>
+      )}
+
+      {lightboxAt !== null && (
+        <Lightbox
+          items={assets.map((a, i) => ({
+            id: a.id || String(i),
+            // ⚠️ THE FULL IMAGE, not the thumbnail the strip renders.
+            url: a.url ?? "",
+            alt: a.alt ?? `${title} screenshot ${i + 1}`,
+          }))}
+          index={lightboxAt}
+          onIndexChange={setLightboxAt}
+          onClose={() => setLightboxAt(null)}
+        />
       )}
     </div>
   );

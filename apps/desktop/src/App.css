@@ -478,7 +478,13 @@
 /* Owned here: home renders this grid too, and page CSS loads lazily. */
 .apps-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  /* ⚠️ auto-fill + a MINIMUM, not `repeat(4, 1fr)`.
+     A fixed four-column track makes every card as wide as a quarter of the
+     window, so the same card is a different width on every screen and the
+     description clamp cuts at a different word each time. A minimum column
+     width lets the count fall from four to one on its own, which is why the
+     three breakpoint overrides that used to follow this rule are gone. */
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
   gap: 20px;
   max-width: 1400px;
   margin: 0 auto;
@@ -487,21 +493,8 @@
   animation: fadeUp 0.5s ease-out 0.2s both;
 }
 
-@media (max-width: 1400px) {
-  .apps-grid {
-    grid-template-columns: repeat(3, minmax(280px, 1fr));
-  }
-}
-
-@media (max-width: 1000px) {
-  .apps-grid {
-    grid-template-columns: repeat(2, minmax(280px, 1fr));
-  }
-}
-
 @media (max-width: 768px) {
   .apps-grid {
-    grid-template-columns: 1fr;
     max-width: 100%;
   }
 }

@@ -1,10 +1,21 @@
-import React from "react";
-import { ArrowLeft, CheckCircle2, Download, ExternalLink, RefreshCw } from "lucide-react";
+import React, { useEffect, useState } from "react";
+import {
+  ArrowLeft,
+  BookOpen,
+  CheckCircle2,
+  Code2,
+  Download,
+  ExternalLink,
+  ImageOff,
+  Monitor,
+  RefreshCw,
+  ShieldCheck,
+} from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import AppIcon from "../components/AppIcon";
 import { VerifiedMark } from "../components/AppCard";
 import { formatBytes, formatCategory, formatRelativeDate, shortenKey } from "../utils/appCards";
-import type { AppSummary, VersionInfo } from "../utils/registry";
+import { fetchPackageAssets, type AppSummary, type PackageAsset, type VersionInfo } from "../utils/registry";
 import "./AppDetail.css";
 
 export interface DetailApp extends AppSummary {
@@ -45,10 +56,28 @@ export default function AppDetail({
   onInstall: () => void;
   onBack: () => void;
 }) {
+  // Preview images. ⚠️ Every published package returns an empty list today —
+  // the asset bucket is still open infrastructure — so this renders a stated
+  // empty case rather than an empty region.
+  const [assets, setAssets] = useState<PackageAsset[]>([]);
+  const [assetsLoading, setAssetsLoading] = useState(true);
+  useEffect(() => {
+    let cancelled = false;
+    setAssetsLoading(true);
+    void fetchPackageAssets(app.registry, app.id).then((list) => {
+      if (cancelled) return;
+      setAssets(list);
+      setAssetsLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [app.registry, app.id]);
+
   const title = app.alias || app.name;
   const author = app.author ?? shortenKey(app.developer_pubkey);
   const category = formatCategory(app.category);
-  const bytes = formatBytes(app.installSize);
+  // ⚠️ `installSize ?? wasm.size` — see AppCard. `installSize` is null on every
+  // published bundle; `wasm.size` is populated on every one.
+  const bytes = formatBytes(app.installSize ?? app.wasm?.size);
   const when = formatRelativeDate(app.publishedAt);
   const tags = (app.tags ?? []).filter((t) => t && t !== app.category);
 
@@ -81,7 +110,24 @@ export default function AppDetail({
   if (category) rows.push({ label: "Category", value: category });
   rows.push({ label: "Downloads", value: (app.downloads ?? 0).toLocaleString() });
   if (bytes) rows.push({ label: "Size", value: bytes });
+  if (app.minRuntimeVersion) {
+    rows.push({
+      label: "Requires node",
+      value: <span className="app-detail-mono">{app.minRuntimeVersion}</span>,
+    });
+  }
   if (when) rows.push({ label: "Published", value: when });
+  if (app.signerId) {
+    rows.push({
+      label: "Signed by",
+      value: (
+        <span className="app-detail-signer">
+          <ShieldCheck size={13} aria-hidden="true" />
+          <span className="app-detail-mono">{app.signerId}</span>
+        </span>
+      ),
+    });
+  }
 
   return (
     <div className="app-detail-page" data-testid="app-detail-page">
@@ -162,6 +208,62 @@ export default function AppDetail({
         </button>
       </section>
 
+      {/* ⚠️ A STATED EMPTY CASE, NOT A HIDDEN SECTION. Every published package
+          returns `assets: []` right now (the bucket is still open infra), so a
+          section that simply vanished would make every app page look
+          unfinished and give nobody a reason to upload one. */}
+      <section className="app-detail-section" aria-label="Preview">
+        <p className="app-detail-section-heading">Preview</p>
+        {assetsLoading ? (
+          <div className="app-detail-preview-empty">
+            <RefreshCw size={16} className="spinning" /> Loading preview…
+          </div>
+        ) : assets.length > 0 ? (
+          <div className="app-detail-preview-strip">
+            {assets.map((a, i) => (
+              <button
+                key={a.id ?? a.url ?? i}
+                type="button"
+                className="app-detail-shot"
+                onClick={() => a.url && void invoke("open_url_in_browser", { url: a.url })}
+              >
+                <img
+                  src={a.thumbnailUrl ?? a.url}
+                  alt={a.alt ?? `${title} screenshot ${i + 1}`}
+                  loading="lazy"
+                  decoding="async"
+                />
+              </button>
+            ))}
+          </div>
+        ) : (
+          <div className="app-detail-preview-empty">
+            <ImageOff size={18} aria-hidden="true" />
+            <span>
+              No preview images published for this app yet. Publishers add them
+              on the registry.
+            </span>
+          </div>
+        )}
+      </section>
+
+      {(app.links?.github || app.links?.docs || app.links?.frontend) && (
+        <section className="app-detail-section" aria-label="Links">
+          <p className="app-detail-section-heading">Links</p>
+          <div className="app-detail-links">
+            {app.links?.frontend && (
+              <LinkCard icon={Monitor} label="Try it out on web" href={app.links.frontend} />
+            )}
+            {app.links?.github && (
+              <LinkCard icon={Code2} label="Source code" href={app.links.github} />
+            )}
+            {app.links?.docs && (
+              <LinkCard icon={BookOpen} label="Documentation" href={app.links.docs} />
+            )}
+          </div>
+        </section>
+      )}
+
       <section className="app-detail-meta" aria-label="Details">
         {rows.map((row) => (
           <div className="app-detail-meta-row" key={row.label}>
@@ -181,5 +283,17 @@ export default function AppDetail({
         </section>
       )}
     </div>
+  );
+}
+
+/** One outbound link, opened in the user's browser rather than in the app. */
+function LinkCard({ icon: Icon, label, href }: { icon: typeof Monitor; label: string; href: string }) {
+  return (
+    <button type="button" className="app-detail-link-card" title={href}
+      onClick={() => void invoke("open_url_in_browser", { url: href })}>
+      <Icon size={15} aria-hidden="true" />
+      <span className="app-detail-link-label">{label}</span>
+      <ExternalLink size={12} aria-hidden="true" />
+    </button>
   );
 }

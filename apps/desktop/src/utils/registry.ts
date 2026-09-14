@@ -77,6 +77,26 @@ export interface AppSummary {
   tags?: string[];
   /** Resolved browse category — see `resolveCategory`. */
   category?: Category;
+  /** `links` — the app's own frontend, source and docs. Any may be absent. */
+  links?: { frontend?: string; github?: string; docs?: string };
+  /**
+   * The runtime this bundle demands.
+   *
+   * ⚠️ WORTH SURFACING, NOT JUST STORING. Core refuses to install a bundle
+   * whose floor is above the node, and today the only way a user learns that is
+   * by pressing Install and reading a toast.
+   */
+  minRuntimeVersion?: string;
+  /**
+   * The compiled module. ⚠️ ITS SIZE IS THE ONLY REAL SIZE THE REGISTRY
+   * SERVES: `installSize` is null on all 21 published bundles while
+   * `wasm.size` is populated on every one.
+   */
+  wasm?: { hash?: string; path?: string; size?: number };
+  abi?: { hash?: string; path?: string; size?: number };
+  signature?: { algorithm?: string; publicKey?: string; signature?: string };
+  /** `did:key:…` of whoever signed the bundle. */
+  signerId?: string;
 }
 
 export interface VersionInfo {
@@ -184,6 +204,11 @@ export async function fetchAppsFromRegistry(
     publishedAt: bundle.publishedAt ?? null,
     tags: Array.isArray(bundle.metadata?.tags) ? bundle.metadata.tags : [],
     category: resolveCategory(bundle.metadata?.category, bundle.metadata?.tags),
+    links: bundle.links,
+    wasm: bundle.wasm,
+    abi: bundle.abi,
+    signature: bundle.signature,
+    signerId: bundle.signerId,
   }));
 }
 
@@ -426,3 +451,42 @@ export async function fetchAppsFromAllRegistries(
     .map((result) => result.value);
 }
 
+
+/** One preview image the registry holds for a package. */
+export interface PackageAsset {
+  id?: string;
+  url?: string;
+  thumbnailUrl?: string;
+  contentType?: string;
+  alt?: string;
+}
+
+/**
+ * Preview images for a package.
+ *
+ * ⚠️ EXPECT AN EMPTY LIST. Measured against apps.calimero.network: every
+ * published package returns `assets: []` today — the asset bucket is still open
+ * infrastructure work (plan.MD item 4). So the caller renders an honest "no
+ * preview" state rather than an empty region, and a 404 from an older registry
+ * is an empty list, not an error worth surfacing.
+ */
+export async function fetchPackageAssets(
+  registryUrl: string,
+  packageId: string,
+): Promise<PackageAsset[]> {
+  if (!APP_ID_RE.test(packageId)) return [];
+  try {
+    const url = new URL(
+      `/api/v2/packages/${encodeURIComponent(packageId)}/assets`,
+      registryUrl,
+    );
+    const res = await fetch(url.toString(), {
+      headers: { "Content-Type": "application/json" },
+    });
+    if (!res.ok) return [];
+    const body = await res.json();
+    return Array.isArray(body?.assets) ? body.assets : [];
+  } catch {
+    return [];
+  }
+}

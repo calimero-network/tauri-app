@@ -2,6 +2,45 @@
  * Registry client utility for fetching applications from configured registries
  */
 
+/** The ten browse categories the registry enforces at upload. */
+export const CATEGORIES = [
+  "games",
+  "productivity",
+  "communication",
+  "social",
+  "art-design",
+  "media",
+  "planning",
+  "security",
+  "utilities",
+  "developer-tools",
+] as const;
+
+export type Category = (typeof CATEGORIES)[number];
+
+/**
+ * Work out which browse category a bundle belongs to.
+ *
+ * ⚠️ THE REGISTRY SERVES NO TOP-LEVEL `category` ON ANY BUNDLE TODAY (measured
+ * against apps.calimero.network: 0 of 21), so reading one directly yields a card
+ * that never shows a category. What bundles DO carry is `metadata.tags` (19 of
+ * 21), and some of those tags are category names — `developer-tools` is in the
+ * wild right now. So an explicit field wins when present, and otherwise the
+ * first tag that names a real category is promoted. A tag that is not a
+ * category ("multiplayer", "crdt") is left alone: it is a keyword, not a shelf.
+ */
+export function resolveCategory(explicit?: unknown, tags?: unknown): Category | undefined {
+  const isCategory = (v: unknown): v is Category =>
+    typeof v === "string" && (CATEGORIES as readonly string[]).includes(v);
+
+  if (isCategory(explicit)) return explicit;
+  if (Array.isArray(tags)) {
+    const hit = tags.find(isCategory);
+    if (hit) return hit;
+  }
+  return undefined;
+}
+
 export interface AppSummary {
   id: string;
   name: string;
@@ -12,6 +51,52 @@ export interface AppSummary {
   description?: string;
   author?: string;
   downloads?: number;
+  /**
+   * `metadata.icon` — a `data:image/png;base64,…` URI carried inside the signed
+   * bundle. ⚠️ NOT NEW DATA: this is the same field this app already passes to
+   * `create_desktop_shortcut` when it writes a launcher, so it was being used
+   * for the dock and dropped on the floor for the UI.
+   *
+   * Absent on 3 of the 21 published bundles, so a fallback is a NORMAL state.
+   */
+  icon?: string;
+  /**
+   * An admin approved THIS PACKAGE. ⚠️ Not the publisher — see
+   * `publisherVerified`. Two separate claims; do not render one value twice.
+   */
+  verified?: boolean;
+  /** The account that published it is verified. */
+  publisherVerified?: boolean;
+  /**
+   * Size of the `.mpk` in bytes. ⚠️ `null` for every bundle published before
+   * the metadata policy shipped — which today is ALL 21. Render nothing.
+   */
+  installSize?: number | null;
+  /** ISO timestamp stamped at upload; null for all but one bundle today. */
+  publishedAt?: string | null;
+  tags?: string[];
+  /** Resolved browse category — see `resolveCategory`. */
+  category?: Category;
+  /** `links` — the app's own frontend, source and docs. Any may be absent. */
+  links?: { frontend?: string; github?: string; docs?: string };
+  /**
+   * The runtime this bundle demands.
+   *
+   * ⚠️ WORTH SURFACING, NOT JUST STORING. Core refuses to install a bundle
+   * whose floor is above the node, and today the only way a user learns that is
+   * by pressing Install and reading a toast.
+   */
+  minRuntimeVersion?: string;
+  /**
+   * The compiled module. ⚠️ ITS SIZE IS THE ONLY REAL SIZE THE REGISTRY
+   * SERVES: `installSize` is null on all 21 published bundles while
+   * `wasm.size` is populated on every one.
+   */
+  wasm?: { hash?: string; path?: string; size?: number };
+  abi?: { hash?: string; path?: string; size?: number };
+  signature?: { algorithm?: string; publicKey?: string; signature?: string };
+  /** `did:key:…` of whoever signed the bundle. */
+  signerId?: string;
 }
 
 export interface VersionInfo {
@@ -95,6 +180,10 @@ export async function fetchAppsFromRegistry(
   const bundlesArray = Array.isArray(bundles) ? bundles : [];
 
   // Transform V2 BundleManifest to AppSummary format
+  // ⚠️ EVERY FIELD THE CARD NEEDS IS ALREADY ON THE WIRE. This mapper used to
+  // keep six keys and drop the rest, which is the whole reason the marketplace
+  // rendered a generic box glyph for every app while the registry — reading the
+  // same endpoint — rendered real launcher icons.
   return bundlesArray.map((bundle: any) => ({
     id: bundle.package,
     name: bundle.metadata?.name || bundle.package,
@@ -106,6 +195,20 @@ export async function fetchAppsFromRegistry(
     author: bundle.metadata?.author,
     minRuntimeVersion: bundle.minRuntimeVersion,
     downloads: bundle.downloads ?? 0,
+    icon: bundle.metadata?.icon,
+    verified: bundle.verified === true,
+    publisherVerified: bundle.publisherVerified === true,
+    // `?? null`, not `|| undefined`: absent and zero are different answers and
+    // the card renders nothing for the first.
+    installSize: bundle.installSize ?? null,
+    publishedAt: bundle.publishedAt ?? null,
+    tags: Array.isArray(bundle.metadata?.tags) ? bundle.metadata.tags : [],
+    category: resolveCategory(bundle.metadata?.category, bundle.metadata?.tags),
+    links: bundle.links,
+    wasm: bundle.wasm,
+    abi: bundle.abi,
+    signature: bundle.signature,
+    signerId: bundle.signerId,
   }));
 }
 
@@ -348,3 +451,140 @@ export async function fetchAppsFromAllRegistries(
     .map((result) => result.value);
 }
 
+
+/** One preview image the registry holds for a package. */
+export interface PackageAsset {
+  id: string;
+  /** `image` today; anything else is not renderable as a preview. */
+  kind?: string;
+  contentType?: string;
+  bytes?: number;
+  alt?: string;
+  order?: number;
+  /**
+   * Absolute URL of the full image.
+   *
+   * ⚠️ ABSOLUTE BECAUSE `fetchPackageAssets` MADE IT SO. The registry answers
+   * with a ROOT-RELATIVE path — `/api/v2/packages/<pkg>/assets/<id>/raw` — and
+   * putting that straight into an <img src> resolves it against whatever
+   * origin is running the app, not the registry, so every preview renders
+   * broken. Resolved once here so no caller can forget.
+   */
+  url?: string;
+  /**
+   * Absolute URL of the thumbnail. ⚠️ The wire field is `thumbUrl`, NOT
+   * `thumbnailUrl` — spelling it the second way silently yields undefined on
+   * every asset and quietly falls back to the full image.
+   */
+  thumbUrl?: string;
+  /** False when the registry holds no smaller copy; `thumbUrl` then equals `url`. */
+  hasThumb?: boolean;
+}
+
+/**
+ * Preview images for a package, ready to render.
+ *
+ * Returns an empty list rather than throwing: a 404 from an older registry, a
+ * package with no images, or an unreachable host are all "nothing to show"
+ * rather than errors worth putting in front of a user.
+ */
+export async function fetchPackageAssets(
+  registryUrl: string,
+  packageId: string,
+): Promise<PackageAsset[]> {
+  if (!APP_ID_RE.test(packageId)) return [];
+  const origin = (() => {
+    try {
+      return new URL(registryUrl).origin;
+    } catch {
+      return registryUrl.replace(/\/+$/, "");
+    }
+  })();
+  // Root-relative -> absolute against the REGISTRY. Anything already absolute
+  // is left alone, so a registry that starts serving a CDN URL still works.
+  const absolute = (u?: string): string | undefined => {
+    if (!u) return undefined;
+    try {
+      return new URL(u, `${origin}/`).toString();
+    } catch {
+      return undefined;
+    }
+  };
+
+  try {
+    const url = new URL(
+      `/api/v2/packages/${encodeURIComponent(packageId)}/assets`,
+      registryUrl,
+    );
+    const res = await fetch(url.toString(), {
+      headers: { "Content-Type": "application/json" },
+    });
+    if (!res.ok) return [];
+    const body = await res.json();
+    const raw: unknown[] = Array.isArray(body?.assets) ? body.assets : [];
+    return raw
+      .map((a) => a as Record<string, unknown>)
+      // `kind` is absent on older records, so only a value that is present AND
+      // not an image disqualifies one.
+      .filter((a) => a["kind"] === undefined || a["kind"] === "image")
+      .map((a) => ({
+        id: String(a["id"] ?? ""),
+        kind: a["kind"] as string | undefined,
+        contentType: a["contentType"] as string | undefined,
+        bytes: a["bytes"] as number | undefined,
+        alt: a["alt"] as string | undefined,
+        order: a["order"] as number | undefined,
+        url: absolute(a["url"] as string | undefined),
+        thumbUrl: absolute(
+          (a["hasThumb"] ? a["thumbUrl"] : a["url"]) as string | undefined,
+        ),
+        hasThumb: a["hasThumb"] === true,
+      }))
+      .filter((a) => !!a.url)
+      // The registry gives an explicit running order; respect it rather than
+      // whatever order the store happened to return.
+      .sort((x, y) => (x.order ?? 0) - (y.order ?? 0));
+  } catch {
+    return [];
+  }
+}
+
+/** An organization as the registry models it. */
+export interface RegistryOrg {
+  id: string;
+  name?: string;
+  slug?: string;
+}
+
+/**
+ * Which organization published a package, or null when it belongs to an
+ * individual.
+ *
+ * ⚠️ NULL IS A NORMAL ANSWER, NOT A FAILURE. Measured against
+ * apps.calimero.network: the calimero-network packages resolve to an org while
+ * community-published ones (com.calimero.mdtest-good,
+ * com.calimero.mero-drive-migration-test) answer a literal `null`. So the
+ * caller hides the section rather than rendering an empty one.
+ *
+ * ⚠️ AND GATE ON `name`, NOT ON THE OBJECT. The lookup can answer with a body
+ * that carries only an id, which renders as a heading over a blank row — the
+ * registry's own app page carries the same note for the same reason.
+ */
+export async function fetchPackageOrg(
+  registryUrl: string,
+  packageId: string,
+): Promise<RegistryOrg | null> {
+  if (!APP_ID_RE.test(packageId)) return null;
+  try {
+    const url = new URL("/api/v2/orgs", registryUrl);
+    url.searchParams.set("package", packageId);
+    const res = await fetch(url.toString(), {
+      headers: { "Content-Type": "application/json" },
+    });
+    if (!res.ok) return null;
+    const body = await res.json();
+    return body && typeof body === "object" && body.id ? (body as RegistryOrg) : null;
+  } catch {
+    return null;
+  }
+}

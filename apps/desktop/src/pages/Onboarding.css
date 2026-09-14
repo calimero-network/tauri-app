@@ -1375,3 +1375,42 @@
 .apps-empty p {
   margin-bottom: 20px;
 }
+
+/* ── The install-your-first-app cards ──
+   Same identity as the Marketplace card: real launcher icon, package id, and
+   the two verified marks. This screen used to draw a box glyph for every app. */
+
+.onboarding-app-card .app-card-header {
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.onboarding-app-package {
+  font-family: 'SF Mono', ui-monospace, Menlo, Consolas, monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.onboarding-app-card .app-version {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.onboarding-app-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+}
+
+.onboarding-app-author {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}

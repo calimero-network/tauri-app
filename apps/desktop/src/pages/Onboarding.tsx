@@ -20,7 +20,9 @@ import { isCloudEnabled } from "../utils/featureFlags";
 import { fetchAppsFromAllRegistries, recordDownload, type AppSummary } from "../utils/registry";
 import { useToast } from "../contexts/ToastContext";
 import { useTheme } from "../contexts/ThemeContext";
-import { ArrowLeft, ArrowRight, Check, Package, Download, CheckCircle2, ChevronDown, ChevronUp, AlertTriangle, Settings, RefreshCw } from "lucide-react";
+import { ArrowLeft, ArrowRight, Check, Download, CheckCircle2, ChevronDown, ChevronUp, AlertTriangle, Settings, RefreshCw } from "lucide-react";
+import AppIcon from "../components/AppIcon";
+import { VerifiedMark } from "../components/AppCard";
 import calimeroLogo from "../assets/calimero-logo.svg";
 import "./Onboarding.css";
 
@@ -1293,16 +1295,40 @@ function Onboarding({ onComplete, onSettings }: OnboardingProps) {
 
                   return (
                     <div key={app.id} className="onboarding-app-card">
+                      {/* ⚠️ THE REAL LAUNCHER ICON, not a box glyph. This is
+                          the first screen anyone sees, and it was the last one
+                          still drawing a placeholder for every app while the
+                          Marketplace two clicks away drew the real thing. */}
                       <div className="app-card-header">
-                        <div className="app-icon-placeholder">
-                          <Package size={24} />
-                        </div>
+                        <AppIcon
+                          icon={app.icon}
+                          name={app.alias || app.name}
+                          seed={app.id}
+                          size={44}
+                        />
                         <div className="app-info">
-                          <h3>{app.name}</h3>
-                          <p className="app-version">v{app.latest_version}</p>
+                          <h3>{app.alias || app.name}</h3>
+                          <p className="app-version">
+                            <span className="onboarding-app-package">{app.id}</span>
+                            {app.verified && <VerifiedMark label="Verified package" />}
+                          </p>
                         </div>
                       </div>
                       <p className="app-description">{description}</p>
+                      <div className="onboarding-app-meta">
+                        <span>v{app.latest_version}</span>
+                        {app.author && (
+                          <>
+                            <span aria-hidden="true">·</span>
+                            <span className="onboarding-app-author">
+                              {app.author}
+                              {app.publisherVerified && (
+                                <VerifiedMark label="Verified author" />
+                              )}
+                            </span>
+                          </>
+                        )}
+                      </div>
                       <button
                         onClick={() => handleInstallApp(app, registry)}
                         className="app-install-button"

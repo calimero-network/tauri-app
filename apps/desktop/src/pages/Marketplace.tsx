@@ -14,7 +14,9 @@ import { listInstalledApps, invalidateInstalledApps } from "../utils/installedAp
 import { truncateText } from "../utils/string";
 import { useToast } from "../contexts/ToastContext";
 import Skeleton from "../components/Skeleton";
-import { Search, RefreshCw, Package, Download, CheckCircle2, X, ExternalLink } from "lucide-react";
+import AppCard from "../components/AppCard";
+import AppDetail from "./AppDetail";
+import { Search, RefreshCw, Package, X, ExternalLink } from "lucide-react";
 import "./Marketplace.css";
 
 interface MarketplaceApp extends AppSummary {
@@ -367,6 +369,24 @@ function Marketplace({ clientReady = true }: MarketplaceProps) {
     try { return new URL(reg).origin; } catch { return reg.replace(/\/$/, ''); }
   }, []);
 
+  // ⚠️ THE DETAIL VIEW REPLACES THE LISTING, it does not float over it. There
+  // is no router in this shell (App.tsx switches on a `Page` union), so "open
+  // an application page" is this swap plus the view's own back button.
+  if (selectedApp) {
+    return (
+      <AppDetail
+        app={selectedApp}
+        installing={installingAppId === selectedApp.id}
+        versions={availableVersions}
+        versionsLoading={versionsLoading}
+        selectedVersion={selectedVersion || selectedApp.latest_version}
+        onSelectVersion={setSelectedVersion}
+        onInstall={() => handleInstall(selectedApp, selectedVersion || selectedApp.latest_version)}
+        onBack={() => setSelectedApp(null)}
+      />
+    );
+  }
+
   return (
     <div className="marketplace-page">
       <header className="marketplace-header">
@@ -480,194 +500,16 @@ function Marketplace({ clientReady = true }: MarketplaceProps) {
           </div>
         ) : (
           <div className="apps-grid">
-            {filteredAndSortedApps.map((app, index) => {
-              const shortPubkey = app.developer_pubkey && app.developer_pubkey.length > 12
-                ? `${app.developer_pubkey.slice(0, 6)}...${app.developer_pubkey.slice(-4)}`
-                : app.developer_pubkey;
-              const description = app.description || "No description available.";
-
-              return (
-                <div
-                  key={`${app.developer_pubkey}-${app.name}-${index}`}
-                  className="app-card"
-                  data-testid="app-card"
-                  onClick={() => setSelectedApp(app)}
-                >
-                  <div className="app-card-header">
-                    <div className="app-icon-wrapper">
-                      <Package className="app-icon" size={20} />
-                    </div>
-                    <div className="app-title-section">
-                      <h3>{app.alias || app.name}</h3>
-                      {app.latest_version && (
-                        <span className="app-version-badge">v{app.latest_version}</span>
-                      )}
-                    </div>
-                    {app.installed && (
-                      <CheckCircle2 className="installed-icon" size={18} />
-                    )}
-                  </div>
-
-                  <div className="app-card-description">
-                    <p>{description}</p>
-                  </div>
-
-                  <div className="app-card-footer">
-                    <div className="app-meta">
-                      <div className="app-meta-row">
-                        <span className="app-meta-label">Author:</span>
-                        <span className="app-meta-value">
-                          {app.author || (shortPubkey && shortPubkey !== 'unknown' ? shortPubkey : '—')}
-                        </span>
-                      </div>
-                      <div className="app-meta-row">
-                        <span className="app-meta-label">Downloads:</span>
-                        <span className="app-meta-value">{(app.downloads ?? 0).toLocaleString()}</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="app-card-actions" onClick={(e) => e.stopPropagation()}>
-                    {app.installed ? (
-                      <button className="button button-success" disabled>
-                        <CheckCircle2 size={16} />
-                        Installed
-                      </button>
-                    ) : (
-                      <button
-                        onClick={() => setSelectedApp(app)}
-                        className="button button-primary"
-                        disabled={installingAppId === app.id}
-                      >
-                        {installingAppId === app.id ? (
-                          <>
-                            <RefreshCw size={16} className="spinning" />
-                            Installing...
-                          </>
-                        ) : (
-                          <>
-                            <span className="install-icon-wrap"><Download size={16} /></span>
-                            Install
-                          </>
-                        )}
-                      </button>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
+            {filteredAndSortedApps.map((app, index) => (
+              <AppCard
+                key={`${app.registry}-${app.id}-${index}`}
+                app={app}
+                onOpen={(a) => setSelectedApp(a as MarketplaceApp)}
+              />
+            ))}
           </div>
         )}
       </main>
-
-      {selectedApp && (
-        <div className="app-detail-overlay" onClick={() => setSelectedApp(null)}>
-          <div className="app-detail-modal" onClick={(e) => e.stopPropagation()}>
-            <button className="modal-close" onClick={() => setSelectedApp(null)}>
-              <X size={18} />
-            </button>
-            <div className="modal-header">
-              <div className="app-icon-wrapper modal-icon">
-                <Package size={28} className="app-icon" />
-              </div>
-              <div className="modal-title">
-                <h2>{selectedApp.alias || selectedApp.name}</h2>
-                {selectedApp.latest_version && (
-                  <span className="app-version-badge">v{selectedApp.latest_version}</span>
-                )}
-              </div>
-              {selectedApp.installed && (
-                <CheckCircle2 className="installed-icon" size={22} />
-              )}
-            </div>
-            <p className="modal-description">
-              {selectedApp.description || "No description available."}
-            </p>
-            <div className="modal-meta">
-              <div className="modal-meta-row">
-                <span className="modal-meta-label">Package ID</span>
-                <span className="modal-meta-value mono">{selectedApp.id}</span>
-              </div>
-              <div className="modal-meta-row">
-                <span className="modal-meta-label">Author</span>
-                <span className="modal-meta-value">
-                  {selectedApp.author || (
-                    selectedApp.developer_pubkey
-                      ? `${selectedApp.developer_pubkey.slice(0, 8)}...${selectedApp.developer_pubkey.slice(-6)}`
-                      : '—'
-                  )}
-                </span>
-              </div>
-              <div className="modal-meta-row">
-                <span className="modal-meta-label">Downloads</span>
-                <span className="modal-meta-value">{(selectedApp.downloads ?? 0).toLocaleString()}</span>
-              </div>
-              <div className="modal-meta-row">
-                <span className="modal-meta-label">Version</span>
-                {versionsLoading ? (
-                  <span className="modal-meta-value modal-versions-loading">
-                    <RefreshCw size={12} className="spinning" /> Loading…
-                  </span>
-                ) : availableVersions.length > 1 ? (
-                  <select
-                    className="modal-version-select"
-                    value={selectedVersion}
-                    onChange={(e) => setSelectedVersion(e.target.value)}
-                    disabled={installingAppId === selectedApp.id || selectedApp.installed}
-                    data-testid="version-picker"
-                  >
-                    {availableVersions.map((v) => (
-                      <option key={v.semver} value={v.semver}>
-                        {v.semver === availableVersions[0]?.semver ? `${v.semver} (latest)` : v.semver}
-                      </option>
-                    ))}
-                  </select>
-                ) : (
-                  <span className="modal-meta-value">{selectedVersion || selectedApp.latest_version}</span>
-                )}
-              </div>
-              <div className="modal-meta-row">
-                <span className="modal-meta-label">Registry</span>
-                <button
-                  className="modal-meta-link"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    const url = (() => { try { return `${new URL(selectedApp.registry).origin}/apps/${encodeURIComponent(selectedApp.id)}`; } catch { return `${selectedApp.registry.replace(/\/$/, '')}/apps/${encodeURIComponent(selectedApp.id)}`; } })();
-                    invoke('open_url_in_browser', { url });
-                  }}
-                >
-                  View on Registry
-                </button>
-              </div>
-            </div>
-            <div className="modal-actions">
-              {selectedApp.installed ? (
-                <button className="button button-success" disabled>
-                  <CheckCircle2 size={16} />
-                  Installed
-                </button>
-              ) : (
-                <button
-                  onClick={() => handleInstall(selectedApp, selectedVersion || selectedApp.latest_version)}
-                  className="button button-primary"
-                  disabled={installingAppId === selectedApp.id || versionsLoading}
-                >
-                  {installingAppId === selectedApp.id ? (
-                    <><RefreshCw size={16} className="spinning" /> Installing...</>
-                  ) : versionsLoading ? (
-                    <><RefreshCw size={16} className="spinning" /> Loading versions...</>
-                  ) : (
-                    <><span className="install-icon-wrap"><Download size={16} /></span>Install</>
-                  )}
-                </button>
-              )}
-              <button className="button button-secondary" onClick={() => setSelectedApp(null)}>
-                Close
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

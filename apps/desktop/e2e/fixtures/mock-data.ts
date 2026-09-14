@@ -100,6 +100,16 @@ export const MOCK_PROVIDERS_RESPONSE = {
 // `fetchAppsFromRegistry` / `fetchAppManifest` expect V2 bundle objects
 // (`package`, `appVersion`, `wasm`, `metadata`, `signature`, `downloads`, …).
 
+/**
+ * A real 1x1 PNG.
+ *
+ * ⚠️ IT HAS TO DECODE. AppIcon falls back to the letter tile on the <img>'s
+ * `onError`, so a bogus `data:` URI would render the fallback and an "icon is
+ * shown" assertion would pass against the wrong element.
+ */
+export const PNG_1PX =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+
 export const MOCK_REGISTRY_V2_BUNDLES = [
   {
     package: "only-peers-chat",
@@ -111,7 +121,11 @@ export const MOCK_REGISTRY_V2_BUNDLES = [
       name: "Only Peers Chat",
       description: "Decentralized chat application",
       author: "dev1.testnet",
+      icon: PNG_1PX,
+      tags: ["communication", "chat"],
     },
+    verified: true,
+    publisherVerified: true,
     signature: {
       pubkey: "dev1.testnet",
       alg: "ed25519",
@@ -128,11 +142,15 @@ export const MOCK_REGISTRY_V2_BUNDLES = [
     minRuntimeVersion: "1.0.0",
     version: "2.0",
     wasm: { hash: "beefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdead", size: 9999 },
+    // Deliberately icon-less: 3 of the 21 published bundles are, so the
+    // lettered fallback needs a case in the suite.
     metadata: {
       name: "Blockchain Demo",
       description: "Simple blockchain demo application",
       author: "dev2.testnet",
     },
+    verified: false,
+    publisherVerified: false,
     signature: {
       pubkey: "dev2.testnet",
       alg: "ed25519",
@@ -166,7 +184,9 @@ export const MOCK_INSTALLED_APPS = [
     metadata: btoa(
       JSON.stringify({
         name: "Only Peers Chat",
+        package: "only-peers-chat",
         description: "Decentralized chat",
+        icon: PNG_1PX,
         links: { frontend: "http://localhost:3001" },
       }),
     ),
@@ -179,6 +199,7 @@ export const MOCK_INSTALLED_APPS = [
     metadata: btoa(
       JSON.stringify({
         name: "Blockchain Demo",
+        package: "blockchain-demo",
         description: "Simple demo",
       }),
     ),

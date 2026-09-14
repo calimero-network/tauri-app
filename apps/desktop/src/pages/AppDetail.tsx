@@ -246,7 +246,7 @@ export default function AppDetail({
                 onClick={() => a.url && void invoke("open_url_in_browser", { url: a.url })}
               >
                 <img
-                  src={a.thumbnailUrl ?? a.url}
+                  src={a.thumbUrl ?? a.url}
                   alt={a.alt ?? `${title} screenshot ${i + 1}`}
                   loading="lazy"
                   decoding="async"

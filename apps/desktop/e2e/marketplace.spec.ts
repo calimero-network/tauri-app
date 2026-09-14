@@ -166,6 +166,35 @@ test.describe("Marketplace – install flow", () => {
     await expect(trigger).toContainText("0.3.0");
   });
 
+  test("preview images load from the registry, not from the app origin", async ({ page }) => {
+    // ⚠️ THE REGISTRY SERVES ROOT-RELATIVE ASSET URLS. Used verbatim in an
+    // <img src> they resolve against whatever origin is running the app, so
+    // every preview renders broken — in the dashboard the dev server answered
+    // "did you mean to visit /admin-dashboard/api/v2/…" instead of an image.
+    await mockRegistryAPIs(page);
+    await setupAuthenticatedPage(page);
+    await navigateVia(page, "Marketplace");
+    await page.locator("[data-testid='app-card']", { hasText: "Only Peers Chat" }).click();
+
+    const shots = page.locator(".app-detail-shot img");
+    await expect(shots).toHaveCount(2);
+    // Decoded, not merely requested: a broken image has naturalWidth 0.
+    await expect(shots.first()).toHaveJSProperty("naturalWidth", 1);
+    await expect(shots.last()).toHaveJSProperty("naturalWidth", 1);
+    // Rendered in the registry's stated order, not the store's.
+    await expect(shots.first()).toHaveAttribute("alt", "First");
+    // And the empty state is gone now that there are images.
+    await expect(page.getByText("No preview images published")).toHaveCount(0);
+  });
+
+  test("an app with no preview images says so", async ({ page }) => {
+    await mockRegistryAPIs(page);
+    await setupAuthenticatedPage(page);
+    await navigateVia(page, "Marketplace");
+    await page.locator("[data-testid='app-card']", { hasText: "Blockchain Demo" }).click();
+    await expect(page.getByText("No preview images published")).toBeVisible();
+  });
+
   test("the application page names the organization that published the app", async ({ page }) => {
     await mockRegistryAPIs(page);
     await setupAuthenticatedPage(page);

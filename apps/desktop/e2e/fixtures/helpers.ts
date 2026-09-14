@@ -1,5 +1,7 @@
 import type { Locator, Page } from "@playwright/test";
 import {
+  DEFAULT_REGISTRY_URL,
+  PNG_1PX,
   STORAGE_KEYS,
   AUTHENTICATED_SETTINGS,
   DEVELOPER_SETTINGS,
@@ -286,6 +288,74 @@ export async function mockSingleUseRefresh(
  * Matches `fetchAppsFromRegistry`, `fetchAppVersions`, `fetchAppManifest` in registry.ts.
  */
 export async function mockRegistryAPIs(page: Page): Promise<void> {
+  // GET /api/v2/packages/<pkg>/assets — preview images.
+  //
+  // ⚠️ THE URLS ARE ROOT-RELATIVE, exactly as the real registry serves them
+  // (`/api/v2/packages/<pkg>/assets/<id>/raw`). That is the whole point of the
+  // fixture: used verbatim in an <img src> they resolve against the APP's
+  // origin instead of the registry's, and every preview renders broken.
+  await page.route(
+    (url) => /\/api\/v2\/packages\/[^/]+\/assets$/.test(url.pathname),
+    (route) => {
+      const pkg = new URL(route.request().url()).pathname.split("/")[4];
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          state: "approved",
+          assets:
+            pkg === "only-peers-chat"
+              ? [
+                  {
+                    id: "shot2",
+                    kind: "image",
+                    contentType: "image/png",
+                    alt: "Second",
+                    order: 1,
+                    url: `/api/v2/packages/${pkg}/assets/shot2/raw`,
+                    thumbUrl: `/api/v2/packages/${pkg}/assets/shot2/raw`,
+                    hasThumb: false,
+                  },
+                  {
+                    id: "shot1",
+                    kind: "image",
+                    contentType: "image/png",
+                    alt: "First",
+                    order: 0,
+                    url: `/api/v2/packages/${pkg}/assets/shot1/raw`,
+                    thumbUrl: `/api/v2/packages/${pkg}/assets/shot1/raw`,
+                    hasThumb: false,
+                  },
+                ]
+              : [],
+        }),
+      });
+    },
+  );
+
+  // The bytes behind those URLs — a real 1x1 PNG, so `naturalWidth` proves the
+  // image actually decoded rather than merely being requested.
+  //
+  // ⚠️ MATCHED ON THE REGISTRY'S HOST, NOT ON THE PATH ALONE, AND THAT IS WHAT
+  // MAKES THE TEST MEAN ANYTHING. A path-only route answers the request
+  // wherever it is aimed, so an <img src> left root-relative — resolving
+  // against the APP's origin, which is the bug — would still be served a valid
+  // PNG and the spec would pass while the real app rendered nothing. Off-host
+  // requests are aborted instead, exactly as they fail in production.
+  const registryHost = new URL(DEFAULT_REGISTRY_URL).host;
+  await page.route(
+    (url) => /\/assets\/[^/]+\/raw$/.test(url.pathname),
+    (route) => {
+      const host = new URL(route.request().url()).host;
+      if (host !== registryHost) return route.abort();
+      return route.fulfill({
+        status: 200,
+        contentType: "image/png",
+        body: Buffer.from(PNG_1PX.split(",")[1] ?? "", "base64"),
+      });
+    },
+  );
+
   // GET /api/v2/orgs?package= — which organization published a package.
   //
   // ⚠️ ONE OF THE TWO FIXTURE APPS ANSWERS `null` ON PURPOSE. That is what the

@@ -29,10 +29,17 @@ export interface FacetSelection {
   tags: string[];
 }
 
-/** The shape the facet helpers read — a subset of `AppSummary`. */
+/**
+ * The shape the facet helpers read — a subset of `AppSummary`.
+ *
+ * ⚠️ `| undefined` SPELLED OUT, to stay assignable in the admin dashboard's
+ * copy of this file, which builds with `exactOptionalPropertyTypes`. There an
+ * `AppSummary` — whose `category` is genuinely absent on most bundles — does
+ * not satisfy a bare `category?: string` at all. Same file, both repos.
+ */
 export interface Facetable {
-  category?: string;
-  tags?: string[];
+  category?: string | undefined;
+  tags?: string[] | undefined;
 }
 
 const CATEGORY_SET: ReadonlySet<string> = new Set<string>(CATEGORIES);

@@ -148,6 +148,10 @@ export const MOCK_REGISTRY_V2_BUNDLES = [
       name: "Blockchain Demo",
       description: "Simple blockchain demo application",
       author: "dev2.testnet",
+      // A SECOND shelf, so the category chips have something to tell apart —
+      // and `demo` alongside it, a keyword that is not a category, which is
+      // the distinction the two chip rows are built on.
+      tags: ["developer-tools", "demo"],
     },
     verified: false,
     publisherVerified: false,

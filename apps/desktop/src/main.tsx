@@ -6,6 +6,7 @@ import { ToastProvider } from "./contexts/ToastContext";
 import { NodeVersionsProvider } from "./contexts/NodeVersionsContext";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { installRefreshSingleFlight } from "./lib/token-broker";
+import { installInputHygiene } from "./utils/inputHygiene";
 import "./index.css";
 
 // Before anything can construct a MeroJs and start talking to the node: refresh
@@ -15,6 +16,12 @@ import "./index.css";
 // POST /auth/refresh calls carrying the same token — the node consumes it once
 // and treats the rest as theft, revoking the family and logging everyone out.
 installRefreshSingleFlight();
+
+// macOS capitalises the first letter of every field and autocorrects the
+// rest. Almost nothing this app asks for is a sentence — usernames, node
+// names, package ids, ports, keys — so the substitutions are turned off
+// once, here, for fields that exist now and for every one mounted later.
+installInputHygiene();
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

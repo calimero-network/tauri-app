@@ -69,6 +69,125 @@ test.describe("Marketplace – browsing & searching", () => {
   });
 });
 
+// ─── Category and tag filters ────────────────────────────────────────────────
+
+test.describe("Marketplace – category and tag filters", () => {
+  test.beforeEach(async ({ page }) => {
+    await mockRegistryAPIs(page);
+    await setupAuthenticatedPage(page);
+    await navigateVia(page, "Marketplace");
+    await expect(page.locator("[data-testid='app-card']")).toHaveCount(2);
+  });
+
+  test("offers a chip per category present, with its size", async ({ page }) => {
+    // ⚠️ PRESENT, NOT DECLARED. There are ten categories in the registry's
+    // vocabulary and two in this listing; a row of ten chips where eight
+    // return nothing reads as a broken filter rather than an empty shelf.
+    const chips = page.locator("[data-testid^='category-']");
+    await expect(chips).toHaveCount(2);
+    await expect(page.getByTestId("category-communication")).toContainText("Communication");
+    await expect(page.getByTestId("category-developer-tools")).toContainText("Developer Tools");
+    await expect(page.getByTestId("category-communication")).toContainText("1");
+  });
+
+  test("a category chip filters the listing and toggles back off", async ({ page }) => {
+    await page.getByTestId("category-communication").click();
+    await expect(page.locator("[data-testid='app-card']")).toHaveCount(1);
+    await expect(page.locator("h3", { hasText: "Only Peers Chat" })).toBeVisible();
+    await expect(page.getByTestId("marketplace-count")).toContainText("1 application of 2");
+
+    // Pressing the ACTIVE chip clears it — the row has no "All" chip, so the
+    // only way back is the chip itself or Clear filters.
+    await page.getByTestId("category-communication").click();
+    await expect(page.locator("[data-testid='app-card']")).toHaveCount(2);
+  });
+
+  test("categories are single-select: the second chip replaces the first", async ({
+    page,
+  }) => {
+    // A bundle sits on exactly one shelf, so two chips held together could
+    // only ever return nothing.
+    await page.getByTestId("category-communication").click();
+    await page.getByTestId("category-developer-tools").click();
+
+    await expect(page.getByTestId("category-communication")).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+    await expect(page.locator("[data-testid='app-card']")).toHaveCount(1);
+    await expect(page.locator("h3", { hasText: "Blockchain Demo" })).toBeVisible();
+  });
+
+  test("a category declared as a TAG still gets a chip", async ({ page }) => {
+    // ⚠️ THE WHOLE REASON `resolveCategory` EXISTS. No published bundle carries
+    // a top-level `metadata.category` — publishers put the category in `tags` —
+    // so a filter reading the explicit field alone would offer no chips at all
+    // against the live registry. Both fixtures declare theirs as a tag.
+    await page.getByTestId("category-communication").click();
+    await expect(page.locator("[data-testid='app-card']")).toHaveCount(1);
+  });
+
+  test("a category slug never appears twice as a keyword chip", async ({ page }) => {
+    // `communication` is a shelf, `chat` is a keyword. Both arrive in the same
+    // `tags` array, and chipping the slug in both rows would give two chips
+    // that filter to the same set.
+    await expect(page.getByTestId("tag-chat")).toBeVisible();
+    await expect(page.getByTestId("tag-demo")).toBeVisible();
+    await expect(page.getByTestId("tag-communication")).toHaveCount(0);
+    await expect(page.getByTestId("tag-developer-tools")).toHaveCount(0);
+  });
+
+  test("tags are multi-select and ANDed — a second chip narrows", async ({ page }) => {
+    await page.getByTestId("tag-chat").click();
+    await expect(page.locator("[data-testid='app-card']")).toHaveCount(1);
+    await expect(page.locator("h3", { hasText: "Only Peers Chat" })).toBeVisible();
+
+    // `demo` belongs to the OTHER app, so holding both must return nothing
+    // rather than both apps. A filter row that can grow the result set is the
+    // one people stop trusting.
+    await page.getByTestId("tag-demo").click();
+    await expect(page.getByTestId("tag-chat")).toHaveAttribute("aria-pressed", "true");
+    await expect(page.locator("[data-testid='app-card']")).toHaveCount(0);
+    await expect(page.getByText("No applications found")).toBeVisible();
+  });
+
+  test("a category and a tag compose", async ({ page }) => {
+    await page.getByTestId("category-communication").click();
+    await page.getByTestId("tag-chat").click();
+    await expect(page.locator("[data-testid='app-card']")).toHaveCount(1);
+
+    await page.getByTestId("tag-demo").click();
+    await expect(page.locator("[data-testid='app-card']")).toHaveCount(0);
+  });
+
+  test("Clear filters drops the chips but keeps the search box", async ({ page }) => {
+    // ⚠️ Clear lives with the All/Installed pills, NOT at the end of a chip
+    // row: both rows are conditional, so a button inside either one vanishes
+    // exactly when the other row is holding the selection.
+    await expect(page.getByTestId("clear-facets")).toHaveCount(0);
+
+    await page.locator('input[placeholder="Search applications..."]').fill("chat");
+    await page.getByTestId("category-communication").click();
+    await expect(page.getByTestId("clear-facets")).toBeVisible();
+
+    await page.getByTestId("clear-facets").click();
+    await expect(page.getByTestId("category-communication")).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+    await expect(page.locator('input[placeholder="Search applications..."]')).toHaveValue("chat");
+    await expect(page.locator("[data-testid='app-card']")).toHaveCount(1);
+  });
+
+  test("the count says how many of the listing is showing", async ({ page }) => {
+    // An unfiltered listing does not say "2 of 2" — the second half only earns
+    // its place when something is hidden.
+    await expect(page.getByTestId("marketplace-count")).toHaveText("2 applications");
+    await page.getByTestId("tag-chat").click();
+    await expect(page.getByTestId("marketplace-count")).toHaveText("1 application of 2");
+  });
+});
+
 // ─── Install flow ────────────────────────────────────────────────────────────
 
 test.describe("Marketplace – install flow", () => {

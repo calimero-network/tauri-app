@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, memo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef, memo } from "react";
 import {
   useMero,
   useNamespaces,
@@ -13,6 +13,7 @@ import {
 } from "@calimero-network/mero-react";
 import type { GroupInfo, MetadataRecord } from "@calimero-network/mero-js";
 import { useToast } from "../contexts/ToastContext";
+import AppIcon from "../components/AppIcon";
 import { ChevronLeft, Users, Box, Layers, Copy, ChevronRight, Shield, Globe, Plus, X, Trash2, UserMinus, Link, ChevronDown, Check, MoreHorizontal, LogIn, LogOut } from "lucide-react";
 import { decodeMetadata } from "../utils/appUtils";
 import { listInstalledApps } from "../utils/installedAppsCache";
@@ -87,6 +88,11 @@ const RECONCILE_RETRY_MS = 30_000;
 interface InstalledApp {
   id: string;
   name: string;
+  /** The bundle's own package id (`only-peers-chat`), when it declares one. */
+  package: string | null;
+  version: string | null;
+  /** `data:image/png;base64,…` from the signed bundle, as the launcher uses. */
+  icon: string | null;
   frontendUrl: string | null;
   metadata?: unknown;
 }
@@ -97,22 +103,51 @@ function readInstalledApps(): Promise<InstalledApp[]> {
     return res.data.map((app: any) => {
       let name: string = app.id;
       let frontendUrl: string | null = null;
+      let pkg: string | null = null;
+      // The list row carries a version of its own; bundle metadata wins when
+      // both are present, matching InstalledAppCard.
+      let version: string | null = app.version ?? null;
+      let icon: string | null = null;
       try {
         const meta = decodeMetadata(app.metadata);
         if (meta) {
           name = meta.name || meta.alias || app.id;
           frontendUrl = meta?.links?.frontend ?? null;
+          pkg = meta.package ?? null;
+          version = meta.version ?? version;
+          icon = meta.icon ?? null;
         }
       } catch {
         // ignore
       }
-      return { id: app.id, name, frontendUrl };
+      return { id: app.id, name, package: pkg, version, icon, frontendUrl };
     });
   });
 }
 
+/**
+ * One application, with the namespaces bound to it.
+ *
+ * Namespaces are app-bound — every one carries a `targetApplicationId` — but
+ * the page used to render them as one flat, unordered grid of opaque hashes,
+ * so "which app is this workspace for" was only answerable by opening it. The
+ * list is grouped by that field instead, and the drill-down is
+ * app → its namespaces → namespace.
+ *
+ * `app` is undefined when a namespace targets an application this node does not
+ * have installed (uninstalled since, or joined from a peer). Those namespaces
+ * still get a card — dropping them would hide real workspaces — it just carries
+ * the application id in place of a name.
+ */
+interface AppGroup {
+  applicationId: string;
+  app: InstalledApp | undefined;
+  namespaces: Namespace[];
+}
+
 type View =
   | { type: "list" }
+  | { type: "app"; applicationId: string }
   | { type: "namespace"; ns: Namespace }
   | { type: "group"; ns: Namespace; groupId: string };
 
@@ -454,10 +489,55 @@ function Namespaces() {
     readInstalledApps().then(setInstalledApps).catch(() => setInstalledApps([]));
   }, []);
 
-  const appById = installedApps.reduce<Record<string, InstalledApp>>((acc, a) => {
-    acc[a.id] = a;
-    return acc;
-  }, {});
+  const appById = useMemo(
+    () =>
+      installedApps.reduce<Record<string, InstalledApp>>((acc, a) => {
+        acc[a.id] = a;
+        return acc;
+      }, {}),
+    [installedApps],
+  );
+
+  // Namespaces grouped by the application they are bound to. Installed apps
+  // with no namespace yet are listed too, so "create a namespace for this app"
+  // starts from the app rather than from a dropdown of every installed bundle.
+  const appGroups = useMemo<AppGroup[]>(() => {
+    const byApp = new Map<string, Namespace[]>();
+    for (const app of installedApps) byApp.set(app.id, []);
+    for (const ns of namespaces) {
+      const key = ns.targetApplicationId ?? "";
+      const list = byApp.get(key);
+      if (list) list.push(ns);
+      else byApp.set(key, [ns]);
+    }
+    return Array.from(byApp.entries())
+      .map(([applicationId, list]) => ({
+        applicationId,
+        app: appById[applicationId],
+        namespaces: list,
+      }))
+      .sort((a, b) => {
+        // Apps you actually have workspaces in come first; then by name, so the
+        // order does not shuffle between loads the way the raw list did.
+        if ((a.namespaces.length === 0) !== (b.namespaces.length === 0)) {
+          return a.namespaces.length === 0 ? 1 : -1;
+        }
+        return (a.app?.name ?? a.applicationId).localeCompare(
+          b.app?.name ?? b.applicationId,
+        );
+      });
+  }, [namespaces, installedApps, appById]);
+
+  /**
+   * Where to go once a namespace is gone. Its app view is the right landing
+   * spot — the sibling namespaces are there — unless the application is not
+   * installed, in which case that view can be left with nothing in it and no
+   * way to create anything, so the app grid is the honest destination.
+   */
+  const viewAfterNamespaceGone = (ns: Namespace): View =>
+    appById[ns.targetApplicationId]
+      ? { type: "app", applicationId: ns.targetApplicationId }
+      : { type: "list" };
 
   const nsDisplayName = (ns: Namespace) => {
     const fromList = (ns as any).name as string | undefined;
@@ -469,6 +549,9 @@ function Namespaces() {
   };
 
   const [nsModalOpen, setNsModalOpen] = useState(false);
+  // The application a create started from, so opening the modal from an app's
+  // own page does not ask again which application it is for.
+  const [nsModalPresetApp, setNsModalPresetApp] = useState<string | null>(null);
   const [ctxModalOpen, setCtxModalOpen] = useState<{ namespaceId: string; applicationId: string } | null>(null);
   const [expandedMemberId, setExpandedMemberId] = useState<string | null>(null);
 
@@ -595,7 +678,7 @@ function Namespaces() {
       await mero.admin.deleteNamespace(ns.namespaceId);
       toast.success('Namespace deleted');
       setDeleteNsTarget(null);
-      setView({ type: 'list' });
+      setView(viewAfterNamespaceGone(ns));
       await refetchNamespaces();
     } catch (e: any) {
       reportActionError('delete', 'namespace', e);
@@ -623,7 +706,7 @@ function Namespaces() {
       await mero.admin.leaveNamespace(ns.namespaceId);
       toast.success('Left namespace');
       setLeaveNsTarget(null);
-      setView({ type: 'list' });
+      setView(viewAfterNamespaceGone(ns));
       await refetchNamespaces();
     } catch (e: any) {
       toast.error(`Failed to leave namespace: ${parseApiError(e)}`);
@@ -1200,12 +1283,20 @@ function Namespaces() {
   }, [haEnabled, mero, toast, triggerReconcile]);
 
   // ── Nav ──
+  const openApp = (applicationId: string) => { setActionsMenuOpen(false); setView({ type: "app", applicationId }); };
+  const openCreateNamespace = (applicationId?: string) => {
+    setNsModalPresetApp(applicationId ?? null);
+    setNsModalOpen(true);
+  };
   const openNamespace = (ns: Namespace) => { setActionsMenuOpen(false); setView({ type: "namespace", ns }); };
   const openGroup = (ns: Namespace, groupId: string) => { setActionsMenuOpen(false); setView({ type: "group", ns, groupId }); };
   const goBack = () => {
     setActionsMenuOpen(false);
     if (view.type === "group") setView({ type: "namespace", ns: view.ns });
-    else if (view.type === "namespace") setView({ type: "list" });
+    // Back from a namespace lands on the app it belongs to, not on the app
+    // grid: that is the level it was opened from.
+    else if (view.type === "namespace") setView({ type: "app", applicationId: view.ns.targetApplicationId });
+    else if (view.type === "app") setView({ type: "list" });
   };
 
   const copyToClipboard = (text: string) => {
@@ -1408,12 +1499,106 @@ function Namespaces() {
     );
   };
 
+  // ── Cards ──
+
+  /**
+   * One application, as the entry point to its namespaces.
+   *
+   * Title, package, version and icon all come from the bundle's own metadata —
+   * the same fields the launcher and the Installed Apps list already read. An
+   * application that is not installed here has none of them, so the card falls
+   * back to the application id, which is at least addressable.
+   */
+  const renderAppCard = (g: AppGroup) => {
+    const app = g.app;
+    const title = app?.name ?? "Unknown application";
+    const count = g.namespaces.length;
+    return (
+      <div
+        key={g.applicationId}
+        className="ns-app-card"
+        data-testid="ns-app-card"
+        data-application-id={g.applicationId}
+        role="button"
+        tabIndex={0}
+        onClick={() => openApp(g.applicationId)}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") openApp(g.applicationId); }}
+      >
+        <div className="ns-app-card-top">
+          <AppIcon
+            icon={app?.icon ?? undefined}
+            name={title}
+            seed={app?.package ?? g.applicationId}
+            size={44}
+          />
+          <div className="ns-app-card-headings">
+            <h3 className="ns-app-card-title" title={title}>{title}</h3>
+            <p className="ns-app-card-package" title={g.applicationId}>
+              {app?.package ?? truncateId(g.applicationId)}
+            </p>
+          </div>
+          <ChevronRight size={16} className="ns-card-chevron" />
+        </div>
+        <div className="ns-app-card-meta">
+          {app?.version ? (
+            <span className="ns-app-version">v{app.version}</span>
+          ) : (
+            <span className="ns-app-version ns-app-version-unknown" title="This application is not installed on this node">
+              not installed
+            </span>
+          )}
+          <span aria-hidden="true" className="ns-app-card-dot">·</span>
+          <span className="ns-app-card-count">
+            <Layers size={13} /> {count} {count === 1 ? "namespace" : "namespaces"}
+          </span>
+        </div>
+      </div>
+    );
+  };
+
+  const renderNamespaceCard = (ns: Namespace) => (
+    <div
+      key={ns.namespaceId}
+      className="ns-card"
+      role="button"
+      tabIndex={0}
+      onClick={() => openNamespace(ns)}
+      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") openNamespace(ns); }}
+    >
+      <div className="ns-card-header">
+        <h3>{nsDisplayName(ns)}</h3>
+        <ChevronRight size={16} className="ns-card-chevron" />
+      </div>
+      <div className="ns-card-id" title={ns.namespaceId}>
+        {truncateId(ns.namespaceId)}
+        <button
+          className="copy-btn"
+          onClick={(e) => { e.stopPropagation(); copyToClipboard(ns.namespaceId); }}
+          title="Copy ID"
+        >
+          <Copy size={12} />
+        </button>
+      </div>
+      <div className="ns-card-stats">
+        <span title="Subgroups — nested groups inside this namespace, each holding its own contexts"><Layers size={14} /> {(ns as any).subgroupCount ?? 0}</span>
+        <span title="Members — identities with access to this namespace"><Users size={14} /> {(ns as any).memberCount ?? 0}</span>
+        <span title="Contexts — running app instances (e.g. a chat channel) directly under the namespace"><Box size={14} /> {(ns as any).contextCount ?? 0}</span>
+      </div>
+      {ns.upgradePolicy && (
+        <div className="ns-card-policy">
+          <Shield size={12} /> {ns.upgradePolicy}
+        </div>
+      )}
+    </div>
+  );
+
   // ── Modals ──
   const modalOverlay = (
     <>
       {nsModalOpen && (
         <CreateNamespaceModal
           installedApps={installedApps}
+          presetApplicationId={nsModalPresetApp}
           loading={creatingNamespace}
           onClose={() => setNsModalOpen(false)}
           onSubmit={onCreateNamespace}
@@ -1535,6 +1720,9 @@ function Namespaces() {
   );
 
   // ─── Namespace List View ───
+  // ─── Application Grid (root) ───
+  // Namespaces are app-bound, so the entry point is the application, not a flat
+  // list of namespace hashes.
   if (view.type === "list") {
     return (
       <>
@@ -1544,7 +1732,7 @@ function Namespaces() {
             <div className="ns-page-top-left">
               <h1>Namespaces</h1>
               <p className="ns-page-subtitle">
-                A namespace is an app-bound workspace. It holds contexts (running app instances, e.g. a chat channel) and subgroups (nested groups that hold their own contexts).
+                A namespace is an app-bound workspace. It holds contexts (running app instances, e.g. a chat channel) and subgroups (nested groups that hold their own contexts). Pick an application to see its namespaces.
               </p>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -1558,7 +1746,7 @@ function Namespaces() {
               <button
                 className="ns-action-btn"
                 style={{ marginLeft: 0 }}
-                onClick={() => setNsModalOpen(true)}
+                onClick={() => openCreateNamespace()}
                 disabled={installedApps.length === 0}
                 title={installedApps.length === 0 ? "Install an application first" : "Create a new namespace"}
               >
@@ -1569,7 +1757,7 @@ function Namespaces() {
           {error && <div className="error-message">{error.message}</div>}
           {loading ? (
             <div className="loading">Loading namespaces...</div>
-          ) : !error && namespaces.length === 0 ? (
+          ) : !error && appGroups.length === 0 ? (
             <div className="empty-state">
               <Globe size={48} style={{ opacity: 0.3, marginBottom: 12 }} />
               <p>No namespaces found</p>
@@ -1579,48 +1767,106 @@ function Namespaces() {
               {installedApps.length === 0 ? (
                 <p style={{ fontSize: "0.85rem", opacity: 0.7 }}>Install an application first (Marketplace).</p>
               ) : (
-                <button className="ns-action-btn" onClick={() => setNsModalOpen(true)} style={{ marginTop: 12 }}>
+                <button className="ns-action-btn" onClick={() => openCreateNamespace()} style={{ marginTop: 12 }}>
                   <Plus size={14} /> Create Namespace
                 </button>
               )}
             </div>
           ) : (
-            <div className="ns-grid">
-              {namespaces.map((ns) => (
-                <div
-                  key={ns.namespaceId}
-                  className="ns-card"
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => openNamespace(ns)}
-                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") openNamespace(ns); }}
-                >
-                  <div className="ns-card-header">
-                    <h3>{nsDisplayName(ns)}</h3>
-                    <ChevronRight size={16} className="ns-card-chevron" />
-                  </div>
-                  <div className="ns-card-id" title={ns.namespaceId}>
-                    {truncateId(ns.namespaceId)}
-                    <button
-                      className="copy-btn"
-                      onClick={(e) => { e.stopPropagation(); copyToClipboard(ns.namespaceId); }}
-                      title="Copy ID"
-                    >
-                      <Copy size={12} />
-                    </button>
-                  </div>
-                  <div className="ns-card-stats">
-                    <span title="Subgroups — nested groups inside this namespace, each holding its own contexts"><Layers size={14} /> {(ns as any).subgroupCount ?? 0}</span>
-                    <span title="Members — identities with access to this namespace"><Users size={14} /> {(ns as any).memberCount ?? 0}</span>
-                    <span title="Contexts — running app instances (e.g. a chat channel) directly under the namespace"><Box size={14} /> {(ns as any).contextCount ?? 0}</span>
-                  </div>
-                  {ns.upgradePolicy && (
-                    <div className="ns-card-policy">
-                      <Shield size={12} /> {ns.upgradePolicy}
-                    </div>
-                  )}
+            <div className="ns-app-grid" data-testid="ns-app-grid">
+              {appGroups.map(renderAppCard)}
+            </div>
+          )}
+        </main>
+      </div>
+      {modalOverlay}
+      </>
+    );
+  }
+
+  // ─── One Application's Namespaces ───
+  if (view.type === "app") {
+    const group = appGroups.find((g) => g.applicationId === view.applicationId);
+    const app = group?.app ?? appById[view.applicationId];
+    const appNamespaces = group?.namespaces ?? [];
+    const installed = !!app;
+    const title = app?.name ?? "Unknown application";
+    return (
+      <>
+      <div className="ns-page">
+        <header className="ns-header">
+          <button className="ns-back" onClick={goBack}>
+            <ChevronLeft size={16} /> Back
+          </button>
+        </header>
+
+        <main className="ns-main">
+          <div className="ns-page-top">
+            <div className="ns-app-heading">
+              <AppIcon
+                icon={app?.icon ?? undefined}
+                name={title}
+                seed={app?.package ?? view.applicationId}
+                size={44}
+              />
+              <div className="ns-page-top-left">
+                <h1>{title}</h1>
+                <div className="ns-app-heading-meta">
+                  <span className="ns-app-package" title={view.applicationId}>
+                    {app?.package ?? truncateId(view.applicationId)}
+                  </span>
+                  {app?.version && <span className="ns-app-version">v{app.version}</span>}
+                  <button
+                    className="copy-btn"
+                    onClick={() => copyToClipboard(view.applicationId)}
+                    title="Copy application ID"
+                  >
+                    <Copy size={12} />
+                  </button>
                 </div>
-              ))}
+              </div>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <button
+                className="ns-invite-btn"
+                onClick={() => setJoinNsModal(true)}
+                title="Join an existing namespace using an invitation"
+              >
+                <LogIn size={14} /> Join Namespace
+              </button>
+              <button
+                className="ns-action-btn"
+                style={{ marginLeft: 0 }}
+                onClick={() => openCreateNamespace(view.applicationId)}
+                disabled={!installed}
+                title={installed
+                  ? `Create a namespace for ${title}`
+                  : "This application is not installed on this node"}
+              >
+                <Plus size={14} /> Create Namespace
+              </button>
+            </div>
+          </div>
+          {error && <div className="error-message">{error.message}</div>}
+          {loading ? (
+            <div className="loading">Loading namespaces...</div>
+          ) : appNamespaces.length === 0 ? (
+            <div className="empty-state">
+              <Globe size={48} style={{ opacity: 0.3, marginBottom: 12 }} />
+              <p>No namespaces for this application yet</p>
+              {installed ? (
+                <button className="ns-action-btn" onClick={() => openCreateNamespace(view.applicationId)} style={{ marginTop: 12 }}>
+                  <Plus size={14} /> Create Namespace
+                </button>
+              ) : (
+                <p style={{ fontSize: "0.85rem", opacity: 0.7 }}>
+                  This application is not installed on this node, so no namespace can be created for it here.
+                </p>
+              )}
+            </div>
+          ) : (
+            <div className="ns-grid">
+              {appNamespaces.map(renderNamespaceCard)}
             </div>
           )}
         </main>
@@ -2112,13 +2358,18 @@ export default memo(Namespaces);
 
 interface CreateNamespaceModalProps {
   installedApps: InstalledApp[];
+  /** The app whose page this was opened from, preselected. */
+  presetApplicationId?: string | null;
   loading: boolean;
   onClose: () => void;
   onSubmit: (applicationId: string, alias: string | undefined) => void;
 }
 
-function CreateNamespaceModal({ installedApps, loading, onClose, onSubmit }: CreateNamespaceModalProps) {
-  const [applicationId, setApplicationId] = useState(installedApps[0]?.id ?? "");
+function CreateNamespaceModal({ installedApps, presetApplicationId, loading, onClose, onSubmit }: CreateNamespaceModalProps) {
+  // The preset only counts when the app is actually installed — the dropdown
+  // lists installed apps, and a preset outside it would show a blank trigger.
+  const preset = installedApps.some((a) => a.id === presetApplicationId) ? presetApplicationId! : null;
+  const [applicationId, setApplicationId] = useState(preset ?? installedApps[0]?.id ?? "");
   const [alias, setAlias] = useState("");
   const [appDropdownOpen, setAppDropdownOpen] = useState(false);
   const appDropdownRef = useRef<HTMLDivElement>(null);

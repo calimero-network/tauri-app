@@ -490,11 +490,20 @@ function Namespaces() {
   const onCreateNamespace = async (applicationId: string, alias: string | undefined) => {
     if (!mero) { toast.error("Node client not ready"); return; }
     try {
+      // Body is EXACTLY `applicationId` + `name` (+ optional `appKey`).
+      // `CreateNamespaceApiRequest` is `deny_unknown_fields`, so an extra key
+      // is a 400 for the whole create, not a field the node ignores:
+      //   unknown field `upgradePolicy`, expected one of `applicationId`,
+      //   `name`, `appKey`, `bytecodeId`
+      // Core deleted the upgrade-policy concept in rc.21 and mero-js dropped it
+      // from `CreateNamespaceRequest`, which is what the `as any` here was
+      // silencing — the cast defeated the excess-property check that would
+      // otherwise have failed this at build time. No cast: the request type is
+      // the contract.
       const result = await createNamespace({
         applicationId,
-        upgradePolicy: "Automatic",
         name: alias?.trim() || undefined,
-      } as any);
+      });
       if (!result) throw new Error("createNamespace returned null");
       try {
         await mero.admin.setDefaultCapabilities(result.namespaceId, {

@@ -127,37 +127,13 @@ test.describe("Marketplace – category and tag filters", () => {
     await expect(page.locator("[data-testid='app-card']")).toHaveCount(1);
   });
 
-  test("a category slug never appears twice as a keyword chip", async ({ page }) => {
-    // `communication` is a shelf, `chat` is a keyword. Both arrive in the same
-    // `tags` array, and chipping the slug in both rows would give two chips
-    // that filter to the same set.
-    await expect(page.getByTestId("tag-chat")).toBeVisible();
-    await expect(page.getByTestId("tag-demo")).toBeVisible();
-    await expect(page.getByTestId("tag-communication")).toHaveCount(0);
-    await expect(page.getByTestId("tag-developer-tools")).toHaveCount(0);
-  });
-
-  test("tags are multi-select and ANDed — a second chip narrows", async ({ page }) => {
-    await page.getByTestId("tag-chat").click();
-    await expect(page.locator("[data-testid='app-card']")).toHaveCount(1);
-    await expect(page.locator("h3", { hasText: "Only Peers Chat" })).toBeVisible();
-
-    // `demo` belongs to the OTHER app, so holding both must return nothing
-    // rather than both apps. A filter row that can grow the result set is the
-    // one people stop trusting.
-    await page.getByTestId("tag-demo").click();
-    await expect(page.getByTestId("tag-chat")).toHaveAttribute("aria-pressed", "true");
-    await expect(page.locator("[data-testid='app-card']")).toHaveCount(0);
-    await expect(page.getByText("No applications found")).toBeVisible();
-  });
-
-  test("a category and a tag compose", async ({ page }) => {
-    await page.getByTestId("category-communication").click();
-    await page.getByTestId("tag-chat").click();
-    await expect(page.locator("[data-testid='app-card']")).toHaveCount(1);
-
-    await page.getByTestId("tag-demo").click();
-    await expect(page.locator("[data-testid='app-card']")).toHaveCount(0);
+  test("there is no keyword-tag row — categories are the only facet", async ({ page }) => {
+    // The tag row was one chip per keyword across 40-odd tags, most of them
+    // matching a single app. It is gone; the shelves are the whole filter.
+    await expect(page.getByTestId("category-communication")).toBeVisible();
+    await expect(page.getByTestId("tag-chat")).toHaveCount(0);
+    await expect(page.getByTestId("tag-demo")).toHaveCount(0);
+    await expect(page.getByTestId("toggle-all-tags")).toHaveCount(0);
   });
 
   test("Clear filters drops the chips but keeps the search box", async ({ page }) => {
@@ -183,7 +159,7 @@ test.describe("Marketplace – category and tag filters", () => {
     // An unfiltered listing does not say "2 of 2" — the second half only earns
     // its place when something is hidden.
     await expect(page.getByTestId("marketplace-count")).toHaveText("2 applications");
-    await page.getByTestId("tag-chat").click();
+    await page.getByTestId("category-communication").click();
     await expect(page.getByTestId("marketplace-count")).toHaveText("1 application of 2");
   });
 });

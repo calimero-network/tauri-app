@@ -103,6 +103,28 @@ export function decodeInvite(blob: string): PairInvite | null {
   };
 }
 
+/** The invite a holder hands out. The account namespace is what lets the new
+ *  device follow this account's projects on its own; the list still rides along
+ *  for a node too old to be given one. */
+export function buildInvite({
+  rootKey,
+  namespaces,
+  apps,
+  accountNamespaceId,
+}: {
+  rootKey: string;
+  namespaces: string[];
+  apps: PairInviteApp[];
+  accountNamespaceId?: string | null;
+}): PairInvite {
+  return {
+    rootKey,
+    namespaces,
+    ...(accountNamespaceId ? { accountNamespace: accountNamespaceId } : {}),
+    ...(apps.length ? { apps } : {}),
+  };
+}
+
 /** The confirmation code is deliberately left out: a code that travels with the
  *  keys it describes proves nothing, since one forger rewrites both. */
 export function encodeReply(result: PairInitResult): string {
@@ -215,11 +237,13 @@ async function waitForDevice(deviceId: string): Promise<boolean> {
 interface WizardProps {
   /** From this node's identity; without one it cannot invite anybody. */
   rootKey?: string;
+  /** Also from identity, absent on a node too old to hold an account namespace. */
+  accountNamespaceId?: string | null;
   onLinked: (deviceId: string, converged: boolean) => void;
   onClose: () => void;
 }
 
-export function DevicePairWizard({ rootKey, onLinked, onClose }: WizardProps) {
+export function DevicePairWizard({ rootKey, accountNamespaceId, onLinked, onClose }: WizardProps) {
   const [namespaces, setNamespaces] = useState<NamespaceSummary[]>([]);
   const [applications, setApplications] = useState<AccountApplication[]>([]);
   const [installed, setInstalled] = useState<InstalledApp[]>([]);
@@ -459,11 +483,14 @@ export function DevicePairWizard({ rootKey, onLinked, onClose }: WizardProps) {
     );
   }
 
-  const invite = encodeInvite({
-    rootKey,
-    namespaces: inviteNs,
-    apps: inviteApps(scopedApps, installed),
-  });
+  const invite = encodeInvite(
+    buildInvite({
+      rootKey,
+      namespaces: inviteNs,
+      apps: inviteApps(scopedApps, installed),
+      accountNamespaceId,
+    }),
+  );
 
   return (
     <div className="account-wizard">

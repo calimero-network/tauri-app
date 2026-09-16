@@ -6,6 +6,7 @@ import {
   scopeRow,
   certifiedIntoAccount,
   installableApps,
+  buildInvite,
   inviteApps,
   decodeInvite,
   decodeReply,
@@ -76,6 +77,38 @@ describe("invite blob", () => {
     expect(decodeInvite("mero-pair:not-base64!!")).toBeNull();
     expect(decodeInvite(encodeReply(INIT))).toBeNull();
     expect(decodeInvite(`mero-pair:${btoa(JSON.stringify({ rootKey: "x" }))}`)).toBeNull();
+  });
+});
+
+describe("buildInvite", () => {
+  it("names the account namespace when this node reports one", () => {
+    expect(
+      buildInvite({ rootKey: ROOT_KEY, namespaces: ["ns-1"], apps: [], accountNamespaceId: ACCOUNT_NS }),
+    ).toEqual({ rootKey: ROOT_KEY, namespaces: ["ns-1"], accountNamespace: ACCOUNT_NS });
+  });
+
+  it("leaves the key out when the node reports none", () => {
+    const invite = buildInvite({
+      rootKey: ROOT_KEY,
+      namespaces: ["ns-1"],
+      apps: [],
+      accountNamespaceId: null,
+    });
+
+    expect("accountNamespace" in invite).toBe(false);
+    expect(invite).toEqual({ rootKey: ROOT_KEY, namespaces: ["ns-1"] });
+  });
+
+  it("keeps naming the namespaces, for a node that cannot follow an account one", () => {
+    const apps = [{ package: "com.calimero.chat", version: "1.0.0" }];
+    expect(
+      buildInvite({ rootKey: ROOT_KEY, namespaces: ["ns-1"], apps, accountNamespaceId: ACCOUNT_NS }),
+    ).toEqual({
+      rootKey: ROOT_KEY,
+      namespaces: ["ns-1"],
+      accountNamespace: ACCOUNT_NS,
+      apps,
+    });
   });
 });
 

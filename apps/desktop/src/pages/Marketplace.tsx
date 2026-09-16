@@ -12,13 +12,7 @@ import {
 } from "../utils/marketplaceCache";
 import { listInstalledApps, invalidateInstalledApps } from "../utils/installedAppsCache";
 import { truncateText } from "../utils/string";
-import {
-  categoryFacets,
-  matchesFacets,
-  tagFacets,
-  toggleTag,
-  TAG_CHIP_LIMIT,
-} from "../utils/appFilters";
+import { categoryFacets, matchesFacets } from "../utils/appFilters";
 import { useToast } from "../contexts/ToastContext";
 import Skeleton from "../components/Skeleton";
 import AppCard from "../components/AppCard";
@@ -43,13 +37,11 @@ function Marketplace({ clientReady = true }: MarketplaceProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [installedAppIds, setInstalledAppIds] = useState<Set<string>>(new Set());
   const [filterInstalled, setFilterInstalled] = useState<'all' | 'installed' | 'not-installed'>('all');
-  // The facet rows. ⚠️ Local state, not the URL: this shell has no router —
-  // App.tsx switches on a `Page` union — so there is no address to put them
-  // in. The admin dashboard, which does have one, keeps the same two filters
-  // in its query string.
+  // The category shelf. ⚠️ Local state, not the URL: this shell has no router —
+  // App.tsx switches on a `Page` union — so there is no address to put it in.
+  // The admin dashboard, which does have one, keeps the same filter in its
+  // query string.
   const [category, setCategory] = useState<string>('');
-  const [selectedTags, setSelectedTags] = useState<string[]>([]);
-  const [showAllTags, setShowAllTags] = useState(false);
   const [installingAppId, setInstallingAppId] = useState<string | null>(null);
   // Track whether a background refresh is in progress (no skeleton shown)
   const [refreshing, setRefreshing] = useState(false);
@@ -324,8 +316,8 @@ function Marketplace({ clientReady = true }: MarketplaceProps) {
       filtered = filtered.filter(app => !app.installed);
     }
 
-    // Apply the category shelf and the keyword tags
-    filtered = filtered.filter(app => matchesFacets(app, { category, tags: selectedTags }));
+    // Apply the category shelf
+    filtered = filtered.filter(app => matchesFacets(app, { category }));
 
     // Sort by name
     const sorted = [...filtered].sort((a, b) => {
@@ -333,7 +325,7 @@ function Marketplace({ clientReady = true }: MarketplaceProps) {
     });
 
     return sorted;
-  }, [apps, filterInstalled, searchQuery, category, selectedTags]);
+  }, [apps, filterInstalled, searchQuery, category]);
 
   // ⚠️ THE CHIPS COME FROM THE LISTING, and from the WHOLE listing rather than
   // from what the other filters have left. Both halves matter: offering all
@@ -341,13 +333,10 @@ function Marketplace({ clientReady = true }: MarketplaceProps) {
   // apps today), and recomputing them against the current filters would make
   // chips vanish from under the cursor as you press them.
   const categories = useMemo(() => categoryFacets(apps), [apps]);
-  const tags = useMemo(() => tagFacets(apps), [apps]);
-  const visibleTags = showAllTags ? tags : tags.slice(0, TAG_CHIP_LIMIT);
 
-  const hasFacetFilters = category !== '' || selectedTags.length > 0;
+  const hasFacetFilters = category !== '';
   const clearFacets = useCallback(() => {
     setCategory('');
-    setSelectedTags([]);
   }, []);
 
   const handleInstall = async (app: MarketplaceApp, version: string = app.latest_version) => {
@@ -514,39 +503,6 @@ function Marketplace({ clientReady = true }: MarketplaceProps) {
             </div>
           )}
 
-          {/* Keyword tags. Multi-select and ANDed, so every chip you add makes
-              the list shorter — a filter row that can grow the result set is
-              the one people stop trusting. */}
-          {tags.length > 0 && (
-            <div className="facet-row" role="group" aria-label="Filter by tag">
-              {visibleTags.map(t => {
-                const active = selectedTags.includes(t.id);
-                return (
-                  <button
-                    key={t.id}
-                    type="button"
-                    className={`facet-chip facet-chip-tag${active ? ' active' : ''}`}
-                    aria-pressed={active}
-                    data-testid={`tag-${t.id}`}
-                    onClick={() => setSelectedTags(prev => toggleTag(prev, t.id))}
-                  >
-                    {t.label}
-                    <span className="facet-count">{t.count}</span>
-                  </button>
-                );
-              })}
-              {tags.length > TAG_CHIP_LIMIT && (
-                <button
-                  type="button"
-                  className="facet-more"
-                  data-testid="toggle-all-tags"
-                  onClick={() => setShowAllTags(v => !v)}
-                >
-                  {showAllTags ? 'Show fewer' : `+${tags.length - TAG_CHIP_LIMIT} more`}
-                </button>
-              )}
-            </div>
-          )}
         </div>
 
         {/* The count is what tells a filtered listing apart from a broken one:

@@ -121,11 +121,20 @@ export async function listAccountApplications(): Promise<AccountApplication[]> {
   return applications.filter((app) => !ALL_ZERO.test(app.applicationId));
 }
 
+/** With an account namespace the device follows the account's projects itself,
+ *  so `namespaces` may be empty; core refuses only a request naming neither. */
 export function pairInit(
   accountRootPublicKey: string,
   namespaces: string[],
+  accountNamespace?: string,
 ): Promise<PairInitResult> {
-  return nodeCall(admin().initAccountPairing({ accountRootPublicKey, namespaces }));
+  return nodeCall(
+    admin().initAccountPairing({
+      accountRootPublicKey,
+      namespaces,
+      ...(accountNamespace ? { accountNamespace } : {}),
+    }),
+  );
 }
 
 export function pairComplete(

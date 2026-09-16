@@ -44,6 +44,9 @@ export interface PairInviteApp {
 export interface PairInvite {
   rootKey: string;
   namespaces: string[];
+  /** The account's own namespace, which a device follows the account's projects
+   *  through. Absent from an invite a node too old to report one handed out. */
+  accountNamespace?: string;
   apps?: PairInviteApp[];
 }
 
@@ -88,10 +91,16 @@ export function decodeInvite(blob: string): PairInvite | null {
   const namespaces = Array.isArray(body?.namespaces)
     ? body.namespaces.filter((id): id is string => typeof id === "string" && id.length > 0)
     : [];
-  // Core refuses an empty namespace list, so an invite carrying none is not one.
-  if (!rootKey || !namespaces.length) return null;
+  const accountNamespace = str(body?.accountNamespace);
+  // Core refuses a request naming neither, so a blob naming neither is not an invite.
+  if (!rootKey || (!namespaces.length && !accountNamespace)) return null;
   const apps = installableApps(body?.apps);
-  return { rootKey, namespaces, ...(apps.length ? { apps } : {}) };
+  return {
+    rootKey,
+    namespaces,
+    ...(accountNamespace ? { accountNamespace } : {}),
+    ...(apps.length ? { apps } : {}),
+  };
 }
 
 /** The confirmation code is deliberately left out: a code that travels with the

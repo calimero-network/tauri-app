@@ -853,6 +853,67 @@ test.describe("Account page - pairing wizard", () => {
     expect(JSON.parse(bodies[0]).applications).toEqual([MOCK_OTHER_APPLICATION_ID]);
   });
 
+  test("a name typed on the confirm step is stored against the device", async ({
+    page,
+  }) => {
+    const bodies: string[] = [];
+    await page.route(API_ROUTES.createDeviceAlias, (route) => {
+      bodies.push(route.request().postData() ?? "");
+      return route.fulfill(json({ data: {} }));
+    });
+
+    await page.locator("#pair-next").click();
+    await page.fill("#pair-response", MOCK_PAIR_REPLY_BLOB);
+    await page.fill("#pair-code", MOCK_PAIR_INIT.confirmationCode);
+    await page.fill("#pair-name", "  Alice's iPhone  ");
+    await page.locator("#pair-complete").click();
+
+    await expect(page.locator("#pair-success")).toBeVisible();
+    expect(JSON.parse(bodies[0])).toEqual({
+      alias: "Alice's iPhone",
+      deviceId: MOCK_PAIR_INIT.deviceId,
+    });
+  });
+
+  test("leaving the name empty names nothing", async ({ page }) => {
+    let named = 0;
+    await page.route(API_ROUTES.createDeviceAlias, (route) => {
+      named += 1;
+      return route.fulfill(json({ data: {} }));
+    });
+
+    await page.locator("#pair-next").click();
+    await page.fill("#pair-response", MOCK_PAIR_REPLY_BLOB);
+    await page.fill("#pair-code", MOCK_PAIR_INIT.confirmationCode);
+    await page.locator("#pair-complete").click();
+
+    await expect(page.locator("#pair-success")).toBeVisible();
+    expect(named).toBe(0);
+  });
+
+  test("a name the node refuses is said out loud, and the device stays added", async ({
+    page,
+  }) => {
+    await page.route(API_ROUTES.createDeviceAlias, (route) =>
+      route.fulfill({
+        status: 400,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "alias contains an invalid character" }),
+      }),
+    );
+
+    await page.locator("#pair-next").click();
+    await page.fill("#pair-response", MOCK_PAIR_REPLY_BLOB);
+    await page.fill("#pair-code", MOCK_PAIR_INIT.confirmationCode);
+    await page.fill("#pair-name", "Alice/iPhone");
+    await page.locator("#pair-complete").click();
+
+    await expect(page.locator("#pair-success")).toBeVisible();
+    await expect(page.locator("#pair-name-error")).toHaveText(
+      "alias contains an invalid character",
+    );
+  });
+
   test("the confirm step takes the reply and the code in separate fields", async ({
     page,
   }) => {

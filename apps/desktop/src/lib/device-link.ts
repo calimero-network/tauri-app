@@ -7,6 +7,7 @@ import {
   HTTPError,
   type AccountApplicationEntry,
   type AccountDeviceEntry,
+  type CreateDeviceAliasRequest,
   type AccountPairCompleteResponseData,
   type AccountPairInitResponseData,
   type NodeIdentity,
@@ -20,6 +21,9 @@ const LIST_LIMIT = 1000;
 /** The node revoked our token family; no retry can succeed. */
 const REVOKED_AUTH_ERRORS = ['token_reuse', 'token_revoked'];
 const REVOKED_MESSAGE = 'Your node session was revoked. Sign in again, then try again.';
+
+/** Core's `Alias` refuses an empty name and caps the length; 50 also keeps a row readable. */
+const ALIAS_MAX_LENGTH = 50;
 
 const HEX_64 = /^[0-9a-fA-F]{64}$/;
 const ALL_ZERO = /^0{64}$/;
@@ -126,6 +130,17 @@ export function activeDeviceCount(devices: AccountDevice[]): number {
  *  calls the account's devices, not what the account calls them. */
 export async function listDeviceAliases(): Promise<Record<string, string>> {
   return (await nodeCall(admin().listDeviceAliases())) ?? {};
+}
+
+export async function createDeviceAlias(request: CreateDeviceAliasRequest): Promise<void> {
+  await nodeCall(admin().createDeviceAlias(request));
+}
+
+/** What a name field holds once core's own bounds are applied, or null where it
+ *  holds nothing worth sending. Core refuses the rest in its own words. */
+export function aliasFromInput(text: string): string | null {
+  const alias = text.trim();
+  return alias.length > 0 && alias.length <= ALIAS_MAX_LENGTH ? alias : null;
 }
 
 export async function listAccountApplications(): Promise<AccountApplication[]> {

@@ -5,6 +5,8 @@ import AppIcon from "./AppIcon";
 import CopyButton from "./CopyButton";
 import { SkeletonText } from "./Skeleton";
 import {
+  aliasFromInput,
+  createDeviceAlias,
   listAccountApplications,
   refusalStatus,
   listAccountDevices,
@@ -297,6 +299,8 @@ export function DevicePairWizard({ rootKey, accountNamespaceId, onLinked, onClos
   const [chosenApps, setChosenApps] = useState<string[]>([]);
   const [replyText, setReplyText] = useState("");
   const [code, setCode] = useState("");
+  const [deviceName, setDeviceName] = useState("");
+  const [nameError, setNameError] = useState("");
   const [linking, setLinking] = useState(false);
   const [linkError, setLinkError] = useState("");
   // A 409 refuses the SCOPE, not the payload, so retyping the code cannot help.
@@ -361,6 +365,14 @@ export function DevicePairWizard({ rootKey, accountNamespaceId, onLinked, onClos
     setScopeRefused(false);
     try {
       const done = await pairComplete(payload, scopedApps);
+      // The device is certified either way, so a refused name is reported rather
+      // than thrown: it is a convenience this node stores on its own.
+      const alias = aliasFromInput(deviceName);
+      if (alias) {
+        await createDeviceAlias({ alias, deviceId: done.deviceId }).catch((err: unknown) =>
+          setNameError(parseTauriError(err, "Could not save that name")),
+        );
+      }
       const seen = await waitForDevice(done.deviceId);
       setResult(done);
       setConverged(seen);
@@ -436,6 +448,11 @@ export function DevicePairWizard({ rootKey, accountNamespaceId, onLinked, onClos
             ? "The device has its account key."
             : "The account key has not reached it yet - the device's sync pull will retry."}
         </p>
+        {nameError && (
+          <p className="field-error" id="pair-name-error">
+            {nameError}
+          </p>
+        )}
         {!converged && (
           <p className="field-hint" id="pair-syncing-note">
             It has not appeared in the list here yet; it is still syncing.
@@ -590,6 +607,17 @@ export function DevicePairWizard({ rootKey, accountNamespaceId, onLinked, onClos
           Type it in yourself. It is not part of the reply, so that a rewritten reply cannot
           carry a matching code.
         </p>
+      </div>
+      <div className="settings-field">
+        <label htmlFor="pair-name">Name this device</label>
+        <input
+          id="pair-name"
+          type="text"
+          value={deviceName}
+          onChange={(e) => setDeviceName(e.target.value)}
+          placeholder="for example, Alice's iPhone"
+        />
+        <p className="field-hint">Optional, and kept on this computer only.</p>
       </div>
       {invalid && <p className="field-error" id="pair-invalid">{invalid}</p>}
       {linkError && <p className="field-error" id="pair-error">{linkError}</p>}

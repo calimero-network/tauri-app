@@ -32,6 +32,7 @@ vi.mock('./mero-client', async (importOriginal) => {
 // Imported once, unlike agent-connect's suite: device-link.ts keeps no module state.
 import {
   activeDeviceCount,
+  aliasFromInput,
   listAccountApplications,
   listAccountDevices,
   listNamespaces,
@@ -546,5 +547,21 @@ describe('activeDeviceCount', () => {
 
   it('counts nothing on an account with no devices', () => {
     expect(activeDeviceCount([])).toBe(0);
+  });
+});
+
+describe('aliasFromInput', () => {
+  it('takes a name the way it was typed, without the surrounding space', () => {
+    expect(aliasFromInput("  Alice's iPhone  ")).toBe("Alice's iPhone");
+  });
+
+  it('reads an empty field, or one holding only space, as no name at all', () => {
+    expect(aliasFromInput('')).toBeNull();
+    expect(aliasFromInput('   ')).toBeNull();
+  });
+
+  it('refuses a name past what core stores, and takes one at the limit', () => {
+    expect(aliasFromInput('n'.repeat(50))).toBe('n'.repeat(50));
+    expect(aliasFromInput('n'.repeat(51))).toBeNull();
   });
 });

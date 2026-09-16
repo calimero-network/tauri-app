@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { NamespaceSummary, PairInitResult } from "../lib/device-link";
+import type { PastedBlob } from "./DevicePairing";
 import {
   applicationLabel,
   applicationNamespaces,
@@ -16,6 +17,7 @@ import {
   encodeInvite,
   encodeReply,
   inviteNamespaces,
+  pasteActionLabel,
 } from "./DevicePairing";
 
 const INIT: PairInitResult = {
@@ -145,6 +147,26 @@ describe("classifyPastedBlob", () => {
   it("reads neither out of a blob that is neither", () => {
     expect(classifyPastedBlob("hello")).toBeNull();
     expect(classifyPastedBlob(encodeReply(INIT))).toBeNull();
+  });
+});
+
+describe("pasteActionLabel", () => {
+  const invite: PastedBlob = { kind: "invite", invite: { rootKey: ROOT_KEY, namespaces: ["ns-1"] } };
+  const link: PastedBlob = { kind: "link", code: { rootKey: ROOT_KEY, accountNamespace: ACCOUNT_NS } };
+
+  it("offers a response for an invite, and a fresh one once it has answered", () => {
+    expect(pasteActionLabel(invite, false, false)).toBe("Get response");
+    expect(pasteActionLabel(invite, false, true)).toBe("Get a new response");
+  });
+
+  it("names the only thing a link code does, which is not a response", () => {
+    expect(pasteActionLabel(link, false, false)).toBe("Follow the account");
+    expect(pasteActionLabel(link, false, true)).toBe("Follow the account");
+  });
+
+  it("says it is working over either of them", () => {
+    expect(pasteActionLabel(link, true, false)).toBe("Working…");
+    expect(pasteActionLabel(null, true, false)).toBe("Working…");
   });
 });
 

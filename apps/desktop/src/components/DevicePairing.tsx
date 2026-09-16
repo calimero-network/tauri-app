@@ -8,6 +8,7 @@ import {
   refusalStatus,
   listAccountDevices,
   listNamespaces,
+  nodeIdentity,
   pairInit,
   pairComplete,
   normalizeConfirmationCode,
@@ -157,6 +158,17 @@ export function classifyPastedBlob(text: string): PastedBlob | null {
   if (invite) return { kind: "invite", invite };
   const code = decodeLinkCode(text);
   return code ? { kind: "link", code } : null;
+}
+
+/** One button drives both paths, so its label has to say which one was pasted. */
+export function pasteActionLabel(
+  pasted: PastedBlob | null,
+  busy: boolean,
+  answered: boolean,
+): string {
+  if (busy) return "Working…";
+  if (pasted?.kind === "link") return "Follow the account";
+  return answered ? "Get a new response" : "Get response";
 }
 
 /** The confirmation code is deliberately left out: a code that travels with the
@@ -670,6 +682,10 @@ export function DevicePairResponder({ enrolledDeviceId }: { enrolledDeviceId?: s
   const [linked, setLinked] = useState(false);
   const [open, setOpen] = useState(false);
   const [step, setStep] = useState<0 | 1>(0);
+  // The account namespace a pasted link code named, kept while this node is
+  // watched for having picked it up.
+  const [following, setFollowing] = useState<LinkCode | null>(null);
+  const [followed, setFollowed] = useState(false);
 
   // Closing stops the poll: `answered` is what the effect watches, so dropping it
   // tears the loop down rather than leaving it running behind a shut dialog.
@@ -678,13 +694,24 @@ export function DevicePairResponder({ enrolledDeviceId }: { enrolledDeviceId?: s
     setAnswered(null);
   };
 
-  const invite = decodeInvite(inviteText);
+  const pasted = classifyPastedBlob(inviteText);
 
   const start = async () => {
-    if (!invite) return;
+    if (!pasted) return;
     setBusy(true);
     setError("");
+    setFollowing(null);
+    setFollowed(false);
     try {
+      // A link code replays pair-init on a device that is already paired, so it
+      // mints nothing and there is no code to read back: the node picking the
+      // account namespace up is the whole result.
+      if (pasted.kind === "link") {
+        await pairInit(pasted.code.rootKey, [], pasted.code.accountNamespace);
+        setFollowing(pasted.code);
+        return;
+      }
+      const { invite } = pasted;
       // Kept on failure: pair-init is idempotent, so the holder can just retry
       // against this same response instead of restarting the wizard.
       setResult(await pairInit(invite.rootKey, invite.namespaces, invite.accountNamespace));
@@ -695,11 +722,36 @@ export function DevicePairResponder({ enrolledDeviceId }: { enrolledDeviceId?: s
       setOpen(true);
       setAnswered(invite);
     } catch (err: unknown) {
-      setError(parseTauriError(err, "Could not answer that invite"));
+      setError(
+        parseTauriError(
+          err,
+          pasted.kind === "link"
+            ? "Could not link this computer to that account"
+            : "Could not answer that invite",
+        ),
+      );
     } finally {
       setBusy(false);
     }
   };
+
+  useEffect(() => {
+    if (!following) return;
+    let cancelled = false;
+
+    void (async () => {
+      while (!cancelled) {
+        const identity = await nodeIdentity().catch(() => null);
+        if (identity?.accountNamespaceId === following.accountNamespace) break;
+        await new Promise((resolve) => setTimeout(resolve, POLL_MS));
+      }
+      if (!cancelled) setFollowed(true);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [following]);
 
   // Nothing has vouched for the invite until the holder accepts the code, and its
   // sources are only pasted URLs until then, so the install waits for the link.
@@ -759,28 +811,32 @@ export function DevicePairResponder({ enrolledDeviceId }: { enrolledDeviceId?: s
     <>
       <p className="field-hint" style={{ marginBottom: "16px" }}>
         Run this on the computer you are adding. Paste the invite from the computer that
-        already holds the account, then read the confirmation code back to it.
+        already holds the account, then read the confirmation code back to it. A link code
+        from that computer needs no code read back.
       </p>
-      {enrolledDeviceId && (
+      {/* A link code is meant for a device that already has an identity, so the
+          warning about one would be telling it to stop. */}
+      {enrolledDeviceId && pasted?.kind !== "link" && (
         <p className="field-hint account-warning" id="pair-already-enrolled">
           This computer already has an identity of its own. Pairing it into another account
           will be refused for anything it is already part of.
         </p>
       )}
       <div className="settings-field">
-        <label htmlFor="pair-invite-input">Invite from the other computer</label>
+        <label htmlFor="pair-invite-input">Invite or link code from the other computer</label>
         <textarea
           id="pair-invite-input"
           className="account-blob-input"
           rows={3}
           value={inviteText}
           onChange={(e) => setInviteText(e.target.value)}
-          placeholder={`${INVITE_PREFIX}…`}
+          placeholder={`${INVITE_PREFIX}… or ${LINK_PREFIX}…`}
         />
       </div>
-      {inviteText.trim() && !invite && (
+      {inviteText.trim() && !pasted && (
         <p className="field-error" id="pair-invite-invalid">
-          That is not an invite. Copy the whole block, including the {INVITE_PREFIX} prefix.
+          That is not an invite or a link code. Copy the whole block, including the{" "}
+          {INVITE_PREFIX} or {LINK_PREFIX} prefix.
         </p>
       )}
       {error && <p className="field-error" id="pair-init-error">{error}</p>}
@@ -789,11 +845,30 @@ export function DevicePairResponder({ enrolledDeviceId }: { enrolledDeviceId?: s
         id="pair-init"
         className="button button-primary"
         onClick={start}
-        disabled={!invite || busy}
+        disabled={!pasted || busy}
       >
         <KeyRound size={14} style={{ marginRight: "6px", verticalAlign: "middle" }} />
-        {busy ? "Working…" : result ? "Get a new response" : "Get response"}
+        {pasteActionLabel(pasted, busy, !!result)}
       </button>
+
+      {following && (
+        <div
+          className={`account-pair-link-state is-${followed ? "linked" : "waiting"}`}
+          id="link-follow-state"
+        >
+          {followed ? (
+            <>
+              <Check size={14} />
+              <span>This device now follows the account.</span>
+            </>
+          ) : (
+            <>
+              <Loader2 size={14} className="account-spin" />
+              <span>Waiting for this device to pick the account up…</span>
+            </>
+          )}
+        </div>
+      )}
 
       {result &&
         open &&

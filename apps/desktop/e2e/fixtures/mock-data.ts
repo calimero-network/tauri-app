@@ -360,6 +360,16 @@ export const MOCK_PAIR_INVITE_BLOB =
     }),
   );
 
+/** What a device paired before the account namespace existed is handed. */
+export const MOCK_LINK_CODE_BLOB =
+  "mero-link:" +
+  btoa(
+    JSON.stringify({
+      rootKey: MOCK_NODE_IDENTITY.accountRootPublicKey,
+      accountNamespace: MOCK_NODE_IDENTITY.accountNamespaceId,
+    }),
+  );
+
 /** The new device's answer. The confirmation code is deliberately not in it. */
 export const MOCK_PAIR_REPLY_BLOB =
   "mero-pair-reply:" +

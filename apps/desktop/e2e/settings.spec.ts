@@ -19,6 +19,7 @@ import {
   MOCK_OTHER_NAMESPACE_ID,
   MOCK_PAIR_COMPLETE,
   MOCK_PAIR_INIT,
+  MOCK_LINK_CODE_BLOB,
   MOCK_PAIR_INVITE_BLOB,
   MOCK_PAIR_REPLY_BLOB,
   MOCK_RELINK,
@@ -325,8 +326,8 @@ test.describe("Tab switching", () => {
 });
 // ─── Account tab ────────────────────────────────────────────────────────────
 
-const json = (body: unknown) => ({
-  status: 200,
+const json = (body: unknown, status = 200) => ({
+  status,
   contentType: "application/json",
   body: JSON.stringify(body),
 });
@@ -695,6 +696,62 @@ test.describe("Account tab - pairing responder", () => {
     await expect(page.locator("#pair-confirmation-code")).toHaveText(
       MOCK_PAIR_INIT.confirmationCode,
     );
+  });
+
+  test("a link code follows the account with no response and no spoken code", async ({
+    page,
+  }) => {
+    const initBodies: string[] = [];
+    await page.route(API_ROUTES.pairInit, (route) => {
+      initBodies.push(route.request().postData() ?? "");
+      return route.fulfill(json({ data: MOCK_PAIR_INIT }));
+    });
+
+    await page.fill("#pair-invite-input", MOCK_LINK_CODE_BLOB);
+    await expect(page.locator("#pair-init")).toHaveText("Follow the account");
+    // This device having an identity is the premise of a link code, not a warning.
+    await expect(page.locator("#pair-already-enrolled")).toHaveCount(0);
+    await page.locator("#pair-init").click();
+
+    await expect(page.locator("#link-follow-state")).toContainText(
+      "This device now follows the account.",
+    );
+    await expect(page.locator("#pair-reply")).toHaveCount(0);
+    expect(JSON.parse(initBodies[0])).toEqual({
+      accountRootPublicKey: MOCK_NODE_IDENTITY.accountRootPublicKey,
+      namespaces: [],
+      accountNamespace: MOCK_NODE_IDENTITY.accountNamespaceId,
+    });
+  });
+
+  test("a link code waits while this device has not picked the namespace up", async ({
+    page,
+  }) => {
+    await page.route(API_ROUTES.identity, (route) =>
+      route.fulfill(json({ data: { ...MOCK_NODE_IDENTITY, accountNamespaceId: null } })),
+    );
+
+    await page.fill("#pair-invite-input", MOCK_LINK_CODE_BLOB);
+    await page.locator("#pair-init").click();
+
+    await expect(page.locator("#link-follow-state")).toContainText("Waiting for this device");
+    await expect(page.locator("#link-follow-state")).toHaveClass(/is-waiting/);
+  });
+
+  test("a link code for another account is refused in the node's own words", async ({
+    page,
+  }) => {
+    await page.route(API_ROUTES.pairInit, (route) =>
+      route.fulfill(json({ error: "this device belongs to another account" }, 403)),
+    );
+
+    await page.fill("#pair-invite-input", MOCK_LINK_CODE_BLOB);
+    await page.locator("#pair-init").click();
+
+    await expect(page.locator("#pair-init-error")).toHaveText(
+      "this device belongs to another account",
+    );
+    await expect(page.locator("#link-follow-state")).toHaveCount(0);
   });
 
   test("it waits while the account roster has not reached this device", async ({ page }) => {

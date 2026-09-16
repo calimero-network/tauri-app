@@ -15,6 +15,9 @@ import { SkeletonText, SkeletonTable } from "./Skeleton";
 import { useVisiblePoll } from "../hooks/useVisiblePoll";
 import type { NodeIdentity } from "@calimero-network/mero-js";
 import {
+  aliasFromInput,
+  createDeviceAlias,
+  deleteDeviceAlias,
   listAccountApplications,
   listAccountDevices,
   listDeviceAliases,
@@ -332,6 +335,8 @@ export default function AccountPanel() {
   const [devicesLoading, setDevicesLoading] = useState(false);
   const [devicesError, setDevicesError] = useState("");
   const [aliases, setAliases] = useState<Record<string, string>>({});
+  const [renaming, setRenaming] = useState("");
+  const [renameText, setRenameText] = useState("");
   const [wizardOpen, setWizardOpen] = useState(false);
   const [reloads, setReloads] = useState(0);
   const [deviceReloads, setDeviceReloads] = useState(0);
@@ -512,6 +517,35 @@ export default function AccountPanel() {
     });
   };
 
+  // Aliases are this node's own, so a rename changes nothing the device listing
+  // carries: the map is corrected here rather than by refetching the roster.
+  const rename = async (device: DeviceRow) => {
+    const alias = aliasFromInput(renameText);
+    if (!alias) return;
+    const previous = deviceLabel(device.deviceId, aliases);
+    setBusyDevice(device.deviceId);
+    setRowNote(null);
+    try {
+      await createDeviceAlias({ alias, deviceId: device.deviceId });
+      // The name is stored, so the row takes it before the old one is dropped:
+      // a failed delete leaves a stale alias, not a row under the wrong name.
+      setAliases((prev) => ({
+        ...(previous ? dropKey(prev, previous) : prev),
+        [alias]: device.deviceId,
+      }));
+      setRenaming("");
+      if (previous && previous !== alias) await deleteDeviceAlias(previous);
+    } catch (err: unknown) {
+      setRowNote({
+        deviceId: device.deviceId,
+        text: parseTauriError(err, "Could not save that name"),
+        error: true,
+      });
+    } finally {
+      setBusyDevice("");
+    }
+  };
+
   const install = async (app: AccountAppRow) => {
     if (!app.package || !app.version) return;
     setInstalling(app.applicationId);
@@ -552,7 +586,9 @@ export default function AccountPanel() {
 
     return (
       <div
-        className={`account-device-row${open ? " is-open" : ""}`}
+        className={`account-device-row${open ? " is-open" : ""}${
+          renaming === device.deviceId ? " is-renaming" : ""
+        }`}
         key={device.deviceId}
         id={`device-row-${device.deviceId}`}
       >
@@ -583,6 +619,46 @@ export default function AccountPanel() {
               </span>
             </span>
           </button>
+          {open && (isHolder || device.isSelf) && (
+            renaming === device.deviceId ? (
+              <>
+                <input
+                  id={`device-rename-input-${device.deviceId}`}
+                  className="account-rename"
+                  type="text"
+                  autoFocus
+                  value={renameText}
+                  placeholder="for example, Alice's iPhone"
+                  onChange={(e) => setRenameText(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") rename(device);
+                    if (e.key === "Escape") setRenaming("");
+                  }}
+                />
+                <button
+                  type="button"
+                  id={`device-rename-save-${device.deviceId}`}
+                  className="button button-primary button-small"
+                  disabled={!aliasFromInput(renameText) || busyDevice === device.deviceId}
+                  onClick={() => rename(device)}
+                >
+                  Save
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                id={`device-rename-${device.deviceId}`}
+                className="button button-secondary button-small"
+                onClick={() => {
+                  setRenaming(device.deviceId);
+                  setRenameText(name ?? "");
+                }}
+              >
+                Rename
+              </button>
+            )
+          )}
           <span className={`account-status is-${status}`}>{DEVICE_STATUS_LABEL[status]}</span>
           <div className="account-row-actions">
           {confirmRevoke === device.deviceId ? (

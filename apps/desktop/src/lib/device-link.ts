@@ -136,6 +136,10 @@ export async function createDeviceAlias(request: CreateDeviceAliasRequest): Prom
   await nodeCall(admin().createDeviceAlias(request));
 }
 
+export async function deleteDeviceAlias(name: string): Promise<void> {
+  await nodeCall(admin().deleteDeviceAlias(name));
+}
+
 /** What a name field holds once core's own bounds are applied, or null where it
  *  holds nothing worth sending. Core refuses the rest in its own words. */
 export function aliasFromInput(text: string): string | null {

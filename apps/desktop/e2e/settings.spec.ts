@@ -588,6 +588,75 @@ test.describe("Account page - device listing", () => {
     );
   });
 
+  test("renaming a device stores the new name and drops the old one", async ({
+    page,
+  }) => {
+    const calls: string[] = [];
+    await page.route(API_ROUTES.createDeviceAlias, (route) => {
+      calls.push(`create ${route.request().postData()}`);
+      return route.fulfill(json({ data: {} }));
+    });
+    await page.route(API_ROUTES.deleteDeviceAlias, (route) => {
+      calls.push(`delete ${decodeURIComponent(new URL(route.request().url()).pathname)}`);
+      return route.fulfill(json({ data: {} }));
+    });
+
+    await page.locator(`#device-expand-${MOCK_PAIR_INIT.deviceId}`).click();
+    await page.locator(`#device-rename-${MOCK_PAIR_INIT.deviceId}`).click();
+    const field = page.locator(`#device-rename-input-${MOCK_PAIR_INIT.deviceId}`);
+    await expect(field).toHaveValue("Alice's iPad");
+
+    await field.fill("Alice's tablet");
+    await page.locator(`#device-rename-save-${MOCK_PAIR_INIT.deviceId}`).click();
+
+    // The name is the row's before any poll, and the old alias is dropped only
+    // once the new one is stored.
+    await expect(
+      page.locator(`#device-row-${MOCK_PAIR_INIT.deviceId} .account-device-name`),
+    ).toContainText("Alice's tablet");
+    expect(calls).toEqual([
+      `create {"alias":"Alice's tablet","deviceId":"${MOCK_PAIR_INIT.deviceId}"}`,
+      "delete /admin-api/alias/delete/device/Alice's iPad",
+    ]);
+  });
+
+  test("Enter is enough to save a rename", async ({ page }) => {
+    await page.locator(`#device-expand-${MOCK_PAIR_INIT.deviceId}`).click();
+    await page.locator(`#device-rename-${MOCK_PAIR_INIT.deviceId}`).click();
+    await page.locator(`#device-rename-input-${MOCK_PAIR_INIT.deviceId}`).fill("Spare tablet");
+    await page.locator(`#device-rename-input-${MOCK_PAIR_INIT.deviceId}`).press("Enter");
+
+    await expect(
+      page.locator(`#device-row-${MOCK_PAIR_INIT.deviceId} .account-device-name`),
+    ).toContainText("Spare tablet");
+  });
+
+  test("Escape leaves the device named as it was", async ({ page }) => {
+    let named = 0;
+    await page.route(API_ROUTES.createDeviceAlias, (route) => {
+      named += 1;
+      return route.fulfill(json({ data: {} }));
+    });
+
+    await page.locator(`#device-expand-${MOCK_PAIR_INIT.deviceId}`).click();
+    await page.locator(`#device-rename-${MOCK_PAIR_INIT.deviceId}`).click();
+    await page.locator(`#device-rename-input-${MOCK_PAIR_INIT.deviceId}`).fill("Nothing doing");
+    await page.locator(`#device-rename-input-${MOCK_PAIR_INIT.deviceId}`).press("Escape");
+
+    await expect(page.locator(`#device-rename-input-${MOCK_PAIR_INIT.deviceId}`)).toHaveCount(0);
+    await expect(
+      page.locator(`#device-row-${MOCK_PAIR_INIT.deviceId} .account-device-name`),
+    ).toContainText("Alice's iPad");
+    expect(named).toBe(0);
+  });
+
+  test("a collapsed row offers no rename", async ({ page }) => {
+    await expect(page.locator(`#device-rename-${MOCK_PAIR_INIT.deviceId}`)).toHaveCount(0);
+
+    await page.locator(`#device-expand-${MOCK_PAIR_INIT.deviceId}`).click();
+    await expect(page.locator(`#device-rename-${MOCK_PAIR_INIT.deviceId}`)).toBeVisible();
+  });
+
   test("this device is offered neither a sync nor a revoke", async ({ page }) => {
     await expect(
       page.locator(`#device-sync-${MOCK_NODE_IDENTITY.deviceId}`),
@@ -661,6 +730,17 @@ test.describe("Account page - a device the account is held away from", () => {
     await expect(page.locator("#add-device")).toHaveCount(0);
     await expect(page.locator("#link-code-show")).toHaveCount(0);
     await expect(page.locator(`#device-revoke-${MOCK_PAIR_INIT.deviceId}`)).toHaveCount(0);
+  });
+
+  test("it may name its own row and no other", async ({ page }) => {
+    await setupDeveloperPage(page);
+    await mockHeldElsewhere(page);
+
+    await page.locator(`#device-expand-${MOCK_NODE_IDENTITY.deviceId}`).click();
+    await page.locator(`#device-expand-${MOCK_PAIR_INIT.deviceId}`).click();
+
+    await expect(page.locator(`#device-rename-${MOCK_NODE_IDENTITY.deviceId}`)).toBeVisible();
+    await expect(page.locator(`#device-rename-${MOCK_PAIR_INIT.deviceId}`)).toHaveCount(0);
   });
 
   test("sync is offered on its own row and on no other", async ({ page }) => {

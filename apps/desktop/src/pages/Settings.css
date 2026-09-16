@@ -786,6 +786,30 @@
   color: var(--text-secondary);
 }
 
+/* The head's title block stops stretching while a rename is open, so the field
+   sits beside the name it is editing rather than out by the actions. */
+.account-device-row.is-renaming .account-device-expand {
+  flex: none;
+}
+
+/* A field in the row head, so it takes the settings field's look at the height
+   the small buttons beside it stand at. */
+.account-rename {
+  width: 180px;
+  padding: 4px 8px;
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--text-primary);
+  background: var(--surface-glass-soft);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+}
+
+.account-rename:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+}
+
 .account-device-body {
   display: grid;
   grid-template-columns: 1fr 1fr;

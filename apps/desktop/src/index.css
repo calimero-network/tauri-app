@@ -475,6 +475,49 @@ body {
   color: var(--text-secondary);
 }
 
+/* ── Disclosure row: a list row that expands in place ── */
+.disclosure-row {
+  background: var(--surface-glass-soft);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+}
+
+.disclosure-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+}
+
+/* Stretches across the head, so the whole title block is the hit area. */
+.disclosure-trigger {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.disclosure-chevron {
+  flex: none;
+  color: var(--text-tertiary);
+  transition: transform 0.15s;
+}
+
+.disclosure-row.is-open .disclosure-chevron {
+  transform: rotate(90deg);
+}
+
+.disclosure-body {
+  border-top: 1px solid var(--border-color);
+}
+
 /* ── Toggle switch ── */
 .toggle-switch {
   display: flex;

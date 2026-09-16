@@ -208,43 +208,6 @@
   gap: 8px;
 }
 
-.account-device-row {
-  background: var(--surface-glass-soft);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
-}
-
-.account-device-head {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
-}
-
-.account-device-expand {
-  display: flex;
-  flex: 1;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-  padding: 0;
-  background: transparent;
-  border: 0;
-  color: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.account-device-chevron {
-  flex: none;
-  color: var(--text-tertiary);
-  transition: transform 0.15s;
-}
-
-.account-device-row.is-open .account-device-chevron {
-  transform: rotate(90deg);
-}
-
 .account-device-label {
   flex: 1;
   min-width: 0;
@@ -265,7 +228,7 @@
 
 /* The head's title block stops stretching while a rename is open, so the field
    sits beside the name it is editing rather than out by the actions. */
-.account-device-row.is-renaming .account-device-expand {
+.account-device-row.is-renaming .disclosure-trigger {
   flex: none;
 }
 
@@ -292,7 +255,6 @@
   grid-template-columns: 1fr 1fr;
   gap: 16px;
   padding: 12px 12px 14px 36px;
-  border-top: 1px solid var(--border-color);
 }
 
 @media (max-width: 900px) {

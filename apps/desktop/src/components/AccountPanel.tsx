@@ -587,23 +587,23 @@ export default function AccountPanel() {
 
     return (
       <div
-        className={`account-device-row${open ? " is-open" : ""}${
+        className={`disclosure-row account-device-row${open ? " is-open" : ""}${
           renaming === device.deviceId ? " is-renaming" : ""
         }`}
         key={device.deviceId}
         id={`device-row-${device.deviceId}`}
       >
-        <div className="account-device-head">
+        <div className="disclosure-head">
           <button
             type="button"
-            className="account-device-expand"
+            className="disclosure-trigger"
             id={`device-expand-${device.deviceId}`}
             aria-expanded={open}
             onClick={() =>
               setExpanded((prev) => ({ ...prev, [device.deviceId]: !prev[device.deviceId] }))
             }
           >
-            <ChevronRight size={14} className="account-device-chevron" />
+            <ChevronRight size={14} className="disclosure-chevron" />
             <span className="account-device-label">
               <span className="account-device-name">
                 {name ?? <code className="account-mono">{shortId}</code>}
@@ -729,7 +729,7 @@ export default function AccountPanel() {
         </div>
 
         {open && (
-          <div className="account-device-body">
+          <div className="disclosure-body account-device-body">
             <section className="account-device-section">
               <h3>
                 Apps this device may act for

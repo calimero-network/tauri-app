@@ -1,23 +1,33 @@
-import { Fragment } from "react";
+import { useState } from "react";
+import { ChevronRight } from "lucide-react";
 import CopyButton from "./CopyButton";
 import { SkeletonText } from "./Skeleton";
 import type { NodeIdentity } from "@calimero-network/mero-js";
 import type { DeviceBanner } from "../lib/account";
+import { truncateText } from "../utils/string";
 
-/** The five the card prints. Named rather than `keyof`, which now also spans a
- *  boolean these rows cannot render. */
-const IDENTITY_FIELDS: {
+type IdentityKey =
+  | "accountId"
+  | "deviceId"
+  | "publicKey"
+  | "accountRootPublicKey"
+  | "accountNamespaceId";
+
+interface IdentityField {
   id: string;
   label: string;
-  key:
-    | "accountId"
-    | "deviceId"
-    | "publicKey"
-    | "accountRootPublicKey"
-    | "accountNamespaceId";
-}[] = [
-  { id: "account-id", label: "Account ID", key: "accountId" },
-  { id: "device-id", label: "Device ID", key: "deviceId" },
+  key: IdentityKey;
+}
+
+/** What a person recognises this node by. Named rather than `keyof`, which also
+ *  spans booleans these rows cannot render. */
+const PRIMARY_FIELDS: IdentityField[] = [
+  { id: "account-id", label: "Account", key: "accountId" },
+  { id: "device-id", label: "Device", key: "deviceId" },
+];
+
+/** Keys other tools ask for; shown on request. */
+const TECHNICAL_FIELDS: IdentityField[] = [
   { id: "public-key", label: "Device public key", key: "publicKey" },
   { id: "account-root-public-key", label: "Account root public key", key: "accountRootPublicKey" },
   { id: "account-namespace", label: "Account namespace", key: "accountNamespaceId" },
@@ -31,6 +41,27 @@ interface AccountIdentityCardProps {
   onRetry: () => void;
 }
 
+function IdentityRows({ identity, fields }: { identity: NodeIdentity; fields: IdentityField[] }) {
+  return (
+    <>
+      {fields.map(({ id, label, key }) => {
+        const value = identity[key];
+        return (
+          <div className="account-identity-row" key={id}>
+            <dt>{label}</dt>
+            <dd>
+              <code id={`value-${id}`} title={value || undefined}>
+                {value ? truncateText(value, 12) : "Not set"}
+              </code>
+              {value && <CopyButton id={`copy-${id}`} value={value} />}
+            </dd>
+          </div>
+        );
+      })}
+    </>
+  );
+}
+
 export default function AccountIdentityCard({
   identity,
   loading,
@@ -38,6 +69,8 @@ export default function AccountIdentityCard({
   banner,
   onRetry,
 }: AccountIdentityCardProps) {
+  const [showTechnical, setShowTechnical] = useState(false);
+
   return (
     <div className="settings-card">
       {banner && (
@@ -50,7 +83,7 @@ export default function AccountIdentityCard({
       )}
       <h2>This device</h2>
       {loading ? (
-        <SkeletonText lines={4} />
+        <SkeletonText lines={2} />
       ) : error ? (
         <>
           <p className="field-error">{error}</p>
@@ -69,21 +102,26 @@ export default function AccountIdentityCard({
           a namespace.
         </p>
       ) : (
-        <dl className="account-identity">
-          {IDENTITY_FIELDS.map(({ id, label, key }) => {
-            const value = identity[key];
-            return (
-              <Fragment key={id}>
-                <dt>{label}</dt>
-                <dd>
-                  <code id={`value-${id}`} title={value || undefined}>
-                    {value || "Not set"}
-                  </code>
-                  {value && <CopyButton id={`copy-${id}`} value={value} />}
-                </dd>
-              </Fragment>
-            );
-          })}
+        <dl className={`account-identity${showTechnical ? " is-open" : ""}`}>
+          <IdentityRows identity={identity} fields={PRIMARY_FIELDS} />
+          <div className="account-identity-row account-identity-more">
+            <button
+              type="button"
+              id="identity-technical-toggle"
+              className="disclosure-trigger"
+              aria-expanded={showTechnical}
+              aria-controls="identity-technical"
+              onClick={() => setShowTechnical((open) => !open)}
+            >
+              <ChevronRight size={14} className="disclosure-chevron" />
+              {showTechnical ? "Hide identifiers" : "Show identifiers"}
+            </button>
+          </div>
+          {showTechnical && (
+            <div id="identity-technical">
+              <IdentityRows identity={identity} fields={TECHNICAL_FIELDS} />
+            </div>
+          )}
         </dl>
       )}
     </div>

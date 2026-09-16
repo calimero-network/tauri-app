@@ -357,22 +357,36 @@ test.describe("Account page", () => {
   });
 
   test("identity fields render from the node's identity", async ({ page }) => {
-    await expect(page.locator("#value-account-id")).toHaveText(
+    // Two rows a person recognises the node by, shortened; the full value stays
+    // on the title and behind Copy.
+    await expect(page.locator("#value-account-id")).toHaveAttribute(
+      "title",
       MOCK_NODE_IDENTITY.accountId,
     );
-    await expect(page.locator("#value-device-id")).toHaveText(
+    await expect(page.locator("#value-account-id")).not.toHaveText(
+      MOCK_NODE_IDENTITY.accountId,
+    );
+    await expect(page.locator("#value-device-id")).toHaveAttribute(
+      "title",
       MOCK_NODE_IDENTITY.deviceId,
     );
-    await expect(page.locator("#value-public-key")).toHaveText(
+    await expect(page.locator("#copy-account-id")).toBeVisible();
+    await expect(page.locator("#value-public-key")).toHaveCount(0);
+
+    await page.locator("#identity-technical-toggle").click();
+    await expect(page.locator("#value-public-key")).toHaveAttribute(
+      "title",
       MOCK_NODE_IDENTITY.publicKey,
     );
-    await expect(page.locator("#value-account-root-public-key")).toHaveText(
+    await expect(page.locator("#value-account-root-public-key")).toHaveAttribute(
+      "title",
       MOCK_NODE_IDENTITY.accountRootPublicKey,
     );
-    await expect(page.locator("#value-account-namespace")).toHaveText(
+    await expect(page.locator("#value-account-namespace")).toHaveAttribute(
+      "title",
       MOCK_NODE_IDENTITY.accountNamespaceId,
     );
-    await expect(page.locator("#copy-account-id")).toBeVisible();
+    await expect(page.locator("#identity-technical-toggle")).toHaveText("Hide identifiers");
   });
 
   test("a node with no identity yet is a normal state, not an error", async ({

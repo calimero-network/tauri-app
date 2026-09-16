@@ -5,6 +5,7 @@ import CopyButton from "./CopyButton";
 import {
   DevicePairWizard,
   DevicePairResponder,
+  encodeLinkCode,
   scopeRow,
   type InstalledApp,
 } from "./DevicePairing";
@@ -94,6 +95,14 @@ export function canInviteDevices(identity: NodeIdentity | null): boolean {
   return identity?.holdsAccountRoot !== false;
 }
 
+/** The blob that hands an already paired device this account's namespace, or
+ *  null where there is nothing to hand out - which is also when it is offered. */
+export function linkCode(identity: NodeIdentity | null): string | null {
+  const { accountRootPublicKey, accountNamespaceId, holdsAccountRoot } = identity ?? {};
+  if (!holdsAccountRoot || !accountRootPublicKey || !accountNamespaceId) return null;
+  return encodeLinkCode({ rootKey: accountRootPublicKey, accountNamespace: accountNamespaceId });
+}
+
 /** A device paired into an account holds a device id but may not have synced the
  *  account's roster, and "none found" would read as a pairing that never landed. */
 export function devicesEmptyMessage(identity: NodeIdentity | null): string {
@@ -120,6 +129,7 @@ export default function AccountPanel() {
   const [devicesLoading, setDevicesLoading] = useState(false);
   const [devicesError, setDevicesError] = useState("");
   const [wizardOpen, setWizardOpen] = useState(false);
+  const [linkCodeOpen, setLinkCodeOpen] = useState(false);
   const [reloads, setReloads] = useState(0);
   const [deviceReloads, setDeviceReloads] = useState(0);
   const [busyDevice, setBusyDevice] = useState("");
@@ -262,6 +272,7 @@ export default function AccountPanel() {
     });
   };
 
+  const accountLinkCode = linkCode(identity);
   const scopeTarget = devices.find((device) => device.deviceId === scopeDevice);
   // A relink only adds, so an app the device already holds is not offered.
   const addableApps = (catalog?.apps ?? []).filter(
@@ -435,19 +446,48 @@ export default function AccountPanel() {
       <div className="settings-card">
         <div className="account-devices-header">
           <h2>Devices on this account</h2>
-          {canInviteDevices(identity) && (
-            <button
-              type="button"
-              id="add-device"
-              className="button button-primary"
-              disabled={wizardOpen}
-              onClick={() => setWizardOpen(true)}
-            >
-              <Plus size={14} style={{ marginRight: "6px", verticalAlign: "middle" }} />
-              Add a device
-            </button>
-          )}
+          <div className="account-devices-actions">
+            {accountLinkCode && (
+              <button
+                type="button"
+                id="link-code-show"
+                className="button button-secondary"
+                onClick={() => setLinkCodeOpen((open) => !open)}
+              >
+                Link code
+              </button>
+            )}
+            {canInviteDevices(identity) && (
+              <button
+                type="button"
+                id="add-device"
+                className="button button-primary"
+                disabled={wizardOpen}
+                onClick={() => setWizardOpen(true)}
+              >
+                <Plus size={14} style={{ marginRight: "6px", verticalAlign: "middle" }} />
+                Add a device
+              </button>
+            )}
+          </div>
         </div>
+        {accountLinkCode && linkCodeOpen && (
+          <div className="account-wizard" id="link-code">
+            <p className="field-hint">
+              For a device paired with an older version of the app. Paste it there once and
+              the device follows this account's projects on its own.
+            </p>
+            <div className="settings-field">
+              <div className="agent-config-header">
+                <span className="settings-field-label">Link code</span>
+                <CopyButton id="copy-link-code" value={accountLinkCode} />
+              </div>
+              <pre className="agent-config account-blob" tabIndex={0} id="link-code-blob">
+                {accountLinkCode}
+              </pre>
+            </div>
+          </div>
+        )}
         {identityLoading || devicesLoading ? (
           <SkeletonTable rows={2} columns={5} />
         ) : devicesError ? (

@@ -267,6 +267,7 @@ export const MOCK_NODE_IDENTITY = {
   accountRootPublicKey: "c".repeat(64),
   accountNamespaceId: "9".repeat(64),
   deviceCertified: true,
+  holdsAccountRoot: true,
 };
 
 // ─── Device pairing ─────────────────────────────────────────────────────────

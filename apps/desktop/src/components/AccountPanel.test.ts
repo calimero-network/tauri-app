@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
+import type { NodeIdentity } from "@calimero-network/mero-js";
 import type { AccountDevice } from "../lib/device-link";
 
 vi.mock("../lib/device-link", () => ({
@@ -7,8 +8,10 @@ vi.mock("../lib/device-link", () => ({
   revokeDevice: vi.fn(),
 }));
 
+import { decodeLinkCode } from "./DevicePairing";
 import {
   canRevoke,
+  linkCode,
   canSync,
   canInviteDevices,
   canWiden,
@@ -174,5 +177,36 @@ describe("devicesEmptyMessage on a device held elsewhere", () => {
   it("says the account is managed on the other device", () => {
     const identity = { accountId: "a", deviceId: "d", holdsAccountRoot: false } as never;
     expect(devicesEmptyMessage(identity)).toContain("held on another device");
+  });
+});
+
+function identity(overrides: Partial<NodeIdentity> = {}): NodeIdentity {
+  return {
+    accountId: "a".repeat(64),
+    deviceId: "b".repeat(64),
+    publicKey: "EdDevicePublicKey",
+    accountRootPublicKey: "c".repeat(64),
+    holdsAccountRoot: true,
+    accountNamespaceId: "9".repeat(64),
+    ...overrides,
+  };
+}
+
+describe("linkCode", () => {
+  it("carries this account's root key and namespace", () => {
+    expect(decodeLinkCode(linkCode(identity()) ?? "")).toEqual({
+      rootKey: "c".repeat(64),
+      accountNamespace: "9".repeat(64),
+    });
+  });
+
+  it("is withheld from a device that does not hold the account root", () => {
+    expect(linkCode(identity({ holdsAccountRoot: false }))).toBeNull();
+  });
+
+  it("is withheld where there is no account namespace to hand over", () => {
+    expect(linkCode(identity({ accountNamespaceId: null }))).toBeNull();
+    expect(linkCode(identity({ accountRootPublicKey: undefined }))).toBeNull();
+    expect(linkCode(null)).toBeNull();
   });
 });

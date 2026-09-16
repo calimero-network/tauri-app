@@ -545,6 +545,12 @@
   margin-bottom: 0;
 }
 
+.account-devices-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .account-device-cell {
   display: inline-flex;
   align-items: center;

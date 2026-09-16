@@ -468,6 +468,14 @@ test.describe("Account tab - device listing", () => {
     await scrollSettingsControlIntoView(page, "#add-device");
   });
 
+  test("the link code stays out of the way until it is asked for", async ({ page }) => {
+    await expect(page.locator("#link-code")).toHaveCount(0);
+
+    await page.locator("#link-code-show").click();
+    await expect(page.locator("#link-code-blob")).toContainText("mero-link:");
+    await expect(page.locator("#copy-link-code")).toBeVisible();
+  });
+
   test("one row per device, with its scope and its status", async ({ page }) => {
     const rows = page.locator(".data-table tbody tr");
     await expect(rows).toHaveCount(2);

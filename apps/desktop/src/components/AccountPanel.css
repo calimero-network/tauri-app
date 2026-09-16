@@ -70,12 +70,6 @@
   margin-bottom: 0;
 }
 
-.account-devices-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
 /* Matches .ns-me-badge, the app's existing "this one is you" marker. */
 .account-this-device {
   display: inline-flex;
@@ -323,18 +317,6 @@
   display: block;
   font-size: 12px;
   color: var(--text-secondary);
-}
-
-/* The account page's one callout that is not an error; an error one takes the
-   shared .error-message instead. */
-.account-banner {
-  margin-bottom: 16px;
-  padding: 12px 16px;
-  background: var(--accent-light);
-  border: 1px solid var(--accent-dim);
-  border-radius: var(--radius-md);
-  color: var(--text-primary);
-  font-size: 13px;
 }
 
 .account-row-actions {

@@ -743,13 +743,12 @@ test.describe("Account page - a device the account is held away from", () => {
     await navigateVia(page, "Account");
   }
 
-  test("it may look but not invite, hand out a link code or revoke", async ({ page }) => {
+  test("it may look but not invite or revoke", async ({ page }) => {
     await setupDeveloperPage(page);
     await mockHeldElsewhere(page);
 
     await expect(page.locator(".account-device-row")).toHaveCount(2);
     await expect(page.locator("#add-device")).toHaveCount(0);
-    await expect(page.locator("#link-code-show")).toHaveCount(0);
     await expect(page.locator(`#device-revoke-${MOCK_PAIR_INIT.deviceId}`)).toHaveCount(0);
   });
 
@@ -799,19 +798,6 @@ test.describe("Account page - a device the account is held away from", () => {
     await expect(page.locator("#account-banner-revoked")).toContainText(
       "can no longer write",
     );
-  });
-
-  test("a device paired by an older version is pointed at the link code", async ({
-    page,
-  }) => {
-    await setupDeveloperPage(page);
-    await mockHeldElsewhere(page, { accountNamespaceId: null });
-
-    await expect(page.locator("#account-banner-legacy")).toContainText(
-      "does not follow the account yet",
-    );
-    // The banner points at the paste field, so the field has to still be there.
-    await expect(page.locator("#pair-invite-input")).toBeVisible();
   });
 });
 

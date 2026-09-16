@@ -31,12 +31,6 @@ export interface AccountCatalog {
   installed: InstalledApp[];
 }
 
-/** What the identity card has to say before anything else on it is worth reading. */
-export interface DeviceBanner {
-  kind: "revoked" | "legacy";
-  text: string;
-}
-
 export const namespaceWord = (n: number) => (n === 1 ? "namespace" : "namespaces");
 
 /** What this node calls a device, or null where no alias names it and the row
@@ -232,26 +226,13 @@ export function accountAppRows(
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
-export function thisDeviceBanner(
-  identity: NodeIdentity | null,
-  devices: AccountDevice[],
-): DeviceBanner | null {
+/** What the identity card has to say before anything else on it is worth reading. */
+export function thisDeviceBanner(devices: AccountDevice[]): string | null {
   if (devices.some((device) => device.isSelf && device.revoked)) {
-    return {
-      kind: "revoked",
-      text:
-        "This device was revoked from the account. It keeps its local copy but can no " +
-        "longer write, and it will not be carried into new namespaces.",
-    };
-  }
-  if (identity && identity.holdsAccountRoot === false && !identity.accountNamespaceId) {
-    return {
-      kind: "legacy",
-      text:
-        "This device does not follow the account yet. It was paired by an older version. " +
-        "Paste a link code from the computer that holds the account and it will pick up " +
-        "the account's namespaces on its own.",
-    };
+    return (
+      "This device was revoked from the account. It keeps its local copy but can no " +
+      "longer write, and it will not be carried into new namespaces."
+    );
   }
   return null;
 }

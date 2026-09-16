@@ -3,7 +3,6 @@ import { Plus } from "lucide-react";
 import AccountAppsCard from "./AccountAppsCard";
 import AccountDeviceRow from "./AccountDeviceRow";
 import AccountIdentityCard from "./AccountIdentityCard";
-import CopyButton from "./CopyButton";
 import { DevicePairWizard, DevicePairResponder, type InstalledApp } from "./DevicePairing";
 import { SkeletonTable } from "./Skeleton";
 import { useVisiblePoll } from "../hooks/useVisiblePoll";
@@ -295,7 +294,7 @@ export default function AccountPanel() {
         identity={identity}
         loading={identityLoading}
         error={identityError}
-        banner={thisDeviceBanner(identity, devices)}
+        banner={thisDeviceBanner(devices)}
         onRetry={() => setReloads((n) => n + 1)}
       />
 

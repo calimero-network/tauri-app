@@ -1,5 +1,4 @@
 import { describe, it, expect, vi } from "vitest";
-import type { NodeIdentity } from "@calimero-network/mero-js";
 import type { AccountDevice } from "./device-link";
 
 vi.mock("./device-link", () => ({
@@ -182,18 +181,6 @@ describe("devicesEmptyMessage on a device held elsewhere", () => {
   });
 });
 
-function identity(overrides: Partial<NodeIdentity> = {}): NodeIdentity {
-  return {
-    accountId: "a".repeat(64),
-    deviceId: "b".repeat(64),
-    publicKey: "EdDevicePublicKey",
-    accountRootPublicKey: "c".repeat(64),
-    holdsAccountRoot: true,
-    accountNamespaceId: "9".repeat(64),
-    ...overrides,
-  };
-}
-
 const ACCOUNT_NS = "9".repeat(64);
 
 describe("inScope", () => {
@@ -282,8 +269,8 @@ describe("namespaceFollowState", () => {
   });
 
   it("does not claim a namespace is followed by a device that skipped the account", () => {
-    const legacy = device({ namespaces: ["ns-1"], applications: ["App1"] });
-    expect(namespaceFollowState(legacy, namespace, ACCOUNT_NS, false)).toBe("not-following");
+    const offAccount = device({ namespaces: ["ns-1"], applications: ["App1"] });
+    expect(namespaceFollowState(offAccount, namespace, ACCOUNT_NS, false)).toBe("not-following");
   });
 });
 
@@ -383,33 +370,14 @@ describe("deviceScopeApps", () => {
 });
 
 describe("thisDeviceBanner", () => {
-  const identity = (extra: Record<string, unknown>) =>
-    ({ accountId: "acct", deviceId: "d".repeat(64), ...extra }) as never;
-
   it("warns in red that this device was withdrawn from the account", () => {
-    const banner = thisDeviceBanner(identity({ holdsAccountRoot: false }), [
-      device({ isSelf: true, revoked: true }),
-    ]);
-    expect(banner?.kind).toBe("revoked");
-    expect(banner?.text).toContain("can no longer write");
-  });
-
-  it("points a device paired by an older version at the link code", () => {
-    const banner = thisDeviceBanner(
-      identity({ holdsAccountRoot: false, accountNamespaceId: null }),
-      [device({ isSelf: true })],
+    expect(thisDeviceBanner([device({ isSelf: true, revoked: true })])).toContain(
+      "can no longer write",
     );
-    expect(banner?.kind).toBe("legacy");
-    expect(banner?.text).toContain("does not follow the account yet");
   });
 
-  it("says nothing on a device that follows the account", () => {
-    const followed = identity({ holdsAccountRoot: false, accountNamespaceId: ACCOUNT_NS });
-    expect(thisDeviceBanner(followed, [device({ isSelf: true })])).toBeNull();
-  });
-
-  it("says nothing on the node holding the account root", () => {
-    expect(thisDeviceBanner(identity({ holdsAccountRoot: true }), [])).toBeNull();
+  it("says nothing while this device is still on the account", () => {
+    expect(thisDeviceBanner([device({ isSelf: true })])).toBeNull();
   });
 });
 

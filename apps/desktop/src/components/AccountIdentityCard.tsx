@@ -3,7 +3,6 @@ import { ChevronRight } from "lucide-react";
 import CopyButton from "./CopyButton";
 import { SkeletonText } from "./Skeleton";
 import type { NodeIdentity } from "@calimero-network/mero-js";
-import type { DeviceBanner } from "../lib/account";
 import { truncateText } from "../utils/string";
 
 type IdentityKey =
@@ -37,7 +36,7 @@ interface AccountIdentityCardProps {
   identity: NodeIdentity | null;
   loading: boolean;
   error: string;
-  banner: DeviceBanner | null;
+  banner: string | null;
   onRetry: () => void;
 }
 
@@ -74,11 +73,8 @@ export default function AccountIdentityCard({
   return (
     <div className="settings-card">
       {banner && (
-        <p
-          className={banner.kind === "revoked" ? "error-message" : "account-banner"}
-          id={`account-banner-${banner.kind}`}
-        >
-          {banner.text}
+        <p className="error-message" id="account-banner-revoked">
+          {banner}
         </p>
       )}
       <h2>This device</h2>

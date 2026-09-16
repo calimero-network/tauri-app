@@ -220,6 +220,12 @@ body {
   box-shadow: none;
 }
 
+/* A button standing in a list row rather than at the foot of a card. */
+.button.button-small {
+  padding: 6px 12px;
+  font-size: 12px;
+}
+
 /* Solid fill so the main action outranks a neighbouring .button. */
 .button.button-primary {
   background: var(--accent-primary);

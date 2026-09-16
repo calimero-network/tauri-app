@@ -121,7 +121,7 @@
   align-items: flex-start;
   gap: 2px;
   padding: 10px;
-  background: var(--bg-tertiary);
+  background: var(--surface-glass-soft);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
   color: var(--text-primary);
@@ -144,14 +144,14 @@
 }
 
 .account-tile-name {
-  font-size: 12.5px;
+  font-size: 12px;
   font-weight: 600;
   line-height: 1.2;
 }
 
 .account-tile-meta {
-  font-size: 11px;
-  color: var(--text-tertiary);
+  font-size: 12px;
+  color: var(--text-secondary);
 }
 
 .account-tile-check {
@@ -165,7 +165,8 @@
   height: 16px;
   border-radius: 50%;
   background: var(--accent-primary);
-  color: var(--bg-primary);
+  /* The ink .button-primary uses: --bg-primary inverts with the theme. */
+  color: #09090b;
 }
 
 .account-blob-input {
@@ -283,11 +284,6 @@
   color: var(--text-secondary);
 }
 
-.account-app-list {
-  display: flex;
-  flex-direction: column;
-}
-
 .account-app-row,
 .account-ns-row {
   display: flex;
@@ -316,8 +312,8 @@
 .account-app-meta,
 .account-ns-name small {
   display: block;
-  font-size: 11px;
-  color: var(--text-tertiary);
+  font-size: 12px;
+  color: var(--text-secondary);
 }
 
 /* The account page's one callout that is not an error; an error one takes the

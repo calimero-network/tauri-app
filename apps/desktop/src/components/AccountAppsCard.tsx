@@ -24,7 +24,7 @@ export default function AccountAppsCard({
           No namespace on this account targets an app yet.
         </p>
       ) : (
-        <div className="account-app-list" id="account-apps">
+        <div id="account-apps">
           {rows.map((app) => (
             <div className="account-app-row" key={app.applicationId}>
               <AppIcon name={app.name} seed={app.applicationId} size={28} />

@@ -144,6 +144,7 @@ export default function AccountDeviceRow({
             </button>
           )
         )}
+        {/* The modifier is the DeviceStatus value itself; App.css carries one per member. */}
         <span className={`status-badge ${status}`}>
           {status === "syncing" ? (
             <RefreshCw size={11} className="spinning" />
@@ -273,6 +274,7 @@ export default function AccountDeviceRow({
                       )}
                     </small>
                   </span>
+                  {/* Likewise a FollowState value, spelled straight into the modifier. */}
                   <span className={`status-badge ${state}`}>
                     {state === "syncing" ? (
                       <RefreshCw size={11} className="spinning" />

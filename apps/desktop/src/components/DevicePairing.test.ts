@@ -7,8 +7,11 @@ import {
   certifiedIntoAccount,
   installableApps,
   buildInvite,
+  classifyPastedBlob,
   inviteApps,
   decodeInvite,
+  decodeLinkCode,
+  encodeLinkCode,
   decodeReply,
   encodeInvite,
   encodeReply,
@@ -109,6 +112,39 @@ describe("buildInvite", () => {
       accountNamespace: ACCOUNT_NS,
       apps,
     });
+  });
+});
+
+describe("link code", () => {
+  it("round trips the root key and the account namespace", () => {
+    const code = { rootKey: ROOT_KEY, accountNamespace: ACCOUNT_NS };
+    expect(decodeLinkCode(encodeLinkCode(code))).toEqual(code);
+  });
+
+  it("rejects a code missing either half", () => {
+    expect(decodeLinkCode(encodeLinkCode({ rootKey: "", accountNamespace: ACCOUNT_NS }))).toBeNull();
+    expect(decodeLinkCode(encodeLinkCode({ rootKey: ROOT_KEY, accountNamespace: "" }))).toBeNull();
+  });
+
+  it("rejects anything that is not a link code", () => {
+    expect(decodeLinkCode("")).toBeNull();
+    expect(decodeLinkCode("mero-link:not-base64!!")).toBeNull();
+    expect(decodeLinkCode(encodeInvite({ rootKey: ROOT_KEY, namespaces: ["ns-1"] }))).toBeNull();
+  });
+});
+
+describe("classifyPastedBlob", () => {
+  it("tells an invite from a link code by its own prefix", () => {
+    const invite = { rootKey: ROOT_KEY, namespaces: ["ns-1"] };
+    const code = { rootKey: ROOT_KEY, accountNamespace: ACCOUNT_NS };
+
+    expect(classifyPastedBlob(encodeInvite(invite))).toEqual({ kind: "invite", invite });
+    expect(classifyPastedBlob(encodeLinkCode(code))).toEqual({ kind: "link", code });
+  });
+
+  it("reads neither out of a blob that is neither", () => {
+    expect(classifyPastedBlob("hello")).toBeNull();
+    expect(classifyPastedBlob(encodeReply(INIT))).toBeNull();
   });
 });
 

@@ -29,6 +29,8 @@ const PACKAGE_RE = /^(?:@[\w.-]+\/)?[\w.+-]+$/; // the registry's own package sh
 const VERSION_RE = /^[\w.+-]+$/;
 /** Marks a blob as the new device's answer. Never carries the confirmation code. */
 const REPLY_PREFIX = "mero-pair-reply:";
+/** Marks a blob as the account namespace handed to an already paired device. */
+const LINK_PREFIX = "mero-link:";
 /** How often, and for how long, we watch for the new device to show up in the listing. */
 const POLL_INTERVAL_MS = 1000;
 const POLL_CEILING_MS = 15000;
@@ -123,6 +125,38 @@ export function buildInvite({
     ...(accountNamespaceId ? { accountNamespace: accountNamespaceId } : {}),
     ...(apps.length ? { apps } : {}),
   };
+}
+
+/** What a device paired before the account namespace existed needs to learn:
+ *  pair-init is idempotent, so replaying it with the id mints nothing. */
+export interface LinkCode {
+  rootKey: string;
+  accountNamespace: string;
+}
+
+export function encodeLinkCode(code: LinkCode): string {
+  return encodeBlob(LINK_PREFIX, code);
+}
+
+export function decodeLinkCode(blob: string): LinkCode | null {
+  const body = decodeBlob(LINK_PREFIX, blob);
+  const rootKey = str(body?.rootKey);
+  const accountNamespace = str(body?.accountNamespace);
+  if (!rootKey || !accountNamespace) return null;
+  return { rootKey, accountNamespace };
+}
+
+export type PastedBlob =
+  | { kind: "invite"; invite: PairInvite }
+  | { kind: "link"; code: LinkCode };
+
+/** One paste field takes both, so what was pasted decides which half of the
+ *  exchange runs. */
+export function classifyPastedBlob(text: string): PastedBlob | null {
+  const invite = decodeInvite(text);
+  if (invite) return { kind: "invite", invite };
+  const code = decodeLinkCode(text);
+  return code ? { kind: "link", code } : null;
 }
 
 /** The confirmation code is deliberately left out: a code that travels with the

@@ -206,6 +206,7 @@ export interface ScopeTile {
   applicationId: string;
   name: string;
   namespaces: number;
+  icon?: string;
 }
 
 /** The apps a scope can name: those the account already speaks in, plus those
@@ -218,11 +219,15 @@ export function scopeTiles(
   const counts = new Map(applications.map((app) => [app.applicationId, app.namespaces.length]));
   for (const app of installed) if (!counts.has(app.id)) counts.set(app.id, 0);
 
-  return Array.from(counts, ([applicationId, count]) => ({
-    applicationId,
-    name: applicationLabel(applicationId, namespaces, installed),
-    namespaces: count,
-  })).sort((a, b) => {
+  return Array.from(counts, ([applicationId, count]) => {
+    const icon = applicationIcon(applicationId, installed);
+    return {
+      applicationId,
+      name: applicationLabel(applicationId, namespaces, installed),
+      namespaces: count,
+      ...(icon ? { icon } : {}),
+    };
+  }).sort((a, b) => {
     if (!a.namespaces !== !b.namespaces) return a.namespaces ? -1 : 1;
     return a.name.localeCompare(b.name);
   });
@@ -268,6 +273,16 @@ export function applicationLabel(
     .filter((ns) => ns.targetApplicationId === applicationId && ns.name)
     .map((ns) => ns.name as string);
   return names.length ? names.join(", ") : truncateText(applicationId, 12);
+}
+
+/** The launcher icon the bundle carries, when this node has the app installed. */
+export function applicationIcon(
+  applicationId: string,
+  installed?: InstalledApp[],
+): string | undefined {
+  const app = installed?.find((entry) => entry.id === applicationId);
+  const icon = app && decodeMetadata(app.metadata)?.icon;
+  return typeof icon === "string" && icon ? icon : undefined;
 }
 
 async function waitForDevice(deviceId: string): Promise<boolean> {
@@ -537,7 +552,7 @@ export function DevicePairWizard({ rootKey, accountNamespaceId, onLinked, onClos
                     aria-pressed={chosen}
                     onClick={() => toggleApp(tile.applicationId)}
                   >
-                    <AppIcon name={tile.name} seed={tile.applicationId} size={32} />
+                    <AppIcon icon={tile.icon} name={tile.name} seed={tile.applicationId} size={32} />
                     <span className="account-tile-name">{tile.name}</span>
                     <span className="account-tile-meta">
                       {tileNamespaceCount(tile.namespaces)}

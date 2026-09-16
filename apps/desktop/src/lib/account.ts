@@ -1,5 +1,6 @@
 import type { NodeIdentity } from "@calimero-network/mero-js";
 import {
+  applicationIcon,
   applicationLabel,
   scopeTiles,
   type InstalledApp,
@@ -196,6 +197,7 @@ export function deviceScopeApps(
 export interface AccountAppRow {
   applicationId: string;
   name: string;
+  icon?: string;
   package?: string;
   version?: string;
   namespaces: number;
@@ -215,9 +217,11 @@ export function accountAppRows(
       const meta = decodeMetadata(app?.metadata);
       const pkg = app?.package ?? meta?.package;
       const version = app?.version ?? meta?.version;
+      const icon = applicationIcon(applicationId, installed);
       return {
         applicationId,
         name: applicationLabel(applicationId, namespaces, installed),
+        ...(icon ? { icon } : {}),
         ...(pkg && version ? { package: pkg, version } : {}),
         namespaces: targeting.length,
         devices: devices.filter((device) => !device.revoked && inScope(device, applicationId))

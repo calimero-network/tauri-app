@@ -27,7 +27,7 @@ export default function AccountAppsCard({
         <div id="account-apps">
           {rows.map((app) => (
             <div className="account-app-row" key={app.applicationId}>
-              <AppIcon name={app.name} seed={app.applicationId} size={28} />
+              <AppIcon icon={app.icon} name={app.name} seed={app.applicationId} size={28} />
               <span className="account-app-text">
                 <span className="account-app-name">{app.name}</span>
                 <span className="account-app-meta">

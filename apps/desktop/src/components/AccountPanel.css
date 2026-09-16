@@ -147,7 +147,8 @@
   background: var(--accent-light);
 }
 
-.account-tile .app-icon-fallback {
+.account-tile .app-icon-fallback,
+.account-tile .app-icon-img {
   margin-bottom: 6px;
 }
 

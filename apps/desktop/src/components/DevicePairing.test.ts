@@ -361,6 +361,15 @@ describe("scopeTiles", () => {
     ]);
   });
 
+  it("carries the installed app's icon onto its tile, as the app card shows it", () => {
+    const icon = "data:image/png;base64,QUJD";
+    const installed = [
+      { id: "AppChat", name: "Mero Chat", metadata: btoa(JSON.stringify({ name: "Mero Chat", icon })) },
+    ];
+    const chat = scopeTiles(accountApps, NAMESPACES, installed).find((t) => t.applicationId === "AppChat");
+    expect(chat?.icon).toBe(icon);
+  });
+
   it("offers an installed app the account has no namespace for yet", () => {
     const installed = [{ id: "AppNotes", name: "Notes", metadata: [] }];
     expect(scopeTiles(accountApps, NAMESPACES, installed)).toEqual([

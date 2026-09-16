@@ -225,7 +225,7 @@ export default function AccountDeviceRow({
               const toggleId = `device-app-${device.deviceId}-${app.applicationId}`;
               return (
                 <div className="account-app-row" key={app.applicationId}>
-                  <AppIcon name={app.name} seed={app.applicationId} size={24} />
+                  <AppIcon icon={app.icon} name={app.name} seed={app.applicationId} size={24} />
                   <span className="account-app-text">
                     <span className="account-app-name">{app.name}</span>
                     <span className="account-app-meta">{tileNamespaceCount(app.namespaces)}</span>

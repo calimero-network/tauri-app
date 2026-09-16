@@ -396,38 +396,6 @@
   cursor: not-allowed;
 }
 
-/* One pill for both the device status and the per-namespace state. */
-.account-status {
-  display: inline-flex;
-  align-items: center;
-  flex: none;
-  padding: 1px 8px;
-  border: 1px solid var(--border-color);
-  border-radius: 999px;
-  font-size: 11px;
-  color: var(--text-secondary);
-  white-space: nowrap;
-}
-
-.account-status.is-active,
-.account-status.is-following {
-  gap: 4px;
-  color: var(--success);
-}
-
-.account-status.is-syncing {
-  color: var(--info);
-}
-
-.account-status.is-not-following {
-  color: var(--warning);
-}
-
-.account-status.is-revoked,
-.account-status.is-retired {
-  color: var(--error);
-}
-
 .account-banner {
   margin-bottom: 16px;
   padding: 10px 12px;

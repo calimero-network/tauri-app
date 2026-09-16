@@ -556,7 +556,7 @@ test.describe("Account page - device listing", () => {
     ]);
     // The listing still shows the old scope, so the row says so until it catches up.
     await expect(
-      page.locator(`#device-row-${MOCK_PAIR_INIT.deviceId} .account-status`).first(),
+      page.locator(`#device-row-${MOCK_PAIR_INIT.deviceId} .status-badge`).first(),
     ).toHaveText("Syncing");
   });
 

@@ -660,7 +660,14 @@ export default function AccountPanel() {
               </button>
             )
           )}
-          <span className={`account-status is-${status}`}>{DEVICE_STATUS_LABEL[status]}</span>
+          <span className={`status-badge ${status}`}>
+            {status === "syncing" ? (
+              <RefreshCw size={11} className="spinning" />
+            ) : (
+              <span className="status-dot" />
+            )}
+            {DEVICE_STATUS_LABEL[status]}
+          </span>
           <div className="account-row-actions">
           {confirmRevoke === device.deviceId ? (
             <>
@@ -778,7 +785,12 @@ export default function AccountPanel() {
                         )}
                       </small>
                     </span>
-                    <span className={`account-status is-${state}`}>
+                    <span className={`status-badge ${state}`}>
+                      {state === "syncing" ? (
+                        <RefreshCw size={11} className="spinning" />
+                      ) : (
+                        <span className="status-dot" />
+                      )}
                       {FOLLOW_STATE_LABEL[state]}
                     </span>
                   </div>
@@ -909,7 +921,7 @@ export default function AccountPanel() {
                   </span>
                 </span>
                 {app.installed ? (
-                  <span className="account-status is-active" id={`app-installed-${app.applicationId}`}>
+                  <span className="status-badge active" id={`app-installed-${app.applicationId}`}>
                     <Check size={12} />
                     Installed
                   </span>
@@ -924,7 +936,7 @@ export default function AccountPanel() {
                     {installing === app.applicationId ? "Installing…" : "Install"}
                   </button>
                 ) : (
-                  <span className="account-status" id={`app-missing-${app.applicationId}`}>
+                  <span className="status-badge" id={`app-missing-${app.applicationId}`}>
                     Not installed here
                   </span>
                 )}

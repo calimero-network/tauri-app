@@ -402,14 +402,19 @@
 }
 
 .status-badge {
-  display: flex;
+  display: inline-flex;
   align-items: center;
+  flex: none;
   gap: 8px;
   padding: 5px 12px;
+  background: var(--surface-glass-soft);
+  border: 1px solid var(--border-color);
   border-radius: 20px;
   font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.3px;
+  color: var(--text-secondary);
+  white-space: nowrap;
 }
 
 .status-badge.connected {
@@ -425,6 +430,7 @@
 }
 
 .status-dot {
+  flex: none;
   width: 8px;
   height: 8px;
   border-radius: 50%;
@@ -433,6 +439,30 @@
 
 .status-badge.connected .status-dot {
   box-shadow: 0 0 6px currentColor;
+}
+
+/* The account's device and namespace states, which keep the neutral pill and
+   say what they are in the colour alone. */
+.status-badge.active,
+.status-badge.following {
+  color: var(--success);
+}
+
+.status-badge.syncing {
+  color: var(--info);
+}
+
+.status-badge.not-following {
+  color: var(--warning);
+}
+
+.status-badge.revoked,
+.status-badge.retired {
+  color: var(--error);
+}
+
+.status-badge.not-in-scope {
+  color: var(--text-secondary);
 }
 
 .status-error {

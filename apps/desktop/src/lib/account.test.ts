@@ -1,8 +1,8 @@
 import { describe, it, expect, vi } from "vitest";
 import type { NodeIdentity } from "@calimero-network/mero-js";
-import type { AccountDevice } from "../lib/device-link";
+import type { AccountDevice } from "./device-link";
 
-vi.mock("../lib/device-link", () => ({
+vi.mock("./device-link", () => ({
   listAccountDevices: vi.fn(),
   relinkDevice: vi.fn(),
   revokeDevice: vi.fn(),
@@ -27,7 +27,7 @@ import {
   scopeToggle,
   thisDeviceBanner,
   widenSummary,
-} from "./AccountPanel";
+} from "./account";
 
 function device(overrides: Partial<AccountDevice> = {}): AccountDevice {
   return {

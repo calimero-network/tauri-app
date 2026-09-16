@@ -475,6 +475,127 @@ body {
   color: var(--text-secondary);
 }
 
+/* ── Toggle switch ── */
+.toggle-switch {
+  display: flex;
+  align-items: center;
+  position: relative;
+}
+
+/* Overlay the slider hit area so the native checkbox stays in layout (Playwright
+   visibility / check()) while the custom slider still shows underneath. */
+.toggle-switch input[type="checkbox"] {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 48px;
+  height: 26px;
+  margin: 0;
+  padding: 0;
+  opacity: 0.02;
+  cursor: pointer;
+  z-index: 3;
+  flex-shrink: 0;
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  border: none;
+}
+
+.toggle-label {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  cursor: pointer;
+  user-select: none;
+  margin: 0;
+  position: relative;
+  z-index: 1;
+}
+
+.toggle-slider {
+  position: relative;
+  width: 48px;
+  height: 26px;
+  background: var(--surface-glass-soft);
+  border: 1px solid var(--border-color);
+  border-radius: 13px;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  flex-shrink: 0;
+}
+
+.toggle-slider::before {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 20px;
+  height: 20px;
+  background: white;
+  border-radius: 50%;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+.toggle-switch input[type="checkbox"]:checked + .toggle-label .toggle-slider {
+  background: var(--accent-primary);
+  border-color: var(--accent-primary);
+}
+
+.toggle-switch input[type="checkbox"]:checked + .toggle-label .toggle-slider::before {
+  transform: translateX(22px);
+}
+
+.toggle-text {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary);
+  min-width: 60px;
+}
+
+/* 34x20, for a switch standing in a list row rather than beside a settings field. */
+.toggle-switch-small {
+  flex: none;
+}
+
+.toggle-switch-small input[type="checkbox"],
+.toggle-switch-small .toggle-slider {
+  width: 34px;
+  height: 20px;
+}
+
+.toggle-switch-small .toggle-slider {
+  border-radius: 10px;
+}
+
+.toggle-switch-small .toggle-slider::before {
+  width: 14px;
+  height: 14px;
+}
+
+.toggle-switch-small input[type="checkbox"]:checked + .toggle-label .toggle-slider::before {
+  transform: translateX(16px);
+}
+
+.toggle-switch input[type="checkbox"]:disabled,
+.toggle-switch input[type="checkbox"]:disabled + .toggle-label {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* Text for a screen reader only, such as the reason a control is locked. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 /* ── Inline confirmation for a destructive action ── */
 .reset-confirm-form {
   margin-top: 12px;

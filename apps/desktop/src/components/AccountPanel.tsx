@@ -737,6 +737,7 @@ export default function AccountPanel() {
               </h3>
               {apps.map((app) => {
                 const toggle = scopeToggle(device, app.applicationId, isHolder);
+                const toggleId = `device-app-${device.deviceId}-${app.applicationId}`;
                 return (
                   <div className="account-app-row" key={app.applicationId}>
                     <AppIcon name={app.name} seed={app.applicationId} size={24} />
@@ -746,21 +747,26 @@ export default function AccountPanel() {
                         {tileNamespaceCount(app.namespaces)}
                       </span>
                     </span>
-                    <button
-                      type="button"
-                      id={`device-app-${device.deviceId}-${app.applicationId}`}
-                      className={`account-toggle${toggle.on ? " is-on" : ""}${
-                        toggle.locked ? " is-locked" : ""
-                      }`}
-                      role="switch"
-                      aria-checked={toggle.on}
-                      aria-label={app.name}
-                      title={toggle.tip}
-                      disabled={toggle.locked || busyDevice === device.deviceId}
-                      onClick={() => widen(device, app.applicationId)}
-                    >
-                      <i />
-                    </button>
+                    <div className="toggle-switch toggle-switch-small">
+                      <input
+                        id={toggleId}
+                        type="checkbox"
+                        role="switch"
+                        aria-label={app.name}
+                        aria-describedby={toggle.tip ? `${toggleId}-why` : undefined}
+                        checked={toggle.on}
+                        disabled={toggle.locked || busyDevice === device.deviceId}
+                        onChange={() => widen(device, app.applicationId)}
+                      />
+                      <label htmlFor={toggleId} className="toggle-label" title={toggle.tip}>
+                        <span className="toggle-slider" />
+                      </label>
+                      {toggle.tip && (
+                        <span className="visually-hidden" id={`${toggleId}-why`}>
+                          {toggle.tip}
+                        </span>
+                      )}
+                    </div>
                   </div>
                 );
               })}

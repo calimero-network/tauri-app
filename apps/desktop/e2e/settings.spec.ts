@@ -545,6 +545,8 @@ test.describe("Account page - device listing", () => {
     await page.locator(`#device-expand-${MOCK_PAIR_INIT.deviceId}`).click();
     await page
       .locator(`#device-app-${MOCK_PAIR_INIT.deviceId}-${MOCK_OTHER_APPLICATION_ID}`)
+      // Clicked, not checked: the switch reads the listing, which still says the
+      // app is out of scope until the relink lands.
       .click();
 
     await expect(page.locator(`#device-note-${MOCK_PAIR_INIT.deviceId}`)).toHaveText(
@@ -569,7 +571,10 @@ test.describe("Account page - device listing", () => {
     );
 
     await expect(held).toBeDisabled();
-    await expect(held).toHaveAttribute("title", "Narrowing a scope needs a fresh pairing");
+    await expect(held.locator("+ .toggle-label")).toHaveAttribute(
+      "title",
+      "Narrowing a scope needs a fresh pairing",
+    );
   });
 
   test("every toggle of a device that follows everything is locked on", async ({
@@ -581,8 +586,8 @@ test.describe("Account page - device listing", () => {
     );
 
     await expect(toggle).toBeDisabled();
-    await expect(toggle).toHaveAttribute("aria-checked", "true");
-    await expect(toggle).toHaveAttribute(
+    await expect(toggle).toBeChecked();
+    await expect(toggle.locator("+ .toggle-label")).toHaveAttribute(
       "title",
       "This device follows everything, including apps added later",
     );
@@ -760,7 +765,7 @@ test.describe("Account page - a device the account is held away from", () => {
     );
 
     await expect(toggle).toBeDisabled();
-    await expect(toggle).toHaveAttribute(
+    await expect(toggle.locator("+ .toggle-label")).toHaveAttribute(
       "title",
       "Only the computer holding the account root can change scope",
     );

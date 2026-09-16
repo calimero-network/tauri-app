@@ -44,6 +44,7 @@ import {
   type EvictionResult,
 } from "../utils/teeEviction";
 import { useCloudEnabled } from "../hooks/useCloudEnabled";
+import { useVisiblePoll } from "../hooks/useVisiblePoll";
 import "./Namespaces.css";
 
 function parseApiError(e: any): string {
@@ -244,6 +245,9 @@ function Namespaces() {
   const activeNsRootId = (view.type === "namespace" || view.type === "group") ? view.ns.namespaceId : null;
 
   const { namespaces, loading, error, refetch: refetchNamespaces } = useNamespaces();
+  // A device follows and unfollows this account's projects without the desktop
+  // asking, so the listing has to notice on its own.
+  useVisiblePoll(refetchNamespaces, 30000);
   const { groups: nsGroups, loading: nsLoadingGroups, refetch: refetchNsGroups } = useNamespaceGroups(activeNsId) as any;
   const { groupInfo: groupInfoRaw, loading: groupInfoLoading } = useGroupInfo(activeGroupId);
   const { groupInfo: nsRootGroupInfoRaw } = useGroupInfo(activeNsRootId);
@@ -1753,7 +1757,7 @@ function Namespaces() {
             </div>
           </div>
           {error && <div className="error-message">{error.message}</div>}
-          {loading ? (
+          {loading && namespaces.length === 0 ? (
             <div className="loading">Loading namespaces...</div>
           ) : !error && appGroups.length === 0 ? (
             <div className="empty-state">
@@ -1840,7 +1844,7 @@ function Namespaces() {
             </div>
           </div>
           {error && <div className="error-message">{error.message}</div>}
-          {loading ? (
+          {loading && namespaces.length === 0 ? (
             <div className="loading">Loading namespaces...</div>
           ) : appNamespaces.length === 0 ? (
             <div className="empty-state">

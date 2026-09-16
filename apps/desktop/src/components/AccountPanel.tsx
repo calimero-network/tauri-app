@@ -10,6 +10,7 @@ import {
   type InstalledApp,
 } from "./DevicePairing";
 import { SkeletonText, SkeletonTable } from "./Skeleton";
+import { useVisiblePoll } from "../hooks/useVisiblePoll";
 import type { NodeIdentity } from "@calimero-network/mero-js";
 import {
   listAccountApplications,
@@ -186,6 +187,18 @@ export default function AccountPanel() {
       });
     return () => controller.abort();
   }, [accountId, reloads, deviceReloads]);
+
+  // Core follows and unfollows this device's projects on its own, so the roster
+  // changes with nothing here asking. A failed poll keeps the rows it has.
+  useVisiblePoll(
+    () => {
+      listAccountDevices()
+        .then(setDevices)
+        .catch(() => {});
+    },
+    30000,
+    !!accountId,
+  );
 
   // A device we linked but never saw converge is not in the listing yet, so
   // refetching would drop it: show it as syncing instead.

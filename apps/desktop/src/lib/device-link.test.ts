@@ -71,6 +71,7 @@ function json(body: unknown, init?: ResponseInit): Response {
 }
 
 const HEX_64 = 'a'.repeat(64);
+const ACCOUNT_NS = '9'.repeat(64);
 const HEX_128 = 'b'.repeat(128);
 
 /** A pair-init result as the other device would read it out. */
@@ -312,6 +313,21 @@ describe('pairInit', () => {
     expect(JSON.parse(String(calls[0].init?.body))).toEqual({
       accountRootPublicKey: HEX_64,
       namespaces: ['ns-1', 'ns-2'],
+    });
+    // Named, not just absent from the parse: an explicit `null` is a key core's
+    // deny-unknown-fields request type would still have to read.
+    expect(String(calls[0].init?.body)).not.toContain('accountNamespace');
+  });
+
+  it('posts the account namespace, and may then name no namespace at all', async () => {
+    const data = validPayload({ accountId: 'e'.repeat(64) });
+    installFetch(json({ data }));
+
+    await expect(pairInit(HEX_64, [], ACCOUNT_NS)).resolves.toEqual(data);
+    expect(JSON.parse(String(calls[0].init?.body))).toEqual({
+      accountRootPublicKey: HEX_64,
+      namespaces: [],
+      accountNamespace: ACCOUNT_NS,
     });
   });
 

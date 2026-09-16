@@ -653,7 +653,7 @@ export function DevicePairResponder({ enrolledDeviceId }: { enrolledDeviceId?: s
     try {
       // Kept on failure: pair-init is idempotent, so the holder can just retry
       // against this same response instead of restarting the wizard.
-      setResult(await pairInit(invite.rootKey, invite.namespaces));
+      setResult(await pairInit(invite.rootKey, invite.namespaces, invite.accountNamespace));
       setInstalls([]);
       setInstalling(false);
       setLinked(false);

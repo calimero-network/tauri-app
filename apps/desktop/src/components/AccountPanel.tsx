@@ -765,7 +765,7 @@ export default function AccountPanel() {
                 );
               })}
               {apps.length === 0 && (
-                <p className="field-hint">This account speaks in no app yet.</p>
+                <p className="empty-hint">This account speaks in no app yet.</p>
               )}
             </section>
 
@@ -797,7 +797,7 @@ export default function AccountPanel() {
                 );
               })}
               {catalog.namespaces.length === 0 && (
-                <p className="field-hint">No namespaces yet.</p>
+                <p className="empty-hint">No namespaces yet.</p>
               )}
             </section>
           </div>
@@ -810,7 +810,10 @@ export default function AccountPanel() {
     <>
       <div className="settings-card">
         {banner && (
-          <p className={`account-banner is-${banner.kind}`} id={`account-banner-${banner.kind}`}>
+          <p
+            className={banner.kind === "revoked" ? "error-message" : "account-banner"}
+            id={`account-banner-${banner.kind}`}
+          >
             {banner.text}
           </p>
         )}
@@ -885,7 +888,7 @@ export default function AccountPanel() {
             </button>
           </>
         ) : devices.length === 0 ? (
-          <p className="field-hint" id="devices-empty">
+          <p className="empty-hint" id="devices-empty">
             {devicesEmptyMessage(identity)}
           </p>
         ) : (
@@ -904,7 +907,7 @@ export default function AccountPanel() {
       <div className="settings-card">
         <h2>Apps on this account</h2>
         {appRows.length === 0 ? (
-          <p className="field-hint" id="account-apps-empty">
+          <p className="empty-hint" id="account-apps-empty">
             No namespace on this account targets an app yet.
           </p>
         ) : (

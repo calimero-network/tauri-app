@@ -518,6 +518,14 @@ body {
   text-decoration: underline;
 }
 
+/* A section that has nothing in it yet, as opposed to .field-hint under a field. */
+.empty-hint {
+  color: var(--text-tertiary);
+  font-size: 14px;
+  font-style: italic;
+  padding: 12px 0;
+}
+
 .error-message {
   padding: 12px 16px;
   margin-bottom: 16px;

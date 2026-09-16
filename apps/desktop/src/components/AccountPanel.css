@@ -396,23 +396,16 @@
   cursor: not-allowed;
 }
 
+/* The account page's one callout that is not an error; an error one takes the
+   shared .error-message instead. */
 .account-banner {
   margin-bottom: 16px;
-  padding: 10px 12px;
-  border-radius: var(--radius-md);
-  font-size: 13px;
-}
-
-.account-banner.is-revoked {
-  color: var(--error);
-  background: var(--error-bg);
-  border: 1px solid var(--error-border);
-}
-
-.account-banner.is-legacy {
-  color: var(--text-primary);
+  padding: 12px 16px;
   background: var(--accent-light);
   border: 1px solid var(--accent-dim);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  font-size: 13px;
 }
 
 .account-row-actions {

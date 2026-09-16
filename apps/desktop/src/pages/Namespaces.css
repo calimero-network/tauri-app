@@ -635,13 +635,6 @@
   font-size: 12px;
 }
 
-.empty-hint {
-  color: var(--text-tertiary);
-  font-size: 14px;
-  font-style: italic;
-  padding: 12px 0;
-}
-
 .ns-row-info {
   flex: 1;
   display: flex;

@@ -20,6 +20,7 @@ import {
   inScope,
   namespaceFollowState,
   relinkSummary,
+  accountAppRows,
   reportedAccountNamespace,
   scopeHint,
   scopeToggle,
@@ -408,5 +409,72 @@ describe("thisDeviceBanner", () => {
 
   it("says nothing on the node holding the account root", () => {
     expect(thisDeviceBanner(identity({ holdsAccountRoot: true }), [])).toBeNull();
+  });
+});
+
+describe("accountAppRows", () => {
+  const applications = [
+    { applicationId: "App1", namespaces: ["ns-1", "ns-2"] },
+    { applicationId: "App2", namespaces: ["ns-3"] },
+  ];
+  const namespaces = [
+    { namespaceId: "ns-1", name: "Personal", targetApplicationId: "App1" },
+    { namespaceId: "ns-2", name: "Work", targetApplicationId: "App1" },
+    { namespaceId: "ns-3", name: "Files", targetApplicationId: "App2" },
+  ];
+  const installed = [
+    {
+      id: "App1",
+      name: "Mero Chat",
+      package: "calimero/mero-chat",
+      version: "1.2.0",
+      blob: { bytecode: "b".repeat(64) },
+    },
+    // A row a followed namespace wrote: named, with coordinates, but no blob.
+    { id: "App2", name: "Mero Drive", package: "calimero/mero-drive", version: "2.0.0" },
+  ];
+
+  it("counts the namespaces an app is spoken in and the devices that reach it", () => {
+    const devices = [
+      device({ applications: [] }),
+      device({ applications: ["App1"] }),
+      device({ applications: ["App1"], revoked: true }),
+    ];
+    expect(accountAppRows(applications, devices, namespaces, installed)).toEqual([
+      {
+        applicationId: "App1",
+        name: "Mero Chat",
+        package: "calimero/mero-chat",
+        version: "1.2.0",
+        namespaces: 2,
+        devices: 2,
+        installed: true,
+      },
+      {
+        applicationId: "App2",
+        name: "Mero Drive",
+        package: "calimero/mero-drive",
+        version: "2.0.0",
+        namespaces: 1,
+        devices: 1,
+        installed: false,
+      },
+    ]);
+  });
+
+  it("names an app this node has no row for, and offers it no coordinates", () => {
+    const rows = accountAppRows(applications, [], namespaces, []);
+    const row = rows.find((entry) => entry.applicationId === "App1");
+    expect(row).toEqual({
+      applicationId: "App1",
+      name: "Personal, Work",
+      namespaces: 2,
+      devices: 0,
+      installed: false,
+    });
+  });
+
+  it("lists nothing for an account whose namespaces target no app", () => {
+    expect(accountAppRows([], [], [], [])).toEqual([]);
   });
 });

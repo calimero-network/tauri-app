@@ -820,6 +820,11 @@
   color: var(--text-secondary);
 }
 
+.account-app-list {
+  display: flex;
+  flex-direction: column;
+}
+
 .account-app-row,
 .account-ns-row {
   display: flex;
@@ -905,6 +910,7 @@
 
 .account-status.is-active,
 .account-status.is-following {
+  gap: 4px;
   color: var(--success);
 }
 

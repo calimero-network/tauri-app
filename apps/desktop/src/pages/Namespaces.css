@@ -493,6 +493,12 @@
   text-transform: capitalize;
 }
 
+.ns-card-install {
+  width: 100%;
+  margin: 10px 0 0;
+  justify-content: center;
+}
+
 /* ─── Copy Button ─── */
 .copy-btn {
   display: inline-flex;

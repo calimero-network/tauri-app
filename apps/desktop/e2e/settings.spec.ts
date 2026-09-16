@@ -11,6 +11,7 @@ import {
   DEFAULT_REGISTRY_URL,
   API_ROUTES,
   MOCK_ACCOUNT_APPLICATIONS,
+  MOCK_ACCOUNT_APP_ROWS,
   MOCK_ACCOUNT_DEVICES,
   MOCK_APPLICATION_ID,
   MOCK_NAMESPACE_ID,
@@ -24,6 +25,7 @@ import {
   MOCK_PAIR_REPLY_BLOB,
   MOCK_RELINK,
   MOCK_REVOKE,
+  listApplicationsWireBody,
 } from "./fixtures/mock-data";
 
 // ─── Navigate to Settings ──────────────────────────────────────────────────
@@ -685,6 +687,49 @@ test.describe("Account page - a device the account is held away from", () => {
     );
     // The banner points at the paste field, so the field has to still be there.
     await expect(page.locator("#pair-invite-input")).toBeVisible();
+  });
+});
+
+test.describe("Account page - apps on this account", () => {
+  test.beforeEach(async ({ page }) => {
+    await setupDeveloperPage(page);
+    await mockPairingAPIs(page);
+    await page.route(API_ROUTES.listApplications, (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: listApplicationsWireBody(MOCK_ACCOUNT_APP_ROWS),
+      }),
+    );
+    await navigateVia(page, "Account");
+  });
+
+  test("every app a namespace targets is listed, with what reaches it", async ({
+    page,
+  }) => {
+    const rows = page.locator("#account-apps .account-app-row");
+    await expect(rows).toHaveCount(2);
+    await expect(rows.filter({ hasText: "Mero Chat" })).toContainText(
+      "mero-chat · 1 namespace · 2 devices in scope",
+    );
+    await expect(
+      page.locator(`#app-installed-${MOCK_APPLICATION_ID}`),
+    ).toContainText("Installed");
+  });
+
+  test("an app this node has no blob for is offered for install", async ({ page }) => {
+    const bodies: string[] = [];
+    await page.route(API_ROUTES.installApplication, (route) => {
+      bodies.push(route.request().postData() ?? "");
+      return route.fulfill(json({ data: { applicationId: MOCK_OTHER_APPLICATION_ID } }));
+    });
+
+    await page.locator(`#app-install-${MOCK_OTHER_APPLICATION_ID}`).click();
+
+    await expect
+      .poll(() => bodies.length)
+      .toBeGreaterThan(0);
+    expect(JSON.parse(bodies[0])).toEqual({ package: "mero-drive", version: "2.0.0" });
   });
 });
 

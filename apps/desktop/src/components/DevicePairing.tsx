@@ -168,6 +168,8 @@ export interface InstalledApp {
   /** Registry coordinates, absent on an app installed outside a registry. */
   package?: string;
   version?: string;
+  /** Absent while a namespace has named the app but its blob has not arrived. */
+  blob?: { bytecode?: string };
 }
 
 /** The apps an invite offers to install: those in scope carrying the coordinates

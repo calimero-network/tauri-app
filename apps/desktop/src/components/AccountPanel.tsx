@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { ChevronRight, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { Check, ChevronRight, Plus, RefreshCw, Trash2 } from "lucide-react";
 import AppIcon from "./AppIcon";
 import CopyButton from "./CopyButton";
 import {
@@ -26,8 +26,9 @@ import {
   type NamespaceSummary,
   type RelinkResult,
 } from "../lib/device-link";
-import { parseTauriError } from "../utils/appUtils";
-import { listInstalledApps } from "../utils/installedAppsCache";
+import { appInstalled, decodeMetadata, parseTauriError } from "../utils/appUtils";
+import { apiClient } from "../lib/mero-client";
+import { invalidateInstalledApps, listInstalledApps } from "../utils/installedAppsCache";
 import { truncateText } from "../utils/string";
 
 /** The five the card prints. Named rather than `keyof`, which now also spans a
@@ -207,6 +208,43 @@ export function deviceScopeApps(
   return scopeTiles(applications, namespaces, [...extra, ...named]);
 }
 
+/** One app the account's namespaces target, as the card lists it. Registry
+ *  coordinates are carried only in the pair that can install something. */
+export interface AccountAppRow {
+  applicationId: string;
+  name: string;
+  package?: string;
+  version?: string;
+  namespaces: number;
+  devices: number;
+  installed: boolean;
+}
+
+export function accountAppRows(
+  applications: AccountApplication[],
+  devices: AccountDevice[],
+  namespaces: NamespaceSummary[],
+  installed: InstalledApp[],
+): AccountAppRow[] {
+  return applications
+    .map(({ applicationId, namespaces: targeting }) => {
+      const app = installed.find((entry) => entry.id === applicationId);
+      const meta = decodeMetadata(app?.metadata);
+      const pkg = app?.package ?? meta?.package;
+      const version = app?.version ?? meta?.version;
+      return {
+        applicationId,
+        name: applicationLabel(applicationId, namespaces, installed),
+        ...(pkg && version ? { package: pkg, version } : {}),
+        namespaces: targeting.length,
+        devices: devices.filter((device) => !device.revoked && inScope(device, applicationId))
+          .length,
+        installed: appInstalled(app),
+      };
+    })
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
 /** What the identity card has to say before anything else on it is worth reading. */
 export function thisDeviceBanner(
   identity: NodeIdentity | null,
@@ -296,6 +334,8 @@ export default function AccountPanel() {
     installed: InstalledApp[];
   }>({ apps: [], namespaces: [], installed: [] });
   const [rowNote, setRowNote] = useState<RowNote | null>(null);
+  const [installing, setInstalling] = useState("");
+  const [installError, setInstallError] = useState<RowNote | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -454,10 +494,34 @@ export default function AccountPanel() {
     });
   };
 
+  const install = async (app: AccountAppRow) => {
+    if (!app.package || !app.version) return;
+    setInstalling(app.applicationId);
+    setInstallError(null);
+    try {
+      const response = await apiClient.node.installApplication({
+        package: app.package,
+        version: app.version,
+      });
+      if (response.error) throw new Error(response.error.message);
+      invalidateInstalledApps();
+      setDeviceReloads((n) => n + 1);
+    } catch (err: unknown) {
+      setInstallError({
+        deviceId: app.applicationId,
+        text: parseTauriError(err, "Could not install that app"),
+        error: true,
+      });
+    } finally {
+      setInstalling("");
+    }
+  };
+
   const isHolder = canInviteDevices(identity);
   const accountNamespace = reportedAccountNamespace(devices, identity?.accountNamespaceId);
   const banner = thisDeviceBanner(identity, devices);
   const isSyncing = (device: DeviceRow) => !!device.syncing || device.deviceId in widening;
+  const appRows = accountAppRows(catalog.apps, devices, catalog.namespaces, catalog.installed);
 
   const renderDeviceRow = (device: DeviceRow) => {
     const open = !!expanded[device.deviceId];
@@ -718,6 +782,56 @@ export default function AccountPanel() {
             onLinked={handleLinked}
             onClose={() => setWizardOpen(false)}
           />
+        )}
+      </div>
+
+      <div className="settings-card">
+        <h2>Apps on this account</h2>
+        {appRows.length === 0 ? (
+          <p className="field-hint" id="account-apps-empty">
+            No namespace on this account targets an app yet.
+          </p>
+        ) : (
+          <div className="account-app-list" id="account-apps">
+            {appRows.map((app) => (
+              <div className="account-app-row" key={app.applicationId}>
+                <AppIcon name={app.name} seed={app.applicationId} size={28} />
+                <span className="account-app-text">
+                  <span className="account-app-name">{app.name}</span>
+                  <span className="account-app-meta">
+                    {app.package ?? truncateText(app.applicationId, 12)} ·{" "}
+                    {app.namespaces} {namespaceWord(app.namespaces)} · {app.devices}{" "}
+                    {app.devices === 1 ? "device" : "devices"} in scope
+                  </span>
+                </span>
+                {app.installed ? (
+                  <span className="account-status is-active" id={`app-installed-${app.applicationId}`}>
+                    <Check size={12} />
+                    Installed
+                  </span>
+                ) : app.package ? (
+                  <button
+                    type="button"
+                    id={`app-install-${app.applicationId}`}
+                    className="button button-primary button-small"
+                    disabled={installing === app.applicationId}
+                    onClick={() => install(app)}
+                  >
+                    {installing === app.applicationId ? "Installing…" : "Install"}
+                  </button>
+                ) : (
+                  <span className="account-status" id={`app-missing-${app.applicationId}`}>
+                    Not installed here
+                  </span>
+                )}
+                {installError?.deviceId === app.applicationId && (
+                  <span className="field-error" id={`app-install-error-${app.applicationId}`}>
+                    {installError.text}
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
         )}
       </div>
 

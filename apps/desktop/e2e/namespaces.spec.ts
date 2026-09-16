@@ -4,6 +4,12 @@ import {
   setupAuthenticatedPage,
   navigateVia,
 } from "./fixtures/helpers";
+import {
+  API_ROUTES,
+  MOCK_INSTALLED_APPS,
+  MOCK_UNINSTALLED_APP,
+  listApplicationsWireBody,
+} from "./fixtures/mock-data";
 
 // ─── Namespaces page – requires developer mode ──────────────────────────────
 
@@ -197,5 +203,77 @@ test.describe("Namespaces – grouped by application", () => {
     await expect(locked.locator(".ns-app-locked-name")).toHaveText("Blockchain Demo");
     // The application is stated, not selected: nothing here is clickable.
     await expect(locked.locator("button")).toHaveCount(0);
+  });
+});
+
+// ─── Namespaces page - an app the node names but cannot run ─────────────────
+
+/** A namespace this node follows whose application arrived without its blob. */
+const MISSING_APP_NAMESPACE = {
+  namespaceId: "d".repeat(64),
+  targetApplicationId: MOCK_UNINSTALLED_APP.id,
+  bytecodeId: "bytecode-3",
+  createdAt: 0,
+  name: "notes workspace",
+  memberCount: 1,
+  contextCount: 0,
+  subgroupCount: 0,
+};
+
+test.describe("Namespaces – installing a missing application", () => {
+  test.beforeEach(async ({ page }) => {
+    await setupDeveloperPage(page);
+    await page.route(API_ROUTES.namespaces, (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ data: [...GROUPED_NAMESPACES, MISSING_APP_NAMESPACE] }),
+      }),
+    );
+    await page.route(API_ROUTES.listApplications, (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: listApplicationsWireBody([...MOCK_INSTALLED_APPS, MOCK_UNINSTALLED_APP]),
+      }),
+    );
+    await navigateVia(page, "Namespaces");
+    await page
+      .locator(`.ns-app-card[data-application-id="${MOCK_UNINSTALLED_APP.id}"]`)
+      .click();
+  });
+
+  test("the namespace offers the install its application is waiting on", async ({
+    page,
+  }) => {
+    await expect(
+      page.locator(`#ns-install-${MISSING_APP_NAMESPACE.namespaceId}`),
+    ).toHaveText("Install Mero Notes");
+  });
+
+  test("a namespace whose application is here is offered no install", async ({
+    page,
+  }) => {
+    await page.locator(".ns-back").click();
+    await page.locator('.ns-app-card[data-application-id="installed-app-1"]').click();
+
+    await expect(page.locator(".ns-card-install")).toHaveCount(0);
+  });
+
+  test("installing posts the coordinates the node carries for it", async ({ page }) => {
+    const bodies: string[] = [];
+    await page.route(API_ROUTES.installApplication, (route) => {
+      bodies.push(route.request().postData() ?? "");
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ data: { applicationId: MOCK_UNINSTALLED_APP.id } }),
+      });
+    });
+
+    await page.locator(`#ns-install-${MISSING_APP_NAMESPACE.namespaceId}`).click();
+
+    await expect.poll(() => bodies.length).toBeGreaterThan(0);
+    expect(JSON.parse(bodies[0])).toEqual({ package: "mero-notes", version: "1.0.0" });
   });
 });

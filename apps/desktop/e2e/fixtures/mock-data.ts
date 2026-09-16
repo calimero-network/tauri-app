@@ -195,6 +195,8 @@ export const MOCK_INSTALLED_APPS = [
       }),
     ),
     source: "registry",
+    // The node sends a blob for every application it can actually run.
+    blob: { bytecode: "a".repeat(64), compiled: "" },
   },
   {
     id: "installed-app-2",
@@ -208,8 +210,20 @@ export const MOCK_INSTALLED_APPS = [
       }),
     ),
     source: "registry",
+    blob: { bytecode: "b".repeat(64), compiled: "" },
   },
 ];
+
+/** What the node lists for an app a followed namespace names but whose blob has
+ *  not arrived: coordinates to install from, and nothing to run. */
+export const MOCK_UNINSTALLED_APP = {
+  id: "missing-app-1",
+  name: "mero-notes",
+  version: "1.0.0",
+  metadata: btoa(JSON.stringify({ name: "Mero Notes", package: "mero-notes" })),
+  source: "registry",
+  blob: { bytecode: "", compiled: "" },
+};
 
 /** Row shape used by Playwright route mocks (same as `MOCK_INSTALLED_APPS`). */
 export type MockInstalledAppRow = (typeof MOCK_INSTALLED_APPS)[number];
@@ -227,6 +241,7 @@ export function listApplicationsWireBody(apps: MockInstalledAppRow[]): string {
         version: app.version,
         metadata: app.metadata,
         source: app.source,
+        blob: app.blob,
       })),
     },
   });
@@ -293,6 +308,27 @@ export const MOCK_NAMESPACES = [
 export const MOCK_ACCOUNT_APPLICATIONS = [
   { applicationId: MOCK_APPLICATION_ID, namespaces: [MOCK_NAMESPACE_ID] },
   { applicationId: MOCK_OTHER_APPLICATION_ID, namespaces: [MOCK_OTHER_NAMESPACE_ID] },
+];
+
+/** The account's two apps as the node lists them: one it holds the blob for,
+ *  one only named by a namespace this node follows. */
+export const MOCK_ACCOUNT_APP_ROWS = [
+  {
+    id: MOCK_APPLICATION_ID,
+    name: "mero-chat",
+    version: "1.2.0",
+    metadata: btoa(JSON.stringify({ name: "Mero Chat", package: "mero-chat" })),
+    source: "registry",
+    blob: { bytecode: "c".repeat(64), compiled: "" },
+  },
+  {
+    id: MOCK_OTHER_APPLICATION_ID,
+    name: "mero-drive",
+    version: "2.0.0",
+    metadata: btoa(JSON.stringify({ name: "Mero Drive", package: "mero-drive" })),
+    source: "registry",
+    blob: { bytecode: "", compiled: "" },
+  },
 ];
 
 export const MOCK_PAIR_INIT = {

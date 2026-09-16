@@ -27,7 +27,7 @@ vi.mock('../lib/token-storage', () => ({
   getTokenExpiresAt: () => 1_700_000_000_000,
 }));
 
-import { openAppFrontend, normalizeNodeUrl } from './appUtils';
+import { appInstalled, openAppFrontend, normalizeNodeUrl } from './appUtils';
 import { BROKERED_REFRESH_TOKEN } from '../lib/token-broker';
 
 /** Args of the `create_app_window` invoke (may not be the first call — the app
@@ -315,5 +315,17 @@ describe('nodeKey collisions', () => {
       return String((c as [string, { windowLabel: string }])[1].windowLabel);
     })();
     expect(a).not.toBe(b);
+  });
+});
+
+describe('appInstalled', () => {
+  it('counts an application the node holds the bytecode for', () => {
+    expect(appInstalled({ blob: { bytecode: 'b'.repeat(64) } })).toBe(true);
+  });
+
+  it('does not count the row a namespace wrote before the blob arrived', () => {
+    expect(appInstalled({ blob: { bytecode: '' } })).toBe(false);
+    expect(appInstalled({})).toBe(false);
+    expect(appInstalled(undefined)).toBe(false);
   });
 });

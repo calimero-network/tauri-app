@@ -77,6 +77,12 @@ export function decodeMetadata(metadata: any): any {
  * query already present on the base URL. Deep-link params take precedence on
  * key collisions. Returns the base URL unchanged when `params` is empty.
  */
+/** The node writes an application row as soon as a namespace names the app, so
+ *  the blob - not the row - is what says the node can run it here. */
+export function appInstalled(app?: { blob?: { bytecode?: string } }): boolean {
+  return !!app?.blob?.bytecode;
+}
+
 export function appendParamsToUrl(baseUrl: string, params: string): string {
   if (!params) return baseUrl;
   try {

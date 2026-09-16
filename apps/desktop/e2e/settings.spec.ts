@@ -26,7 +26,6 @@ import {
   MOCK_PAIR_REPLY_BLOB,
   MOCK_RELINK,
   MOCK_REVOKE,
-  listApplicationsWireBody,
 } from "./fixtures/mock-data";
 
 // ─── Navigate to Settings ──────────────────────────────────────────────────
@@ -619,6 +618,9 @@ test.describe("Account page - device listing", () => {
     await expect(
       page.locator(`#device-row-${MOCK_PAIR_INIT.deviceId} .account-device-name`),
     ).toContainText("Alice's tablet");
+    // The row takes the new name before the delete is even sent, so the calls are
+    // waited for rather than read off the back of that assertion.
+    await expect.poll(() => calls.length).toBe(2);
     expect(calls).toEqual([
       `create {"alias":"Alice's tablet","deviceId":"${MOCK_PAIR_INIT.deviceId}"}`,
       "delete /admin-api/alias/delete/device/Alice's iPad",
@@ -801,15 +803,10 @@ test.describe("Account page - a device the account is held away from", () => {
 
 test.describe("Account page - apps on this account", () => {
   test.beforeEach(async ({ page }) => {
-    await setupDeveloperPage(page);
+    // Seeded through the shell's own first read: the installed-app list is cached
+    // for the page, so a route registered after that read never reaches the card.
+    await setupDeveloperPage(page, { installedApps: MOCK_ACCOUNT_APP_ROWS });
     await mockPairingAPIs(page);
-    await page.route(API_ROUTES.listApplications, (route) =>
-      route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: listApplicationsWireBody(MOCK_ACCOUNT_APP_ROWS),
-      }),
-    );
     await navigateVia(page, "Account");
   });
 

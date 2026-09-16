@@ -24,6 +24,7 @@ const INIT: PairInitResult = {
 };
 
 const ROOT_KEY = "f".repeat(64);
+const ACCOUNT_NS = "9".repeat(64);
 
 const NAMESPACES: NamespaceSummary[] = [
   { namespaceId: "ns-chat-1", name: "Chat", targetApplicationId: "AppChat" },
@@ -42,8 +43,24 @@ describe("invite blob", () => {
     expect(decodeInvite(`\n  ${encodeInvite(invite)}  \n`)).toEqual(invite);
   });
 
-  it("rejects an invite naming no namespace, which core would refuse anyway", () => {
+  it("round trips an invite that names only the account namespace", () => {
+    const invite = { rootKey: ROOT_KEY, namespaces: [], accountNamespace: ACCOUNT_NS };
+    expect(decodeInvite(encodeInvite(invite))).toEqual(invite);
+  });
+
+  it("rejects an invite naming neither a namespace nor the account one", () => {
     expect(decodeInvite(encodeInvite({ rootKey: ROOT_KEY, namespaces: [] }))).toBeNull();
+  });
+
+  it("defaults a missing namespace list to none, so the account namespace carries it", () => {
+    const blob = `mero-pair:${btoa(
+      JSON.stringify({ rootKey: ROOT_KEY, accountNamespace: ACCOUNT_NS }),
+    )}`;
+    expect(decodeInvite(blob)).toEqual({
+      rootKey: ROOT_KEY,
+      namespaces: [],
+      accountNamespace: ACCOUNT_NS,
+    });
   });
 
   it("drops namespace entries that are not ids", () => {

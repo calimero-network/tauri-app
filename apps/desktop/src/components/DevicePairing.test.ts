@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import type { NamespaceSummary, PairInitResult } from "../lib/device-link";
+import type { AccountApplication, NamespaceSummary, PairInitResult } from "../lib/device-link";
 import {
   applicationLabel,
   applicationNamespaces,
@@ -13,6 +13,9 @@ import {
   encodeInvite,
   encodeReply,
   inviteNamespaces,
+  scopeTiles,
+  tileNamespaceCount,
+  canLeaveScopeStep,
 } from "./DevicePairing";
 
 const INIT: PairInitResult = {
@@ -342,5 +345,79 @@ describe("certifiedIntoAccount", () => {
 
   it("does not count a revoked row as a live link", () => {
     expect(certifiedIntoAccount([device({ revoked: true })])).toBe(false);
+  });
+});
+
+describe("scopeTiles", () => {
+  const accountApps: AccountApplication[] = [
+    { applicationId: "AppChat", namespaces: ["ns-chat-1", "ns-chat-2"] },
+    { applicationId: "AppDrive", namespaces: ["ns-drive"] },
+  ];
+
+  it("names every app the account speaks in, with what it would cover", () => {
+    expect(scopeTiles(accountApps, NAMESPACES, [])).toEqual([
+      { applicationId: "AppChat", name: "Chat", namespaces: 2 },
+      { applicationId: "AppDrive", name: "Drive", namespaces: 1 },
+    ]);
+  });
+
+  it("offers an installed app the account has no namespace for yet", () => {
+    const installed = [{ id: "AppNotes", name: "Notes", metadata: [] }];
+    expect(scopeTiles(accountApps, NAMESPACES, installed)).toEqual([
+      { applicationId: "AppChat", name: "Chat", namespaces: 2 },
+      { applicationId: "AppDrive", name: "Drive", namespaces: 1 },
+      { applicationId: "AppNotes", name: "Notes", namespaces: 0 },
+    ]);
+  });
+
+  it("lists an app the account uses and this node has installed only once", () => {
+    const installed = [{ id: "AppChat", name: "Mero Chat", metadata: [] }];
+    const tiles = scopeTiles(accountApps, NAMESPACES, installed);
+
+    expect(tiles.map((t) => t.applicationId).sort()).toEqual(["AppChat", "AppDrive"]);
+    expect(tiles.find((t) => t.applicationId === "AppChat")).toEqual({
+      applicationId: "AppChat",
+      name: "Mero Chat",
+      namespaces: 2,
+    });
+  });
+
+  it("puts the apps with no namespace last, and orders each group by name", () => {
+    const installed = [
+      { id: "AppZeta", name: "Zeta", metadata: [] },
+      { id: "AppAlpha", name: "Alpha", metadata: [] },
+    ];
+    expect(scopeTiles(accountApps, NAMESPACES, installed).map((t) => t.name)).toEqual([
+      "Chat",
+      "Drive",
+      "Alpha",
+      "Zeta",
+    ]);
+  });
+
+  it("has nothing to offer on an account with no app and no install", () => {
+    expect(scopeTiles([], [], [])).toEqual([]);
+  });
+});
+
+describe("tileNamespaceCount", () => {
+  it("counts what picking the app would cover", () => {
+    expect(tileNamespaceCount(2)).toBe("2 namespaces");
+    expect(tileNamespaceCount(1)).toBe("1 namespace");
+  });
+
+  it("says an app with none is still offerable rather than empty", () => {
+    expect(tileNamespaceCount(0)).toBe("no namespace yet");
+  });
+});
+
+describe("canLeaveScopeStep", () => {
+  it("lets everything through, which needs no app ticked", () => {
+    expect(canLeaveScopeStep(true, [])).toBe(true);
+  });
+
+  it("holds the chosen-apps path back until one is ticked", () => {
+    expect(canLeaveScopeStep(false, [])).toBe(false);
+    expect(canLeaveScopeStep(false, ["AppChat"])).toBe(true);
   });
 });

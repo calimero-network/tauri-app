@@ -546,17 +546,16 @@ test.describe("Account page - pairing wizard", () => {
     await page.locator("#add-device").click();
   });
 
-  test("the scope step opens on everything, with no app picker in the way", async ({
+  test("the invite step opens on everything, with no tiles in the way", async ({
     page,
   }) => {
+    await expect(page.getByRole("heading", { name: "1. Show the invite" })).toBeVisible();
     await expect(page.locator("#pair-scope-all")).toBeChecked();
     await expect(page.locator("#pair-app-list")).toHaveCount(0);
-    await expect(page.locator("#pair-scope-next")).toBeEnabled();
+    await expect(page.locator("#pair-next")).toBeEnabled();
   });
 
   test("everything hands the new device every namespace", async ({ page }) => {
-    await page.locator("#pair-scope-next").click();
-
     // Decoded, not matched as text: the ids are inside base64, where a substring
     // assertion would pass on a blob that names the wrong set.
     expect(await inviteNamespacesOnScreen(page)).toEqual([
@@ -565,39 +564,38 @@ test.describe("Account page - pairing wizard", () => {
     ]);
   });
 
-  test("choosing one app narrows the invite to that app's namespaces", async ({
+  test("ticking one tile narrows the invite to that app's namespaces", async ({
     page,
   }) => {
     await page.locator("#pair-scope-apps").check();
-    await page.locator(`#pair-app-${MOCK_OTHER_APPLICATION_ID}`).check();
-    await page.locator("#pair-scope-next").click();
+    await page.locator(`#pair-app-${MOCK_OTHER_APPLICATION_ID}`).click();
 
+    await expect(
+      page.locator(`#pair-app-${MOCK_OTHER_APPLICATION_ID}`),
+    ).toHaveAttribute("aria-pressed", "true");
     expect(await inviteNamespacesOnScreen(page)).toEqual([MOCK_OTHER_NAMESPACE_ID]);
   });
 
-  test("the app picker is labelled by namespace, not by a raw id", async ({
-    page,
-  }) => {
+  test("a tile names the app and what picking it would cover", async ({ page }) => {
     await page.locator("#pair-scope-apps").check();
 
     await expect(page.locator("#pair-app-list")).toContainText("Personal");
     await expect(page.locator("#pair-app-list")).toContainText("Files");
+    await expect(page.locator("#pair-app-list")).toContainText("1 namespace");
     await expect(page.locator("#pair-app-list")).not.toContainText(
       MOCK_APPLICATION_ID,
     );
   });
 
-  test("choosing no app leaves nothing to invite anyone to", async ({ page }) => {
+  test("ticking nothing under the narrowed scope holds the step", async ({ page }) => {
     await page.locator("#pair-scope-apps").check();
 
-    await expect(page.locator("#pair-scope-next")).toBeDisabled();
+    await expect(page.locator("#pair-next")).toBeDisabled();
   });
 
-  test("step 1 hands over an invite blob naming this account's namespace", async ({
+  test("the invite blob names this account's namespace", async ({
     page,
   }) => {
-    await page.locator("#pair-scope-next").click();
-
     await expect(page.locator("#pair-invite")).toContainText("mero-pair:");
     await expect(page.locator("#copy-pair-invite")).toBeVisible();
     expect(await inviteBodyOnScreen(page)).toMatchObject({
@@ -605,11 +603,43 @@ test.describe("Account page - pairing wizard", () => {
     });
   });
 
-  test("step 2 takes the response and the code in separate fields", async ({
+  test("the wizard opens on an account with no namespace yet", async ({ page }) => {
+    await page.route(API_ROUTES.namespaces, (route) => route.fulfill(json({ data: [] })));
+    await page.route(API_ROUTES.accountApplications, (route) =>
+      route.fulfill(json({ applications: [] })),
+    );
+    await page.reload();
+    await navigateVia(page, "Account");
+    await page.locator("#add-device").click();
+
+    await expect(page.locator("#pair-no-namespace")).toHaveCount(0);
+    await expect(page.locator("#pair-invite")).toContainText("mero-pair:");
+  });
+
+  test("pair-complete carries the apps the tiles chose", async ({ page }) => {
+    const bodies: string[] = [];
+    await page.route(API_ROUTES.pairComplete, (route) => {
+      bodies.push(route.request().postData() ?? "");
+      return route.fulfill(json({ data: MOCK_PAIR_COMPLETE }));
+    });
+
+    await page.locator("#pair-scope-apps").check();
+    await page.locator(`#pair-app-${MOCK_OTHER_APPLICATION_ID}`).click();
+    await page.locator("#pair-next").click();
+    await page.fill("#pair-response", MOCK_PAIR_REPLY_BLOB);
+    await page.fill("#pair-code", MOCK_PAIR_INIT.confirmationCode);
+    await page.locator("#pair-complete").click();
+
+    await expect(page.locator("#pair-success")).toBeVisible();
+    expect(JSON.parse(bodies[0]).applications).toEqual([MOCK_OTHER_APPLICATION_ID]);
+  });
+
+  test("the confirm step takes the reply and the code in separate fields", async ({
     page,
   }) => {
-    await page.locator("#pair-scope-next").click();
     await page.locator("#pair-next").click();
+
+    await expect(page.getByRole("heading", { name: "2. Confirm the device" })).toBeVisible();
 
     await expect(page.locator("#pair-response")).toBeVisible();
     await expect(page.locator("#pair-code")).toBeVisible();
@@ -630,7 +660,6 @@ test.describe("Account page - pairing wizard", () => {
   test("a truncated response is named as such before it is sent", async ({
     page,
   }) => {
-    await page.locator("#pair-scope-next").click();
     await page.locator("#pair-next").click();
     await page.fill("#pair-response", "mero-pair-reply:" + btoa('{"deviceId":"abc"}'));
 
@@ -641,7 +670,6 @@ test.describe("Account page - pairing wizard", () => {
   });
 
   test("linking shows a loader and then the success state", async ({ page }) => {
-    await page.locator("#pair-scope-next").click();
     await page.locator("#pair-next").click();
     await page.fill("#pair-response", MOCK_PAIR_REPLY_BLOB);
     await page.fill("#pair-code", MOCK_PAIR_INIT.confirmationCode);

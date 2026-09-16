@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { Check, KeyRound, Loader2, X } from "lucide-react";
+import AppIcon from "./AppIcon";
 import CopyButton from "./CopyButton";
 import { SkeletonText } from "./Skeleton";
 import {
@@ -195,6 +196,46 @@ export function applicationNamespaces(
     .join(", ");
 }
 
+/** One app the invite can be scoped to, and what picking it would cover. */
+export interface ScopeTile {
+  applicationId: string;
+  name: string;
+  namespaces: number;
+}
+
+/** The apps a scope can name: those the account already speaks in, plus those
+ *  installed here, which a namespace may be created for after the pairing. */
+export function scopeTiles(
+  applications: AccountApplication[],
+  namespaces: NamespaceSummary[],
+  installed: InstalledApp[],
+): ScopeTile[] {
+  const counts = new Map(applications.map((app) => [app.applicationId, app.namespaces.length]));
+  for (const app of installed) if (!counts.has(app.id)) counts.set(app.id, 0);
+
+  return Array.from(counts, ([applicationId, count]) => ({
+    applicationId,
+    name: applicationLabel(applicationId, namespaces, installed),
+    namespaces: count,
+  })).sort((a, b) => {
+    if (!a.namespaces !== !b.namespaces) return a.namespaces ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+}
+
+/** An app with no namespace is still worth picking: the device follows the ones
+ *  created for it later. */
+export function tileNamespaceCount(count: number): string {
+  if (!count) return "no namespace yet";
+  return `${count} namespace${count === 1 ? "" : "s"}`;
+}
+
+/** Everything needs nothing ticked; the narrowed scope is not a scope until it
+ *  names one app. */
+export function canLeaveScopeStep(everything: boolean, chosen: string[]): boolean {
+  return everything || chosen.length > 0;
+}
+
 /** The lines one scope choice shows: its name, then the namespaces it covers
  *  when those say something the name did not already. */
 export function scopeRow(
@@ -249,7 +290,7 @@ export function DevicePairWizard({ rootKey, accountNamespaceId, onLinked, onClos
   const [installed, setInstalled] = useState<InstalledApp[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
-  const [step, setStep] = useState<0 | 1 | 2>(0);
+  const [step, setStep] = useState<0 | 1>(0);
   const [everything, setEverything] = useState(true);
   const [chosenApps, setChosenApps] = useState<string[]>([]);
   const [replyText, setReplyText] = useState("");
@@ -294,6 +335,7 @@ export function DevicePairWizard({ rootKey, accountNamespaceId, onLinked, onClos
   // invite names namespaces to listen on, pair-complete names applications.
   const scopedApps = everything ? undefined : chosenApps;
   const inviteNs = inviteNamespaces(namespaces, scopedApps);
+  const tiles = scopeTiles(applications, namespaces, installed);
 
   const reply = decodeReply(replyText);
   const payload = reply ? { ...reply, confirmationCode: code } : null;
@@ -367,7 +409,9 @@ export function DevicePairWizard({ rootKey, accountNamespaceId, onLinked, onClos
     );
   }
 
-  if (!namespaces.length) {
+  // An account namespace is something to add a device to on its own: the device
+  // follows whatever the account joins later.
+  if (!accountNamespaceId && !namespaces.length) {
     return (
       <div className="account-wizard">
         <p className="field-hint" id="pair-no-namespace">
@@ -411,78 +455,6 @@ export function DevicePairWizard({ rootKey, accountNamespaceId, onLinked, onClos
     );
   }
 
-  if (step === 0) {
-    return (
-      <div className="account-wizard">
-        <p className="field-hint">What should this device have?</p>
-        <label className="account-scope-choice">
-          <input
-            type="radio"
-            id="pair-scope-all"
-            name="pair-scope"
-            checked={everything}
-            onChange={() => setEverything(true)}
-          />
-          <span>Everything on this account</span>
-        </label>
-        <label className="account-scope-choice">
-          <input
-            type="radio"
-            id="pair-scope-apps"
-            name="pair-scope"
-            checked={!everything}
-            onChange={() => setEverything(false)}
-          />
-          <span>Only the apps I choose</span>
-        </label>
-        {!everything && (
-          <div className="account-scope-apps" id="pair-app-list">
-            {applications.length === 0 ? (
-              <p className="field-hint" id="pair-no-apps">
-                This account speaks in no app yet.
-              </p>
-            ) : (
-              applications.map((app) => (
-                <label className="account-scope-choice account-scope-app" key={app.applicationId}>
-                  <input
-                    type="checkbox"
-                    id={`pair-app-${app.applicationId}`}
-                    checked={chosenApps.includes(app.applicationId)}
-                    onChange={() => toggleApp(app.applicationId)}
-                  />
-                  <span className="account-scope-app-text">
-                    {scopeRow(app.applicationId, namespaces, installed).map((line, i) => (
-                        <span
-                          key={line}
-                          className={i === 0 ? "account-scope-app-name" : "account-scope-app-ns"}
-                        >
-                          {line}
-                        </span>
-                      ))}
-                  </span>
-                </label>
-              ))
-            )}
-          </div>
-        )}
-        <div className="account-wizard-actions">
-          <button
-            type="button"
-            id="pair-scope-next"
-            className="button button-primary"
-            onClick={() => setStep(1)}
-            disabled={!inviteNs.length}
-          >
-            Next
-          </button>
-          <button type="button" id="pair-cancel" className="button button-secondary" onClick={onClose}>
-            Cancel
-          </button>
-        </div>
-      </div>
-    );
-  }
-
   const invite = encodeInvite(
     buildInvite({
       rootKey,
@@ -492,116 +464,169 @@ export function DevicePairWizard({ rootKey, accountNamespaceId, onLinked, onClos
     }),
   );
 
+  if (step === 0) {
+    return (
+      <div className="account-wizard">
+        <h3 className="account-wizard-title">1. Show the invite</h3>
+        <p className="field-hint">
+          Copy this invite to the new device and paste it into its Account page. It carries
+          the account, not a list of namespaces; the device learns those on its own. You can
+          widen the scope from the device's row afterwards.
+        </p>
+        <span className="settings-field-label">What may this device act for?</span>
+        <label className="account-scope-choice">
+          <input
+            type="radio"
+            id="pair-scope-all"
+            name="pair-scope"
+            checked={everything}
+            onChange={() => setEverything(true)}
+          />
+          <span>Everything on this account, now and later</span>
+        </label>
+        <label className="account-scope-choice">
+          <input
+            type="radio"
+            id="pair-scope-apps"
+            name="pair-scope"
+            checked={!everything}
+            onChange={() => setEverything(false)}
+          />
+          <span>
+            Only the apps I choose{" "}
+            <span className="account-scope-note">
+              (it follows every namespace for these apps, including ones you join later)
+            </span>
+          </span>
+        </label>
+        {!everything &&
+          (tiles.length === 0 ? (
+            <p className="field-hint" id="pair-no-apps">
+              This account speaks in no app yet, and this node has none installed.
+            </p>
+          ) : (
+            <div className="account-tiles" id="pair-app-list">
+              {tiles.map((tile) => {
+                const chosen = chosenApps.includes(tile.applicationId);
+                return (
+                  <button
+                    type="button"
+                    key={tile.applicationId}
+                    id={`pair-app-${tile.applicationId}`}
+                    className={`account-tile${chosen ? " is-on" : ""}`}
+                    aria-pressed={chosen}
+                    onClick={() => toggleApp(tile.applicationId)}
+                  >
+                    <AppIcon name={tile.name} seed={tile.applicationId} size={32} />
+                    <span className="account-tile-name">{tile.name}</span>
+                    <span className="account-tile-meta">
+                      {tileNamespaceCount(tile.namespaces)}
+                    </span>
+                    {chosen && (
+                      <span className="account-tile-check">
+                        <Check size={10} />
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          ))}
+        <div className="settings-field">
+          <div className="agent-config-header">
+            <span className="settings-field-label">Invite</span>
+            <CopyButton id="copy-pair-invite" value={invite} />
+          </div>
+          <pre className="agent-config account-blob" tabIndex={0} id="pair-invite">{invite}</pre>
+        </div>
+        <div className="account-wizard-actions">
+          <button
+            type="button"
+            id="pair-next"
+            className="button button-primary"
+            onClick={() => setStep(1)}
+            disabled={!canLeaveScopeStep(everything, chosenApps)}
+          >
+            I pasted it, next
+          </button>
+          <button type="button" id="pair-cancel" className="button button-secondary" onClick={onClose}>
+            Cancel
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="account-wizard">
-      {step === 1 ? (
-        <>
-          <p className="field-hint">
-            On the computer you are adding, open Settings, then Account, and paste this into
-            "Pair this computer into an account".
-          </p>
-          <div className="settings-field">
-            <div className="agent-config-header">
-              <span className="settings-field-label">Invite</span>
-              <CopyButton id="copy-pair-invite" value={invite} />
-            </div>
-            <pre className="agent-config account-blob" tabIndex={0} id="pair-invite">{invite}</pre>
-          </div>
-          <div className="account-wizard-actions">
-            <button
-              type="button"
-              id="pair-next"
-              className="button button-primary"
-              onClick={() => setStep(2)}
-            >
-              Next
-            </button>
-            <button
-              type="button"
-              id="pair-scope-back"
-              className="button button-secondary"
-              onClick={() => setStep(0)}
-            >
-              Back
-            </button>
-            <button type="button" id="pair-cancel" className="button button-secondary" onClick={onClose}>
-              Cancel
-            </button>
-          </div>
-        </>
-      ) : (
-        <>
-          <p className="field-hint">
-            The other computer now shows a response and a confirmation code. Paste the response
-            here, then type the code as it appears on that screen.
-          </p>
-          <div className="settings-field">
-            <label htmlFor="pair-response">Response from the other computer</label>
-            <textarea
-              id="pair-response"
-              className="account-blob-input"
-              rows={4}
-              value={replyText}
-              onChange={(e) => setReplyText(e.target.value)}
-              placeholder={`${REPLY_PREFIX}…`}
-            />
-          </div>
-          <div className="settings-field">
-            <label htmlFor="pair-code">
-              Confirmation code, read off the other computer's screen
-            </label>
-            <input
-              id="pair-code"
-              type="text"
-              value={code}
-              onChange={(e) => setCode(normalizeConfirmationCode(e.target.value))}
-              placeholder="ABCD-1234"
-            />
-            <p className="field-hint">
-              Type it in yourself. It is not part of the response, so that a rewritten response
-              cannot carry a matching code.
-            </p>
-          </div>
-          {invalid && <p className="field-error" id="pair-invalid">{invalid}</p>}
-          {linkError && <p className="field-error" id="pair-error">{linkError}</p>}
-          {scopeRefused && (
-            <button
-              type="button"
-              id="pair-change-scope"
-              className="button button-secondary"
-              onClick={() => {
-                setScopeRefused(false);
-                setLinkError("");
-                setStep(0);
-              }}
-            >
-              Change the apps
-            </button>
-          )}
-          <div className="account-wizard-actions">
-            <button
-              type="button"
-              id="pair-complete"
-              className="button button-primary"
-              onClick={link}
-              disabled={!payload || !!invalid}
-            >
-              Link device
-            </button>
-            <button
-              type="button"
-              id="pair-back"
-              className="button button-secondary"
-              onClick={() => setStep(1)}
-            >
-              Back
-            </button>
-            <button type="button" id="pair-cancel" className="button button-secondary" onClick={onClose}>
-              Cancel
-            </button>
-          </div>
-        </>
+      <h3 className="account-wizard-title">2. Confirm the device</h3>
+      <p className="field-hint">
+        Paste the reply the device shows, then type the code it displays. The code proves the
+        reply was not altered on the way.
+      </p>
+      <div className="settings-field">
+        <label htmlFor="pair-response">Reply from the device</label>
+        <textarea
+          id="pair-response"
+          className="account-blob-input"
+          rows={4}
+          value={replyText}
+          onChange={(e) => setReplyText(e.target.value)}
+          placeholder={`${REPLY_PREFIX}…`}
+        />
+      </div>
+      <div className="settings-field">
+        <label htmlFor="pair-code">Confirmation code</label>
+        <input
+          id="pair-code"
+          type="text"
+          value={code}
+          onChange={(e) => setCode(normalizeConfirmationCode(e.target.value))}
+          placeholder="ABCD-1234"
+        />
+        <p className="field-hint">
+          Type it in yourself. It is not part of the reply, so that a rewritten reply cannot
+          carry a matching code.
+        </p>
+      </div>
+      {invalid && <p className="field-error" id="pair-invalid">{invalid}</p>}
+      {linkError && <p className="field-error" id="pair-error">{linkError}</p>}
+      {scopeRefused && (
+        <button
+          type="button"
+          id="pair-change-scope"
+          className="button button-secondary"
+          onClick={() => {
+            setScopeRefused(false);
+            setLinkError("");
+            setStep(0);
+          }}
+        >
+          Change the apps
+        </button>
       )}
+      <div className="account-wizard-actions">
+        <button
+          type="button"
+          id="pair-complete"
+          className="button button-primary"
+          onClick={link}
+          disabled={!payload || !!invalid}
+        >
+          Add this device
+        </button>
+        <button
+          type="button"
+          id="pair-back"
+          className="button button-secondary"
+          onClick={() => setStep(0)}
+        >
+          Back
+        </button>
+        <button type="button" id="pair-cancel" className="button button-secondary" onClick={onClose}>
+          Cancel
+        </button>
+      </div>
     </div>
   );
 }

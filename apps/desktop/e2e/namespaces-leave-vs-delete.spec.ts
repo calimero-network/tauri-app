@@ -69,6 +69,11 @@ async function openNamespace(
   await setupDeveloperPage(page);
   const mock = await mockNamespaceGraph(page, g, failures);
   await navigateVia(page, "Namespaces");
+  // The page lists applications first; a namespace lives one level in, under
+  // the application it is bound to.
+  await page
+    .locator(`.ns-app-card[data-application-id="${g.applicationId ?? "installed-app-1"}"]`)
+    .click();
   await page.locator(".ns-card").first().click();
   // The tree is what carries the per-row Delete/Leave decision; wait for it
   // rather than for the header, so no assertion races the member fetches.

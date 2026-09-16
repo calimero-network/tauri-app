@@ -261,6 +261,133 @@
   min-height: 400px;
 }
 
+/* ─── Application Grid ─── */
+/* The root of the page: one card per application, holding the namespaces bound
+   to it. Title, package, version and icon all come from the bundle metadata,
+   the same source the Installed Apps list reads. */
+.ns-app-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 16px;
+}
+
+.ns-app-card {
+  background: var(--gradient-surface), var(--surface-glass);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  padding: 18px;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  position: relative;
+  overflow: hidden;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  width: 100%;
+  font: inherit;
+  color: inherit;
+}
+
+.ns-app-card:hover {
+  border-color: var(--accent-dim);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-glow);
+}
+
+.ns-app-card:hover .ns-card-chevron {
+  transform: translateX(2px);
+  color: var(--accent-primary);
+}
+
+.ns-app-card-top {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.ns-app-card-headings {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.ns-app-card-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ns-app-card-package {
+  margin: 2px 0 0;
+  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ns-app-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-color);
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.ns-app-card-dot {
+  color: var(--text-tertiary);
+}
+
+.ns-app-card-count {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.ns-app-version {
+  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+  font-size: 12px;
+  color: var(--accent-primary);
+}
+
+/* Not an error state: a namespace can target an app this node never installed
+   (joined from a peer, or uninstalled since), and that is worth saying plainly
+   rather than painting red. */
+.ns-app-version-unknown {
+  color: var(--text-tertiary);
+}
+
+/* ─── Application Header (one app's namespaces) ─── */
+.ns-app-heading {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+
+.ns-app-heading-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.ns-app-package {
+  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
 /* ─── Namespace Grid ─── */
 .ns-grid {
   display: grid;
@@ -1015,134 +1142,56 @@
   border-color: var(--accent-primary);
 }
 
-/* ─── App select dropdown (Create Namespace modal) ─── */
-.ns-app-select-wrapper {
-  position: relative;
-}
-
-.ns-app-select-trigger {
-  width: 100%;
+/* ─── Locked application (Create Namespace modal) ─── */
+/* The application is settled by the page this modal opens from, so this states
+   the binding instead of offering a choice. Deliberately styled as a read-only
+   panel, not a control, so it is never mistaken for one. */
+.ns-app-locked {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 8px 10px;
+  gap: 10px;
+  padding: 10px;
   background: var(--bg-secondary, rgba(255, 255, 255, 0.03));
   border: 1px solid var(--border-color);
   border-radius: 6px;
-  cursor: pointer;
-  font-family: inherit;
-  font-size: 13px;
-  color: var(--text-primary);
-  transition: border-color 0.15s, box-shadow 0.15s;
-  text-align: left;
   box-sizing: border-box;
 }
 
-.ns-app-select-trigger:hover:not(:disabled) {
-  border-color: var(--border-hover);
+.ns-app-locked-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
 }
 
-.ns-app-select-trigger.open {
-  border-color: var(--accent-primary);
-  box-shadow: 0 0 0 2px var(--accent-light);
-}
-
-.ns-app-select-trigger:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.ns-app-select-name {
-  flex: 1;
+.ns-app-locked-name {
+  font-size: 13px;
   font-weight: 500;
+  color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.ns-app-select-chevron {
-  flex-shrink: 0;
-  color: var(--text-tertiary);
-  transition: transform 0.2s ease;
-}
-
-.ns-app-select-chevron.open {
-  transform: rotate(180deg);
-  color: var(--accent-primary);
-}
-
-.ns-app-select-menu {
-  position: absolute;
-  top: calc(100% + 4px);
-  left: 0;
-  right: 0;
-  background: #0d1117;
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
-  z-index: 300;
-  overflow: hidden;
-  animation: nodeDropdownIn 0.15s ease-out;
-}
-
-[data-theme="light"] .ns-app-select-menu {
-  background: #ffffff;
-}
-
-.ns-app-select-option {
-  width: 100%;
+.ns-app-locked-meta {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 9px 12px;
-  background: none;
-  border: none;
-  border-bottom: 1px solid var(--border-color);
-  cursor: pointer;
-  font-family: inherit;
-  font-size: 13px;
-  color: var(--text-primary);
-  text-align: left;
-  transition: background 0.12s;
-  box-sizing: border-box;
+  min-width: 0;
 }
 
-.ns-app-select-option:last-child {
-  border-bottom: none;
-}
-
-.ns-app-select-option:hover {
-  background: var(--accent-light);
-}
-
-.ns-app-select-option.selected {
-  background: rgba(165, 255, 17, 0.06);
-}
-
-[data-theme="light"] .ns-app-select-option.selected {
-  background: rgba(106, 171, 0, 0.06);
-}
-
-.ns-app-select-option-name {
-  flex: 1;
-  font-weight: 500;
+.ns-app-locked-package {
+  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+  font-size: 11px;
+  color: var(--text-tertiary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.ns-app-select-option.selected .ns-app-select-option-name {
-  color: var(--accent-primary);
-}
-
-.ns-app-select-option-id {
+.ns-app-locked-version {
+  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
   font-size: 11px;
-  color: var(--text-tertiary);
-  flex-shrink: 0;
-}
-
-.ns-app-select-check {
   color: var(--accent-primary);
   flex-shrink: 0;
 }

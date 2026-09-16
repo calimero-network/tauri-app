@@ -373,6 +373,9 @@ test.describe("Account tab", () => {
     await expect(page.locator("#value-account-root-public-key")).toHaveText(
       MOCK_NODE_IDENTITY.accountRootPublicKey,
     );
+    await expect(page.locator("#value-account-namespace")).toHaveText(
+      MOCK_NODE_IDENTITY.accountNamespaceId,
+    );
     await expect(page.locator("#copy-account-id")).toBeVisible();
   });
 
@@ -431,10 +434,14 @@ async function mockPairingAPIs(page: Page): Promise<void> {
   );
 }
 
-/** The namespaces an invite blob on screen actually carries. */
-async function inviteNamespacesOnScreen(page: Page): Promise<string[]> {
+/** What an invite blob on screen actually carries, past its base64. */
+async function inviteBodyOnScreen(page: Page): Promise<Record<string, unknown>> {
   const blob = (await page.locator("#pair-invite").innerText()).trim();
-  return JSON.parse(atob(blob.replace("mero-pair:", ""))).namespaces;
+  return JSON.parse(atob(blob.replace("mero-pair:", "")));
+}
+
+async function inviteNamespacesOnScreen(page: Page): Promise<string[]> {
+  return (await inviteBodyOnScreen(page)).namespaces as string[];
 }
 
 test.describe("Account tab - pairing needs no developer mode", () => {
@@ -575,11 +582,16 @@ test.describe("Account tab - pairing wizard", () => {
     await expect(page.locator("#pair-scope-next")).toBeDisabled();
   });
 
-  test("step 1 hands over an invite blob", async ({ page }) => {
+  test("step 1 hands over an invite blob naming this account's namespace", async ({
+    page,
+  }) => {
     await page.locator("#pair-scope-next").click();
 
     await expect(page.locator("#pair-invite")).toContainText("mero-pair:");
     await expect(page.locator("#copy-pair-invite")).toBeVisible();
+    expect(await inviteBodyOnScreen(page)).toMatchObject({
+      accountNamespace: MOCK_NODE_IDENTITY.accountNamespaceId,
+    });
   });
 
   test("step 2 takes the response and the code in separate fields", async ({
@@ -643,8 +655,19 @@ test.describe("Account tab - pairing responder", () => {
   test("an invite yields a response blob and a spoken confirmation code", async ({
     page,
   }) => {
+    const initBodies: string[] = [];
+    await page.route(API_ROUTES.pairInit, (route) => {
+      initBodies.push(route.request().postData() ?? "");
+      return route.fulfill(json({ data: MOCK_PAIR_INIT }));
+    });
+
     await page.fill("#pair-invite-input", MOCK_PAIR_INVITE_BLOB);
     await page.locator("#pair-init").click();
+
+    await expect(page.locator("#pair-reply")).toContainText("mero-pair-reply:");
+    expect(JSON.parse(initBodies[0]).accountNamespace).toBe(
+      MOCK_NODE_IDENTITY.accountNamespaceId,
+    );
 
     await expect(page.locator("#pair-reply")).toContainText("mero-pair-reply:");
 

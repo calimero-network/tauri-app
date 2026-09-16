@@ -26,17 +26,23 @@ import { parseTauriError } from "../utils/appUtils";
 import { listInstalledApps } from "../utils/installedAppsCache";
 import { truncateText } from "../utils/string";
 
-/** The four the card prints. Named rather than `keyof`, which now also spans a
+/** The five the card prints. Named rather than `keyof`, which now also spans a
  *  boolean these rows cannot render. */
 const IDENTITY_FIELDS: {
   id: string;
   label: string;
-  key: "accountId" | "deviceId" | "publicKey" | "accountRootPublicKey";
+  key:
+    | "accountId"
+    | "deviceId"
+    | "publicKey"
+    | "accountRootPublicKey"
+    | "accountNamespaceId";
 }[] = [
   { id: "account-id", label: "Account ID", key: "accountId" },
   { id: "device-id", label: "Device ID", key: "deviceId" },
   { id: "public-key", label: "Device public key", key: "publicKey" },
   { id: "account-root-public-key", label: "Account root public key", key: "accountRootPublicKey" },
+  { id: "account-namespace", label: "Account namespace", key: "accountNamespaceId" },
 ];
 
 /** `syncing` marks a device we linked but have not yet seen in the listing. */

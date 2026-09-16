@@ -537,6 +537,7 @@ export default function AccountPanel() {
         {wizardOpen && (
           <DevicePairWizard
             rootKey={identity?.accountRootPublicKey}
+            accountNamespaceId={identity?.accountNamespaceId}
             onLinked={handleLinked}
             onClose={() => setWizardOpen(false)}
           />

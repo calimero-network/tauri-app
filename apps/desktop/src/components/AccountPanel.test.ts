@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
+import type { NodeIdentity } from "@calimero-network/mero-js";
 import type { AccountDevice } from "../lib/device-link";
 
 vi.mock("../lib/device-link", () => ({
@@ -11,10 +12,18 @@ import {
   canRevoke,
   canSync,
   canInviteDevices,
-  canWiden,
   deviceScope,
+  deviceScopeApps,
+  deviceStatus,
   devicesEmptyMessage,
+  followsAccount,
+  inScope,
+  namespaceFollowState,
   relinkSummary,
+  reportedAccountNamespace,
+  scopeHint,
+  scopeToggle,
+  thisDeviceBanner,
   widenSummary,
 } from "./AccountPanel";
 
@@ -42,34 +51,43 @@ describe("deviceScope", () => {
 });
 
 describe("canSync", () => {
-  it("offers the repair for another live device", () => {
-    expect(canSync(device())).toBe(true);
+  it("offers the holder the repair for another live device", () => {
+    expect(canSync(device(), true)).toBe(true);
   });
 
-  it("withholds it from this node's own device, which is never relinked", () => {
-    expect(canSync(device({ isSelf: true }))).toBe(false);
+  it("withholds it from the holder's own device, which is never relinked", () => {
+    expect(canSync(device({ isSelf: true }), true)).toBe(false);
   });
 
   it("withholds it from a withdrawn device", () => {
-    expect(canSync(device({ revoked: true }))).toBe(false);
+    expect(canSync(device({ revoked: true }), true)).toBe(false);
+  });
+
+  it("leaves a node holding no root only its own row", () => {
+    expect(canSync(device({ isSelf: true }), false)).toBe(true);
+    expect(canSync(device(), false)).toBe(false);
   });
 });
 
 describe("canRevoke", () => {
   it("offers revocation for another live device", () => {
-    expect(canRevoke(device())).toBe(true);
+    expect(canRevoke(device(), true)).toBe(true);
   });
 
   it("withholds it from this node's own device", () => {
-    expect(canRevoke(device({ isSelf: true }))).toBe(false);
+    expect(canRevoke(device({ isSelf: true }), true)).toBe(false);
   });
 
   it("withholds it from a device already withdrawn", () => {
-    expect(canRevoke(device({ revoked: true }))).toBe(false);
+    expect(canRevoke(device({ revoked: true }), true)).toBe(false);
   });
 
   it("withholds it from a device bound nowhere, since the route names a namespace", () => {
-    expect(canRevoke(device({ namespaces: [] }))).toBe(false);
+    expect(canRevoke(device({ namespaces: [] }), false)).toBe(false);
+  });
+
+  it("withholds it from a node that does not hold the account root", () => {
+    expect(canRevoke(device(), false)).toBe(false);
   });
 });
 
@@ -94,21 +112,6 @@ describe("relinkSummary", () => {
     expect(relinkSummary({ linkedIn: [], skipped: ["ns-1"] })).toBe(
       "Repaired 0 namespaces, skipped 1.",
     );
-  });
-});
-
-describe("canWiden", () => {
-  it("offers the action for a scoped device", () => {
-    expect(canWiden(device({ applications: ["App1"] }))).toBe(true);
-  });
-
-  it("withholds it from a device that already reaches every app", () => {
-    expect(canWiden(device({ applications: [] }))).toBe(false);
-  });
-
-  it("withholds it from this node's own device and a revoked one", () => {
-    expect(canWiden(device({ applications: ["App1"], isSelf: true }))).toBe(false);
-    expect(canWiden(device({ applications: ["App1"], revoked: true }))).toBe(false);
   });
 });
 
@@ -174,5 +177,236 @@ describe("devicesEmptyMessage on a device held elsewhere", () => {
   it("says the account is managed on the other device", () => {
     const identity = { accountId: "a", deviceId: "d", holdsAccountRoot: false } as never;
     expect(devicesEmptyMessage(identity)).toContain("held on another device");
+  });
+});
+
+function identity(overrides: Partial<NodeIdentity> = {}): NodeIdentity {
+  return {
+    accountId: "a".repeat(64),
+    deviceId: "b".repeat(64),
+    publicKey: "EdDevicePublicKey",
+    accountRootPublicKey: "c".repeat(64),
+    holdsAccountRoot: true,
+    accountNamespaceId: "9".repeat(64),
+    ...overrides,
+  };
+}
+
+const ACCOUNT_NS = "9".repeat(64);
+
+describe("inScope", () => {
+  it("reads an empty scope as every application, which is core's convention", () => {
+    expect(inScope(device({ applications: [] }), "App1")).toBe(true);
+  });
+
+  it("covers only the applications a narrowed scope names", () => {
+    expect(inScope(device({ applications: ["App1"] }), "App1")).toBe(true);
+    expect(inScope(device({ applications: ["App1"] }), "App2")).toBe(false);
+  });
+});
+
+describe("reportedAccountNamespace", () => {
+  it("takes the id once a device in the listing is bound into it", () => {
+    const devices = [device({ namespaces: [ACCOUNT_NS, "ns-1"] })];
+    expect(reportedAccountNamespace(devices, ACCOUNT_NS)).toBe(ACCOUNT_NS);
+  });
+
+  it("holds nothing back to accuse with on a node whose listing never names it", () => {
+    expect(reportedAccountNamespace([device({ namespaces: ["ns-1"] })], ACCOUNT_NS)).toBeNull();
+    expect(reportedAccountNamespace([device()], null)).toBeNull();
+  });
+});
+
+describe("followsAccount", () => {
+  it("follows it when the device is bound into the account namespace", () => {
+    expect(followsAccount(device({ namespaces: [ACCOUNT_NS] }), ACCOUNT_NS)).toBe(true);
+  });
+
+  it("does not follow it when the binding is missing", () => {
+    expect(followsAccount(device({ namespaces: ["ns-1"] }), ACCOUNT_NS)).toBe(false);
+  });
+
+  it("accuses nobody where the account namespace is not reported at all", () => {
+    expect(followsAccount(device({ namespaces: ["ns-1"] }), null)).toBe(true);
+  });
+});
+
+describe("deviceStatus", () => {
+  it("calls a live, bound device active", () => {
+    expect(deviceStatus(device({ namespaces: [ACCOUNT_NS] }), ACCOUNT_NS, false)).toBe("active");
+  });
+
+  it("puts a withdrawal ahead of everything else it could say", () => {
+    expect(deviceStatus(device({ revoked: true }), ACCOUNT_NS, true)).toBe("revoked");
+  });
+
+  it("says syncing while we are waiting for the listing to catch up", () => {
+    expect(deviceStatus(device({ namespaces: [ACCOUNT_NS] }), ACCOUNT_NS, true)).toBe("syncing");
+  });
+
+  it("names a device that never picked the account up", () => {
+    expect(deviceStatus(device({ namespaces: ["ns-1"] }), ACCOUNT_NS, false)).toBe(
+      "not-following",
+    );
+  });
+});
+
+describe("namespaceFollowState", () => {
+  const namespace = { namespaceId: "ns-1", name: "Personal", targetApplicationId: "App1" };
+  const bound = () => device({ namespaces: [ACCOUNT_NS, "ns-1"], applications: ["App1"] });
+
+  it("follows a namespace in scope that names the device's binding", () => {
+    expect(namespaceFollowState(bound(), namespace, ACCOUNT_NS, false)).toBe("following");
+  });
+
+  it("retires every namespace of a withdrawn device", () => {
+    expect(
+      namespaceFollowState(device({ revoked: true }), namespace, ACCOUNT_NS, false),
+    ).toBe("retired");
+  });
+
+  it("syncs a namespace the device is reaching for but has not bound", () => {
+    expect(namespaceFollowState(bound(), namespace, ACCOUNT_NS, true)).toBe("syncing");
+  });
+
+  it("says a namespace outside the scope is not in it, rather than not followed", () => {
+    const narrow = device({ namespaces: [ACCOUNT_NS], applications: ["App2"] });
+    expect(namespaceFollowState(narrow, namespace, ACCOUNT_NS, false)).toBe("not-in-scope");
+  });
+
+  it("says a namespace in scope with no binding is simply not followed", () => {
+    const unbound = device({ namespaces: [ACCOUNT_NS], applications: ["App1"] });
+    expect(namespaceFollowState(unbound, namespace, ACCOUNT_NS, false)).toBe("not-following");
+  });
+
+  it("does not claim a namespace is followed by a device that skipped the account", () => {
+    const legacy = device({ namespaces: ["ns-1"], applications: ["App1"] });
+    expect(namespaceFollowState(legacy, namespace, ACCOUNT_NS, false)).toBe("not-following");
+  });
+});
+
+describe("scopeToggle", () => {
+  it("offers the only change core supports, which is switching one on", () => {
+    expect(scopeToggle(device({ applications: ["App1"] }), "App2", true)).toEqual({
+      on: false,
+      locked: false,
+    });
+  });
+
+  it("locks the off direction, since core cannot narrow without a fresh pairing", () => {
+    expect(scopeToggle(device({ applications: ["App1"] }), "App1", true)).toEqual({
+      on: true,
+      locked: true,
+      tip: "Narrowing a scope needs a fresh pairing",
+    });
+  });
+
+  it("locks every toggle on for a device that already follows everything", () => {
+    expect(scopeToggle(device({ applications: [] }), "App1", true)).toEqual({
+      on: true,
+      locked: true,
+      tip: "This device follows everything, including apps added later",
+    });
+  });
+
+  it("locks the lot on a node that does not hold the account root", () => {
+    expect(scopeToggle(device({ applications: ["App1"] }), "App2", false)).toEqual({
+      on: false,
+      locked: true,
+      tip: "Only the computer holding the account root can change scope",
+    });
+  });
+
+  it("locks a withdrawn device, which no relink reaches", () => {
+    expect(scopeToggle(device({ revoked: true, applications: ["App1"] }), "App2", true)).toEqual({
+      on: false,
+      locked: true,
+      tip: "Revoked devices cannot be changed",
+    });
+  });
+});
+
+describe("scopeHint", () => {
+  it("says what an empty scope really means", () => {
+    expect(scopeHint(device({ applications: [] }), 3)).toBe(
+      "everything, including apps added later",
+    );
+  });
+
+  it("counts a narrowed scope against what the account has", () => {
+    expect(scopeHint(device({ applications: ["App1"] }), 3)).toBe("1 of 3 apps");
+  });
+});
+
+describe("deviceScopeApps", () => {
+  const applications = [
+    { applicationId: "App1", namespaces: ["ns-1"] },
+    { applicationId: "App2", namespaces: ["ns-2"] },
+  ];
+  const namespaces = [
+    { namespaceId: "ns-1", name: "Personal", targetApplicationId: "App1" },
+    { namespaceId: "ns-2", name: "Files", targetApplicationId: "App2" },
+  ];
+
+  it("offers every app the account speaks in", () => {
+    expect(
+      deviceScopeApps(applications, device({ applications: ["App1"] }), namespaces, []).map(
+        (tile) => tile.applicationId,
+      ),
+    ).toEqual(["App2", "App1"]);
+  });
+
+  it("keeps an app the device's scope names after the account stopped using it", () => {
+    const tiles = deviceScopeApps(
+      applications,
+      device({ applications: ["App3"] }),
+      namespaces,
+      [{ id: "App3", name: "Notes" }],
+    );
+    expect(tiles.map((tile) => tile.name)).toEqual(["Files", "Personal", "Notes"]);
+  });
+
+  it("names an app the node has installed by its own name, not by a namespace", () => {
+    const tiles = deviceScopeApps(applications, device({ applications: ["App1"] }), namespaces, [
+      { id: "App1", name: "Mero Chat" },
+    ]);
+    expect(tiles.find((tile) => tile.applicationId === "App1")?.name).toBe("Mero Chat");
+  });
+
+  it("offers nothing extra for a device that already follows everything", () => {
+    expect(
+      deviceScopeApps(applications, device({ applications: [] }), namespaces, []).length,
+    ).toBe(2);
+  });
+});
+
+describe("thisDeviceBanner", () => {
+  const identity = (extra: Record<string, unknown>) =>
+    ({ accountId: "acct", deviceId: "d".repeat(64), ...extra }) as never;
+
+  it("warns in red that this device was withdrawn from the account", () => {
+    const banner = thisDeviceBanner(identity({ holdsAccountRoot: false }), [
+      device({ isSelf: true, revoked: true }),
+    ]);
+    expect(banner?.kind).toBe("revoked");
+    expect(banner?.text).toContain("can no longer write");
+  });
+
+  it("points a device paired by an older version at the link code", () => {
+    const banner = thisDeviceBanner(
+      identity({ holdsAccountRoot: false, accountNamespaceId: null }),
+      [device({ isSelf: true })],
+    );
+    expect(banner?.kind).toBe("legacy");
+    expect(banner?.text).toContain("does not follow the account yet");
+  });
+
+  it("says nothing on a device that follows the account", () => {
+    const followed = identity({ holdsAccountRoot: false, accountNamespaceId: ACCOUNT_NS });
+    expect(thisDeviceBanner(followed, [device({ isSelf: true })])).toBeNull();
+  });
+
+  it("says nothing on the node holding the account root", () => {
+    expect(thisDeviceBanner(identity({ holdsAccountRoot: true }), [])).toBeNull();
   });
 });

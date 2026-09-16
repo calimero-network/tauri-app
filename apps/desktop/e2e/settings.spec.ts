@@ -482,7 +482,7 @@ test.describe("Account page - device listing", () => {
   });
 
   test("one row per device, with its scope and its status", async ({ page }) => {
-    const rows = page.locator(".data-table tbody tr");
+    const rows = page.locator(".account-device-row");
     await expect(rows).toHaveCount(2);
 
     // This node's own device: no application scope at all, which is every app.
@@ -490,6 +490,76 @@ test.describe("Account page - device listing", () => {
     await expect(rows.nth(0)).toContainText("This device");
     await expect(rows.nth(1)).toContainText("1 app");
     await expect(rows.nth(1)).toContainText("Active");
+  });
+
+  test("a row expands into the apps it may act for and the namespaces it follows", async ({
+    page,
+  }) => {
+    const row = page.locator(`#device-row-${MOCK_PAIR_INIT.deviceId}`);
+    await expect(row.locator(".account-device-body")).toHaveCount(0);
+
+    await page.locator(`#device-expand-${MOCK_PAIR_INIT.deviceId}`).click();
+
+    await expect(row).toContainText("Apps this device may act for");
+    await expect(row).toContainText("1 of 2 apps");
+    // Personal is this device's own app; Files is the one its scope leaves out.
+    await expect(row.locator(".account-ns-row").nth(0)).toContainText("Following");
+    await expect(row.locator(".account-ns-row").nth(1)).toContainText("Not in scope");
+  });
+
+  test("widening a scoped device relinks it with the app it was missing", async ({
+    page,
+  }) => {
+    const bodies: string[] = [];
+    await page.route(API_ROUTES.relinkDevice, (route) => {
+      bodies.push(route.request().postData() ?? "");
+      return route.fulfill(json({ data: MOCK_RELINK }));
+    });
+
+    await page.locator(`#device-expand-${MOCK_PAIR_INIT.deviceId}`).click();
+    await page
+      .locator(`#device-app-${MOCK_PAIR_INIT.deviceId}-${MOCK_OTHER_APPLICATION_ID}`)
+      .click();
+
+    await expect(page.locator(`#device-note-${MOCK_PAIR_INIT.deviceId}`)).toHaveText(
+      "Added 1 app, reaching 1 more namespace.",
+    );
+    expect(JSON.parse(bodies[0]).applications).toEqual([
+      MOCK_APPLICATION_ID,
+      MOCK_OTHER_APPLICATION_ID,
+    ]);
+    // The listing still shows the old scope, so the row says so until it catches up.
+    await expect(
+      page.locator(`#device-row-${MOCK_PAIR_INIT.deviceId} .account-status`).first(),
+    ).toHaveText("Syncing");
+  });
+
+  test("the toggle of an app already in scope is locked, and says why", async ({
+    page,
+  }) => {
+    await page.locator(`#device-expand-${MOCK_PAIR_INIT.deviceId}`).click();
+    const held = page.locator(
+      `#device-app-${MOCK_PAIR_INIT.deviceId}-${MOCK_APPLICATION_ID}`,
+    );
+
+    await expect(held).toBeDisabled();
+    await expect(held).toHaveAttribute("title", "Narrowing a scope needs a fresh pairing");
+  });
+
+  test("every toggle of a device that follows everything is locked on", async ({
+    page,
+  }) => {
+    await page.locator(`#device-expand-${MOCK_NODE_IDENTITY.deviceId}`).click();
+    const toggle = page.locator(
+      `#device-app-${MOCK_NODE_IDENTITY.deviceId}-${MOCK_APPLICATION_ID}`,
+    );
+
+    await expect(toggle).toBeDisabled();
+    await expect(toggle).toHaveAttribute("aria-checked", "true");
+    await expect(toggle).toHaveAttribute(
+      "title",
+      "This device follows everything, including apps added later",
+    );
   });
 
   test("this device is offered neither a sync nor a revoke", async ({ page }) => {
@@ -535,6 +605,86 @@ test.describe("Account page - device listing", () => {
     await expect(page.locator(`#device-note-${MOCK_PAIR_INIT.deviceId}`)).toHaveText(
       "Withdrawn from 1 namespace.",
     );
+  });
+});
+
+test.describe("Account page - a device the account is held away from", () => {
+  /** The same account seen from a paired device: it holds no root of its own. */
+  async function mockHeldElsewhere(
+    page: Page,
+    identity: Record<string, unknown> = {},
+    devices = MOCK_ACCOUNT_DEVICES,
+  ): Promise<void> {
+    await mockPairingAPIs(page);
+    await page.route(API_ROUTES.identity, (route) =>
+      route.fulfill(
+        json({ data: { ...MOCK_NODE_IDENTITY, holdsAccountRoot: false, ...identity } }),
+      ),
+    );
+    await page.route(API_ROUTES.accountDevices, (route) =>
+      route.fulfill(json({ devices })),
+    );
+    await navigateVia(page, "Account");
+  }
+
+  test("it may look but not invite, hand out a link code or revoke", async ({ page }) => {
+    await setupDeveloperPage(page);
+    await mockHeldElsewhere(page);
+
+    await expect(page.locator(".account-device-row")).toHaveCount(2);
+    await expect(page.locator("#add-device")).toHaveCount(0);
+    await expect(page.locator("#link-code-show")).toHaveCount(0);
+    await expect(page.locator(`#device-revoke-${MOCK_PAIR_INIT.deviceId}`)).toHaveCount(0);
+  });
+
+  test("sync is offered on its own row and on no other", async ({ page }) => {
+    await setupDeveloperPage(page);
+    await mockHeldElsewhere(page);
+
+    await expect(page.locator(`#device-sync-${MOCK_NODE_IDENTITY.deviceId}`)).toBeEnabled();
+    await expect(page.locator(`#device-sync-${MOCK_PAIR_INIT.deviceId}`)).toHaveCount(0);
+  });
+
+  test("every toggle names the computer that can change a scope", async ({ page }) => {
+    await setupDeveloperPage(page);
+    await mockHeldElsewhere(page);
+    await page.locator(`#device-expand-${MOCK_PAIR_INIT.deviceId}`).click();
+    const toggle = page.locator(
+      `#device-app-${MOCK_PAIR_INIT.deviceId}-${MOCK_OTHER_APPLICATION_ID}`,
+    );
+
+    await expect(toggle).toBeDisabled();
+    await expect(toggle).toHaveAttribute(
+      "title",
+      "Only the computer holding the account root can change scope",
+    );
+  });
+
+  test("a withdrawn device says so in red before anything else on the card", async ({
+    page,
+  }) => {
+    await setupDeveloperPage(page);
+    await mockHeldElsewhere(page, {}, [
+      { ...MOCK_ACCOUNT_DEVICES[0], revoked: true },
+      MOCK_ACCOUNT_DEVICES[1],
+    ]);
+
+    await expect(page.locator("#account-banner-revoked")).toContainText(
+      "can no longer write",
+    );
+  });
+
+  test("a device paired by an older version is pointed at the link code", async ({
+    page,
+  }) => {
+    await setupDeveloperPage(page);
+    await mockHeldElsewhere(page, { accountNamespaceId: null });
+
+    await expect(page.locator("#account-banner-legacy")).toContainText(
+      "does not follow the account yet",
+    );
+    // The banner points at the paste field, so the field has to still be there.
+    await expect(page.locator("#pair-invite-input")).toBeVisible();
   });
 });
 

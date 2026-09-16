@@ -1,12 +1,15 @@
 import { useState, useEffect } from "react";
-import { MonitorSmartphone, Plus, RefreshCw, SquarePlus, Trash2 } from "lucide-react";
-import DataTable, { type Column } from "./DataTable";
+import { ChevronRight, Plus, RefreshCw, Trash2 } from "lucide-react";
+import AppIcon from "./AppIcon";
 import CopyButton from "./CopyButton";
 import {
   DevicePairWizard,
   DevicePairResponder,
-  scopeRow,
+  applicationLabel,
+  scopeTiles,
+  tileNamespaceCount,
   type InstalledApp,
+  type ScopeTile,
 } from "./DevicePairing";
 import { SkeletonText, SkeletonTable } from "./Skeleton";
 import { useVisiblePoll } from "../hooks/useVisiblePoll";
@@ -58,6 +61,9 @@ interface RowNote {
 
 const namespaceWord = (n: number) => (n === 1 ? "namespace" : "namespaces");
 
+const dropKey = <T,>(map: Record<string, T>, key: string): Record<string, T> =>
+  Object.fromEntries(Object.entries(map).filter(([at]) => at !== key));
+
 /** Core's empty `applications` means every application, not none. */
 export function deviceScope(device: AccountDevice): string {
   const count = device.applications.length;
@@ -65,22 +71,178 @@ export function deviceScope(device: AccountDevice): string {
   return `${count} ${count === 1 ? "app" : "apps"}`;
 }
 
-/** Relinking this node's own device, or a withdrawn one, is defined but can
- *  never publish anything, so neither is offered the action. */
-export function canSync(device: AccountDevice): boolean {
-  return !device.isSelf && !device.revoked;
+/** Core reads an empty scope as every application, the opposite of what an empty
+ *  relink asks for. */
+export function inScope(device: AccountDevice, applicationId: string): boolean {
+  return !device.applications.length || device.applications.includes(applicationId);
+}
+
+/** The account namespace, but only once the listing shows a device bound into it.
+ *  A node too old to bind anybody there would otherwise have every device read as
+ *  not following the account. */
+export function reportedAccountNamespace(
+  devices: AccountDevice[],
+  accountNamespaceId: string | null | undefined,
+): string | null {
+  if (!accountNamespaceId) return null;
+  return devices.some((device) => device.namespaces.includes(accountNamespaceId))
+    ? accountNamespaceId
+    : null;
+}
+
+/** Following the account is what carries a device into namespaces nobody told it
+ *  about, so it is the binding into the account namespace itself. */
+export function followsAccount(
+  device: AccountDevice,
+  accountNamespace: string | null,
+): boolean {
+  return !accountNamespace || device.namespaces.includes(accountNamespace);
+}
+
+export type DeviceStatus = "active" | "syncing" | "not-following" | "revoked";
+
+export const DEVICE_STATUS_LABEL: Record<DeviceStatus, string> = {
+  active: "Active",
+  syncing: "Syncing",
+  "not-following": "Not following the account",
+  revoked: "Revoked",
+};
+
+export function deviceStatus(
+  device: AccountDevice,
+  accountNamespace: string | null,
+  syncing: boolean,
+): DeviceStatus {
+  if (device.revoked) return "revoked";
+  if (syncing) return "syncing";
+  return followsAccount(device, accountNamespace) ? "active" : "not-following";
+}
+
+export type FollowState =
+  | "following"
+  | "syncing"
+  | "not-in-scope"
+  | "not-following"
+  | "retired";
+
+export const FOLLOW_STATE_LABEL: Record<FollowState, string> = {
+  following: "Following",
+  syncing: "Syncing",
+  "not-in-scope": "Not in scope",
+  "not-following": "Not following",
+  retired: "Retired",
+};
+
+/** What one device is doing about one namespace. A binding the namespace lists is
+ *  the only proof of following; everything else says why there is none. */
+export function namespaceFollowState(
+  device: AccountDevice,
+  namespace: NamespaceSummary,
+  accountNamespace: string | null,
+  syncing: boolean,
+): FollowState {
+  if (device.revoked) return "retired";
+  if (!inScope(device, namespace.targetApplicationId)) return "not-in-scope";
+  if (syncing) return "syncing";
+  if (!followsAccount(device, accountNamespace)) return "not-following";
+  return device.namespaces.includes(namespace.namespaceId) ? "following" : "not-following";
+}
+
+/** One app's switch on a device row. Core cannot narrow a scope without a fresh
+ *  pairing, so the on direction is the only one a toggle ever takes. */
+export interface ScopeToggle {
+  on: boolean;
+  locked: boolean;
+  tip?: string;
+}
+
+export function scopeToggle(
+  device: AccountDevice,
+  applicationId: string,
+  isHolder: boolean,
+): ScopeToggle {
+  const on = inScope(device, applicationId);
+  if (device.revoked) {
+    return { on: false, locked: true, tip: "Revoked devices cannot be changed" };
+  }
+  if (!isHolder) {
+    return {
+      on,
+      locked: true,
+      tip: "Only the computer holding the account root can change scope",
+    };
+  }
+  if (!device.applications.length) {
+    return {
+      on: true,
+      locked: true,
+      tip: "This device follows everything, including apps added later",
+    };
+  }
+  if (on) return { on, locked: true, tip: "Narrowing a scope needs a fresh pairing" };
+  return { on, locked: false };
+}
+
+export function scopeHint(device: AccountDevice, total: number): string {
+  if (!device.applications.length) return "everything, including apps added later";
+  return `${device.applications.length} of ${total} ${total === 1 ? "app" : "apps"}`;
+}
+
+/** The apps one row switches between: those the account speaks in, plus any this
+ *  device's own scope still names. */
+export function deviceScopeApps(
+  applications: AccountApplication[],
+  device: AccountDevice,
+  namespaces: NamespaceSummary[],
+  installed: InstalledApp[],
+): ScopeTile[] {
+  const extra = device.applications
+    .filter((id) => !applications.some((app) => app.applicationId === id))
+    .map((id) => installed.find((app) => app.id === id) ?? { id });
+  // Rows for apps the account already names are passed through too: they add
+  // nothing to the union, and they are where the app's own name comes from.
+  const named = installed.filter((app) =>
+    applications.some((entry) => entry.applicationId === app.id),
+  );
+  return scopeTiles(applications, namespaces, [...extra, ...named]);
+}
+
+/** What the identity card has to say before anything else on it is worth reading. */
+export function thisDeviceBanner(
+  identity: NodeIdentity | null,
+  devices: AccountDevice[],
+): { kind: "revoked" | "legacy"; text: string } | null {
+  if (devices.some((device) => device.isSelf && device.revoked)) {
+    return {
+      kind: "revoked",
+      text:
+        "This device was revoked from the account. It keeps its local copy but can no " +
+        "longer write, and it will not be carried into new namespaces.",
+    };
+  }
+  if (identity && identity.holdsAccountRoot === false && !identity.accountNamespaceId) {
+    return {
+      kind: "legacy",
+      text:
+        "This device does not follow the account yet. It was paired by an older version. " +
+        "Paste a link code from the computer that holds the account and it will pick up " +
+        "the account's namespaces on its own.",
+    };
+  }
+  return null;
+}
+
+/** Relinking this node's own device is defined but can never publish anything, so
+ *  the holder is not offered it; a device held elsewhere can only repair itself. */
+export function canSync(device: AccountDevice, isHolder: boolean): boolean {
+  if (device.revoked) return false;
+  return isHolder ? !device.isSelf : device.isSelf;
 }
 
 /** Revocation is terminal, and its route names a namespace, so a device bound
  *  nowhere has nothing to revoke in. */
-export function canRevoke(device: AccountDevice): boolean {
-  return !device.isSelf && !device.revoked && device.namespaces.length > 0;
-}
-
-/** A relink ADDS to the stored scope, and an empty scope already covers every
- *  application, so a device holding one has nothing to widen. */
-export function canWiden(device: AccountDevice): boolean {
-  return canSync(device) && device.applications.length > 0;
+export function canRevoke(device: AccountDevice, isHolder: boolean): boolean {
+  return isHolder && !device.isSelf && !device.revoked && device.namespaces.length > 0;
 }
 
 export function widenSummary({ linkedIn }: RelinkResult, added: number): string {
@@ -125,14 +287,14 @@ export default function AccountPanel() {
   const [deviceReloads, setDeviceReloads] = useState(0);
   const [busyDevice, setBusyDevice] = useState("");
   const [confirmRevoke, setConfirmRevoke] = useState("");
-  const [scopeDevice, setScopeDevice] = useState("");
-  const [scopeChoices, setScopeChoices] = useState<string[]>([]);
-  const [scopeError, setScopeError] = useState("");
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  // The app each row is waiting to see in the listing after a relink widened it.
+  const [widening, setWidening] = useState<Record<string, string>>({});
   const [catalog, setCatalog] = useState<{
     apps: AccountApplication[];
     namespaces: NamespaceSummary[];
     installed: InstalledApp[];
-  } | null>(null);
+  }>({ apps: [], namespaces: [], installed: [] });
   const [rowNote, setRowNote] = useState<RowNote | null>(null);
 
   useEffect(() => {
@@ -178,17 +340,53 @@ export default function AccountPanel() {
     return () => controller.abort();
   }, [accountId, reloads, deviceReloads]);
 
-  // Core follows and unfollows this device's projects on its own, so the roster
-  // changes with nothing here asking. A failed poll keeps the rows it has.
+  // Names and namespace counts for the expanded rows. A failure here leaves the
+  // rows readable by id rather than taking the listing down with it.
+  useEffect(() => {
+    if (!accountId) return;
+    const controller = new AbortController();
+    Promise.all([
+      listAccountApplications(),
+      listNamespaces(controller.signal),
+      listInstalledApps()
+        .then((r) => (Array.isArray(r.data) ? (r.data as InstalledApp[]) : []))
+        .catch(() => [] as InstalledApp[]),
+    ])
+      .then(([apps, namespaces, installed]) => {
+        if (!controller.signal.aborted) setCatalog({ apps, namespaces, installed });
+      })
+      .catch(() => {});
+    return () => controller.abort();
+  }, [accountId, reloads, deviceReloads]);
+
+  // Core follows and unfollows this device's namespaces on its own, so both
+  // listings change with nothing here asking. A failed poll keeps what it has.
   useVisiblePoll(
     () => {
       listAccountDevices()
         .then(setDevices)
         .catch(() => {});
+      listNamespaces()
+        .then((namespaces) => setCatalog((prev) => ({ ...prev, namespaces })))
+        .catch(() => {});
     },
     30000,
     !!accountId,
   );
+
+  // A widened row stays on Syncing until the listing carries the app the relink
+  // added, which is the only signal that the new scope reached the registry.
+  useEffect(() => {
+    setWidening((prev) => {
+      const next = Object.fromEntries(
+        Object.entries(prev).filter(([deviceId, applicationId]) => {
+          const row = devices.find((device) => device.deviceId === deviceId);
+          return !row || !inScope(row, applicationId);
+        }),
+      );
+      return Object.keys(next).length === Object.keys(prev).length ? prev : next;
+    });
+  }, [devices]);
 
   // A device we linked but never saw converge is not in the listing yet, so
   // refetching would drop it: show it as syncing instead.
@@ -221,12 +419,14 @@ export default function AccountPanel() {
     try {
       setRowNote({ deviceId, text: await action() });
       setDeviceReloads((n) => n + 1);
+      return true;
     } catch (err: unknown) {
       setRowNote({
         deviceId,
         text: parseTauriError(err, "That did not work"),
         error: true,
       });
+      return false;
     } finally {
       setBusyDevice("");
     }
@@ -235,34 +435,13 @@ export default function AccountPanel() {
   const sync = (device: DeviceRow) =>
     runRowAction(device.deviceId, async () => relinkSummary(await relinkDevice(device.deviceId)));
 
-  // Loaded on demand: most visits to this panel never open the picker, and the
-  // catalog is the same for every row once it is here.
-  const openScope = async (device: DeviceRow) => {
-    setScopeDevice(device.deviceId);
-    setScopeChoices([]);
-    setScopeError("");
-    if (catalog) return;
-    try {
-      const [apps, namespaces, installed] = await Promise.all([
-        listAccountApplications(),
-        listNamespaces(),
-        // A name is a nicety; the picker must still work when the lookup fails.
-        listInstalledApps()
-          .then((r) => (Array.isArray(r.data) ? (r.data as InstalledApp[]) : []))
-          .catch(() => [] as InstalledApp[]),
-      ]);
-      setCatalog({ apps, namespaces, installed });
-    } catch (err: unknown) {
-      setScopeError(parseTauriError(err, "Could not read this account's apps"));
-    }
-  };
-
-  const widen = (device: DeviceRow) => {
-    const chosen = scopeChoices;
-    setScopeDevice("");
-    return runRowAction(device.deviceId, async () =>
-      widenSummary(await relinkDevice(device.deviceId, chosen), chosen.length),
+  const widen = async (device: DeviceRow, applicationId: string) => {
+    const scope = [...device.applications, applicationId];
+    setWidening((prev) => ({ ...prev, [device.deviceId]: applicationId }));
+    const ok = await runRowAction(device.deviceId, async () =>
+      widenSummary(await relinkDevice(device.deviceId, scope), 1),
     );
+    if (!ok) setWidening((prev) => dropKey(prev, device.deviceId));
   };
 
   const revoke = (device: DeviceRow) => {
@@ -275,121 +454,96 @@ export default function AccountPanel() {
     });
   };
 
-  const scopeTarget = devices.find((device) => device.deviceId === scopeDevice);
-  // A relink only adds, so an app the device already holds is not offered.
-  const addableApps = (catalog?.apps ?? []).filter(
-    (app) => !scopeTarget?.applications.includes(app.applicationId),
-  );
+  const isHolder = canInviteDevices(identity);
+  const accountNamespace = reportedAccountNamespace(devices, identity?.accountNamespaceId);
+  const banner = thisDeviceBanner(identity, devices);
+  const isSyncing = (device: DeviceRow) => !!device.syncing || device.deviceId in widening;
 
-  const columns: Column<DeviceRow>[] = [
-    {
-      key: "deviceId",
-      label: "Device",
-      render: (device) => (
-        <span className="account-device-cell">
-          <MonitorSmartphone size={14} />
-          <code className="account-mono">{truncateText(device.deviceId, 8)}</code>
-        </span>
-      ),
-    },
-    {
-      key: "applications",
-      label: "Scope",
-      render: (device) => (
-        <span className="account-mono" title={device.applications.join(", ") || undefined}>
-          {device.syncing ? "-" : deviceScope(device)}
-        </span>
-      ),
-    },
-    {
-      key: "namespaces",
-      label: "Namespaces",
-      render: (device) => (
-        <span className="account-mono">{device.syncing ? "-" : device.namespaces.length}</span>
-      ),
-    },
-    {
-      key: "status",
-      label: "Status",
-      render: (device) =>
-        device.syncing ? (
-          <span className="account-syncing">Syncing</span>
-        ) : device.isSelf ? (
-          <span className="account-this-device">This device</span>
-        ) : device.revoked ? (
-          <span className="account-revoked">Revoked</span>
-        ) : (
-          <span className="account-active">Active</span>
-        ),
-    },
-    {
-      key: "actions",
-      label: "",
-      render: (device) => {
-        if (device.syncing) return null;
-        const note = rowNote?.deviceId === device.deviceId ? rowNote : null;
-        return (
+  const renderDeviceRow = (device: DeviceRow) => {
+    const open = !!expanded[device.deviceId];
+    const syncing = isSyncing(device);
+    const status = deviceStatus(device, accountNamespace, syncing);
+    const note = rowNote?.deviceId === device.deviceId ? rowNote : null;
+    const apps = deviceScopeApps(catalog.apps, device, catalog.namespaces, catalog.installed);
+
+    return (
+      <div
+        className={`account-device-row${open ? " is-open" : ""}`}
+        key={device.deviceId}
+        id={`device-row-${device.deviceId}`}
+      >
+        <div className="account-device-head">
+          <button
+            type="button"
+            className="account-device-expand"
+            id={`device-expand-${device.deviceId}`}
+            aria-expanded={open}
+            onClick={() =>
+              setExpanded((prev) => ({ ...prev, [device.deviceId]: !prev[device.deviceId] }))
+            }
+          >
+            <ChevronRight size={14} className="account-device-chevron" />
+            <span className="account-device-label">
+              <span className="account-device-name">
+                <code className="account-mono">{truncateText(device.deviceId, 8)}</code>
+                {device.isSelf && <span className="account-this-device">This device</span>}
+              </span>
+              <span className="account-device-meta">
+                {deviceScope(device)} · {device.namespaces.length}{" "}
+                {namespaceWord(device.namespaces.length)}
+              </span>
+            </span>
+          </button>
+          <span className={`account-status is-${status}`}>{DEVICE_STATUS_LABEL[status]}</span>
           <div className="account-row-actions">
-            {confirmRevoke === device.deviceId ? (
-              <>
-                <span className="account-row-note">Withdraw it for good?</span>
+          {confirmRevoke === device.deviceId ? (
+            <>
+              <span className="account-row-note">Withdraw it for good?</span>
+              <button
+                type="button"
+                id={`device-revoke-confirm-${device.deviceId}`}
+                className="button button-danger button-small"
+                disabled={busyDevice === device.deviceId}
+                onClick={() => revoke(device)}
+              >
+                Revoke
+              </button>
+              <button
+                type="button"
+                id={`device-revoke-cancel-${device.deviceId}`}
+                className="button button-secondary button-small"
+                onClick={() => setConfirmRevoke("")}
+              >
+                Cancel
+              </button>
+            </>
+          ) : (
+            <>
+              {canSync(device, isHolder) && (
                 <button
                   type="button"
-                  id={`device-revoke-confirm-${device.deviceId}`}
-                  className="button button-danger button-small"
+                  id={`device-sync-${device.deviceId}`}
+                  className="button button-secondary button-small"
                   disabled={busyDevice === device.deviceId}
-                  onClick={() => revoke(device)}
+                  onClick={() => sync(device)}
                 >
+                  <RefreshCw size={12} />
+                  Sync
+                </button>
+              )}
+              {canRevoke(device, isHolder) && (
+                <button
+                  type="button"
+                  id={`device-revoke-${device.deviceId}`}
+                  className="button button-secondary button-small"
+                  onClick={() => setConfirmRevoke(device.deviceId)}
+                >
+                  <Trash2 size={12} />
                   Revoke
                 </button>
-                <button
-                  type="button"
-                  id={`device-revoke-cancel-${device.deviceId}`}
-                  className="button button-secondary button-small"
-                  onClick={() => setConfirmRevoke("")}
-                >
-                  Cancel
-                </button>
-              </>
-            ) : (
-              <>
-                {canWiden(device) && (
-                  <button
-                    type="button"
-                    id={`device-scope-${device.deviceId}`}
-                    className="button button-secondary button-small"
-                    disabled={busyDevice === device.deviceId}
-                    onClick={() => openScope(device)}
-                  >
-                    <SquarePlus size={12} />
-                    Add apps
-                  </button>
-                )}
-                {canSync(device) && (
-                  <button
-                    type="button"
-                    id={`device-sync-${device.deviceId}`}
-                    className="button button-secondary button-small"
-                    disabled={busyDevice === device.deviceId}
-                    onClick={() => sync(device)}
-                  >
-                    <RefreshCw size={12} />
-                    Sync
-                  </button>
-                )}
-                {canRevoke(device) && (
-                  <button
-                    type="button"
-                    id={`device-revoke-${device.deviceId}`}
-                    className="button button-secondary button-small"
-                    onClick={() => setConfirmRevoke(device.deviceId)}
-                  >
-                    <Trash2 size={12} />
-                    Revoke
-                  </button>
-                )}
-              </>
-            )}
+              )}
+            </>
+          )}
             {note && (
               <span
                 className={note.error ? "field-error" : "account-row-note"}
@@ -399,14 +553,89 @@ export default function AccountPanel() {
               </span>
             )}
           </div>
-        );
-      },
-    },
-  ];
+        </div>
+
+        {open && (
+          <div className="account-device-body">
+            <section className="account-device-section">
+              <h3>
+                Apps this device may act for
+                <span className="account-section-hint">{scopeHint(device, apps.length)}</span>
+              </h3>
+              {apps.map((app) => {
+                const toggle = scopeToggle(device, app.applicationId, isHolder);
+                return (
+                  <div className="account-app-row" key={app.applicationId}>
+                    <AppIcon name={app.name} seed={app.applicationId} size={24} />
+                    <span className="account-app-text">
+                      <span className="account-app-name">{app.name}</span>
+                      <span className="account-app-meta">
+                        {tileNamespaceCount(app.namespaces)}
+                      </span>
+                    </span>
+                    <button
+                      type="button"
+                      id={`device-app-${device.deviceId}-${app.applicationId}`}
+                      className={`account-toggle${toggle.on ? " is-on" : ""}${
+                        toggle.locked ? " is-locked" : ""
+                      }`}
+                      role="switch"
+                      aria-checked={toggle.on}
+                      aria-label={app.name}
+                      title={toggle.tip}
+                      disabled={toggle.locked || busyDevice === device.deviceId}
+                      onClick={() => widen(device, app.applicationId)}
+                    >
+                      <i />
+                    </button>
+                  </div>
+                );
+              })}
+              {apps.length === 0 && (
+                <p className="field-hint">This account speaks in no app yet.</p>
+              )}
+            </section>
+
+            <section className="account-device-section">
+              <h3>Namespaces</h3>
+              {catalog.namespaces.map((namespace) => {
+                const state = namespaceFollowState(device, namespace, accountNamespace, syncing);
+                return (
+                  <div className="account-ns-row" key={namespace.namespaceId}>
+                    <span className="account-ns-name">
+                      {namespace.name || truncateText(namespace.namespaceId, 8)}
+                      <small>
+                        {applicationLabel(
+                          namespace.targetApplicationId,
+                          catalog.namespaces,
+                          catalog.installed,
+                        )}
+                      </small>
+                    </span>
+                    <span className={`account-status is-${state}`}>
+                      {FOLLOW_STATE_LABEL[state]}
+                    </span>
+                  </div>
+                );
+              })}
+              {catalog.namespaces.length === 0 && (
+                <p className="field-hint">No namespaces yet.</p>
+              )}
+            </section>
+          </div>
+        )}
+      </div>
+    );
+  };
 
   return (
     <>
       <div className="settings-card">
+        {banner && (
+          <p className={`account-banner is-${banner.kind}`} id={`account-banner-${banner.kind}`}>
+            {banner.text}
+          </p>
+        )}
         <h2>This device</h2>
         {identityLoading ? (
           <SkeletonText lines={4} />
@@ -448,7 +677,7 @@ export default function AccountPanel() {
       <div className="settings-card">
         <div className="account-devices-header">
           <h2>Devices on this account</h2>
-          {canInviteDevices(identity) && (
+          {isHolder && (
             <button
               type="button"
               id="add-device"
@@ -475,83 +704,12 @@ export default function AccountPanel() {
               Retry
             </button>
           </>
+        ) : devices.length === 0 ? (
+          <p className="field-hint" id="devices-empty">
+            {devicesEmptyMessage(identity)}
+          </p>
         ) : (
-          <DataTable
-            data={devices}
-            columns={columns}
-            keyExtractor={(device) => device.deviceId}
-            emptyMessage={devicesEmptyMessage(identity)}
-            compact
-          />
-        )}
-        {scopeTarget && (
-          <div className="account-wizard" id="device-scope-picker">
-            <p className="field-hint">
-              Which apps should {truncateText(scopeTarget.deviceId, 8)} also reach?
-            </p>
-            {scopeError ? (
-              <p className="field-error" id="device-scope-error">
-                {scopeError}
-              </p>
-            ) : !catalog ? (
-              <SkeletonText />
-            ) : addableApps.length === 0 ? (
-              <p className="field-hint" id="device-scope-none">
-                It already reaches every app this account speaks in.
-              </p>
-            ) : (
-              <div className="account-scope-apps" id="device-scope-apps">
-                {addableApps.map((app) => (
-                  <label
-                    className="account-scope-choice account-scope-app"
-                    key={app.applicationId}
-                  >
-                    <input
-                      type="checkbox"
-                      id={`device-scope-app-${app.applicationId}`}
-                      checked={scopeChoices.includes(app.applicationId)}
-                      onChange={() =>
-                        setScopeChoices((prev) =>
-                          prev.includes(app.applicationId)
-                            ? prev.filter((id) => id !== app.applicationId)
-                            : [...prev, app.applicationId],
-                        )
-                      }
-                    />
-                    <span className="account-scope-app-text">
-                      {scopeRow(app.applicationId, catalog.namespaces, catalog.installed).map((line, i) => (
-                        <span
-                          key={line}
-                          className={i === 0 ? "account-scope-app-name" : "account-scope-app-ns"}
-                        >
-                          {line}
-                        </span>
-                      ))}
-                    </span>
-                  </label>
-                ))}
-              </div>
-            )}
-            <div className="account-wizard-actions">
-              <button
-                type="button"
-                id="device-scope-add"
-                className="button button-primary"
-                disabled={!scopeChoices.length || busyDevice === scopeTarget.deviceId}
-                onClick={() => widen(scopeTarget)}
-              >
-                Add
-              </button>
-              <button
-                type="button"
-                id="device-scope-cancel"
-                className="button button-secondary"
-                onClick={() => setScopeDevice("")}
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
+          <div className="account-device-list">{devices.map(renderDeviceRow)}</div>
         )}
         {wizardOpen && (
           <DevicePairWizard

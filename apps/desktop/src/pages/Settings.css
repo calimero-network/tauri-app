@@ -725,6 +725,221 @@
   background: var(--surface-glass-soft);
 }
 
+.account-device-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.account-device-row {
+  background: var(--surface-glass-soft);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+}
+
+.account-device-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+}
+
+.account-device-expand {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.account-device-chevron {
+  flex: none;
+  color: var(--text-tertiary);
+  transition: transform 0.15s;
+}
+
+.account-device-row.is-open .account-device-chevron {
+  transform: rotate(90deg);
+}
+
+.account-device-label {
+  flex: 1;
+  min-width: 0;
+}
+
+.account-device-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.account-device-meta {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.account-device-body {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  padding: 12px 12px 14px 36px;
+  border-top: 1px solid var(--border-color);
+}
+
+@media (max-width: 900px) {
+  .account-device-body {
+    grid-template-columns: 1fr;
+  }
+}
+
+.account-device-section h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.account-section-hint {
+  font-size: 12px;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text-secondary);
+}
+
+.account-app-row,
+.account-ns-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 0;
+  border-bottom: 1px dashed var(--border-color);
+}
+
+.account-app-row:last-child,
+.account-ns-row:last-child {
+  border-bottom: 0;
+}
+
+.account-app-text,
+.account-ns-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+}
+
+.account-app-name {
+  display: block;
+}
+
+.account-app-meta,
+.account-ns-name small {
+  display: block;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.account-toggle {
+  position: relative;
+  flex: none;
+  width: 34px;
+  height: 20px;
+  padding: 0;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.account-toggle i {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--text-secondary);
+  transition: left 0.15s, background 0.15s;
+}
+
+.account-toggle.is-on {
+  background: var(--accent-light);
+  border-color: var(--accent-dim);
+}
+
+.account-toggle.is-on i {
+  left: 16px;
+  background: var(--accent-primary);
+}
+
+.account-toggle.is-locked {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* One pill for both the device status and the per-namespace state. */
+.account-status {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  padding: 1px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.account-status.is-active,
+.account-status.is-following {
+  color: var(--success);
+}
+
+.account-status.is-syncing {
+  color: var(--info);
+}
+
+.account-status.is-not-following {
+  color: var(--warning);
+}
+
+.account-status.is-revoked,
+.account-status.is-retired {
+  color: var(--error);
+}
+
+.account-banner {
+  margin-bottom: 16px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  font-size: 13px;
+}
+
+.account-banner.is-revoked {
+  color: var(--error);
+  background: var(--error-bg);
+  border: 1px solid var(--error-border);
+}
+
+.account-banner.is-legacy {
+  color: var(--text-primary);
+  background: var(--accent-light);
+  border: 1px solid var(--accent-dim);
+}
+
 .account-row-actions {
   display: flex;
   flex-wrap: wrap;

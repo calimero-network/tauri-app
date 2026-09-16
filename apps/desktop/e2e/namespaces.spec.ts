@@ -172,13 +172,30 @@ test.describe("Namespaces – grouped by application", () => {
     await expect(page.getByTestId("ns-app-card")).toHaveCount(2);
   });
 
-  test("creating from an application page preselects that application", async ({
+  test("the application grid offers joining, never creating", async ({ page }) => {
+    // A namespace is app-bound, so it can only be created from an application's
+    // own page. Offering it here would mean asking which app, which is the
+    // dropdown this replaced.
+    await expect(page.getByTestId("ns-app-grid")).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Create Namespace" }),
+    ).toHaveCount(0);
+    await expect(
+      page.getByRole("button", { name: "Join Namespace" }),
+    ).toBeVisible();
+  });
+
+  test("creating from an application page binds to that application, with no choice offered", async ({
     page,
   }) => {
     await page.locator('.ns-app-card[data-application-id="installed-app-2"]').click();
     await page.getByRole("button", { name: "Create Namespace" }).click();
 
     const modal = page.getByRole("dialog", { name: "Create Namespace" });
-    await expect(modal.locator(".ns-app-select-name")).toHaveText("Blockchain Demo");
+    const locked = modal.getByTestId("ns-app-locked");
+    await expect(locked).toBeVisible();
+    await expect(locked.locator(".ns-app-locked-name")).toHaveText("Blockchain Demo");
+    // The application is stated, not selected: nothing here is clickable.
+    await expect(locked.locator("button")).toHaveCount(0);
   });
 });

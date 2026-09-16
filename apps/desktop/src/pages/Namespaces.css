@@ -1142,134 +1142,56 @@
   border-color: var(--accent-primary);
 }
 
-/* ─── App select dropdown (Create Namespace modal) ─── */
-.ns-app-select-wrapper {
-  position: relative;
-}
-
-.ns-app-select-trigger {
-  width: 100%;
+/* ─── Locked application (Create Namespace modal) ─── */
+/* The application is settled by the page this modal opens from, so this states
+   the binding instead of offering a choice. Deliberately styled as a read-only
+   panel, not a control, so it is never mistaken for one. */
+.ns-app-locked {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 8px 10px;
+  gap: 10px;
+  padding: 10px;
   background: var(--bg-secondary, rgba(255, 255, 255, 0.03));
   border: 1px solid var(--border-color);
   border-radius: 6px;
-  cursor: pointer;
-  font-family: inherit;
-  font-size: 13px;
-  color: var(--text-primary);
-  transition: border-color 0.15s, box-shadow 0.15s;
-  text-align: left;
   box-sizing: border-box;
 }
 
-.ns-app-select-trigger:hover:not(:disabled) {
-  border-color: var(--border-hover);
+.ns-app-locked-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
 }
 
-.ns-app-select-trigger.open {
-  border-color: var(--accent-primary);
-  box-shadow: 0 0 0 2px var(--accent-light);
-}
-
-.ns-app-select-trigger:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.ns-app-select-name {
-  flex: 1;
+.ns-app-locked-name {
+  font-size: 13px;
   font-weight: 500;
+  color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.ns-app-select-chevron {
-  flex-shrink: 0;
-  color: var(--text-tertiary);
-  transition: transform 0.2s ease;
-}
-
-.ns-app-select-chevron.open {
-  transform: rotate(180deg);
-  color: var(--accent-primary);
-}
-
-.ns-app-select-menu {
-  position: absolute;
-  top: calc(100% + 4px);
-  left: 0;
-  right: 0;
-  background: #0d1117;
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
-  z-index: 300;
-  overflow: hidden;
-  animation: nodeDropdownIn 0.15s ease-out;
-}
-
-[data-theme="light"] .ns-app-select-menu {
-  background: #ffffff;
-}
-
-.ns-app-select-option {
-  width: 100%;
+.ns-app-locked-meta {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 9px 12px;
-  background: none;
-  border: none;
-  border-bottom: 1px solid var(--border-color);
-  cursor: pointer;
-  font-family: inherit;
-  font-size: 13px;
-  color: var(--text-primary);
-  text-align: left;
-  transition: background 0.12s;
-  box-sizing: border-box;
+  min-width: 0;
 }
 
-.ns-app-select-option:last-child {
-  border-bottom: none;
-}
-
-.ns-app-select-option:hover {
-  background: var(--accent-light);
-}
-
-.ns-app-select-option.selected {
-  background: rgba(165, 255, 17, 0.06);
-}
-
-[data-theme="light"] .ns-app-select-option.selected {
-  background: rgba(106, 171, 0, 0.06);
-}
-
-.ns-app-select-option-name {
-  flex: 1;
-  font-weight: 500;
+.ns-app-locked-package {
+  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+  font-size: 11px;
+  color: var(--text-tertiary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.ns-app-select-option.selected .ns-app-select-option-name {
-  color: var(--accent-primary);
-}
-
-.ns-app-select-option-id {
+.ns-app-locked-version {
+  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
   font-size: 11px;
-  color: var(--text-tertiary);
-  flex-shrink: 0;
-}
-
-.ns-app-select-check {
   color: var(--accent-primary);
   flex-shrink: 0;
 }

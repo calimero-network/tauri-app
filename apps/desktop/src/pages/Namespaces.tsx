@@ -14,7 +14,7 @@ import {
 import type { GroupInfo, MetadataRecord } from "@calimero-network/mero-js";
 import { useToast } from "../contexts/ToastContext";
 import AppIcon from "../components/AppIcon";
-import { ChevronLeft, Users, Box, Layers, Copy, ChevronRight, Shield, Globe, Plus, X, Trash2, UserMinus, Link, ChevronDown, Check, MoreHorizontal, LogIn, LogOut } from "lucide-react";
+import { ChevronLeft, Users, Box, Layers, Copy, ChevronRight, Shield, Globe, Plus, X, Trash2, UserMinus, Link, MoreHorizontal, LogIn, LogOut } from "lucide-react";
 import { decodeMetadata } from "../utils/appUtils";
 import { listInstalledApps } from "../utils/installedAppsCache";
 import { getSettings } from "../utils/settings";
@@ -209,6 +209,9 @@ const MAX_TREE_DEPTH = 12;
 // Total contexts in the whole tree: root contexts + every subgroup's contexts,
 // recursively. This is what the "Contexts" stat should reflect (the old count
 // only saw root contexts).
+const truncateId = (id: string) =>
+  id.length > 16 ? `${id.slice(0, 8)}...${id.slice(-8)}` : id;
+
 function countTreeContexts(tree: NamespaceTree): number {
   let n = tree.rootContexts.length;
   const walk = (sg: TreeSubgroup) => {
@@ -1284,8 +1287,10 @@ function Namespaces() {
 
   // ── Nav ──
   const openApp = (applicationId: string) => { setActionsMenuOpen(false); setView({ type: "app", applicationId }); };
-  const openCreateNamespace = (applicationId?: string) => {
-    setNsModalPresetApp(applicationId ?? null);
+  // Always app-scoped: the only entry point is an application's own page, so
+  // the binding is settled before the modal opens and is never chosen in it.
+  const openCreateNamespace = (applicationId: string) => {
+    setNsModalPresetApp(applicationId);
     setNsModalOpen(true);
   };
   const openNamespace = (ns: Namespace) => { setActionsMenuOpen(false); setView({ type: "namespace", ns }); };
@@ -1303,9 +1308,6 @@ function Namespaces() {
     navigator.clipboard.writeText(text);
     toast.success("Copied to clipboard");
   };
-
-  const truncateId = (id: string) =>
-    id.length > 16 ? `${id.slice(0, 8)}...${id.slice(-8)}` : id;
 
   const roleColor = (role: string) => {
     switch (role.toLowerCase()) {
@@ -1595,10 +1597,11 @@ function Namespaces() {
   // ── Modals ──
   const modalOverlay = (
     <>
-      {nsModalOpen && (
+      {/* No app, no modal: the binding is the point, so there is nothing
+          sensible to show without it. */}
+      {nsModalOpen && nsModalPresetApp && appById[nsModalPresetApp] && (
         <CreateNamespaceModal
-          installedApps={installedApps}
-          presetApplicationId={nsModalPresetApp}
+          app={appById[nsModalPresetApp]}
           loading={creatingNamespace}
           onClose={() => setNsModalOpen(false)}
           onSubmit={onCreateNamespace}
@@ -1735,6 +1738,10 @@ function Namespaces() {
                 A namespace is an app-bound workspace. It holds contexts (running app instances, e.g. a chat channel) and subgroups (nested groups that hold their own contexts). Pick an application to see its namespaces.
               </p>
             </div>
+            {/* Creating is deliberately not offered here. A namespace is bound
+                to one application, so it is created from that application's
+                page, where the binding is already decided. Joining needs no
+                application — the invitation names it. */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <button
                 className="ns-invite-btn"
@@ -1742,15 +1749,6 @@ function Namespaces() {
                 title="Join an existing namespace using an invitation"
               >
                 <LogIn size={14} /> Join Namespace
-              </button>
-              <button
-                className="ns-action-btn"
-                style={{ marginLeft: 0 }}
-                onClick={() => openCreateNamespace()}
-                disabled={installedApps.length === 0}
-                title={installedApps.length === 0 ? "Install an application first" : "Create a new namespace"}
-              >
-                <Plus size={14} /> Create Namespace
               </button>
             </div>
           </div>
@@ -1762,15 +1760,9 @@ function Namespaces() {
               <Globe size={48} style={{ opacity: 0.3, marginBottom: 12 }} />
               <p>No namespaces found</p>
               <p style={{ fontSize: "0.85rem" }}>
-                Create a namespace bound to an installed application, then create a context inside it.
+                A namespace belongs to an application. Install one, open it here, and create the namespace from its page.
               </p>
-              {installedApps.length === 0 ? (
-                <p style={{ fontSize: "0.85rem", opacity: 0.7 }}>Install an application first (Marketplace).</p>
-              ) : (
-                <button className="ns-action-btn" onClick={() => openCreateNamespace()} style={{ marginTop: 12 }}>
-                  <Plus size={14} /> Create Namespace
-                </button>
-              )}
+              <p style={{ fontSize: "0.85rem", opacity: 0.7 }}>Install an application first (Marketplace).</p>
             </div>
           ) : (
             <div className="ns-app-grid" data-testid="ns-app-grid">
@@ -2357,35 +2349,15 @@ export default memo(Namespaces);
 // ─── Modals ───
 
 interface CreateNamespaceModalProps {
-  installedApps: InstalledApp[];
-  /** The app whose page this was opened from, preselected. */
-  presetApplicationId?: string | null;
+  /** The application this namespace will be bound to. Fixed, never chosen here. */
+  app: InstalledApp;
   loading: boolean;
   onClose: () => void;
   onSubmit: (applicationId: string, alias: string | undefined) => void;
 }
 
-function CreateNamespaceModal({ installedApps, presetApplicationId, loading, onClose, onSubmit }: CreateNamespaceModalProps) {
-  // The preset only counts when the app is actually installed — the dropdown
-  // lists installed apps, and a preset outside it would show a blank trigger.
-  const preset = installedApps.some((a) => a.id === presetApplicationId) ? presetApplicationId! : null;
-  const [applicationId, setApplicationId] = useState(preset ?? installedApps[0]?.id ?? "");
+function CreateNamespaceModal({ app, loading, onClose, onSubmit }: CreateNamespaceModalProps) {
   const [alias, setAlias] = useState("");
-  const [appDropdownOpen, setAppDropdownOpen] = useState(false);
-  const appDropdownRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!appDropdownOpen) return;
-    const handleClick = (e: MouseEvent) => {
-      if (appDropdownRef.current && !appDropdownRef.current.contains(e.target as Node)) {
-        setAppDropdownOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClick);
-    return () => document.removeEventListener('mousedown', handleClick);
-  }, [appDropdownOpen]);
-
-  const selectedApp = installedApps.find((a) => a.id === applicationId);
 
   return (
     <div className="ns-modal-backdrop" onClick={onClose}>
@@ -2396,38 +2368,28 @@ function CreateNamespaceModal({ installedApps, presetApplicationId, loading, onC
         </div>
         <form
           className="ns-modal-body"
-          onSubmit={(e) => { e.preventDefault(); if (!applicationId) return; onSubmit(applicationId, alias); }}
+          onSubmit={(e) => { e.preventDefault(); onSubmit(app.id, alias); }}
         >
           <div className="ns-modal-field">
             <span>Application</span>
-            <div className="ns-app-select-wrapper" ref={appDropdownRef}>
-              <button
-                type="button"
-                className={`ns-app-select-trigger${appDropdownOpen ? ' open' : ''}`}
-                onClick={() => setAppDropdownOpen((o) => !o)}
-                disabled={installedApps.length === 0}
-              >
-                <span className="ns-app-select-name">
-                  {selectedApp ? selectedApp.name : 'No applications installed'}
+            {/* Fixed, not a control: this modal is only reachable from one
+                application's page, and the namespace is bound to it. */}
+            <div className="ns-app-locked" data-testid="ns-app-locked">
+              <AppIcon
+                icon={app.icon ?? undefined}
+                name={app.name}
+                seed={app.package ?? app.id}
+                size={32}
+              />
+              <div className="ns-app-locked-text">
+                <span className="ns-app-locked-name">{app.name}</span>
+                <span className="ns-app-locked-meta">
+                  <span className="ns-app-locked-package" title={app.id}>
+                    {app.package ?? truncateId(app.id)}
+                  </span>
+                  {app.version && <span className="ns-app-locked-version">v{app.version}</span>}
                 </span>
-                <ChevronDown size={14} className={`ns-app-select-chevron${appDropdownOpen ? ' open' : ''}`} />
-              </button>
-              {appDropdownOpen && installedApps.length > 0 && (
-                <div className="ns-app-select-menu">
-                  {installedApps.map((app) => (
-                    <button
-                      key={app.id}
-                      type="button"
-                      className={`ns-app-select-option${app.id === applicationId ? ' selected' : ''}`}
-                      onClick={() => { setApplicationId(app.id); setAppDropdownOpen(false); }}
-                    >
-                      <span className="ns-app-select-option-name">{app.name}</span>
-                      <span className="ns-app-select-option-id mono">{app.id.slice(0, 8)}…</span>
-                      {app.id === applicationId && <Check size={13} className="ns-app-select-check" />}
-                    </button>
-                  ))}
-                </div>
-              )}
+              </div>
             </div>
           </div>
           <label className="ns-modal-field">
@@ -2448,7 +2410,7 @@ function CreateNamespaceModal({ installedApps, presetApplicationId, loading, onC
           </p>
           <div className="ns-modal-actions">
             <button type="button" className="ns-modal-cancel" onClick={onClose} disabled={loading}>Cancel</button>
-            <button type="submit" className="ns-action-btn" disabled={loading || !applicationId}>
+            <button type="submit" className="ns-action-btn" disabled={loading}>
               {loading ? "Creating..." : "Create Namespace"}
             </button>
           </div>

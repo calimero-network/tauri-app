@@ -1,17 +1,21 @@
 import { getSettings } from "../utils/settings";
-import { Home, Layers, Package, Store, Settings2 as SettingsIcon, Server } from "lucide-react";
+import { Home, Layers, Package, Store, Settings2 as SettingsIcon, Server, UserRound } from "lucide-react";
 import calimeroLogo from "../assets/calimero-logo.svg";
 import "./Sidebar.css";
 
+type NavPage = 'home' | 'marketplace' | 'installed' | 'namespaces' | 'account' | 'nodes';
+
 interface SidebarProps {
-  currentPage: 'home' | 'marketplace' | 'installed' | 'namespaces' | 'nodes';
-  onNavigate: (page: 'home' | 'marketplace' | 'installed' | 'namespaces' | 'nodes') => void;
+  currentPage: NavPage;
+  onNavigate: (page: NavPage) => void;
   onOpenSettings: () => void;
   /** When true, show Nodes in nav so users can fix connection (even without developer mode) */
   nodeDisconnected?: boolean;
+  /** Devices still on this account, or undefined while the node has not said. */
+  accountDevices?: number;
 }
 
-export default function Sidebar({ currentPage, onNavigate, onOpenSettings, nodeDisconnected = false }: SidebarProps) {
+export default function Sidebar({ currentPage, onNavigate, onOpenSettings, nodeDisconnected = false, accountDevices }: SidebarProps) {
   const settings = getSettings();
   const developerMode = settings.developerMode ?? false;
 
@@ -19,6 +23,7 @@ export default function Sidebar({ currentPage, onNavigate, onOpenSettings, nodeD
     { id: 'home' as const, label: 'Home', icon: Home },
     ...(developerMode || nodeDisconnected ? [{ id: 'nodes' as const, label: 'Nodes', icon: Server }] : []),
     ...(developerMode ? [{ id: 'namespaces' as const, label: 'Namespaces', icon: Layers }] : []),
+    { id: 'account' as const, label: 'Account', icon: UserRound, count: accountDevices },
     { id: 'installed' as const, label: 'Applications', icon: Package },
     { id: 'marketplace' as const, label: 'Marketplace', icon: Store },
   ];
@@ -41,6 +46,9 @@ export default function Sidebar({ currentPage, onNavigate, onOpenSettings, nodeD
           >
             <item.icon className="nav-icon" size={20} />
             <span className="nav-label">{item.label}</span>
+            {'count' in item && item.count !== undefined && (
+              <span className="nav-count">{item.count}</span>
+            )}
           </button>
         ))}
       </nav>

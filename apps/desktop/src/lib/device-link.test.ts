@@ -31,6 +31,7 @@ vi.mock('./mero-client', async (importOriginal) => {
 
 // Imported once, unlike agent-connect's suite: device-link.ts keeps no module state.
 import {
+  activeDeviceCount,
   listAccountApplications,
   listAccountDevices,
   listNamespaces,
@@ -522,5 +523,28 @@ describe('listAccountApplications on a device that syncs no namespace metadata',
     );
     const apps = await listAccountApplications();
     expect(apps.map((a) => a.applicationId)).toEqual(['ca'.repeat(32)]);
+  });
+});
+
+describe('activeDeviceCount', () => {
+  const device = (revoked: boolean) => ({
+    deviceId: HEX_64,
+    signingKey: 'bs58key',
+    isSelf: false,
+    revoked,
+    applications: [],
+    namespaces: [],
+  });
+
+  it('counts the devices still on the account', () => {
+    expect(activeDeviceCount([device(false), device(false)])).toBe(2);
+  });
+
+  it('leaves out a withdrawn device, which the listing keeps carrying', () => {
+    expect(activeDeviceCount([device(false), device(true)])).toBe(1);
+  });
+
+  it('counts nothing on an account with no devices', () => {
+    expect(activeDeviceCount([])).toBe(0);
   });
 });

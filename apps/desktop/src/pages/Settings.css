@@ -520,6 +520,10 @@
 
 /* ─── Account tab ─────────────────────────────────────────────────────────── */
 
+.settings-account-link {
+  margin-top: 16px;
+}
+
 .account-mono {
   font-family: 'JetBrains Mono', 'Fira Code', monospace;
   font-size: 12px;

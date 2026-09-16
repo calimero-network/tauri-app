@@ -116,6 +116,12 @@ export async function listAccountDevices(): Promise<AccountDevice[]> {
   return (await nodeCall(admin().listAccountDevices())) ?? [];
 }
 
+/** What the sidebar counts. A revoked device stays in the listing, so it has to
+ *  be left out here rather than by the route. */
+export function activeDeviceCount(devices: AccountDevice[]): number {
+  return devices.filter((device) => !device.revoked).length;
+}
+
 export async function listAccountApplications(): Promise<AccountApplication[]> {
   const applications = (await nodeCall(admin().listAccountApplications())) ?? [];
   return applications.filter((app) => !ALL_ZERO.test(app.applicationId));

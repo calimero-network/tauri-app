@@ -25,6 +25,7 @@ import Sidebar from "./components/Sidebar";
 import { NodeStatusIndicator } from "./components/NodeStatusIndicator";
 import ToastContainer from "./components/ToastContainer";
 import { getCurrentVersion } from "./utils/updater";
+import { activeDeviceCount, listAccountDevices } from "./lib/device-link";
 import { invoke } from "@tauri-apps/api/core";
 import { Settings as SettingsIcon } from "lucide-react";
 import calimeroLogo from "./assets/calimero-logo.svg";
@@ -39,10 +40,11 @@ const Onboarding = lazy(() => import("./pages/Onboarding"));
 const Marketplace = lazy(() => import("./pages/Marketplace"));
 const InstalledApps = lazy(() => import("./pages/InstalledApps"));
 const Namespaces = lazy(() => import("./pages/Namespaces"));
+const Account = lazy(() => import("./pages/Account"));
 const NodeManagement = lazy(() => import("./pages/NodeManagement"));
 const ConfirmAction = lazy(() => import("./pages/ConfirmAction"));
 
-type Page = 'home' | 'marketplace' | 'installed' | 'namespaces' | 'nodes' | 'confirm';
+type Page = 'home' | 'marketplace' | 'installed' | 'namespaces' | 'account' | 'nodes' | 'confirm';
 
 // 'confirm' takes over the whole window rather than rendering inside the shell.
 type ShellPage = Exclude<Page, 'confirm'>;
@@ -71,6 +73,7 @@ function App() {
   } | null>(null);
   const [appVersion, setAppVersion] = useState<string>("");
   const [runningNodes, setRunningNodes] = useState<RunningMerodNode[]>([]);
+  const [accountDevices, setAccountDevices] = useState<number | undefined>(undefined);
 
   // Expose the adapter's MeroJs instance to mero-react hooks (useNamespaces, etc.)
   // Include showLogin in deps so the value refreshes after login completes
@@ -105,6 +108,14 @@ function App() {
   useEffect(() => {
     getCurrentVersion().then(setAppVersion);
   }, []);
+
+  // The nav badge only; a node with no account leaves it unset rather than at 0.
+  useEffect(() => {
+    if (!clientReady || !connected) return;
+    listAccountDevices()
+      .then((devices) => setAccountDevices(activeDeviceCount(devices)))
+      .catch(() => {});
+  }, [clientReady, connected]);
 
   // Each set_tray_icon_connected decodes a PNG on the Rust side, and the health
   // poll asks for the same value every tick. Only send changes; a failed send
@@ -578,7 +589,13 @@ function App() {
         {/* Settings short-circuits the page shell, where the ToastContainer is
             mounted, so it needs its own or its toasts never render. */}
         <ToastContainer />
-        <Settings onBack={handleSettingsBack} />
+        <Settings
+          onBack={handleSettingsBack}
+          onOpenAccount={async () => {
+            await handleSettingsBack();
+            setCurrentPage('account');
+          }}
+        />
       </ErrorBoundary>
     );
   }
@@ -640,6 +657,10 @@ function App() {
         </MeroContext.Provider>
       ),
     },
+    account: {
+      title: 'Account',
+      element: <Account />,
+    },
     nodes: {
       title: 'Nodes',
       element: <NodeManagement />,
@@ -657,6 +678,7 @@ function App() {
           onNavigate={setCurrentPage}
           onOpenSettings={handleOpenSettings}
           nodeDisconnected={!connected && !!error}
+          accountDevices={accountDevices}
         />
 
         <div className="app-content">

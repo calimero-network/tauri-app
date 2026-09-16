@@ -1,6 +1,7 @@
 import { test, expect } from "./fixtures/test";
 import type { Page } from "@playwright/test";
 import {
+  navigateVia,
   setupAuthenticatedPage,
   setupDeveloperPage,
   scrollSettingsControlIntoView,
@@ -323,7 +324,7 @@ test.describe("Tab switching", () => {
     await expect(page.locator("#registry-url")).not.toBeVisible();
   });
 });
-// ─── Account tab ────────────────────────────────────────────────────────────
+// ─── Account page ───────────────────────────────────────────────────────────
 
 const json = (body: unknown) => ({
   status: 200,
@@ -331,7 +332,7 @@ const json = (body: unknown) => ({
   body: JSON.stringify(body),
 });
 
-test.describe("Account tab", () => {
+test.describe("Account page", () => {
   test.beforeEach(async ({ page }) => {
     await setupAuthenticatedPage(page);
     await page.route(API_ROUTES.identity, (route) =>
@@ -341,15 +342,10 @@ test.describe("Account tab", () => {
     // depend on the device listing's wire shape.
     await page.route(API_ROUTES.namespaces, (route) => route.fulfill(json({ data: [] })));
     await page.route(API_ROUTES.accountDevices, (route) => route.fulfill(json({ devices: [] })));
-    await page.click('button[title="Settings"]');
+    await navigateVia(page, "Account");
   });
 
-  test("Account tab is visible", async ({ page }) => {
-    await expect(page.locator("#settings-tab-account")).toBeVisible();
-  });
-
-  test("clicking the Account tab shows the panel", async ({ page }) => {
-    await page.locator("#settings-tab-account").click();
+  test("the page shows this device and the account's devices", async ({ page }) => {
     await expect(
       page.getByRole("heading", { name: "This device" }),
     ).toBeVisible();
@@ -359,8 +355,6 @@ test.describe("Account tab", () => {
   });
 
   test("identity fields render from the node's identity", async ({ page }) => {
-    await page.locator("#settings-tab-account").click();
-
     await expect(page.locator("#value-account-id")).toHaveText(
       MOCK_NODE_IDENTITY.accountId,
     );
@@ -389,7 +383,8 @@ test.describe("Account tab", () => {
         body: JSON.stringify({ error: "not found" }),
       }),
     );
-    await page.locator("#settings-tab-account").click();
+    await page.reload();
+    await navigateVia(page, "Account");
 
     await expect(page.locator("#account-no-identity")).toBeVisible();
     await expect(page.locator("#account-retry")).toHaveCount(0);
@@ -398,13 +393,35 @@ test.describe("Account tab", () => {
   test("adding a device is offered on the bundled node, with no developer mode", async ({
     page,
   }) => {
-    await page.locator("#settings-tab-account").click();
-    await scrollSettingsControlIntoView(page, "#add-device");
     await expect(page.locator("#add-device")).toBeEnabled();
   });
 });
 
-// ─── Account tab - device pairing ───────────────────────────────────────────
+test.describe("Settings points at the Account page", () => {
+  test.beforeEach(async ({ page }) => {
+    await setupAuthenticatedPage(page);
+    await page.route(API_ROUTES.identity, (route) =>
+      route.fulfill(json({ data: MOCK_NODE_IDENTITY })),
+    );
+    await page.route(API_ROUTES.namespaces, (route) => route.fulfill(json({ data: [] })));
+    await page.route(API_ROUTES.accountDevices, (route) => route.fulfill(json({ devices: [] })));
+    await page.click('button[title="Settings"]');
+    await page.locator("#settings-tab-account").click();
+  });
+
+  test("the tab keeps only a link, and the link lands on the page", async ({ page }) => {
+    await expect(page.locator("#add-device")).toHaveCount(0);
+    await expect(page.locator("#settings-open-account")).toHaveText(
+      "Manage devices on the Account page",
+    );
+
+    await page.locator("#settings-open-account").click();
+    await expect(page.getByRole("heading", { name: "This device" })).toBeVisible();
+    await expect(page.locator("#add-device")).toBeEnabled();
+  });
+});
+
+// ─── Account page - device pairing ──────────────────────────────────────────
 
 /** This account's two devices and namespaces, plus every account-level route. */
 async function mockPairingAPIs(page: Page): Promise<void> {
@@ -444,28 +461,24 @@ async function inviteNamespacesOnScreen(page: Page): Promise<string[]> {
   return (await inviteBodyOnScreen(page)).namespaces as string[];
 }
 
-test.describe("Account tab - pairing needs no developer mode", () => {
+test.describe("Account page - pairing needs no developer mode", () => {
   test("both halves of the exchange are offered on an ordinary session", async ({
     page,
   }) => {
     await setupAuthenticatedPage(page);
     await mockPairingAPIs(page);
-    await page.click('button[title="Settings"]');
-    await page.locator("#settings-tab-account").click();
+    await navigateVia(page, "Account");
 
-    await scrollSettingsControlIntoView(page, "#add-device");
     await expect(page.locator("#add-device")).toBeEnabled();
     await expect(page.locator("#pair-invite-input")).toBeVisible();
   });
 });
 
-test.describe("Account tab - device listing", () => {
+test.describe("Account page - device listing", () => {
   test.beforeEach(async ({ page }) => {
     await setupDeveloperPage(page);
     await mockPairingAPIs(page);
-    await page.click('button[title="Settings"]');
-    await page.locator("#settings-tab-account").click();
-    await scrollSettingsControlIntoView(page, "#add-device");
+    await navigateVia(page, "Account");
   });
 
   test("one row per device, with its scope and its status", async ({ page }) => {
@@ -525,13 +538,11 @@ test.describe("Account tab - device listing", () => {
   });
 });
 
-test.describe("Account tab - pairing wizard", () => {
+test.describe("Account page - pairing wizard", () => {
   test.beforeEach(async ({ page }) => {
     await setupDeveloperPage(page);
     await mockPairingAPIs(page);
-    await page.click('button[title="Settings"]');
-    await page.locator("#settings-tab-account").click();
-    await scrollSettingsControlIntoView(page, "#add-device");
+    await navigateVia(page, "Account");
     await page.locator("#add-device").click();
   });
 
@@ -643,13 +654,11 @@ test.describe("Account tab - pairing wizard", () => {
   });
 });
 
-test.describe("Account tab - pairing responder", () => {
+test.describe("Account page - pairing responder", () => {
   test.beforeEach(async ({ page }) => {
     await setupDeveloperPage(page);
     await mockPairingAPIs(page);
-    await page.click('button[title="Settings"]');
-    await page.locator("#settings-tab-account").click();
-    await scrollSettingsControlIntoView(page, "#pair-invite-input");
+    await navigateVia(page, "Account");
   });
 
   test("an invite yields a response blob and a spoken confirmation code", async ({

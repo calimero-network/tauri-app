@@ -265,6 +265,8 @@ export const MOCK_NODE_IDENTITY = {
   deviceId: "d".repeat(32),
   publicKey: "EdMockDevicePublicKey11111111111111111111111",
   accountRootPublicKey: "c".repeat(64),
+  accountNamespaceId: "9".repeat(64),
+  deviceCertified: true,
 };
 
 // ─── Device pairing ─────────────────────────────────────────────────────────
@@ -351,6 +353,7 @@ export const MOCK_PAIR_INVITE_BLOB =
     JSON.stringify({
       rootKey: MOCK_NODE_IDENTITY.accountRootPublicKey,
       namespaces: [MOCK_NAMESPACE_ID, MOCK_OTHER_NAMESPACE_ID],
+      accountNamespace: MOCK_NODE_IDENTITY.accountNamespaceId,
       // Registry coordinates, as a holder's invite carries them.
       apps: [{ package: "com.calimero.chat", version: "3.1.1" }],
     }),

@@ -22,3 +22,10 @@
   color: var(--text-secondary);
   font-size: 14px;
 }
+
+/* The value .settings-content uses, so the cards stack the same on both pages. */
+.account-page-main {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}

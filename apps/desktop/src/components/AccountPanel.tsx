@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { Fragment, useState, useEffect } from "react";
 import { Check, ChevronRight, Plus, RefreshCw, Trash2 } from "lucide-react";
 import AppIcon from "./AppIcon";
 import CopyButton from "./CopyButton";
@@ -823,26 +823,28 @@ export default function AccountPanel() {
             a namespace.
           </p>
         ) : (
-          IDENTITY_FIELDS.map(({ id, label, key }) => {
-            const value = identity[key];
-            return (
-              <div className="settings-field" key={id}>
-                <div className="agent-config-header">
-                  <span className="settings-field-label">{label}</span>
-                  {value && <CopyButton id={`copy-${id}`} value={value} />}
-                </div>
-                <code className="account-mono account-value" id={`value-${id}`}>
-                  {value || "Not set"}
-                </code>
-              </div>
-            );
-          })
+          <dl className="account-identity">
+            {IDENTITY_FIELDS.map(({ id, label, key }) => {
+              const value = identity[key];
+              return (
+                <Fragment key={id}>
+                  <dt>{label}</dt>
+                  <dd>
+                    <code id={`value-${id}`} title={value || undefined}>
+                      {value || "Not set"}
+                    </code>
+                    {value && <CopyButton id={`copy-${id}`} value={value} />}
+                  </dd>
+                </Fragment>
+              );
+            })}
+          </dl>
         )}
       </div>
 
       <div className="settings-card">
         <div className="account-devices-header">
-          <h2>Devices on this account</h2>
+          <h2>Devices</h2>
           {isHolder && (
             <button
               type="button"

@@ -353,7 +353,7 @@ test.describe("Account page", () => {
       page.getByRole("heading", { name: "This device" }),
     ).toBeVisible();
     await expect(
-      page.getByRole("heading", { name: "Devices on this account" }),
+      page.getByRole("heading", { name: "Devices" }),
     ).toBeVisible();
   });
 

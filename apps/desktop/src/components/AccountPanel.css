@@ -7,11 +7,47 @@
   color: var(--text-secondary);
 }
 
-.account-value {
-  display: block;
-  /* Account ids and keys are one unbroken token wider than the card. */
-  word-break: break-all;
-  line-height: 1.6;
+.account-identity {
+  display: grid;
+  grid-template-columns: 160px minmax(0, 1fr);
+  align-items: center;
+}
+
+.account-identity dt,
+.account-identity dd {
+  padding: 9px 0;
+  border-top: 1px solid var(--border-color);
+}
+
+.account-identity > dt:first-child,
+.account-identity > dt:first-child + dd {
+  border-top: 0;
+}
+
+.account-identity dt {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.account-identity dd {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+}
+
+/* One unbroken token per value, so it is clipped rather than wrapped; the full
+   text stays reachable through the title and the copy button. */
+.account-identity code {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 13px;
+  color: var(--text-primary);
 }
 
 .account-devices-header {

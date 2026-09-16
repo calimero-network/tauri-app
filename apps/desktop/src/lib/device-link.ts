@@ -122,6 +122,12 @@ export function activeDeviceCount(devices: AccountDevice[]): number {
   return devices.filter((device) => !device.revoked).length;
 }
 
+/** Aliases are node-local: nothing replicates them, so this is what this node
+ *  calls the account's devices, not what the account calls them. */
+export async function listDeviceAliases(): Promise<Record<string, string>> {
+  return (await nodeCall(admin().listDeviceAliases())) ?? {};
+}
+
 export async function listAccountApplications(): Promise<AccountApplication[]> {
   const applications = (await nodeCall(admin().listAccountApplications())) ?? [];
   return applications.filter((app) => !ALL_ZERO.test(app.applicationId));

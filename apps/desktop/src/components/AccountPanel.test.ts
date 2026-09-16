@@ -12,6 +12,7 @@ import {
   canRevoke,
   canSync,
   canInviteDevices,
+  deviceLabel,
   deviceScope,
   deviceScopeApps,
   deviceStatus,
@@ -476,5 +477,25 @@ describe("accountAppRows", () => {
 
   it("lists nothing for an account whose namespaces target no app", () => {
     expect(accountAppRows([], [], [], [])).toEqual([]);
+  });
+});
+
+describe("deviceLabel", () => {
+  const paired = "b".repeat(64);
+
+  it("names a device the node holds an alias for", () => {
+    expect(deviceLabel(paired, { "Alice's iPad": paired })).toBe("Alice's iPad");
+  });
+
+  it("names nothing for a device no alias points at", () => {
+    expect(deviceLabel("c".repeat(64), { "Alice's iPad": paired })).toBeNull();
+  });
+
+  it("takes the first of several aliases on one device, as the node lists them", () => {
+    expect(deviceLabel(paired, { iPad: paired, "Old iPad": paired })).toBe("iPad");
+  });
+
+  it("names nothing when the node holds no aliases at all", () => {
+    expect(deviceLabel(paired, {})).toBeNull();
   });
 });

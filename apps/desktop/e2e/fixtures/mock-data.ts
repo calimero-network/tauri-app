@@ -368,6 +368,12 @@ export const MOCK_ACCOUNT_DEVICES = [
   },
 ];
 
+/** Aliases are node-local, so only some of an account's devices carry one. Core
+ *  answers with a flat `{ alias: deviceId }` map. */
+export const MOCK_DEVICE_ALIASES: Record<string, string> = {
+  "Alice's iPad": MOCK_PAIR_INIT.deviceId,
+};
+
 export const MOCK_RELINK = {
   accountId: MOCK_NODE_IDENTITY.accountId,
   deviceId: MOCK_PAIR_INIT.deviceId,
@@ -425,6 +431,10 @@ export const API_ROUTES = {
   // does not swallow the namespace-scoped routes below it.
   namespaces: "**/admin-api/namespaces*",
   accountDevices: "**/admin-api/account/devices",
+  deviceAliases: "**/admin-api/alias/list/device",
+  createDeviceAlias: "**/admin-api/alias/create/device",
+  lookupDeviceAlias: "**/admin-api/alias/lookup/device/*",
+  deleteDeviceAlias: "**/admin-api/alias/delete/device/*",
   accountApplications: "**/admin-api/account/applications",
   relinkDevice: "**/admin-api/account/devices/*/relink",
   revokeDevice: "**/admin-api/namespaces/*/account/revoke",

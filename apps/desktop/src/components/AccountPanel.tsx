@@ -17,6 +17,7 @@ import type { NodeIdentity } from "@calimero-network/mero-js";
 import {
   listAccountApplications,
   listAccountDevices,
+  listDeviceAliases,
   listNamespaces,
   nodeIdentity,
   relinkDevice,
@@ -64,6 +65,16 @@ const namespaceWord = (n: number) => (n === 1 ? "namespace" : "namespaces");
 
 const dropKey = <T,>(map: Record<string, T>, key: string): Record<string, T> =>
   Object.fromEntries(Object.entries(map).filter(([at]) => at !== key));
+
+/** What this node calls a device, or null where no alias names it and the row
+ *  falls back to the short id. Core allows several aliases on one device; the
+ *  first the listing carries is the one a row shows. */
+export function deviceLabel(
+  deviceId: string,
+  aliases: Record<string, string>,
+): string | null {
+  return Object.entries(aliases).find(([, id]) => id === deviceId)?.[0] ?? null;
+}
 
 /** Core's empty `applications` means every application, not none. */
 export function deviceScope(device: AccountDevice): string {
@@ -320,6 +331,7 @@ export default function AccountPanel() {
   const [devices, setDevices] = useState<DeviceRow[]>([]);
   const [devicesLoading, setDevicesLoading] = useState(false);
   const [devicesError, setDevicesError] = useState("");
+  const [aliases, setAliases] = useState<Record<string, string>>({});
   const [wizardOpen, setWizardOpen] = useState(false);
   const [reloads, setReloads] = useState(0);
   const [deviceReloads, setDeviceReloads] = useState(0);
@@ -366,9 +378,12 @@ export default function AccountPanel() {
     const controller = new AbortController();
     setDevicesLoading(true);
     setDevicesError("");
-    listAccountDevices()
-      .then((rows) => {
-        if (!controller.signal.aborted) setDevices(rows);
+    // A name is a nicety; a lookup that fails must not take the listing with it.
+    Promise.all([listAccountDevices(), listDeviceAliases().catch(() => ({}))])
+      .then(([rows, names]) => {
+        if (controller.signal.aborted) return;
+        setDevices(rows);
+        setAliases(names);
       })
       .catch((err: unknown) => {
         if (controller.signal.aborted) return;
@@ -405,6 +420,9 @@ export default function AccountPanel() {
     () => {
       listAccountDevices()
         .then(setDevices)
+        .catch(() => {});
+      listDeviceAliases()
+        .then(setAliases)
         .catch(() => {});
       listNamespaces()
         .then((namespaces) => setCatalog((prev) => ({ ...prev, namespaces })))
@@ -529,6 +547,8 @@ export default function AccountPanel() {
     const status = deviceStatus(device, accountNamespace, syncing);
     const note = rowNote?.deviceId === device.deviceId ? rowNote : null;
     const apps = deviceScopeApps(catalog.apps, device, catalog.namespaces, catalog.installed);
+    const name = deviceLabel(device.deviceId, aliases);
+    const shortId = truncateText(device.deviceId, 8);
 
     return (
       <div
@@ -549,10 +569,15 @@ export default function AccountPanel() {
             <ChevronRight size={14} className="account-device-chevron" />
             <span className="account-device-label">
               <span className="account-device-name">
-                <code className="account-mono">{truncateText(device.deviceId, 8)}</code>
+                {name ?? <code className="account-mono">{shortId}</code>}
                 {device.isSelf && <span className="account-this-device">This device</span>}
               </span>
               <span className="account-device-meta">
+                {name && (
+                  <>
+                    <code className="account-mono">{shortId}</code> ·{" "}
+                  </>
+                )}
                 {deviceScope(device)} · {device.namespaces.length}{" "}
                 {namespaceWord(device.namespaces.length)}
               </span>

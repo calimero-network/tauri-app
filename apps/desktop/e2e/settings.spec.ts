@@ -13,6 +13,7 @@ import {
   MOCK_ACCOUNT_APPLICATIONS,
   MOCK_ACCOUNT_APP_ROWS,
   MOCK_ACCOUNT_DEVICES,
+  MOCK_DEVICE_ALIASES,
   MOCK_APPLICATION_ID,
   MOCK_NAMESPACE_ID,
   MOCK_NAMESPACES,
@@ -439,6 +440,14 @@ async function mockPairingAPIs(page: Page): Promise<void> {
   await page.route(API_ROUTES.accountDevices, (route) =>
     route.fulfill(json({ devices: MOCK_ACCOUNT_DEVICES })),
   );
+  await page.route(API_ROUTES.deviceAliases, (route) =>
+    route.fulfill(json({ data: MOCK_DEVICE_ALIASES })),
+  );
+  await page.route(API_ROUTES.createDeviceAlias, (route) => route.fulfill(json({ data: {} })));
+  await page.route(API_ROUTES.deleteDeviceAlias, (route) => route.fulfill(json({ data: {} })));
+  await page.route(API_ROUTES.lookupDeviceAlias, (route) =>
+    route.fulfill(json({ data: { value: MOCK_PAIR_INIT.deviceId } })),
+  );
   await page.route(API_ROUTES.relinkDevice, (route) =>
     route.fulfill(json({ data: MOCK_RELINK })),
   );
@@ -492,6 +501,21 @@ test.describe("Account page - device listing", () => {
     await expect(rows.nth(0)).toContainText("This device");
     await expect(rows.nth(1)).toContainText("1 app");
     await expect(rows.nth(1)).toContainText("Active");
+  });
+
+  test("a named device is titled by its name, and keeps its id in the meta line", async ({
+    page,
+  }) => {
+    const rows = page.locator(".account-device-row");
+
+    await expect(rows.nth(1).locator(".account-device-name")).toContainText("Alice's iPad");
+    await expect(rows.nth(1).locator(".account-device-meta")).toContainText(
+      MOCK_PAIR_INIT.deviceId.slice(0, 8),
+    );
+    // Nothing named this node's own device, so its title is the short id as before.
+    await expect(rows.nth(0).locator(".account-device-name")).toContainText(
+      MOCK_NODE_IDENTITY.deviceId.slice(0, 8),
+    );
   });
 
   test("a row expands into the apps it may act for and the namespaces it follows", async ({

@@ -13,6 +13,29 @@ import type {
 } from "./device-link";
 import { appInstalled, decodeMetadata } from "../utils/appUtils";
 
+/** `syncing` marks a device we linked but have not yet seen in the listing. */
+export type DeviceRow = AccountDevice & { syncing?: boolean };
+
+/** What the page is saying about one row after an action on it. */
+export interface RowNote {
+  deviceId: string;
+  text: string;
+  error?: boolean;
+}
+
+/** Everything the rows need naming, fetched once for the whole page. */
+export interface AccountCatalog {
+  apps: AccountApplication[];
+  namespaces: NamespaceSummary[];
+  installed: InstalledApp[];
+}
+
+/** What the identity card has to say before anything else on it is worth reading. */
+export interface DeviceBanner {
+  kind: "revoked" | "legacy";
+  text: string;
+}
+
 export const namespaceWord = (n: number) => (n === 1 ? "namespace" : "namespaces");
 
 /** What this node calls a device, or null where no alias names it and the row
@@ -205,11 +228,10 @@ export function accountAppRows(
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
-/** What the identity card has to say before anything else on it is worth reading. */
 export function thisDeviceBanner(
   identity: NodeIdentity | null,
   devices: AccountDevice[],
-): { kind: "revoked" | "legacy"; text: string } | null {
+): DeviceBanner | null {
   if (devices.some((device) => device.isSelf && device.revoked)) {
     return {
       kind: "revoked",

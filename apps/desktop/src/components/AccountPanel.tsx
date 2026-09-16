@@ -34,6 +34,7 @@ import { appInstalled, decodeMetadata, parseTauriError } from "../utils/appUtils
 import { apiClient } from "../lib/mero-client";
 import { invalidateInstalledApps, listInstalledApps } from "../utils/installedAppsCache";
 import { truncateText } from "../utils/string";
+import "./AccountPanel.css";
 
 /** The five the card prints. Named rather than `keyof`, which now also spans a
  *  boolean these rows cannot render. */

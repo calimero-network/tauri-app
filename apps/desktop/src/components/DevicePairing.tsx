@@ -25,6 +25,7 @@ import { decodeMetadata, parseTauriError } from "../utils/appUtils";
 import { listInstalledApps, invalidateInstalledApps } from "../utils/installedAppsCache";
 import { apiClient } from "../lib/mero-client";
 import { truncateText } from "../utils/string";
+import "./AccountPanel.css";
 
 /** Marks a blob as the invite the account holder hands out. */
 const INVITE_PREFIX = "mero-pair:";

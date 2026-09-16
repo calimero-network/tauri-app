@@ -1,6 +1,4 @@
 import AccountPanel from "../components/AccountPanel";
-// The panel grew up inside Settings and is still styled by that sheet.
-import "./Settings.css";
 import "./Account.css";
 
 export default function Account() {

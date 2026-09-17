@@ -25,7 +25,6 @@ import Sidebar from "./components/Sidebar";
 import { NodeStatusIndicator } from "./components/NodeStatusIndicator";
 import ToastContainer from "./components/ToastContainer";
 import { getCurrentVersion } from "./utils/updater";
-import { activeDeviceCount, listAccountDevices } from "./lib/device-link";
 import { invoke } from "@tauri-apps/api/core";
 import { Settings as SettingsIcon } from "lucide-react";
 import calimeroLogo from "./assets/calimero-logo.svg";
@@ -73,7 +72,6 @@ function App() {
   } | null>(null);
   const [appVersion, setAppVersion] = useState<string>("");
   const [runningNodes, setRunningNodes] = useState<RunningMerodNode[]>([]);
-  const [accountDevices, setAccountDevices] = useState<number | undefined>(undefined);
 
   // Expose the adapter's MeroJs instance to mero-react hooks (useNamespaces, etc.)
   // Include showLogin in deps so the value refreshes after login completes
@@ -108,14 +106,6 @@ function App() {
   useEffect(() => {
     getCurrentVersion().then(setAppVersion);
   }, []);
-
-  // The nav badge only; a node with no account leaves it unset rather than at 0.
-  useEffect(() => {
-    if (!clientReady || !connected) return;
-    listAccountDevices()
-      .then((devices) => setAccountDevices(activeDeviceCount(devices)))
-      .catch(() => {});
-  }, [clientReady, connected]);
 
   // Each set_tray_icon_connected decodes a PNG on the Rust side, and the health
   // poll asks for the same value every tick. Only send changes; a failed send
@@ -678,7 +668,6 @@ function App() {
           onNavigate={setCurrentPage}
           onOpenSettings={handleOpenSettings}
           nodeDisconnected={!connected && !!error}
-          accountDevices={accountDevices}
         />
 
         <div className="app-content">

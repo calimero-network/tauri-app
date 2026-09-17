@@ -123,12 +123,6 @@ export async function listAccountDevices(): Promise<AccountDevice[]> {
   return (await nodeCall(admin().listAccountDevices())) ?? [];
 }
 
-/** What the sidebar counts. A revoked device stays in the listing, so it has to
- *  be left out here rather than by the route. */
-export function activeDeviceCount(devices: AccountDevice[]): number {
-  return devices.filter((device) => !device.revoked).length;
-}
-
 /** Aliases are node-local: nothing replicates them, so this is what this node
  *  calls the account's devices, not what the account calls them. */
 export async function listDeviceAliases(): Promise<Record<string, string>> {

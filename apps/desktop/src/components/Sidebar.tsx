@@ -11,11 +11,9 @@ interface SidebarProps {
   onOpenSettings: () => void;
   /** When true, show Nodes in nav so users can fix connection (even without developer mode) */
   nodeDisconnected?: boolean;
-  /** Devices still on this account, or undefined while the node has not said. */
-  accountDevices?: number;
 }
 
-export default function Sidebar({ currentPage, onNavigate, onOpenSettings, nodeDisconnected = false, accountDevices }: SidebarProps) {
+export default function Sidebar({ currentPage, onNavigate, onOpenSettings, nodeDisconnected = false }: SidebarProps) {
   const settings = getSettings();
   const developerMode = settings.developerMode ?? false;
 
@@ -23,7 +21,7 @@ export default function Sidebar({ currentPage, onNavigate, onOpenSettings, nodeD
     { id: 'home' as const, label: 'Home', icon: Home },
     ...(developerMode || nodeDisconnected ? [{ id: 'nodes' as const, label: 'Nodes', icon: Server }] : []),
     ...(developerMode ? [{ id: 'namespaces' as const, label: 'Namespaces', icon: Layers }] : []),
-    { id: 'account' as const, label: 'Account', icon: UserRound, count: accountDevices },
+    { id: 'account' as const, label: 'Account', icon: UserRound },
     { id: 'installed' as const, label: 'Applications', icon: Package },
     { id: 'marketplace' as const, label: 'Marketplace', icon: Store },
   ];
@@ -46,9 +44,6 @@ export default function Sidebar({ currentPage, onNavigate, onOpenSettings, nodeD
           >
             <item.icon className="nav-icon" size={20} />
             <span className="nav-label">{item.label}</span>
-            {'count' in item && item.count !== undefined && (
-              <span className="nav-count">{item.count}</span>
-            )}
           </button>
         ))}
       </nav>

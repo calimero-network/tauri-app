@@ -337,6 +337,12 @@
   color: var(--text-tertiary);
 }
 
+/* Under the head, indented to the title: a long refusal wraps here, not in the row. */
+.account-row-message {
+  margin: 0;
+  padding: 0 12px 10px 36px;
+}
+
 .account-scope-choice {
   display: flex;
   align-items: center;

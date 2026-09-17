@@ -10,6 +10,7 @@ vi.mock("./device-link", () => ({
 import {
   canRevoke,
   canSync,
+  narrowHint,
   canInviteDevices,
   deviceLabel,
   deviceScope,
@@ -64,8 +65,8 @@ describe("canSync", () => {
     expect(canSync(device({ revoked: true }), true)).toBe(false);
   });
 
-  it("leaves a node holding no root only its own row", () => {
-    expect(canSync(device({ isSelf: true }), false)).toBe(true);
+  it("offers a node holding no root none, since only the holder can relink", () => {
+    expect(canSync(device({ isSelf: true }), false)).toBe(false);
     expect(canSync(device(), false)).toBe(false);
   });
 });
@@ -93,44 +94,50 @@ describe("canRevoke", () => {
 });
 
 describe("relinkSummary", () => {
-  it("names both counts", () => {
-    expect(relinkSummary({ linkedIn: ["ns-1", "ns-2"], skipped: ["ns-3"] })).toBe(
-      "Repaired 2 namespaces, skipped 1.",
+  it("counts what it repaired", () => {
+    expect(relinkSummary({ linkedIn: ["ns-1", "ns-2"], skipped: ["ns-3"], pending: [] })).toBe(
+      "Repaired 2 namespaces.",
     );
   });
 
   it("keeps the singular for one namespace", () => {
-    expect(relinkSummary({ linkedIn: ["ns-1"], skipped: [] })).toBe(
-      "Repaired 1 namespace, skipped 0.",
+    expect(relinkSummary({ linkedIn: ["ns-1"], skipped: [], pending: [] })).toBe(
+      "Repaired 1 namespace.",
     );
   });
 
-  it("says so plainly when the relink reached nothing at all", () => {
-    expect(relinkSummary({ linkedIn: [], skipped: [] })).toBe("Nothing to repair.");
+  it("reads a relink that had nothing to do as up to date, however many it skipped", () => {
+    expect(relinkSummary({ linkedIn: [], skipped: [], pending: [] })).toBe("Already up to date.");
+    expect(relinkSummary({ linkedIn: [], skipped: ["ns-1", "ns-2"], pending: [] })).toBe(
+      "Already up to date.",
+    );
   });
 
-  it("still reports skips when nothing was repaired", () => {
-    expect(relinkSummary({ linkedIn: [], skipped: ["ns-1"] })).toBe(
-      "Repaired 0 namespaces, skipped 1.",
+  it("names the namespaces a retry could still reach", () => {
+    expect(relinkSummary({ linkedIn: ["ns-1"], skipped: ["ns-2"], pending: ["ns-2"] })).toBe(
+      "Repaired 1 namespace, 1 not reachable yet.",
+    );
+    expect(relinkSummary({ linkedIn: [], skipped: ["ns-2"], pending: ["ns-2"] })).toBe(
+      "1 namespace not reachable yet. Try again shortly.",
     );
   });
 });
 
 describe("widenSummary", () => {
   it("counts the apps added and the namespaces they reached", () => {
-    expect(widenSummary({ linkedIn: ["ns-1", "ns-2"], skipped: ["ns-3"] }, 2)).toBe(
+    expect(widenSummary({ linkedIn: ["ns-1", "ns-2"], skipped: ["ns-3"], pending: [] }, 2)).toBe(
       "Added 2 apps, reaching 2 more namespaces.",
     );
   });
 
   it("says it in the singular for one app and one namespace", () => {
-    expect(widenSummary({ linkedIn: ["ns-1"], skipped: [] }, 1)).toBe(
+    expect(widenSummary({ linkedIn: ["ns-1"], skipped: [], pending: [] }, 1)).toBe(
       "Added 1 app, reaching 1 more namespace.",
     );
   });
 
   it("reports an add that reached nowhere rather than implying it landed", () => {
-    expect(widenSummary({ linkedIn: [], skipped: ["ns-1"] }, 1)).toBe(
+    expect(widenSummary({ linkedIn: [], skipped: ["ns-1"], pending: [] }, 1)).toBe(
       "Added 1 app, reaching 0 more namespaces.",
     );
   });
@@ -465,5 +472,22 @@ describe("deviceLabel", () => {
 
   it("names nothing when the node holds no aliases at all", () => {
     expect(deviceLabel(paired, {})).toBeNull();
+  });
+});
+
+describe("narrowHint", () => {
+  it("tells the holder how to reduce another device's access", () => {
+    expect(narrowHint(device(), true)).toBe(
+      "To reduce what this device can access, revoke it and pair it again with fewer apps.",
+    );
+  });
+
+  it("says nothing on the holder's own row, which always follows everything", () => {
+    expect(narrowHint(device({ isSelf: true }), true)).toBeNull();
+  });
+
+  it("says nothing on a revoked device or to a node that holds no root", () => {
+    expect(narrowHint(device({ revoked: true }), true)).toBeNull();
+    expect(narrowHint(device(), false)).toBeNull();
   });
 });

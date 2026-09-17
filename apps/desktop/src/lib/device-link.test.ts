@@ -424,6 +424,7 @@ describe('relinkDevice', () => {
           skipped: [
             { namespaceId: 'ns-2', reason: 'alreadyBound' },
             { namespaceId: 'ns-3', reason: 'outOfScope' },
+            { namespaceId: 'ns-4', reason: 'noScopeKey' },
           ],
         },
       }),
@@ -431,7 +432,9 @@ describe('relinkDevice', () => {
 
     await expect(relinkDevice(HEX_64)).resolves.toEqual({
       linkedIn: ['ns-1'],
-      skipped: ['ns-2', 'ns-3'],
+      skipped: ['ns-2', 'ns-3', 'ns-4'],
+      // Only the skip a later relink can still reach.
+      pending: ['ns-4'],
     });
     expect(calls[0].url).toBe(
       `http://localhost:2528/admin-api/account/devices/${HEX_64}/relink`,
@@ -458,7 +461,7 @@ describe('relinkDevice', () => {
   it('reports nothing rather than throwing when the node names no outcomes', async () => {
     installFetch(json({ data: { accountId: 'e'.repeat(64), deviceId: HEX_64 } }));
 
-    await expect(relinkDevice(HEX_64)).resolves.toEqual({ linkedIn: [], skipped: [] });
+    await expect(relinkDevice(HEX_64)).resolves.toEqual({ linkedIn: [], skipped: [], pending: [] });
   });
 });
 

@@ -6,6 +6,7 @@ import {
   FOLLOW_STATE_LABEL,
   canRevoke,
   canSync,
+  narrowHint,
   deviceLabel,
   deviceScope,
   deviceScopeApps,
@@ -202,16 +203,17 @@ export default function AccountDeviceRow({
               )}
             </>
           )}
-          {note && (
-            <span
-              className={note.error ? "field-error" : "account-row-note"}
-              id={`device-note-${device.deviceId}`}
-            >
-              {note.text}
-            </span>
-          )}
         </div>
       </div>
+
+      {note && (
+        <p
+          className={`account-row-message ${note.error ? "field-error" : "account-row-note"}`}
+          id={`device-note-${device.deviceId}`}
+        >
+          {note.text}
+        </p>
+      )}
 
       {renaming && aliasInputHint(renameText) && (
         <p className="field-hint" id={`device-rename-hint-${device.deviceId}`}>
@@ -259,6 +261,11 @@ export default function AccountDeviceRow({
                 </div>
               );
             })}
+            {narrowHint(device, isHolder) && (
+              <p className="field-hint" id={`device-narrow-hint-${device.deviceId}`}>
+                {narrowHint(device, isHolder)}
+              </p>
+            )}
             {apps.length === 0 && (
               <p className="empty-hint">This account speaks in no app yet.</p>
             )}

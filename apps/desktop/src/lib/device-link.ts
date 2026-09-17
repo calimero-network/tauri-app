@@ -40,6 +40,8 @@ export type AccountApplication = AccountApplicationEntry;
 export interface RelinkResult {
   linkedIn: string[];
   skipped: string[];
+  /** Skipped for want of a scope key, which a later relink can still reach. */
+  pending: string[];
 }
 
 export interface NamespaceSummary {
@@ -200,6 +202,9 @@ export async function relinkDevice(
   return {
     linkedIn: (result?.linkedIn ?? []).map((entry) => entry.namespaceId),
     skipped: (result?.skipped ?? []).map((entry) => entry.namespaceId),
+    pending: (result?.skipped ?? [])
+      .filter((entry) => entry.reason === "noScopeKey")
+      .map((entry) => entry.namespaceId),
   };
 }
 

@@ -697,13 +697,12 @@ test.describe("Account page - device listing", () => {
     ).toHaveCount(0);
   });
 
-  test("syncing a device reports what it repaired and what it skipped", async ({
-    page,
-  }) => {
+  test("syncing a device reports what it repaired", async ({ page }) => {
     await page.locator(`#device-sync-${MOCK_PAIR_INIT.deviceId}`).click();
 
+    // A namespace out of the device's scope is no news; only a repair is.
     await expect(page.locator(`#device-note-${MOCK_PAIR_INIT.deviceId}`)).toHaveText(
-      "Repaired 1 namespace, skipped 1.",
+      "Repaired 1 namespace.",
     );
   });
 
@@ -773,11 +772,12 @@ test.describe("Account page - a device the account is held away from", () => {
     await expect(page.locator(`#device-rename-${MOCK_PAIR_INIT.deviceId}`)).toHaveCount(0);
   });
 
-  test("sync is offered on its own row and on no other", async ({ page }) => {
+  test("sync is offered on no row, since only the holder can relink", async ({ page }) => {
     await setupDeveloperPage(page);
     await mockHeldElsewhere(page);
 
-    await expect(page.locator(`#device-sync-${MOCK_NODE_IDENTITY.deviceId}`)).toBeEnabled();
+    await expect(page.locator(`#device-row-${MOCK_NODE_IDENTITY.deviceId}`)).toBeVisible();
+    await expect(page.locator(`#device-sync-${MOCK_NODE_IDENTITY.deviceId}`)).toHaveCount(0);
     await expect(page.locator(`#device-sync-${MOCK_PAIR_INIT.deviceId}`)).toHaveCount(0);
   });
 

@@ -240,8 +240,15 @@ export function thisDeviceBanner(devices: AccountDevice[]): string | null {
 /** Relinking this node's own device is defined but can never publish anything, so
  *  the holder is not offered it; a device held elsewhere can only repair itself. */
 export function canSync(device: AccountDevice, isHolder: boolean): boolean {
-  if (device.revoked) return false;
-  return isHolder ? !device.isSelf : device.isSelf;
+  // A relink certifies, and only the node holding the account root can.
+  return isHolder && !device.isSelf && !device.revoked;
+}
+
+/** A scope only grows, so reducing one is a fresh pairing; said where the locked
+ *  switches are, because a tooltip is not something anyone finds. */
+export function narrowHint(device: AccountDevice, isHolder: boolean): string | null {
+  if (!isHolder || device.isSelf || device.revoked) return null;
+  return "To reduce what this device can access, revoke it and pair it again with fewer apps.";
 }
 
 /** Revocation is terminal, and its route names a namespace, so a device bound
@@ -275,7 +282,11 @@ export function devicesEmptyMessage(identity: NodeIdentity | null): string {
   return "No devices found for this account.";
 }
 
-export function relinkSummary({ linkedIn, skipped }: RelinkResult): string {
-  if (!linkedIn.length && !skipped.length) return "Nothing to repair.";
-  return `Repaired ${linkedIn.length} ${namespaceWord(linkedIn.length)}, skipped ${skipped.length}.`;
+export function relinkSummary({ linkedIn, pending }: RelinkResult): string {
+  if (!linkedIn.length) {
+    if (!pending.length) return "Already up to date.";
+    return `${pending.length} ${namespaceWord(pending.length)} not reachable yet. Try again shortly.`;
+  }
+  const repaired = `Repaired ${linkedIn.length} ${namespaceWord(linkedIn.length)}`;
+  return pending.length ? `${repaired}, ${pending.length} not reachable yet.` : `${repaired}.`;
 }

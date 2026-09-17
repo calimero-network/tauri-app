@@ -306,31 +306,17 @@ describe('listAccountApplications', () => {
 });
 
 describe('pairInit', () => {
-  it('posts the account root key and every namespace the device is to listen on', async () => {
+  it('posts the account root key and the account namespace, and names no others', async () => {
     const data = validPayload({ accountId: 'e'.repeat(64) });
     installFetch(json({ data }));
 
-    await expect(pairInit(HEX_64, ['ns-1', 'ns-2'])).resolves.toEqual(data);
+    await expect(pairInit(HEX_64, ACCOUNT_NS)).resolves.toEqual(data);
     expect(calls[0].url).toBe('http://localhost:2528/admin-api/account/pair-init');
     expect(calls[0].init?.method).toBe('POST');
     expect(JSON.parse(String(calls[0].init?.body))).toEqual({
       accountRootPublicKey: HEX_64,
-      namespaces: ['ns-1', 'ns-2'],
-    });
-    // Named, not just absent from the parse: an explicit `null` is a key core's
-    // deny-unknown-fields request type would still have to read.
-    expect(String(calls[0].init?.body)).not.toContain('accountNamespace');
-  });
-
-  it('posts the account namespace, and may then name no namespace at all', async () => {
-    const data = validPayload({ accountId: 'e'.repeat(64) });
-    installFetch(json({ data }));
-
-    await expect(pairInit(HEX_64, [], ACCOUNT_NS)).resolves.toEqual(data);
-    expect(JSON.parse(String(calls[0].init?.body))).toEqual({
-      accountRootPublicKey: HEX_64,
-      namespaces: [],
       accountNamespace: ACCOUNT_NS,
+      namespaces: [],
     });
   });
 
@@ -340,7 +326,7 @@ describe('pairInit', () => {
   it('surfaces the node error message, with no status line in front of it', async () => {
     installFetch(json({ error: 'no account root on this node' }, { status: 400 }));
 
-    await expect(pairInit(HEX_64, ['ns-1'])).rejects.toMatchObject({
+    await expect(pairInit(HEX_64, ACCOUNT_NS)).rejects.toMatchObject({
       message: 'no account root on this node',
       status: 400,
     });
@@ -349,7 +335,7 @@ describe('pairInit', () => {
   it('reports a revoked token family as terminal, in words a user can act on', async () => {
     installFetch(new Response('{}', { status: 401, headers: { 'x-auth-error': 'token_reuse' } }));
 
-    await expect(pairInit(HEX_64, ['ns-1'])).rejects.toThrow(
+    await expect(pairInit(HEX_64, ACCOUNT_NS)).rejects.toThrow(
       'Your node session was revoked. Sign in again, then try again.',
     );
   });
@@ -357,13 +343,13 @@ describe('pairInit', () => {
   it('falls back to the status when the body carries no message', async () => {
     installFetch(new Response('', { status: 503 }));
 
-    await expect(pairInit(HEX_64, ['ns-1'])).rejects.toThrow('HTTP 503');
+    await expect(pairInit(HEX_64, ACCOUNT_NS)).rejects.toThrow('HTTP 503');
   });
 
   it('quotes a plain-text refusal verbatim, which the sdk message drops', async () => {
     installFetch(new Response('this node takes part in none of those namespaces', { status: 409 }));
 
-    await expect(pairInit(HEX_64, ['ns-1'])).rejects.toMatchObject({
+    await expect(pairInit(HEX_64, ACCOUNT_NS)).rejects.toMatchObject({
       message: 'this node takes part in none of those namespaces',
       status: 409,
     });

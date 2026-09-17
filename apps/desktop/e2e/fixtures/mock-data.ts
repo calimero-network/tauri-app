@@ -397,7 +397,6 @@ export const MOCK_PAIR_INVITE_BLOB =
   btoa(
     JSON.stringify({
       rootKey: MOCK_NODE_IDENTITY.accountRootPublicKey,
-      namespaces: [MOCK_NAMESPACE_ID, MOCK_OTHER_NAMESPACE_ID],
       accountNamespace: MOCK_NODE_IDENTITY.accountNamespaceId,
       // Registry coordinates, as a holder's invite carries them.
       apps: [{ package: "com.calimero.chat", version: "3.1.1" }],

@@ -48,10 +48,9 @@ export interface PairInviteApp {
 
 export interface PairInvite {
   rootKey: string;
-  namespaces: string[];
-  /** The account's own namespace, which a device follows the account's projects
-   *  through. Absent from an invite a node too old to report one handed out. */
-  accountNamespace?: string;
+  /** The account's own namespace. Following it is what carries the new device
+   *  into the account's projects, so the invite names no namespaces itself. */
+  accountNamespace: string;
   apps?: PairInviteApp[];
 }
 
@@ -93,41 +92,24 @@ export function encodeInvite(invite: PairInvite): string {
 export function decodeInvite(blob: string): PairInvite | null {
   const body = decodeBlob(INVITE_PREFIX, blob);
   const rootKey = str(body?.rootKey);
-  const namespaces = Array.isArray(body?.namespaces)
-    ? body.namespaces.filter((id): id is string => typeof id === "string" && id.length > 0)
-    : [];
   const accountNamespace = str(body?.accountNamespace);
   // Core refuses a request naming neither, so a blob naming neither is not an invite.
-  if (!rootKey || (!namespaces.length && !accountNamespace)) return null;
+  if (!rootKey || !accountNamespace) return null;
   const apps = installableApps(body?.apps);
-  return {
-    rootKey,
-    namespaces,
-    ...(accountNamespace ? { accountNamespace } : {}),
-    ...(apps.length ? { apps } : {}),
-  };
+  return { rootKey, accountNamespace, ...(apps.length ? { apps } : {}) };
 }
 
-/** The invite a holder hands out. The account namespace is what lets the new
- *  device follow this account's projects on its own; the list still rides along
- *  for a node too old to be given one. */
+/** The invite a holder hands out. */
 export function buildInvite({
   rootKey,
-  namespaces,
+  accountNamespace,
   apps,
-  accountNamespaceId,
 }: {
   rootKey: string;
-  namespaces: string[];
+  accountNamespace: string;
   apps: PairInviteApp[];
-  accountNamespaceId?: string | null;
 }): PairInvite {
-  return {
-    rootKey,
-    namespaces,
-    ...(accountNamespaceId ? { accountNamespace: accountNamespaceId } : {}),
-    ...(apps.length ? { apps } : {}),
-  };
+  return { rootKey, accountNamespace, ...(apps.length ? { apps } : {}) };
 }
 
 /** The confirmation code is deliberately left out: a code that travels with the
@@ -150,18 +132,6 @@ export function decodeReply(blob: string): PairReply | null {
     signPublicKey: str(body.signPublicKey),
     statement: str(body.statement),
   };
-}
-
-/** What the new device listens on: every namespace, or those the chosen
- *  applications target. `undefined` applications is "everything". */
-export function inviteNamespaces(
-  namespaces: NamespaceSummary[],
-  applications?: string[],
-): string[] {
-  const chosen = applications
-    ? namespaces.filter((ns) => applications.includes(ns.targetApplicationId))
-    : namespaces;
-  return chosen.map((ns) => ns.namespaceId);
 }
 
 /** What the label needs off an installed application; the node's row carries more. */
@@ -330,10 +300,7 @@ export function DevicePairWizard({ rootKey, accountNamespaceId, onLinked, onClos
     return () => controller.abort();
   }, [rootKey, reloads]);
 
-  // The one value the two halves of pairing disagree about on purpose: the
-  // invite names namespaces to listen on, pair-complete names applications.
   const scopedApps = everything ? undefined : chosenApps;
-  const inviteNs = inviteNamespaces(namespaces, scopedApps);
   const tiles = scopeTiles(applications, namespaces, installed);
 
   const reply = decodeReply(replyText);
@@ -416,14 +383,13 @@ export function DevicePairWizard({ rootKey, accountNamespaceId, onLinked, onClos
     );
   }
 
-  // An account namespace is something to add a device to on its own: the device
-  // follows whatever the account joins later.
-  if (!accountNamespaceId && !namespaces.length) {
+  // The account namespace is the whole invite: without one there is nothing a
+  // new device could be told to follow.
+  if (!accountNamespaceId) {
     return (
       <div className="account-wizard">
-        <p className="field-hint" id="pair-no-namespace">
-          This node is not part of anything yet, so there is nothing to add a device to. Join
-          or create something first, then come back.
+        <p className="field-hint" id="pair-node-too-old">
+          This node is too old to pair devices. Update it, then come back.
         </p>
         <button type="button" id="pair-cancel" className="button button-secondary" onClick={onClose}>
           Close
@@ -470,9 +436,8 @@ export function DevicePairWizard({ rootKey, accountNamespaceId, onLinked, onClos
   const invite = encodeInvite(
     buildInvite({
       rootKey,
-      namespaces: inviteNs,
+      accountNamespace: accountNamespaceId,
       apps: inviteApps(scopedApps, installed),
-      accountNamespaceId,
     }),
   );
 
@@ -705,7 +670,7 @@ export function DevicePairResponder({ enrolledDeviceId }: { enrolledDeviceId?: s
     try {
       // Kept on failure: pair-init is idempotent, so the holder can just retry
       // against this same response instead of restarting the wizard.
-      setResult(await pairInit(invite.rootKey, invite.namespaces, invite.accountNamespace));
+      setResult(await pairInit(invite.rootKey, invite.accountNamespace));
       setInstalls([]);
       setInstalling(false);
       setLinked(false);

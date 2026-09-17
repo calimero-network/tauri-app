@@ -15,11 +15,9 @@ import {
   MOCK_ACCOUNT_DEVICES,
   MOCK_DEVICE_ALIASES,
   MOCK_APPLICATION_ID,
-  MOCK_NAMESPACE_ID,
   MOCK_NAMESPACES,
   MOCK_NODE_IDENTITY,
   MOCK_OTHER_APPLICATION_ID,
-  MOCK_OTHER_NAMESPACE_ID,
   MOCK_PAIR_COMPLETE,
   MOCK_PAIR_INIT,
   MOCK_PAIR_INVITE_BLOB,
@@ -481,10 +479,6 @@ async function mockPairingAPIs(page: Page): Promise<void> {
 async function inviteBodyOnScreen(page: Page): Promise<Record<string, unknown>> {
   const blob = (await page.locator("#pair-invite").innerText()).trim();
   return JSON.parse(atob(blob.replace("mero-pair:", "")));
-}
-
-async function inviteNamespacesOnScreen(page: Page): Promise<string[]> {
-  return (await inviteBodyOnScreen(page)).namespaces as string[];
 }
 
 test.describe("Account page - pairing needs no developer mode", () => {
@@ -949,25 +943,13 @@ test.describe("Account page - pairing wizard", () => {
     await expect(page.locator("#pair-next")).toBeEnabled();
   });
 
-  test("everything hands the new device every namespace", async ({ page }) => {
-    // Decoded, not matched as text: the ids are inside base64, where a substring
-    // assertion would pass on a blob that names the wrong set.
-    expect(await inviteNamespacesOnScreen(page)).toEqual([
-      MOCK_NAMESPACE_ID,
-      MOCK_OTHER_NAMESPACE_ID,
-    ]);
-  });
-
-  test("ticking one tile narrows the invite to that app's namespaces", async ({
-    page,
-  }) => {
+  test("ticking a tile marks it chosen", async ({ page }) => {
     await page.locator("#pair-scope-apps").check();
     await page.locator(`#pair-app-${MOCK_OTHER_APPLICATION_ID}`).click();
 
     await expect(
       page.locator(`#pair-app-${MOCK_OTHER_APPLICATION_ID}`),
     ).toHaveAttribute("aria-pressed", "true");
-    expect(await inviteNamespacesOnScreen(page)).toEqual([MOCK_OTHER_NAMESPACE_ID]);
   });
 
   test("a tile names the app and what picking it would cover", async ({ page }) => {
@@ -987,14 +969,16 @@ test.describe("Account page - pairing wizard", () => {
     await expect(page.locator("#pair-next")).toBeDisabled();
   });
 
-  test("the invite blob names this account's namespace", async ({
+  test("the invite blob names this account's namespace and no namespace list", async ({
     page,
   }) => {
     await expect(page.locator("#pair-invite")).toContainText("mero-pair:");
     await expect(page.locator("#copy-pair-invite")).toBeVisible();
-    expect(await inviteBodyOnScreen(page)).toMatchObject({
+    const body = await inviteBodyOnScreen(page);
+    expect(body).toMatchObject({
       accountNamespace: MOCK_NODE_IDENTITY.accountNamespaceId,
     });
+    expect("namespaces" in body).toBe(false);
   });
 
   test("the wizard opens on an account with no namespace yet", async ({ page }) => {
@@ -1006,8 +990,25 @@ test.describe("Account page - pairing wizard", () => {
     await navigateVia(page, "Account");
     await page.locator("#add-device").click();
 
-    await expect(page.locator("#pair-no-namespace")).toHaveCount(0);
+    await expect(page.locator("#pair-node-too-old")).toHaveCount(0);
     await expect(page.locator("#pair-invite")).toContainText("mero-pair:");
+  });
+
+  test("a node reporting no account namespace is named as too old to pair", async ({
+    page,
+  }) => {
+    await page.route(API_ROUTES.identity, (route) =>
+      route.fulfill(json({ data: { ...MOCK_NODE_IDENTITY, accountNamespaceId: undefined } })),
+    );
+    await page.reload();
+    await navigateVia(page, "Account");
+    await page.locator("#add-device").click();
+
+    await expect(page.locator("#pair-node-too-old")).toHaveText(
+      "This node is too old to pair devices. Update it, then come back.",
+    );
+    await expect(page.locator("#pair-invite")).toHaveCount(0);
+    await expect(page.locator("#pair-cancel")).toBeVisible();
   });
 
   test("pair-complete carries the apps the tiles chose", async ({ page }) => {
@@ -1180,9 +1181,11 @@ test.describe("Account page - pairing responder", () => {
     await page.locator("#pair-init").click();
 
     await expect(page.locator("#pair-reply")).toContainText("mero-pair-reply:");
-    expect(JSON.parse(initBodies[0]).accountNamespace).toBe(
-      MOCK_NODE_IDENTITY.accountNamespaceId,
-    );
+    expect(JSON.parse(initBodies[0])).toEqual({
+      accountRootPublicKey: MOCK_NODE_IDENTITY.accountRootPublicKey,
+      accountNamespace: MOCK_NODE_IDENTITY.accountNamespaceId,
+      namespaces: [],
+    });
 
     await expect(page.locator("#pair-reply")).toContainText("mero-pair-reply:");
 
@@ -1263,10 +1266,10 @@ test.describe("Account page - pairing responder", () => {
     await expect(page.locator("#pair-app-installs")).toHaveCount(0);
   });
 
-  test("an invite naming no namespace is not one", async ({ page }) => {
+  test("an invite naming no account namespace is not one", async ({ page }) => {
     const empty =
       "mero-pair:" +
-      btoa(JSON.stringify({ rootKey: MOCK_NODE_IDENTITY.accountRootPublicKey, namespaces: [] }));
+      btoa(JSON.stringify({ rootKey: MOCK_NODE_IDENTITY.accountRootPublicKey }));
     await page.fill("#pair-invite-input", empty);
 
     await expect(page.locator("#pair-invite-invalid")).toBeVisible();

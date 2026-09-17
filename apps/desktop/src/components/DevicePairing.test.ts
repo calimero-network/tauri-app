@@ -10,7 +10,6 @@ import {
   decodeReply,
   encodeInvite,
   encodeReply,
-  inviteNamespaces,
   scopeTiles,
   tileNamespaceCount,
   canLeaveScopeStep,
@@ -35,41 +34,37 @@ const NAMESPACES: NamespaceSummary[] = [
 ];
 
 describe("invite blob", () => {
-  it("round trips the root key and every namespace", () => {
-    const invite = { rootKey: ROOT_KEY, namespaces: ["ns-1", "ns-2"] };
+  it("round trips the root key and the account namespace", () => {
+    const invite = { rootKey: ROOT_KEY, accountNamespace: ACCOUNT_NS };
     expect(decodeInvite(encodeInvite(invite))).toEqual(invite);
   });
 
   it("tolerates the whitespace a paste brings with it", () => {
-    const invite = { rootKey: ROOT_KEY, namespaces: ["ns-1"] };
+    const invite = { rootKey: ROOT_KEY, accountNamespace: ACCOUNT_NS };
     expect(decodeInvite(`\n  ${encodeInvite(invite)}  \n`)).toEqual(invite);
   });
 
-  it("round trips an invite that names only the account namespace", () => {
-    const invite = { rootKey: ROOT_KEY, namespaces: [], accountNamespace: ACCOUNT_NS };
+  it("carries the apps the new device is to install", () => {
+    const apps = [{ package: "com.calimero.chat", version: "1.0.0" }];
+    const invite = { rootKey: ROOT_KEY, accountNamespace: ACCOUNT_NS, apps };
     expect(decodeInvite(encodeInvite(invite))).toEqual(invite);
   });
 
-  it("rejects an invite naming neither a namespace nor the account one", () => {
-    expect(decodeInvite(encodeInvite({ rootKey: ROOT_KEY, namespaces: [] }))).toBeNull();
+  it("rejects a blob naming no account namespace, which nothing could follow", () => {
+    const blob = `mero-pair:${btoa(JSON.stringify({ rootKey: ROOT_KEY }))}`;
+    expect(decodeInvite(blob)).toBeNull();
   });
 
-  it("defaults a missing namespace list to none, so the account namespace carries it", () => {
-    const blob = `mero-pair:${btoa(
-      JSON.stringify({ rootKey: ROOT_KEY, accountNamespace: ACCOUNT_NS }),
-    )}`;
-    expect(decodeInvite(blob)).toEqual({
-      rootKey: ROOT_KEY,
-      namespaces: [],
-      accountNamespace: ACCOUNT_NS,
-    });
+  it("rejects a blob naming no root key", () => {
+    const blob = `mero-pair:${btoa(JSON.stringify({ accountNamespace: ACCOUNT_NS }))}`;
+    expect(decodeInvite(blob)).toBeNull();
   });
 
-  it("drops namespace entries that are not ids", () => {
+  it("drops a namespace list an older holder still sent", () => {
     const blob = `mero-pair:${btoa(
-      JSON.stringify({ rootKey: ROOT_KEY, namespaces: ["ns-1", 7, "", null] }),
+      JSON.stringify({ rootKey: ROOT_KEY, accountNamespace: ACCOUNT_NS, namespaces: ["ns-1"] }),
     )}`;
-    expect(decodeInvite(blob)).toEqual({ rootKey: ROOT_KEY, namespaces: ["ns-1"] });
+    expect(decodeInvite(blob)).toEqual({ rootKey: ROOT_KEY, accountNamespace: ACCOUNT_NS });
   });
 
   it("rejects anything that is not an invite", () => {
@@ -82,31 +77,17 @@ describe("invite blob", () => {
 });
 
 describe("buildInvite", () => {
-  it("names the account namespace when this node reports one", () => {
-    expect(
-      buildInvite({ rootKey: ROOT_KEY, namespaces: ["ns-1"], apps: [], accountNamespaceId: ACCOUNT_NS }),
-    ).toEqual({ rootKey: ROOT_KEY, namespaces: ["ns-1"], accountNamespace: ACCOUNT_NS });
-  });
-
-  it("leaves the key out when the node reports none", () => {
-    const invite = buildInvite({
+  it("names the account namespace and no namespace list", () => {
+    expect(buildInvite({ rootKey: ROOT_KEY, accountNamespace: ACCOUNT_NS, apps: [] })).toEqual({
       rootKey: ROOT_KEY,
-      namespaces: ["ns-1"],
-      apps: [],
-      accountNamespaceId: null,
+      accountNamespace: ACCOUNT_NS,
     });
-
-    expect("accountNamespace" in invite).toBe(false);
-    expect(invite).toEqual({ rootKey: ROOT_KEY, namespaces: ["ns-1"] });
   });
 
-  it("keeps naming the namespaces, for a node that cannot follow an account one", () => {
+  it("offers the apps the new device should install", () => {
     const apps = [{ package: "com.calimero.chat", version: "1.0.0" }];
-    expect(
-      buildInvite({ rootKey: ROOT_KEY, namespaces: ["ns-1"], apps, accountNamespaceId: ACCOUNT_NS }),
-    ).toEqual({
+    expect(buildInvite({ rootKey: ROOT_KEY, accountNamespace: ACCOUNT_NS, apps })).toEqual({
       rootKey: ROOT_KEY,
-      namespaces: ["ns-1"],
       accountNamespace: ACCOUNT_NS,
       apps,
     });
@@ -136,30 +117,8 @@ describe("reply blob", () => {
   });
 
   it("rejects an invite pasted into the response box", () => {
-    expect(decodeReply(encodeInvite({ rootKey: ROOT_KEY, namespaces: ["ns-1"] }))).toBeNull();
+    expect(decodeReply(encodeInvite({ rootKey: ROOT_KEY, accountNamespace: ACCOUNT_NS }))).toBeNull();
     expect(decodeReply("mero-pair-reply:")).toBeNull();
-  });
-});
-
-describe("inviteNamespaces", () => {
-  it("names every namespace when the device gets everything", () => {
-    expect(inviteNamespaces(NAMESPACES)).toEqual(["ns-chat-1", "ns-chat-2", "ns-drive"]);
-  });
-
-  it("names only the namespaces a chosen application targets", () => {
-    expect(inviteNamespaces(NAMESPACES, ["AppDrive"])).toEqual(["ns-drive"]);
-  });
-
-  it("keeps every namespace of a chosen application, not just the first", () => {
-    expect(inviteNamespaces(NAMESPACES, ["AppChat"])).toEqual(["ns-chat-1", "ns-chat-2"]);
-  });
-
-  it("names nothing when nothing is chosen, which is not the same as everything", () => {
-    expect(inviteNamespaces(NAMESPACES, [])).toEqual([]);
-  });
-
-  it("names nothing for an application this node holds no namespace for", () => {
-    expect(inviteNamespaces(NAMESPACES, ["AppUnknown"])).toEqual([]);
   });
 });
 

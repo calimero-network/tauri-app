@@ -40,6 +40,16 @@ describe('fetchBundleDisplay', () => {
     expect(display).toEqual({ name: 'Mero Chat' });
   });
 
+  it('hands the caller\'s signal to fetch, so a timed-out lookup is cancelled', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ metadata: { name: 'Mero Chat' } }) });
+    global.fetch = fetchMock as unknown as typeof fetch;
+    const controller = new AbortController();
+
+    await fetchBundleDisplay('https://registry.example', 'com.calimero.chat', '3.1.1', controller.signal);
+
+    expect(fetchMock.mock.calls[0][1].signal).toBe(controller.signal);
+  });
+
   it('returns null on a non-OK response', async () => {
     global.fetch = vi.fn().mockResolvedValue({ ok: false, status: 404 }) as unknown as typeof fetch;
 

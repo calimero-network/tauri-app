@@ -116,7 +116,12 @@ describe('listInstalledApps display backfill', () => {
     const { data } = await listInstalledApps();
 
     expect(data![0].metadata).toEqual({ name: 'Mero Chat' });
-    expect(fetchBundleDisplay).toHaveBeenCalledWith('https://registry-a.example', 'com.calimero.chat', '1.0.0');
+    expect(fetchBundleDisplay).toHaveBeenCalledWith(
+      'https://registry-a.example',
+      'com.calimero.chat',
+      '1.0.0',
+      expect.any(AbortSignal),
+    );
   });
 
   it('falls through to the next registry when the first has nothing', async () => {
@@ -127,8 +132,12 @@ describe('listInstalledApps display backfill', () => {
     const { data } = await listInstalledApps();
 
     expect(data![0].metadata).toEqual({ name: 'Mero Drive' });
-    expect(fetchBundleDisplay).toHaveBeenNthCalledWith(1, 'https://registry-a.example', 'com.calimero.drive', '2.0.0');
-    expect(fetchBundleDisplay).toHaveBeenNthCalledWith(2, 'https://registry-b.example', 'com.calimero.drive', '2.0.0');
+    expect(fetchBundleDisplay).toHaveBeenNthCalledWith(
+      1, 'https://registry-a.example', 'com.calimero.drive', '2.0.0', expect.any(AbortSignal),
+    );
+    expect(fetchBundleDisplay).toHaveBeenNthCalledWith(
+      2, 'https://registry-b.example', 'com.calimero.drive', '2.0.0', expect.any(AbortSignal),
+    );
   });
 
   it('leaves the row untouched when every registry has nothing', async () => {
@@ -164,19 +173,29 @@ describe('listInstalledApps display backfill', () => {
     expect(fetchBundleDisplay).toHaveBeenCalledTimes(1);
   });
 
-  it('caps a hung registry lookup so it never delays the list past 4s', async () => {
+  it('cancels a hung registry lookup at 4s rather than leaving it running', async () => {
     vi.useFakeTimers();
     try {
       const row = blobShareRow('com.calimero.slow', '6.0.0');
       listApplications.mockResolvedValue({ data: [row] });
+      let cancelled = false;
       fetchBundleDisplay
-        .mockImplementationOnce(() => new Promise(() => {}))
+        .mockImplementationOnce(
+          (...args: unknown[]) =>
+            new Promise((resolve) =>
+              (args[3] as AbortSignal).addEventListener('abort', () => {
+                cancelled = true;
+                resolve(null);
+              }),
+            ),
+        )
         .mockResolvedValueOnce({ name: 'Slow App' });
 
       const promise = listInstalledApps();
       await vi.advanceTimersByTimeAsync(4000);
       const { data } = await promise;
 
+      expect(cancelled).toBe(true);
       expect(data![0].metadata).toEqual({ name: 'Slow App' });
     } finally {
       vi.useRealTimers();

@@ -413,6 +413,7 @@ export async function fetchBundleDisplay(
   registryUrl: string,
   pkg: string,
   version: string,
+  signal?: AbortSignal,
 ): Promise<{ name?: string; icon?: string; description?: string } | null> {
   if (!APP_ID_RE.test(pkg) || !VERSION_RE.test(version)) return null;
   try {
@@ -420,6 +421,7 @@ export async function fetchBundleDisplay(
     const response = await fetch(url.toString(), {
       method: 'GET',
       headers: { 'Content-Type': 'application/json' },
+      signal,
     });
     if (!response.ok) return null;
 

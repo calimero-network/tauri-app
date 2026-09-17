@@ -7,8 +7,8 @@ import { fetchBundleDisplay } from "./registry";
 import { decodeMetadata } from "./appUtils";
 
 const TTL_MS = 5 * 60 * 1000;
-// Give one registry request this long to answer before moving to the next -
-// a slow or dead registry must never hold up the app list.
+// Give one registry request this long to answer before it is cancelled and the
+// next is tried - a slow or dead registry must never hold up the app list.
 const DISPLAY_LOOKUP_TIMEOUT_MS = 4000;
 
 type InstalledAppsResponse = Awaited<ReturnType<typeof apiClient.node.listApplications>>;
@@ -43,11 +43,16 @@ async function lookupDisplay(pkg: string, version: string): Promise<AppDisplay |
   if (memoized) return memoized;
 
   for (const registryUrl of getSettings().registries ?? []) {
-    const timeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), DISPLAY_LOOKUP_TIMEOUT_MS));
-    const display = await Promise.race([fetchBundleDisplay(registryUrl, pkg, version), timeout]);
-    if (display) {
-      displayCache.set(key, display);
-      return display;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), DISPLAY_LOOKUP_TIMEOUT_MS);
+    try {
+      const display = await fetchBundleDisplay(registryUrl, pkg, version, controller.signal);
+      if (display) {
+        displayCache.set(key, display);
+        return display;
+      }
+    } finally {
+      clearTimeout(timer);
     }
   }
   return null;

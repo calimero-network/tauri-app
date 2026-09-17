@@ -565,10 +565,6 @@ test.describe("Account page - device listing", () => {
       MOCK_APPLICATION_ID,
       MOCK_OTHER_APPLICATION_ID,
     ]);
-    // The listing still shows the old scope, so the row says so until it catches up.
-    await expect(
-      page.locator(`#device-row-${MOCK_PAIR_INIT.deviceId} .status-badge`).first(),
-    ).toHaveText("Syncing");
   });
 
   test("the toggle of an app already in scope is locked, and says why", async ({

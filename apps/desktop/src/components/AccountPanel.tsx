@@ -24,7 +24,6 @@ import {
   canInviteDevices,
   deviceLabel,
   devicesEmptyMessage,
-  inScope,
   namespaceWord,
   relinkSummary,
   thisDeviceBanner,
@@ -77,8 +76,6 @@ export default function AccountPanel() {
   const [busyDevice, setBusyDevice] = useState("");
   const [confirmRevoke, setConfirmRevoke] = useState("");
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
-  // The app each row is waiting to see in the listing after a relink widened it.
-  const [widening, setWidening] = useState<Record<string, string>>({});
   const [catalog, setCatalog] = useState<AccountCatalog>({
     apps: [],
     namespaces: [],
@@ -166,20 +163,6 @@ export default function AccountPanel() {
     !!accountId,
   );
 
-  // A widened row stays on Syncing until the listing carries the app the relink
-  // added, which is the only signal that the new scope reached the registry.
-  useEffect(() => {
-    setWidening((prev) => {
-      const next = Object.fromEntries(
-        Object.entries(prev).filter(([deviceId, applicationId]) => {
-          const row = devices.find((device) => device.deviceId === deviceId);
-          return !row || !inScope(row, applicationId);
-        }),
-      );
-      return Object.keys(next).length === Object.keys(prev).length ? prev : next;
-    });
-  }, [devices]);
-
   // A device we linked but never saw converge is not in the listing yet, so
   // refetching would drop it: show it as syncing instead.
   const handleLinked = (deviceId: string, converged: boolean) => {
@@ -211,14 +194,12 @@ export default function AccountPanel() {
     try {
       setRowNote({ deviceId, text: await action() });
       setDeviceReloads((n) => n + 1);
-      return true;
     } catch (err: unknown) {
       setRowNote({
         deviceId,
         text: parseTauriError(err, "That did not work"),
         error: true,
       });
-      return false;
     } finally {
       setBusyDevice("");
     }
@@ -227,14 +208,10 @@ export default function AccountPanel() {
   const sync = (device: DeviceRow) =>
     runRowAction(device.deviceId, async () => relinkSummary(await relinkDevice(device.deviceId)));
 
-  const widen = async (device: DeviceRow, applicationId: string) => {
-    const scope = [...device.applications, applicationId];
-    setWidening((prev) => ({ ...prev, [device.deviceId]: applicationId }));
-    const ok = await runRowAction(device.deviceId, async () =>
-      widenSummary(await relinkDevice(device.deviceId, scope), 1),
+  const widen = (device: DeviceRow, applicationId: string) =>
+    runRowAction(device.deviceId, async () =>
+      widenSummary(await relinkDevice(device.deviceId, [...device.applications, applicationId]), 1),
     );
-    if (!ok) setWidening((prev) => dropKey(prev, device.deviceId));
-  };
 
   const revoke = (device: DeviceRow) => {
     setConfirmRevoke("");
@@ -353,7 +330,7 @@ export default function AccountPanel() {
                 catalog={catalog}
                 aliases={aliases}
                 isHolder={isHolder}
-                syncing={!!device.syncing || device.deviceId in widening}
+                syncing={!!device.syncing}
                 open={!!expanded[device.deviceId]}
                 busy={busyDevice === device.deviceId}
                 note={rowNote?.deviceId === device.deviceId ? rowNote : null}

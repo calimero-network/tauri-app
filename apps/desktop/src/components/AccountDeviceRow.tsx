@@ -11,7 +11,6 @@ import {
   deviceScopeApps,
   deviceStatus,
   namespaceFollowState,
-  namespaceWord,
   nextScope,
   scopeHint,
   scopeLockHint,
@@ -107,8 +106,7 @@ export default function AccountDeviceRow({
                   <code className="account-mono">{shortId}</code> ·{" "}
                 </>
               )}
-              {deviceScope(device)} · {device.namespaces.length}{" "}
-              {namespaceWord(device.namespaces.length)}
+              {deviceScope(device)}
             </span>
           </span>
         </button>

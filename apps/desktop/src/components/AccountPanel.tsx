@@ -135,8 +135,10 @@ export default function AccountPanel() {
     return () => controller.abort();
   }, [accountId, reloads, deviceReloads]);
 
-  // Core follows and unfollows this device's namespaces on its own, so both
-  // listings change with nothing here asking. A failed poll keeps what it has.
+  // Core follows and unfollows this device's namespaces on its own, and a
+  // follower's application row can go from bytecode-less to installed between
+  // ticks, so the whole catalog is reloaded alongside the devices. A failed
+  // poll keeps what it has.
   useVisiblePoll(
     () => {
       listAccountDevices()
@@ -145,8 +147,15 @@ export default function AccountPanel() {
       listDeviceAliases()
         .then(setAliases)
         .catch(() => {});
-      listNamespaces()
-        .then((namespaces) => setCatalog((prev) => ({ ...prev, namespaces })))
+      invalidateInstalledApps();
+      Promise.all([
+        listAccountApplications(),
+        listNamespaces(),
+        listInstalledApps()
+          .then((r) => (Array.isArray(r.data) ? (r.data as InstalledApp[]) : []))
+          .catch(() => [] as InstalledApp[]),
+      ])
+        .then(([apps, namespaces, installed]) => setCatalog({ apps, namespaces, installed }))
         .catch(() => {});
     },
     30000,

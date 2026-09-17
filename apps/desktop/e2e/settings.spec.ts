@@ -26,6 +26,8 @@ import {
   MOCK_PAIR_REPLY_BLOB,
   MOCK_RELINK,
   MOCK_REVOKE,
+  listApplicationsWireBody,
+  type MockInstalledAppRow,
 } from "./fixtures/mock-data";
 
 // ─── Navigate to Settings ──────────────────────────────────────────────────
@@ -844,6 +846,47 @@ test.describe("Account page - apps on this account", () => {
       .poll(() => bodies.length)
       .toBeGreaterThan(0);
     expect(JSON.parse(bodies[0])).toEqual({ package: "mero-drive", version: "2.0.0" });
+  });
+});
+
+test.describe("Account page - apps catalog refreshes on poll", () => {
+  test("a follower's row flips to installed once the poll re-reads the catalog", async ({
+    page,
+  }) => {
+    await page.clock.install();
+
+    // What core seeds for a follower before the blob arrives: no bytecode,
+    // and no package to offer an install from either.
+    const notYetArrived: MockInstalledAppRow = {
+      id: MOCK_APPLICATION_ID,
+      name: "mero-chat",
+      version: "",
+      metadata: btoa(JSON.stringify({ name: "Mero Chat" })),
+      source: "registry",
+      blob: { bytecode: "", compiled: "" },
+    };
+
+    await setupDeveloperPage(page, { installedApps: [notYetArrived] });
+    await mockPairingAPIs(page);
+    await navigateVia(page, "Account");
+
+    await expect(page.locator(`#app-missing-${MOCK_APPLICATION_ID}`)).toContainText(
+      "Not installed here",
+    );
+
+    await page.route(API_ROUTES.listApplications, (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: listApplicationsWireBody([MOCK_ACCOUNT_APP_ROWS[0]]),
+      }),
+    );
+
+    await page.clock.fastForward(30_000);
+
+    await expect(page.locator(`#app-installed-${MOCK_APPLICATION_ID}`)).toContainText(
+      "Installed",
+    );
   });
 });
 

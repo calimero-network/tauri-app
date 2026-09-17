@@ -10,6 +10,7 @@ import {
   type CreateDeviceAliasRequest,
   type AccountPairCompleteResponseData,
   type AccountPairInitResponseData,
+  type DeviceScope,
   type NodeIdentity,
 } from '@calimero-network/mero-js';
 import { getSettings } from '../utils/settings';
@@ -42,6 +43,13 @@ export interface RelinkResult {
   skipped: string[];
   /** Skipped for want of a scope key, which a later relink can still reach. */
   pending: string[];
+}
+
+/** The scope a device now holds, and the namespaces it left and joined for it. */
+export interface RescopeResult {
+  applications: string[];
+  descoped: string[];
+  bound: string[];
 }
 
 export interface NamespaceSummary {
@@ -179,21 +187,31 @@ export function pairComplete(
   return nodeCall(admin().completeAccountPairing({ ...payload, applications }));
 }
 
-/** Without `applications` this repairs the scope already stored, which is what
- *  an operator asks for to heal drift; with them it widens that scope. */
-export async function relinkDevice(
-  deviceId: string,
-  applications?: string[],
-): Promise<RelinkResult> {
-  const result = await nodeCall(
-    admin().relinkAccountDevice(deviceId, { applications }),
-  );
+/** Repairs the scope already stored, which is what an operator asks for to heal
+ *  drift. Changing that scope is a rescope, not a relink. */
+export async function relinkDevice(deviceId: string): Promise<RelinkResult> {
+  const result = await nodeCall(admin().relinkAccountDevice(deviceId, {}));
   return {
     linkedIn: (result?.linkedIn ?? []).map((entry) => entry.namespaceId),
     skipped: (result?.skipped ?? []).map((entry) => entry.namespaceId),
     pending: (result?.skipped ?? [])
       .filter((entry) => entry.reason === "noScopeKey")
       .map((entry) => entry.namespaceId),
+  };
+}
+
+/** Replaces the stored scope outright, in either direction. Narrowing unbinds
+ *  the device from the namespaces it loses; the device id and certificate stay,
+ *  so widening later re-binds the same device. */
+export async function rescopeDevice(
+  deviceId: string,
+  scope: DeviceScope,
+): Promise<RescopeResult> {
+  const result = await nodeCall(admin().rescopeAccountDevice(deviceId, { scope }));
+  return {
+    applications: result?.applications ?? [],
+    descoped: (result?.descoped ?? []).map((entry) => entry.namespaceId),
+    bound: (result?.linkedIn ?? []).map((entry) => entry.namespaceId),
   };
 }
 

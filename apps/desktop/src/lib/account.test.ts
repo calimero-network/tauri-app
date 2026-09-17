@@ -16,15 +16,17 @@ import {
   deviceScopeApps,
   deviceStatus,
   devicesEmptyMessage,
+  effectiveScope,
   inScope,
   namespaceFollowState,
+  nextScope,
   relinkSummary,
+  rescopeSummary,
   accountAppRows,
   scopeHint,
   scopeLockHint,
-  scopeToggle,
+  scopeSwitches,
   thisDeviceBanner,
-  widenSummary,
 } from "./account";
 
 function device(overrides: Partial<AccountDevice> = {}): AccountDevice {
@@ -121,23 +123,29 @@ describe("relinkSummary", () => {
   });
 });
 
-describe("widenSummary", () => {
-  it("counts the apps added and the namespaces they reached", () => {
-    expect(widenSummary({ linkedIn: ["ns-1", "ns-2"], skipped: ["ns-3"], pending: [] }, 2)).toBe(
-      "Added 2 apps, reaching 2 more namespaces.",
+describe("rescopeSummary", () => {
+  const result = (descoped: string[], bound: string[]) => ({
+    applications: ["App1"],
+    descoped,
+    bound,
+  });
+
+  it("counts the namespaces a narrowing took the device out of", () => {
+    expect(rescopeSummary(result(["ns-1", "ns-2"], []))).toBe("Removed from 2 namespaces.");
+  });
+
+  it("counts the namespaces a widening carried it into", () => {
+    expect(rescopeSummary(result([], ["ns-1"]))).toBe("Added to 1 namespace.");
+  });
+
+  it("says both ways in one sentence when a scope moved in both", () => {
+    expect(rescopeSummary(result(["ns-1"], ["ns-2", "ns-3"]))).toBe(
+      "Removed from 1 namespace, added to 2.",
     );
   });
 
-  it("says it in the singular for one app and one namespace", () => {
-    expect(widenSummary({ linkedIn: ["ns-1"], skipped: [], pending: [] }, 1)).toBe(
-      "Added 1 app, reaching 1 more namespace.",
-    );
-  });
-
-  it("reports an add that reached nowhere rather than implying it landed", () => {
-    expect(widenSummary({ linkedIn: [], skipped: ["ns-1"], pending: [] }, 1)).toBe(
-      "Added 1 app, reaching 0 more namespaces.",
-    );
+  it("still confirms a change that moved no binding at all", () => {
+    expect(rescopeSummary(result([], []))).toBe("Scope updated.");
   });
 });
 
@@ -231,66 +239,174 @@ describe("namespaceFollowState", () => {
   });
 });
 
-describe("scopeToggle", () => {
-  it("offers the only change core supports, which is switching one on", () => {
-    expect(scopeToggle(device({ applications: ["App1"] }), "App2", true)).toEqual({
-      on: false,
-      locked: false,
+describe("effectiveScope", () => {
+  it("reads a narrowed scope straight off the listing", () => {
+    expect(effectiveScope(device({ applications: ["App1"] }), ["App1", "App2"])).toEqual([
+      "App1",
+    ]);
+  });
+
+  it("spells an everything device out as every app the row lists", () => {
+    expect(effectiveScope(device({ applications: [] }), ["App1", "App2"])).toEqual([
+      "App1",
+      "App2",
+    ]);
+  });
+});
+
+describe("nextScope", () => {
+  const rows = ["App1", "App2", "App3"];
+
+  it("asks for everything when the first switch goes on", () => {
+    expect(nextScope(device({ applications: ["App1"] }), rows, { kind: "all", on: true })).toBe(
+      "all",
+    );
+  });
+
+  it("freezes today's access when the first switch goes off", () => {
+    expect(nextScope(device({ applications: [] }), rows, { kind: "all", on: false })).toEqual({
+      only: rows,
     });
   });
 
-  it("locks the off direction, since core cannot narrow without a fresh pairing", () => {
-    expect(scopeToggle(device({ applications: ["App1"] }), "App1", true)).toEqual({
-      on: true,
-      locked: true,
+  it("drops one app off a narrowed scope", () => {
+    expect(
+      nextScope(device({ applications: ["App1", "App2"] }), rows, {
+        kind: "app",
+        applicationId: "App1",
+        on: false,
+      }),
+    ).toEqual({ only: ["App2"] });
+  });
+
+  it("turns an everything device into the rest of the list when one app goes off", () => {
+    expect(
+      nextScope(device({ applications: [] }), rows, {
+        kind: "app",
+        applicationId: "App2",
+        on: false,
+      }),
+    ).toEqual({ only: ["App1", "App3"] });
+  });
+
+  it("adds an app without ever asking for everything", () => {
+    expect(
+      nextScope(device({ applications: ["App1"] }), rows, {
+        kind: "app",
+        applicationId: "App3",
+        on: true,
+      }),
+    ).toEqual({ only: ["App1", "App3"] });
+  });
+
+  it("names an app the scope already holds only once", () => {
+    expect(
+      nextScope(device({ applications: ["App1"] }), rows, {
+        kind: "app",
+        applicationId: "App1",
+        on: true,
+      }),
+    ).toEqual({ only: ["App1"] });
+  });
+});
+
+describe("scopeSwitches", () => {
+  const rows = ["App1", "App2"];
+
+  it("switches both ways on a narrowed device the holder can change", () => {
+    expect(scopeSwitches(device({ applications: ["App1"] }), rows, true)).toEqual({
+      all: { on: false, locked: false },
+      apps: {
+        // The only app left on: core refuses an empty scope.
+        App1: { on: true, locked: true },
+        App2: { on: false, locked: false },
+      },
     });
   });
 
-  it("locks every toggle on for a device that already follows everything", () => {
-    expect(scopeToggle(device({ applications: [] }), "App1", true)).toEqual({
-      on: true,
-      locked: true,
+  it("reads an everything device as every app on, each still switchable off", () => {
+    expect(scopeSwitches(device({ applications: [] }), rows, true)).toEqual({
+      all: { on: true, locked: false },
+      apps: {
+        App1: { on: true, locked: false },
+        App2: { on: true, locked: false },
+      },
+    });
+  });
+
+  it("locks the first switch while the row lists no app to fall back on", () => {
+    expect(scopeSwitches(device({ applications: [] }), [], true)).toEqual({
+      all: { on: true, locked: true },
+      apps: {},
     });
   });
 
   it("locks the lot on a node that does not hold the account root", () => {
-    expect(scopeToggle(device({ applications: ["App1"] }), "App2", false)).toEqual({
-      on: false,
-      locked: true,
+    expect(scopeSwitches(device({ applications: ["App1"] }), rows, false)).toEqual({
+      all: { on: false, locked: true },
+      apps: {
+        App1: { on: true, locked: true },
+        App2: { on: false, locked: true },
+      },
     });
   });
 
-  it("locks a withdrawn device, which no relink reaches", () => {
-    expect(scopeToggle(device({ revoked: true, applications: ["App1"] }), "App2", true)).toEqual({
-      on: false,
-      locked: true,
+  it("locks the lot on a withdrawn device, which no scope change reaches", () => {
+    expect(scopeSwitches(device({ revoked: true, applications: ["App1"] }), rows, true)).toEqual({
+      all: { on: false, locked: true },
+      apps: {
+        App1: { on: true, locked: true },
+        App2: { on: false, locked: true },
+      },
+    });
+  });
+
+  it("locks the holder's own row, which follows everything by definition", () => {
+    expect(scopeSwitches(device({ isSelf: true, applications: [] }), rows, true)).toEqual({
+      all: { on: true, locked: true },
+      apps: {
+        App1: { on: true, locked: true },
+        App2: { on: true, locked: true },
+      },
     });
   });
 });
 
 describe("scopeLockHint", () => {
+  const rows = ["App1", "App2"];
+
   it("puts a withdrawal ahead of every other reason", () => {
-    expect(scopeLockHint(device({ revoked: true }), true)).toBe(
+    expect(scopeLockHint(device({ revoked: true }), true, rows)).toBe(
       "Revoked devices cannot be changed.",
     );
   });
 
   it("names the computer that can change a scope, for a node holding no root", () => {
-    expect(scopeLockHint(device(), false)).toBe(
+    expect(scopeLockHint(device(), false, rows)).toBe(
       "Only the computer holding the account root can change scope.",
     );
   });
 
   it("says the holder's own row follows everything", () => {
-    expect(scopeLockHint(device({ isSelf: true }), true)).toBe(
+    expect(scopeLockHint(device({ isSelf: true }), true, rows)).toBe(
       "This device follows everything, including apps added later.",
     );
   });
 
-  it("tells the holder how to reduce another device's access", () => {
-    expect(scopeLockHint(device(), true)).toBe(
-      "To reduce what this device can access, revoke it and pair it again with fewer apps.",
+  it("says what an account needs before a device can be limited at all", () => {
+    expect(scopeLockHint(device({ applications: [] }), true, [])).toBe(
+      "Add an app to the account before limiting this device.",
     );
+  });
+
+  it("says why the last app left on cannot be switched off", () => {
+    expect(scopeLockHint(device({ applications: ["App1"] }), true, rows)).toBe(
+      "A device acts for at least one app. Revoke it to remove it entirely.",
+    );
+  });
+
+  it("says nothing at all when every switch on the row can move", () => {
+    expect(scopeLockHint(device({ applications: [] }), true, rows)).toBeNull();
   });
 });
 

@@ -622,21 +622,29 @@ test.describe("Account page - device listing", () => {
     await page.locator(`#device-expand-${MOCK_PAIR_INIT.deviceId}`).click();
     await page.locator(`#device-rename-${MOCK_PAIR_INIT.deviceId}`).click();
     const field = page.locator(`#device-rename-input-${MOCK_PAIR_INIT.deviceId}`);
+    const save = page.locator(`#device-rename-save-${MOCK_PAIR_INIT.deviceId}`);
     await expect(field).toHaveValue("Alice's iPad");
 
     await field.fill("Alice's tablet");
-    await page.locator(`#device-rename-save-${MOCK_PAIR_INIT.deviceId}`).click();
+    await expect(
+      page.locator(`#device-rename-hint-${MOCK_PAIR_INIT.deviceId}`),
+    ).toHaveText("Use letters, digits, dots, dashes or underscores, up to 50 characters.");
+    await expect(save).toBeDisabled();
+
+    await field.fill("alices-tablet");
+    await expect(page.locator(`#device-rename-hint-${MOCK_PAIR_INIT.deviceId}`)).toHaveCount(0);
+    await save.click();
 
     // The name is the row's before any poll, and the old alias is dropped only
     // once the new one is stored.
     await expect(
       page.locator(`#device-row-${MOCK_PAIR_INIT.deviceId} .account-device-name`),
-    ).toContainText("Alice's tablet");
+    ).toContainText("alices-tablet");
     // The row takes the new name before the delete is even sent, so the calls are
     // waited for rather than read off the back of that assertion.
     await expect.poll(() => calls.length).toBe(2);
     expect(calls).toEqual([
-      `create {"alias":"Alice's tablet","deviceId":"${MOCK_PAIR_INIT.deviceId}"}`,
+      `create {"alias":"alices-tablet","deviceId":"${MOCK_PAIR_INIT.deviceId}"}`,
       "delete /admin-api/alias/delete/device/Alice's iPad",
     ]);
   });
@@ -644,12 +652,12 @@ test.describe("Account page - device listing", () => {
   test("Enter is enough to save a rename", async ({ page }) => {
     await page.locator(`#device-expand-${MOCK_PAIR_INIT.deviceId}`).click();
     await page.locator(`#device-rename-${MOCK_PAIR_INIT.deviceId}`).click();
-    await page.locator(`#device-rename-input-${MOCK_PAIR_INIT.deviceId}`).fill("Spare tablet");
+    await page.locator(`#device-rename-input-${MOCK_PAIR_INIT.deviceId}`).fill("spare-tablet");
     await page.locator(`#device-rename-input-${MOCK_PAIR_INIT.deviceId}`).press("Enter");
 
     await expect(
       page.locator(`#device-row-${MOCK_PAIR_INIT.deviceId} .account-device-name`),
-    ).toContainText("Spare tablet");
+    ).toContainText("spare-tablet");
   });
 
   test("Escape leaves the device named as it was", async ({ page }) => {
@@ -947,12 +955,12 @@ test.describe("Account page - pairing wizard", () => {
     await page.locator("#pair-next").click();
     await page.fill("#pair-response", MOCK_PAIR_REPLY_BLOB);
     await page.fill("#pair-code", MOCK_PAIR_INIT.confirmationCode);
-    await page.fill("#pair-name", "  Alice's iPhone  ");
+    await page.fill("#pair-name", "  alices-iphone  ");
     await page.locator("#pair-complete").click();
 
     await expect(page.locator("#pair-success")).toBeVisible();
     expect(JSON.parse(bodies[0])).toEqual({
-      alias: "Alice's iPhone",
+      alias: "alices-iphone",
       deviceId: MOCK_PAIR_INIT.deviceId,
     });
   });
@@ -973,6 +981,29 @@ test.describe("Account page - pairing wizard", () => {
     expect(named).toBe(0);
   });
 
+  test("a name outside core's alias grammar shows a hint and names nothing", async ({
+    page,
+  }) => {
+    let named = 0;
+    await page.route(API_ROUTES.createDeviceAlias, (route) => {
+      named += 1;
+      return route.fulfill(json({ data: {} }));
+    });
+
+    await page.locator("#pair-next").click();
+    await page.fill("#pair-response", MOCK_PAIR_REPLY_BLOB);
+    await page.fill("#pair-code", MOCK_PAIR_INIT.confirmationCode);
+    await page.fill("#pair-name", "Alice's iPhone");
+
+    await expect(page.locator("#pair-name-hint")).toHaveText(
+      "Use letters, digits, dots, dashes or underscores, up to 50 characters.",
+    );
+    await page.locator("#pair-complete").click();
+
+    await expect(page.locator("#pair-success")).toBeVisible();
+    expect(named).toBe(0);
+  });
+
   test("a name the node refuses is said out loud, and the device stays added", async ({
     page,
   }) => {
@@ -987,7 +1018,7 @@ test.describe("Account page - pairing wizard", () => {
     await page.locator("#pair-next").click();
     await page.fill("#pair-response", MOCK_PAIR_REPLY_BLOB);
     await page.fill("#pair-code", MOCK_PAIR_INIT.confirmationCode);
-    await page.fill("#pair-name", "Alice/iPhone");
+    await page.fill("#pair-name", "already-taken");
     await page.locator("#pair-complete").click();
 
     await expect(page.locator("#pair-success")).toBeVisible();

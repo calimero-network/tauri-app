@@ -18,7 +18,7 @@ import {
   type DeviceRow,
   type RowNote,
 } from "../lib/account";
-import { aliasFromInput } from "../lib/device-link";
+import { aliasFromInput, aliasInputHint } from "../lib/device-link";
 import { truncateText } from "../utils/string";
 
 interface AccountDeviceRowProps {
@@ -116,7 +116,7 @@ export default function AccountDeviceRow({
                 type="text"
                 autoFocus
                 value={renameText}
-                placeholder="for example, Alice's iPhone"
+                placeholder="alices-iphone"
                 onChange={(e) => onRenameText(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") onRename();
@@ -212,6 +212,12 @@ export default function AccountDeviceRow({
           )}
         </div>
       </div>
+
+      {renaming && aliasInputHint(renameText) && (
+        <p className="field-hint" id={`device-rename-hint-${device.deviceId}`}>
+          {aliasInputHint(renameText)}
+        </p>
+      )}
 
       {open && (
         <div className="disclosure-body account-device-body">

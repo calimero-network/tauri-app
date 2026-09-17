@@ -33,6 +33,7 @@ vi.mock('./mero-client', async (importOriginal) => {
 import {
   activeDeviceCount,
   aliasFromInput,
+  aliasInputHint,
   listAccountApplications,
   listAccountDevices,
   listNamespaces,
@@ -551,8 +552,8 @@ describe('activeDeviceCount', () => {
 });
 
 describe('aliasFromInput', () => {
-  it('takes a name the way it was typed, without the surrounding space', () => {
-    expect(aliasFromInput("  Alice's iPhone  ")).toBe("Alice's iPhone");
+  it('trims surrounding space from an otherwise valid name', () => {
+    expect(aliasFromInput('  alices-iphone  ')).toBe('alices-iphone');
   });
 
   it('reads an empty field, or one holding only space, as no name at all', () => {
@@ -563,5 +564,36 @@ describe('aliasFromInput', () => {
   it('refuses a name past what core stores, and takes one at the limit', () => {
     expect(aliasFromInput('n'.repeat(50))).toBe('n'.repeat(50));
     expect(aliasFromInput('n'.repeat(51))).toBeNull();
+  });
+
+  it('refuses spaces inside the name', () => {
+    expect(aliasFromInput('alices iphone')).toBeNull();
+  });
+
+  it("refuses an apostrophe", () => {
+    expect(aliasFromInput("Alice's iPhone")).toBeNull();
+  });
+
+  it('accepts letters, digits, dots, dashes and underscores', () => {
+    expect(aliasFromInput('alices-iphone')).toBe('alices-iphone');
+    expect(aliasFromInput('IPHONE_2')).toBe('IPHONE_2');
+    expect(aliasFromInput('a.b')).toBe('a.b');
+  });
+});
+
+describe('aliasInputHint', () => {
+  it('gives no hint for an empty or valid name', () => {
+    expect(aliasInputHint('')).toBeNull();
+    expect(aliasInputHint('   ')).toBeNull();
+    expect(aliasInputHint('alices-iphone')).toBeNull();
+  });
+
+  it('names the allowed characters for an invalid name', () => {
+    expect(aliasInputHint("Alice's iPhone")).toBe(
+      'Use letters, digits, dots, dashes or underscores, up to 50 characters.',
+    );
+    expect(aliasInputHint('n'.repeat(51))).toBe(
+      'Use letters, digits, dots, dashes or underscores, up to 50 characters.',
+    );
   });
 });

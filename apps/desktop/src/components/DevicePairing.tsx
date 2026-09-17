@@ -6,6 +6,7 @@ import CopyButton from "./CopyButton";
 import { SkeletonText } from "./Skeleton";
 import {
   aliasFromInput,
+  aliasInputHint,
   createDeviceAlias,
   listAccountApplications,
   refusalStatus,
@@ -631,9 +632,13 @@ export function DevicePairWizard({ rootKey, accountNamespaceId, onLinked, onClos
           type="text"
           value={deviceName}
           onChange={(e) => setDeviceName(e.target.value)}
-          placeholder="for example, Alice's iPhone"
+          placeholder="alices-iphone"
         />
-        <p className="field-hint">Optional, and kept on this computer only.</p>
+        {aliasInputHint(deviceName) ? (
+          <p className="field-hint" id="pair-name-hint">{aliasInputHint(deviceName)}</p>
+        ) : (
+          <p className="field-hint">Optional, and kept on this computer only.</p>
+        )}
       </div>
       {invalid && <p className="field-error" id="pair-invalid">{invalid}</p>}
       {linkError && <p className="field-error" id="pair-error">{linkError}</p>}

@@ -12,14 +12,18 @@ import {
   deviceStatus,
   namespaceFollowState,
   namespaceWord,
+  nextScope,
   scopeHint,
   scopeLockHint,
-  scopeToggle,
+  scopeSwitches,
   type AccountCatalog,
   type RowNote,
 } from "../lib/account";
 import { aliasFromInput, aliasInputHint, type AccountDevice } from "../lib/device-link";
+import type { DeviceScope } from "@calimero-network/mero-js";
 import { truncateText } from "../utils/string";
+
+const SCOPE_ALL_LABEL = "Everything, including apps added later";
 
 interface AccountDeviceRowProps {
   device: AccountDevice;
@@ -37,7 +41,7 @@ interface AccountDeviceRowProps {
   onRenameText: (text: string) => void;
   onCancelRename: () => void;
   onRename: () => void;
-  onWiden: (applicationId: string) => void;
+  onRescope: (scope: DeviceScope) => void;
   onSync: () => void;
   onAskRevoke: () => void;
   onCancelRevoke: () => void;
@@ -60,7 +64,7 @@ export default function AccountDeviceRow({
   onRenameText,
   onCancelRename,
   onRename,
-  onWiden,
+  onRescope,
   onSync,
   onAskRevoke,
   onCancelRevoke,
@@ -68,7 +72,11 @@ export default function AccountDeviceRow({
 }: AccountDeviceRowProps) {
   const status = deviceStatus(device);
   const apps = deviceScopeApps(catalog.apps, device, catalog.namespaces, catalog.installed);
+  const rowAppIds = apps.map((app) => app.applicationId);
+  const switches = scopeSwitches(device, rowAppIds, isHolder);
+  const lockHint = scopeLockHint(device, isHolder, rowAppIds);
   const scopeHintId = `device-scope-hint-${device.deviceId}`;
+  const scopeAllId = `device-scope-all-${device.deviceId}`;
   const name = deviceLabel(device.deviceId, aliases);
   const shortId = truncateText(device.deviceId, 8);
 
@@ -220,8 +228,32 @@ export default function AccountDeviceRow({
               Apps this device may act for
               <span className="account-section-hint">{scopeHint(device, apps.length)}</span>
             </h3>
+            <div className="account-app-row">
+              <span className="account-app-text">
+                <span className="account-app-name">{SCOPE_ALL_LABEL}</span>
+              </span>
+              <div className="toggle-switch toggle-switch-small">
+                <input
+                  id={scopeAllId}
+                  type="checkbox"
+                  role="switch"
+                  aria-label={SCOPE_ALL_LABEL}
+                  aria-describedby={switches.all.locked && lockHint ? scopeHintId : undefined}
+                  checked={switches.all.on}
+                  disabled={switches.all.locked || busy}
+                  onChange={() =>
+                    onRescope(
+                      nextScope(device, rowAppIds, { kind: "all", on: !switches.all.on }),
+                    )
+                  }
+                />
+                <label htmlFor={scopeAllId} className="toggle-label">
+                  <span className="toggle-slider" />
+                </label>
+              </div>
+            </div>
             {apps.map((app) => {
-              const toggle = scopeToggle(device, app.applicationId, isHolder);
+              const toggle = switches.apps[app.applicationId];
               const toggleId = `device-app-${device.deviceId}-${app.applicationId}`;
               return (
                 <div className="account-app-row" key={app.applicationId}>
@@ -236,10 +268,18 @@ export default function AccountDeviceRow({
                       type="checkbox"
                       role="switch"
                       aria-label={app.name}
-                      aria-describedby={toggle.locked ? scopeHintId : undefined}
+                      aria-describedby={toggle.locked && lockHint ? scopeHintId : undefined}
                       checked={toggle.on}
                       disabled={toggle.locked || busy}
-                      onChange={() => onWiden(app.applicationId)}
+                      onChange={() =>
+                        onRescope(
+                          nextScope(device, rowAppIds, {
+                            kind: "app",
+                            applicationId: app.applicationId,
+                            on: !toggle.on,
+                          }),
+                        )
+                      }
                     />
                     <label htmlFor={toggleId} className="toggle-label">
                       <span className="toggle-slider" />
@@ -248,9 +288,11 @@ export default function AccountDeviceRow({
                 </div>
               );
             })}
-            <p className="field-hint" id={scopeHintId}>
-              {scopeLockHint(device, isHolder)}
-            </p>
+            {lockHint && (
+              <p className="field-hint" id={scopeHintId}>
+                {lockHint}
+              </p>
+            )}
             {apps.length === 0 && (
               <p className="empty-hint">This account speaks in no app yet.</p>
             )}

@@ -6,7 +6,7 @@ import AccountIdentityCard from "../components/AccountIdentityCard";
 import { DevicePairWizard, DevicePairResponder, type InstalledApp } from "../components/DevicePairing";
 import { SkeletonTable } from "../components/Skeleton";
 import { useVisiblePoll } from "../hooks/useVisiblePoll";
-import type { NodeIdentity } from "@calimero-network/mero-js";
+import type { DeviceScope, NodeIdentity } from "@calimero-network/mero-js";
 import {
   aliasFromInput,
   createDeviceAlias,
@@ -17,6 +17,7 @@ import {
   listNamespaces,
   nodeIdentity,
   relinkDevice,
+  rescopeDevice,
   revokeDevice,
   type AccountDevice,
 } from "../lib/device-link";
@@ -27,8 +28,8 @@ import {
   devicesEmptyMessage,
   namespaceWord,
   relinkSummary,
+  rescopeSummary,
   thisDeviceBanner,
-  widenSummary,
   type AccountAppRow,
   type AccountCatalog,
   type RowNote,
@@ -184,9 +185,9 @@ export default function Account() {
   const sync = (device: AccountDevice) =>
     runRowAction(device.deviceId, async () => relinkSummary(await relinkDevice(device.deviceId)));
 
-  const widen = (device: AccountDevice, applicationId: string) =>
+  const rescope = (device: AccountDevice, scope: DeviceScope) =>
     runRowAction(device.deviceId, async () =>
-      widenSummary(await relinkDevice(device.deviceId, [...device.applications, applicationId]), 1),
+      rescopeSummary(await rescopeDevice(device.deviceId, scope)),
     );
 
   const revoke = (device: AccountDevice) => {
@@ -327,7 +328,7 @@ export default function Account() {
                   onRenameText={setRenameText}
                   onCancelRename={() => setRenaming("")}
                   onRename={() => rename(device)}
-                  onWiden={(applicationId) => widen(device, applicationId)}
+                  onRescope={(scope) => rescope(device, scope)}
                   onSync={() => sync(device)}
                   onAskRevoke={() => setConfirmRevoke(device.deviceId)}
                   onCancelRevoke={() => setConfirmRevoke("")}

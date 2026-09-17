@@ -1,4 +1,4 @@
-import type { NodeIdentity } from "@calimero-network/mero-js";
+import type { DeviceScope, NodeIdentity } from "@calimero-network/mero-js";
 import {
   applicationIcon,
   applicationLabel,
@@ -11,6 +11,7 @@ import type {
   AccountDevice,
   NamespaceSummary,
   RelinkResult,
+  RescopeResult,
 } from "./device-link";
 import { appInstalled, decodeMetadata } from "../utils/appUtils";
 
@@ -84,31 +85,77 @@ export function namespaceFollowState(
   return device.namespaces.includes(namespace.namespaceId) ? "following" : "not-following";
 }
 
-/** One app's switch on a device row. Core cannot narrow a scope without a fresh
- *  pairing, so the on direction is the only one a toggle ever takes, and a device
- *  already following everything has nothing left to switch. */
+/** The apps a device acts for, spelled out. Core's empty scope is every
+ *  application, which on a row is every app that row lists. */
+export function effectiveScope(device: AccountDevice, rowAppIds: string[]): string[] {
+  return device.applications.length ? device.applications : rowAppIds;
+}
+
+/** A switch the reader moved: the first one, or one app's. */
+export type ScopeChange =
+  | { kind: "all"; on: boolean }
+  | { kind: "app"; applicationId: string; on: boolean };
+
+/** The scope to ask core for once a switch has moved. Only the first switch ever
+ *  asks for `all`; switching an app on holds the device to a list. */
+export function nextScope(
+  device: AccountDevice,
+  rowAppIds: string[],
+  change: ScopeChange,
+): DeviceScope {
+  if (change.kind === "all") return change.on ? "all" : { only: rowAppIds };
+  const rest = effectiveScope(device, rowAppIds).filter((id) => id !== change.applicationId);
+  return { only: change.on ? [...rest, change.applicationId] : rest };
+}
+
+/** One switch on a device row. */
 export interface ScopeToggle {
   on: boolean;
   locked: boolean;
 }
 
-export function scopeToggle(
+/** Every switch in a row's app section: the first one, then one per app. */
+export interface ScopeSwitches {
+  all: ScopeToggle;
+  apps: Record<string, ScopeToggle>;
+}
+
+export function scopeSwitches(
   device: AccountDevice,
-  applicationId: string,
+  rowAppIds: string[],
   isHolder: boolean,
-): ScopeToggle {
-  if (device.revoked) return { on: false, locked: true };
-  const on = inScope(device, applicationId);
-  return { on, locked: !isHolder || !device.applications.length || on };
+): ScopeSwitches {
+  const held = new Set(effectiveScope(device, rowAppIds));
+  // Only the holder certifies, a withdrawn device is past changing, and the
+  // holder's own device follows the account by definition.
+  const frozen = !isHolder || device.revoked || device.isSelf;
+  return {
+    all: { on: !device.applications.length, locked: frozen || !rowAppIds.length },
+    apps: Object.fromEntries(
+      rowAppIds.map((id) => [
+        id,
+        // Core refuses an empty scope, so the last app left on cannot go off.
+        { on: held.has(id), locked: frozen || (held.has(id) && held.size === 1) },
+      ]),
+    ),
+  };
 }
 
 /** Why a row's switches are locked, said once under the app list: a tooltip on
- *  each one is neither findable nor worth repeating. */
-export function scopeLockHint(device: AccountDevice, isHolder: boolean): string {
+ *  each one is neither findable nor worth repeating. Null where none is. */
+export function scopeLockHint(
+  device: AccountDevice,
+  isHolder: boolean,
+  rowAppIds: string[],
+): string | null {
   if (device.revoked) return "Revoked devices cannot be changed.";
   if (!isHolder) return "Only the computer holding the account root can change scope.";
   if (device.isSelf) return "This device follows everything, including apps added later.";
-  return "To reduce what this device can access, revoke it and pair it again with fewer apps.";
+  if (!rowAppIds.length) return "Add an app to the account before limiting this device.";
+  if (effectiveScope(device, rowAppIds).length === 1) {
+    return "A device acts for at least one app. Revoke it to remove it entirely.";
+  }
+  return null;
 }
 
 export function scopeHint(device: AccountDevice, total: number): string {
@@ -155,8 +202,9 @@ export function accountAppRows(
   installed: InstalledApp[],
 ): AccountAppRow[] {
   return applications
-    .map(({ applicationId, namespaces: targeting }) => {
-      const app = installed.find((entry) => entry.id === applicationId);
+    .map((entry) => {
+      const { applicationId } = entry;
+      const app = installed.find((row) => row.id === applicationId);
       const meta = decodeMetadata(app?.metadata);
       const pkg = app?.package ?? meta?.package;
       const version = app?.version ?? meta?.version;
@@ -166,7 +214,7 @@ export function accountAppRows(
         name: applicationLabel(applicationId, namespaces, installed),
         ...(icon ? { icon } : {}),
         ...(pkg && version ? { package: pkg, version } : {}),
-        namespaces: targeting.length,
+        namespaces: entry.namespaces.length,
         devices: devices.filter((device) => !device.revoked && inScope(device, applicationId))
           .length,
         installed: appInstalled(app),
@@ -199,9 +247,13 @@ export function canRevoke(device: AccountDevice, isHolder: boolean): boolean {
   return isHolder && !device.isSelf && !device.revoked && device.namespaces.length > 0;
 }
 
-export function widenSummary({ linkedIn }: RelinkResult, added: number): string {
-  const appWord = added === 1 ? "app" : "apps";
-  return `Added ${added} ${appWord}, reaching ${linkedIn.length} more ${namespaceWord(linkedIn.length)}.`;
+/** What a scope replacement moved. The word "namespace" is said once, so the
+ *  combined sentence carries only the second count. */
+export function rescopeSummary({ descoped, bound }: RescopeResult): string {
+  if (!descoped.length && !bound.length) return "Scope updated.";
+  if (!descoped.length) return `Added to ${bound.length} ${namespaceWord(bound.length)}.`;
+  const removed = `Removed from ${descoped.length} ${namespaceWord(descoped.length)}`;
+  return bound.length ? `${removed}, added to ${bound.length}.` : `${removed}.`;
 }
 
 /** Only the holder of an account's root can certify a device into it, so a node

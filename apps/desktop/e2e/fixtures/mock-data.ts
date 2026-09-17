@@ -385,6 +385,16 @@ export const MOCK_RELINK = {
   skipped: [{ namespaceId: MOCK_OTHER_NAMESPACE_ID, reason: "outOfScope" }],
 };
 
+/** One namespace lost, as a narrowing reports it. */
+export const MOCK_RESCOPE = {
+  accountId: MOCK_NODE_IDENTITY.accountId,
+  deviceId: MOCK_PAIR_INIT.deviceId,
+  applications: [MOCK_APPLICATION_ID],
+  descoped: [{ namespaceId: MOCK_OTHER_NAMESPACE_ID, keyRotated: true }],
+  linkedIn: [],
+  skipped: [],
+};
+
 export const MOCK_REVOKE = {
   accountId: MOCK_NODE_IDENTITY.accountId,
   deviceId: MOCK_PAIR_INIT.deviceId,
@@ -439,6 +449,7 @@ export const API_ROUTES = {
   deleteDeviceAlias: "**/admin-api/alias/delete/device/*",
   accountApplications: "**/admin-api/account/applications",
   relinkDevice: "**/admin-api/account/devices/*/relink",
+  rescopeDevice: "**/admin-api/account/devices/*/scope",
   revokeDevice: "**/admin-api/namespaces/*/account/revoke",
   pairInit: "**/admin-api/account/pair-init",
   pairComplete: "**/admin-api/account/pair-complete",

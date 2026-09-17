@@ -567,7 +567,7 @@ test.describe("Account page - device listing", () => {
     ]);
   });
 
-  test("the toggle of an app already in scope is locked, and says why", async ({
+  test("the toggle of an app already in scope is locked, and the row says why once", async ({
     page,
   }) => {
     await page.locator(`#device-expand-${MOCK_PAIR_INIT.deviceId}`).click();
@@ -576,10 +576,27 @@ test.describe("Account page - device listing", () => {
     );
 
     await expect(held).toBeDisabled();
-    await expect(held.locator("+ .toggle-label")).toHaveAttribute(
-      "title",
-      "Narrowing a scope needs a fresh pairing",
+    await expect(held).toHaveAttribute(
+      "aria-describedby",
+      `device-scope-hint-${MOCK_PAIR_INIT.deviceId}`,
     );
+    await expect(
+      page.locator(`#device-scope-hint-${MOCK_PAIR_INIT.deviceId}`),
+    ).toHaveText(
+      "To reduce what this device can access, revoke it and pair it again with fewer apps.",
+    );
+  });
+
+  test("the switch a relink can still turn on is not described by the lock hint", async ({
+    page,
+  }) => {
+    await page.locator(`#device-expand-${MOCK_PAIR_INIT.deviceId}`).click();
+    const open = page.locator(
+      `#device-app-${MOCK_PAIR_INIT.deviceId}-${MOCK_OTHER_APPLICATION_ID}`,
+    );
+
+    await expect(open).toBeEnabled();
+    await expect(open).not.toHaveAttribute("aria-describedby", /./);
   });
 
   test("every toggle of a device that follows everything is locked on", async ({
@@ -592,10 +609,9 @@ test.describe("Account page - device listing", () => {
 
     await expect(toggle).toBeDisabled();
     await expect(toggle).toBeChecked();
-    await expect(toggle.locator("+ .toggle-label")).toHaveAttribute(
-      "title",
-      "This device follows everything, including apps added later",
-    );
+    await expect(
+      page.locator(`#device-scope-hint-${MOCK_NODE_IDENTITY.deviceId}`),
+    ).toHaveText("This device follows everything, including apps added later.");
   });
 
   test("renaming a device stores the new name and drops the old one", async ({
@@ -780,10 +796,9 @@ test.describe("Account page - a device the account is held away from", () => {
     );
 
     await expect(toggle).toBeDisabled();
-    await expect(toggle.locator("+ .toggle-label")).toHaveAttribute(
-      "title",
-      "Only the computer holding the account root can change scope",
-    );
+    await expect(
+      page.locator(`#device-scope-hint-${MOCK_PAIR_INIT.deviceId}`),
+    ).toHaveText("Only the computer holding the account root can change scope.");
   });
 
   test("a withdrawn device says so in red before anything else on the card", async ({

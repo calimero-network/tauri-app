@@ -85,11 +85,11 @@ export function namespaceFollowState(
 }
 
 /** One app's switch on a device row. Core cannot narrow a scope without a fresh
- *  pairing, so the on direction is the only one a toggle ever takes. */
+ *  pairing, so the on direction is the only one a toggle ever takes, and a device
+ *  already following everything has nothing left to switch. */
 export interface ScopeToggle {
   on: boolean;
   locked: boolean;
-  tip?: string;
 }
 
 export function scopeToggle(
@@ -97,26 +97,18 @@ export function scopeToggle(
   applicationId: string,
   isHolder: boolean,
 ): ScopeToggle {
+  if (device.revoked) return { on: false, locked: true };
   const on = inScope(device, applicationId);
-  if (device.revoked) {
-    return { on: false, locked: true, tip: "Revoked devices cannot be changed" };
-  }
-  if (!isHolder) {
-    return {
-      on,
-      locked: true,
-      tip: "Only the computer holding the account root can change scope",
-    };
-  }
-  if (!device.applications.length) {
-    return {
-      on: true,
-      locked: true,
-      tip: "This device follows everything, including apps added later",
-    };
-  }
-  if (on) return { on, locked: true, tip: "Narrowing a scope needs a fresh pairing" };
-  return { on, locked: false };
+  return { on, locked: !isHolder || !device.applications.length || on };
+}
+
+/** Why a row's switches are locked, said once under the app list: a tooltip on
+ *  each one is neither findable nor worth repeating. */
+export function scopeLockHint(device: AccountDevice, isHolder: boolean): string {
+  if (device.revoked) return "Revoked devices cannot be changed.";
+  if (!isHolder) return "Only the computer holding the account root can change scope.";
+  if (device.isSelf) return "This device follows everything, including apps added later.";
+  return "To reduce what this device can access, revoke it and pair it again with fewer apps.";
 }
 
 export function scopeHint(device: AccountDevice, total: number): string {
@@ -199,13 +191,6 @@ export function thisDeviceBanner(devices: AccountDevice[]): string | null {
 export function canSync(device: AccountDevice, isHolder: boolean): boolean {
   // A relink certifies, and only the node holding the account root can.
   return isHolder && !device.isSelf && !device.revoked;
-}
-
-/** A scope only grows, so reducing one is a fresh pairing; said where the locked
- *  switches are, because a tooltip is not something anyone finds. */
-export function narrowHint(device: AccountDevice, isHolder: boolean): string | null {
-  if (!isHolder || device.isSelf || device.revoked) return null;
-  return "To reduce what this device can access, revoke it and pair it again with fewer apps.";
 }
 
 /** Revocation is terminal, and its route names a namespace, so a device bound

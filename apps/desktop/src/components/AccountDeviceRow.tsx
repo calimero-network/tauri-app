@@ -6,7 +6,6 @@ import {
   FOLLOW_STATE_LABEL,
   canRevoke,
   canSync,
-  narrowHint,
   deviceLabel,
   deviceScope,
   deviceScopeApps,
@@ -14,6 +13,7 @@ import {
   namespaceFollowState,
   namespaceWord,
   scopeHint,
+  scopeLockHint,
   scopeToggle,
   type AccountCatalog,
   type RowNote,
@@ -68,6 +68,7 @@ export default function AccountDeviceRow({
 }: AccountDeviceRowProps) {
   const status = deviceStatus(device);
   const apps = deviceScopeApps(catalog.apps, device, catalog.namespaces, catalog.installed);
+  const scopeHintId = `device-scope-hint-${device.deviceId}`;
   const name = deviceLabel(device.deviceId, aliases);
   const shortId = truncateText(device.deviceId, 8);
 
@@ -235,28 +236,21 @@ export default function AccountDeviceRow({
                       type="checkbox"
                       role="switch"
                       aria-label={app.name}
-                      aria-describedby={toggle.tip ? `${toggleId}-why` : undefined}
+                      aria-describedby={toggle.locked ? scopeHintId : undefined}
                       checked={toggle.on}
                       disabled={toggle.locked || busy}
                       onChange={() => onWiden(app.applicationId)}
                     />
-                    <label htmlFor={toggleId} className="toggle-label" title={toggle.tip}>
+                    <label htmlFor={toggleId} className="toggle-label">
                       <span className="toggle-slider" />
                     </label>
-                    {toggle.tip && (
-                      <span className="visually-hidden" id={`${toggleId}-why`}>
-                        {toggle.tip}
-                      </span>
-                    )}
                   </div>
                 </div>
               );
             })}
-            {narrowHint(device, isHolder) && (
-              <p className="field-hint" id={`device-narrow-hint-${device.deviceId}`}>
-                {narrowHint(device, isHolder)}
-              </p>
-            )}
+            <p className="field-hint" id={scopeHintId}>
+              {scopeLockHint(device, isHolder)}
+            </p>
             {apps.length === 0 && (
               <p className="empty-hint">This account speaks in no app yet.</p>
             )}

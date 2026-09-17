@@ -633,18 +633,6 @@ body {
   cursor: not-allowed;
 }
 
-/* Text for a screen reader only, such as the reason a control is locked. */
-.visually-hidden {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  margin: -1px;
-  padding: 0;
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
-}
-
 /* ── Inline confirmation for a destructive action ── */
 .reset-confirm-form {
   margin-top: 12px;

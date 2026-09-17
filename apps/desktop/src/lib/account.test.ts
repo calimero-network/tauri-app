@@ -10,7 +10,6 @@ vi.mock("./device-link", () => ({
 import {
   canRevoke,
   canSync,
-  narrowHint,
   canInviteDevices,
   deviceLabel,
   deviceScope,
@@ -22,6 +21,7 @@ import {
   relinkSummary,
   accountAppRows,
   scopeHint,
+  scopeLockHint,
   scopeToggle,
   thisDeviceBanner,
   widenSummary,
@@ -243,7 +243,6 @@ describe("scopeToggle", () => {
     expect(scopeToggle(device({ applications: ["App1"] }), "App1", true)).toEqual({
       on: true,
       locked: true,
-      tip: "Narrowing a scope needs a fresh pairing",
     });
   });
 
@@ -251,7 +250,6 @@ describe("scopeToggle", () => {
     expect(scopeToggle(device({ applications: [] }), "App1", true)).toEqual({
       on: true,
       locked: true,
-      tip: "This device follows everything, including apps added later",
     });
   });
 
@@ -259,7 +257,6 @@ describe("scopeToggle", () => {
     expect(scopeToggle(device({ applications: ["App1"] }), "App2", false)).toEqual({
       on: false,
       locked: true,
-      tip: "Only the computer holding the account root can change scope",
     });
   });
 
@@ -267,8 +264,33 @@ describe("scopeToggle", () => {
     expect(scopeToggle(device({ revoked: true, applications: ["App1"] }), "App2", true)).toEqual({
       on: false,
       locked: true,
-      tip: "Revoked devices cannot be changed",
     });
+  });
+});
+
+describe("scopeLockHint", () => {
+  it("puts a withdrawal ahead of every other reason", () => {
+    expect(scopeLockHint(device({ revoked: true }), true)).toBe(
+      "Revoked devices cannot be changed.",
+    );
+  });
+
+  it("names the computer that can change a scope, for a node holding no root", () => {
+    expect(scopeLockHint(device(), false)).toBe(
+      "Only the computer holding the account root can change scope.",
+    );
+  });
+
+  it("says the holder's own row follows everything", () => {
+    expect(scopeLockHint(device({ isSelf: true }), true)).toBe(
+      "This device follows everything, including apps added later.",
+    );
+  });
+
+  it("tells the holder how to reduce another device's access", () => {
+    expect(scopeLockHint(device(), true)).toBe(
+      "To reduce what this device can access, revoke it and pair it again with fewer apps.",
+    );
   });
 });
 
@@ -422,22 +444,5 @@ describe("deviceLabel", () => {
 
   it("names nothing when the node holds no aliases at all", () => {
     expect(deviceLabel(paired, {})).toBeNull();
-  });
-});
-
-describe("narrowHint", () => {
-  it("tells the holder how to reduce another device's access", () => {
-    expect(narrowHint(device(), true)).toBe(
-      "To reduce what this device can access, revoke it and pair it again with fewer apps.",
-    );
-  });
-
-  it("says nothing on the holder's own row, which always follows everything", () => {
-    expect(narrowHint(device({ isSelf: true }), true)).toBeNull();
-  });
-
-  it("says nothing on a revoked device or to a node that holds no root", () => {
-    expect(narrowHint(device({ revoked: true }), true)).toBeNull();
-    expect(narrowHint(device(), false)).toBeNull();
   });
 });

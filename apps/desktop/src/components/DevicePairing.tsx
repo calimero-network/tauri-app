@@ -190,18 +190,6 @@ export function inviteApps(
   );
 }
 
-/** The namespaces an application is spoken in, named where they have names. A
- *  scope is chosen per application, so this says what picking one would cover. */
-export function applicationNamespaces(
-  applicationId: string,
-  namespaces: NamespaceSummary[],
-): string {
-  return namespaces
-    .filter((ns) => ns.targetApplicationId === applicationId)
-    .map((ns) => ns.name || truncateText(ns.namespaceId, 8))
-    .join(", ");
-}
-
 /** One app the invite can be scoped to, and what picking it would cover. */
 export interface ScopeTile {
   applicationId: string;
@@ -245,18 +233,6 @@ export function tileNamespaceCount(count: number): string {
  *  names one app. */
 export function canLeaveScopeStep(everything: boolean, chosen: string[]): boolean {
   return everything || chosen.length > 0;
-}
-
-/** The lines one scope choice shows: its name, then the namespaces it covers
- *  when those say something the name did not already. */
-export function scopeRow(
-  applicationId: string,
-  namespaces: NamespaceSummary[],
-  installed?: InstalledApp[],
-): string[] {
-  const name = applicationLabel(applicationId, namespaces, installed);
-  const covered = applicationNamespaces(applicationId, namespaces);
-  return covered && covered !== name ? [name, covered] : [name];
 }
 
 /** The application's own name where the node has one, since the question being

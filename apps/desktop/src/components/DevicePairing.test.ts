@@ -2,8 +2,6 @@ import { describe, it, expect } from "vitest";
 import type { AccountApplication, NamespaceSummary, PairInitResult } from "../lib/device-link";
 import {
   applicationLabel,
-  applicationNamespaces,
-  scopeRow,
   certifiedIntoAccount,
   installableApps,
   buildInvite,
@@ -206,52 +204,6 @@ describe("applicationLabel with an installed application", () => {
   it("falls back to the namespace when the application is not installed here", () => {
     expect(applicationLabel("app-1", ns, [])).toBe("Calimero");
     expect(applicationLabel("app-1", ns)).toBe("Calimero");
-  });
-});
-
-describe("applicationNamespaces", () => {
-  const ns: NamespaceSummary[] = [
-    { namespaceId: "a".repeat(64), name: "Work", targetApplicationId: "app-1" },
-    { namespaceId: "b".repeat(64), name: "Personal", targetApplicationId: "app-1" },
-    { namespaceId: "c".repeat(64), name: "Other", targetApplicationId: "app-2" },
-  ];
-
-  it("names every namespace the application is spoken in, and no others", () => {
-    expect(applicationNamespaces("app-1", ns)).toBe("Work, Personal");
-  });
-
-  it("falls back to a short id for a namespace with no name", () => {
-    const unnamed: NamespaceSummary[] = [
-      { namespaceId: "d".repeat(64), targetApplicationId: "app-1" },
-    ];
-    expect(applicationNamespaces("app-1", unnamed)).toBe("dddddddd…");
-  });
-
-  it("is empty when the application is spoken in none", () => {
-    expect(applicationNamespaces("app-9", ns)).toBe("");
-  });
-});
-
-describe("scopeRow", () => {
-  const ns: NamespaceSummary[] = [
-    { namespaceId: "a".repeat(64), name: "Calimero", targetApplicationId: "app-1" },
-  ];
-
-  it("shows the app name over the namespaces it covers", () => {
-    const installed = [{ id: "app-1", name: "Mero Chat", metadata: [] }];
-    expect(scopeRow("app-1", ns, installed)).toEqual(["Mero Chat", "Calimero"]);
-  });
-
-  it("does not repeat itself when the name fell back to that same namespace", () => {
-    expect(scopeRow("app-1", ns)).toEqual(["Calimero"]);
-  });
-
-  it("keeps both lines when one namespace of several supplied the fallback name", () => {
-    const two: NamespaceSummary[] = [
-      ...ns,
-      { namespaceId: "b".repeat(64), name: "Work", targetApplicationId: "app-1" },
-    ];
-    expect(scopeRow("app-1", two)).toEqual(["Calimero, Work"]);
   });
 });
 

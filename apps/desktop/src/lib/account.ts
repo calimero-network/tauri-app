@@ -56,45 +56,17 @@ export function inScope(device: AccountDevice, applicationId: string): boolean {
   return !device.applications.length || device.applications.includes(applicationId);
 }
 
-/** The account namespace, but only once the listing shows a device bound into it.
- *  A node too old to bind anybody there would otherwise have every device read as
- *  not following the account. */
-export function reportedAccountNamespace(
-  devices: AccountDevice[],
-  accountNamespaceId: string | null | undefined,
-): string | null {
-  if (!accountNamespaceId) return null;
-  return devices.some((device) => device.namespaces.includes(accountNamespaceId))
-    ? accountNamespaceId
-    : null;
-}
-
-/** Following the account is what carries a device into namespaces nobody told it
- *  about, so it is the binding into the account namespace itself. */
-export function followsAccount(
-  device: AccountDevice,
-  accountNamespace: string | null,
-): boolean {
-  return !accountNamespace || device.namespaces.includes(accountNamespace);
-}
-
-export type DeviceStatus = "active" | "syncing" | "not-following" | "revoked";
+export type DeviceStatus = "active" | "syncing" | "revoked";
 
 export const DEVICE_STATUS_LABEL: Record<DeviceStatus, string> = {
   active: "Active",
   syncing: "Syncing",
-  "not-following": "Not following the account",
   revoked: "Revoked",
 };
 
-export function deviceStatus(
-  device: AccountDevice,
-  accountNamespace: string | null,
-  syncing: boolean,
-): DeviceStatus {
+export function deviceStatus(device: AccountDevice, syncing: boolean): DeviceStatus {
   if (device.revoked) return "revoked";
-  if (syncing) return "syncing";
-  return followsAccount(device, accountNamespace) ? "active" : "not-following";
+  return syncing ? "syncing" : "active";
 }
 
 export type FollowState =
@@ -117,13 +89,11 @@ export const FOLLOW_STATE_LABEL: Record<FollowState, string> = {
 export function namespaceFollowState(
   device: AccountDevice,
   namespace: NamespaceSummary,
-  accountNamespace: string | null,
   syncing: boolean,
 ): FollowState {
   if (device.revoked) return "retired";
   if (!inScope(device, namespace.targetApplicationId)) return "not-in-scope";
   if (syncing) return "syncing";
-  if (!followsAccount(device, accountNamespace)) return "not-following";
   return device.namespaces.includes(namespace.namespaceId) ? "following" : "not-following";
 }
 

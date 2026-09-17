@@ -27,7 +27,6 @@ import {
   inScope,
   namespaceWord,
   relinkSummary,
-  reportedAccountNamespace,
   thisDeviceBanner,
   widenSummary,
   type AccountAppRow,
@@ -295,7 +294,6 @@ export default function AccountPanel() {
   };
 
   const isHolder = canInviteDevices(identity);
-  const accountNamespace = reportedAccountNamespace(devices, identity?.accountNamespaceId);
 
   return (
     <>
@@ -349,7 +347,6 @@ export default function AccountPanel() {
                 device={device}
                 catalog={catalog}
                 aliases={aliases}
-                accountNamespace={accountNamespace}
                 isHolder={isHolder}
                 syncing={!!device.syncing || device.deviceId in widening}
                 open={!!expanded[device.deviceId]}

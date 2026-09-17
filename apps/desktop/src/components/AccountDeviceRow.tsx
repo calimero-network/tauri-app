@@ -26,7 +26,6 @@ interface AccountDeviceRowProps {
   device: DeviceRow;
   catalog: AccountCatalog;
   aliases: Record<string, string>;
-  accountNamespace: string | null;
   isHolder: boolean;
   syncing: boolean;
   open: boolean;
@@ -51,7 +50,6 @@ export default function AccountDeviceRow({
   device,
   catalog,
   aliases,
-  accountNamespace,
   isHolder,
   syncing,
   open,
@@ -71,7 +69,7 @@ export default function AccountDeviceRow({
   onCancelRevoke,
   onRevoke,
 }: AccountDeviceRowProps) {
-  const status = deviceStatus(device, accountNamespace, syncing);
+  const status = deviceStatus(device, syncing);
   const apps = deviceScopeApps(catalog.apps, device, catalog.namespaces, catalog.installed);
   const name = deviceLabel(device.deviceId, aliases);
   const shortId = truncateText(device.deviceId, 8);
@@ -274,7 +272,7 @@ export default function AccountDeviceRow({
           <section className="account-device-section">
             <h3>Namespaces</h3>
             {catalog.namespaces.map((namespace) => {
-              const state = namespaceFollowState(device, namespace, accountNamespace, syncing);
+              const state = namespaceFollowState(device, namespace, syncing);
               return (
                 <div className="account-ns-row" key={namespace.namespaceId}>
                   <span className="account-ns-name">

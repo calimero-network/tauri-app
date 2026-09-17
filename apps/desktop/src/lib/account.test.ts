@@ -17,12 +17,10 @@ import {
   deviceScopeApps,
   deviceStatus,
   devicesEmptyMessage,
-  followsAccount,
   inScope,
   namespaceFollowState,
   relinkSummary,
   accountAppRows,
-  reportedAccountNamespace,
   scopeHint,
   scopeToggle,
   thisDeviceBanner,
@@ -188,8 +186,6 @@ describe("devicesEmptyMessage on a device held elsewhere", () => {
   });
 });
 
-const ACCOUNT_NS = "9".repeat(64);
-
 describe("inScope", () => {
   it("reads an empty scope as every application, which is core's convention", () => {
     expect(inScope(device({ applications: [] }), "App1")).toBe(true);
@@ -201,83 +197,44 @@ describe("inScope", () => {
   });
 });
 
-describe("reportedAccountNamespace", () => {
-  it("takes the id once a device in the listing is bound into it", () => {
-    const devices = [device({ namespaces: [ACCOUNT_NS, "ns-1"] })];
-    expect(reportedAccountNamespace(devices, ACCOUNT_NS)).toBe(ACCOUNT_NS);
-  });
-
-  it("holds nothing back to accuse with on a node whose listing never names it", () => {
-    expect(reportedAccountNamespace([device({ namespaces: ["ns-1"] })], ACCOUNT_NS)).toBeNull();
-    expect(reportedAccountNamespace([device()], null)).toBeNull();
-  });
-});
-
-describe("followsAccount", () => {
-  it("follows it when the device is bound into the account namespace", () => {
-    expect(followsAccount(device({ namespaces: [ACCOUNT_NS] }), ACCOUNT_NS)).toBe(true);
-  });
-
-  it("does not follow it when the binding is missing", () => {
-    expect(followsAccount(device({ namespaces: ["ns-1"] }), ACCOUNT_NS)).toBe(false);
-  });
-
-  it("accuses nobody where the account namespace is not reported at all", () => {
-    expect(followsAccount(device({ namespaces: ["ns-1"] }), null)).toBe(true);
-  });
-});
-
 describe("deviceStatus", () => {
-  it("calls a live, bound device active", () => {
-    expect(deviceStatus(device({ namespaces: [ACCOUNT_NS] }), ACCOUNT_NS, false)).toBe("active");
+  it("calls a live device active", () => {
+    expect(deviceStatus(device(), false)).toBe("active");
   });
 
   it("puts a withdrawal ahead of everything else it could say", () => {
-    expect(deviceStatus(device({ revoked: true }), ACCOUNT_NS, true)).toBe("revoked");
+    expect(deviceStatus(device({ revoked: true }), true)).toBe("revoked");
   });
 
   it("says syncing while we are waiting for the listing to catch up", () => {
-    expect(deviceStatus(device({ namespaces: [ACCOUNT_NS] }), ACCOUNT_NS, true)).toBe("syncing");
-  });
-
-  it("names a device that never picked the account up", () => {
-    expect(deviceStatus(device({ namespaces: ["ns-1"] }), ACCOUNT_NS, false)).toBe(
-      "not-following",
-    );
+    expect(deviceStatus(device(), true)).toBe("syncing");
   });
 });
 
 describe("namespaceFollowState", () => {
   const namespace = { namespaceId: "ns-1", name: "Personal", targetApplicationId: "App1" };
-  const bound = () => device({ namespaces: [ACCOUNT_NS, "ns-1"], applications: ["App1"] });
+  const bound = () => device({ namespaces: ["ns-1"], applications: ["App1"] });
 
   it("follows a namespace in scope that names the device's binding", () => {
-    expect(namespaceFollowState(bound(), namespace, ACCOUNT_NS, false)).toBe("following");
+    expect(namespaceFollowState(bound(), namespace, false)).toBe("following");
   });
 
   it("retires every namespace of a withdrawn device", () => {
-    expect(
-      namespaceFollowState(device({ revoked: true }), namespace, ACCOUNT_NS, false),
-    ).toBe("retired");
+    expect(namespaceFollowState(device({ revoked: true }), namespace, false)).toBe("retired");
   });
 
   it("syncs a namespace the device is reaching for but has not bound", () => {
-    expect(namespaceFollowState(bound(), namespace, ACCOUNT_NS, true)).toBe("syncing");
+    expect(namespaceFollowState(bound(), namespace, true)).toBe("syncing");
   });
 
   it("says a namespace outside the scope is not in it, rather than not followed", () => {
-    const narrow = device({ namespaces: [ACCOUNT_NS], applications: ["App2"] });
-    expect(namespaceFollowState(narrow, namespace, ACCOUNT_NS, false)).toBe("not-in-scope");
+    const narrow = device({ namespaces: ["ns-1"], applications: ["App2"] });
+    expect(namespaceFollowState(narrow, namespace, false)).toBe("not-in-scope");
   });
 
-  it("says a namespace in scope with no binding is simply not followed", () => {
-    const unbound = device({ namespaces: [ACCOUNT_NS], applications: ["App1"] });
-    expect(namespaceFollowState(unbound, namespace, ACCOUNT_NS, false)).toBe("not-following");
-  });
-
-  it("does not claim a namespace is followed by a device that skipped the account", () => {
-    const offAccount = device({ namespaces: ["ns-1"], applications: ["App1"] });
-    expect(namespaceFollowState(offAccount, namespace, ACCOUNT_NS, false)).toBe("not-following");
+  it("says a namespace in scope the device has no binding in is not followed", () => {
+    const unbound = device({ namespaces: ["ns-2"], applications: ["App1"] });
+    expect(namespaceFollowState(unbound, namespace, false)).toBe("not-following");
   });
 });
 

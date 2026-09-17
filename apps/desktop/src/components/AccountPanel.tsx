@@ -42,6 +42,25 @@ import "./AccountPanel.css";
 const dropKey = <T,>(map: Record<string, T>, key: string): Record<string, T> =>
   Object.fromEntries(Object.entries(map).filter(([at]) => at !== key));
 
+/** Everything the rows need naming. A lookup that fails leaves the rows readable
+ *  by id rather than taking the listing down with it. */
+async function loadCatalog(signal?: AbortSignal): Promise<AccountCatalog> {
+  const [apps, namespaces, installed] = await Promise.all([
+    listAccountApplications(),
+    listNamespaces(signal),
+    listInstalledApps()
+      .then((r) => (Array.isArray(r.data) ? (r.data as InstalledApp[]) : []))
+      .catch(() => [] as InstalledApp[]),
+  ]);
+  return { apps, namespaces, installed };
+}
+
+/** The listing, and what this node calls the devices in it. A name lookup that
+ *  fails answers null, so the caller keeps the names it already has. */
+function loadDevices() {
+  return Promise.all([listAccountDevices(), listDeviceAliases().catch(() => null)]);
+}
+
 export default function AccountPanel() {
   const [identity, setIdentity] = useState<NodeIdentity | null>(null);
   const [identityLoading, setIdentityLoading] = useState(true);
@@ -98,12 +117,11 @@ export default function AccountPanel() {
     const controller = new AbortController();
     setDevicesLoading(true);
     setDevicesError("");
-    // A name is a nicety; a lookup that fails must not take the listing with it.
-    Promise.all([listAccountDevices(), listDeviceAliases().catch(() => ({}))])
+    loadDevices()
       .then(([rows, names]) => {
         if (controller.signal.aborted) return;
         setDevices(rows);
-        setAliases(names);
+        if (names) setAliases(names);
       })
       .catch((err: unknown) => {
         if (controller.signal.aborted) return;
@@ -115,20 +133,13 @@ export default function AccountPanel() {
     return () => controller.abort();
   }, [accountId, reloads, deviceReloads]);
 
-  // Names and namespace counts for the expanded rows. A failure here leaves the
-  // rows readable by id rather than taking the listing down with it.
+  // Names and namespace counts for the expanded rows.
   useEffect(() => {
     if (!accountId) return;
     const controller = new AbortController();
-    Promise.all([
-      listAccountApplications(),
-      listNamespaces(controller.signal),
-      listInstalledApps()
-        .then((r) => (Array.isArray(r.data) ? (r.data as InstalledApp[]) : []))
-        .catch(() => [] as InstalledApp[]),
-    ])
-      .then(([apps, namespaces, installed]) => {
-        if (!controller.signal.aborted) setCatalog({ apps, namespaces, installed });
+    loadCatalog(controller.signal)
+      .then((next) => {
+        if (!controller.signal.aborted) setCatalog(next);
       })
       .catch(() => {});
     return () => controller.abort();
@@ -140,21 +151,15 @@ export default function AccountPanel() {
   // poll keeps what it has.
   useVisiblePoll(
     () => {
-      listAccountDevices()
-        .then(setDevices)
-        .catch(() => {});
-      listDeviceAliases()
-        .then(setAliases)
+      loadDevices()
+        .then(([rows, names]) => {
+          setDevices(rows);
+          if (names) setAliases(names);
+        })
         .catch(() => {});
       invalidateInstalledApps();
-      Promise.all([
-        listAccountApplications(),
-        listNamespaces(),
-        listInstalledApps()
-          .then((r) => (Array.isArray(r.data) ? (r.data as InstalledApp[]) : []))
-          .catch(() => [] as InstalledApp[]),
-      ])
-        .then(([apps, namespaces, installed]) => setCatalog({ apps, namespaces, installed }))
+      loadCatalog()
+        .then(setCatalog)
         .catch(() => {});
     },
     30000,

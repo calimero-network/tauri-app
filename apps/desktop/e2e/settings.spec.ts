@@ -514,6 +514,9 @@ test.describe("Account page - device listing", () => {
     await expect(rows.nth(0)).toContainText("This device");
     await expect(rows.nth(1)).toContainText("1 app");
     await expect(rows.nth(1)).toContainText("Active");
+    // The expanded row lists the namespaces; a count beside the scope only
+    // repeats it, and disagrees whenever two nodes are a moment apart.
+    await expect(rows.nth(0).locator(".account-device-meta")).toHaveText("All apps");
   });
 
   test("a named device is titled by its name, and keeps its id in the meta line", async ({

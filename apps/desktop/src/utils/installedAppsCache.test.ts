@@ -12,7 +12,7 @@ vi.mock('./settings', () => ({ getSettings: () => ({ nodeUrl, registries }) }));
 const fetchBundleDisplay = vi.fn();
 vi.mock('./registry', () => ({ fetchBundleDisplay: (...args: unknown[]) => fetchBundleDisplay(...args) }));
 
-import { listInstalledApps, invalidateInstalledApps } from './installedAppsCache';
+import { listInstalledApps, invalidateInstalledApps, needsDisplayBackfill } from './installedAppsCache';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -181,5 +181,34 @@ describe('listInstalledApps display backfill', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('needsDisplayBackfill', () => {
+  // The row core seeds for a follower whose bytecode arrived by blob share
+  // instead of a registry install: package/version set, metadata empty.
+  const BLOB_SHARE_ROW = {
+    id: '3f550253',
+    package: 'com.calimero.chat',
+    version: '3.1.1',
+    blob: { bytecode: 'e348' },
+    metadata: [],
+    source: 'calimero://pending-blob-share',
+  };
+
+  it('is true for a row with package/version but no name in its metadata', () => {
+    expect(needsDisplayBackfill(BLOB_SHARE_ROW)).toBe(true);
+  });
+
+  it('is false once metadata already carries a name', () => {
+    expect(needsDisplayBackfill({ ...BLOB_SHARE_ROW, metadata: { name: 'Mero Chat' } })).toBe(false);
+  });
+
+  it('is false without a package', () => {
+    expect(needsDisplayBackfill({ ...BLOB_SHARE_ROW, package: undefined })).toBe(false);
+  });
+
+  it('is false without a version', () => {
+    expect(needsDisplayBackfill({ ...BLOB_SHARE_ROW, version: undefined })).toBe(false);
   });
 });

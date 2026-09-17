@@ -4,7 +4,7 @@
 import { apiClient } from "../lib/mero-client";
 import { getSettings } from "./settings";
 import { fetchBundleDisplay } from "./registry";
-import { needsDisplayBackfill, withDisplay, type AppDisplay, type AppRow } from "./appDisplay";
+import { decodeMetadata } from "./appUtils";
 
 const TTL_MS = 5 * 60 * 1000;
 // Give one registry request this long to answer before moving to the next -
@@ -12,6 +12,26 @@ const TTL_MS = 5 * 60 * 1000;
 const DISPLAY_LOOKUP_TIMEOUT_MS = 4000;
 
 type InstalledAppsResponse = Awaited<ReturnType<typeof apiClient.node.listApplications>>;
+
+interface AppDisplay {
+  name?: string;
+  icon?: string;
+  description?: string;
+}
+
+interface AppRow {
+  package?: string;
+  version?: string;
+  metadata?: unknown;
+}
+
+/** True when the row names a package/version but its metadata has no name to show -
+ *  the case for bytecode that arrived by blob share instead of a registry install. */
+export function needsDisplayBackfill(app: AppRow): boolean {
+  if (typeof app.package !== "string" || !app.package) return false;
+  if (typeof app.version !== "string" || !app.version) return false;
+  return !decodeMetadata(app.metadata)?.name;
+}
 
 // Keyed `${package}@${version}`. A published bundle's display never changes, so
 // a hit outlives the list cache the Account poll drops every 30 s; misses are retried.
@@ -40,7 +60,7 @@ async function backfillDisplays<T extends AppRow>(apps: T[]): Promise<T[]> {
     apps.map(async (app) => {
       if (!needsDisplayBackfill(app)) return app;
       const display = await lookupDisplay(app.package!, app.version!);
-      return withDisplay(app, display);
+      return display ? { ...app, metadata: display } : app;
     }),
   );
 }

@@ -247,7 +247,7 @@ interface WizardProps {
   rootKey?: string;
   /** Also from identity, absent on a node too old to hold an account namespace. */
   accountNamespaceId?: string | null;
-  onLinked: (deviceId: string, converged: boolean) => void;
+  onLinked: () => void;
   onClose: () => void;
 }
 
@@ -336,7 +336,7 @@ export function DevicePairWizard({ rootKey, accountNamespaceId, onLinked, onClos
       const seen = await waitForDevice(done.deviceId);
       setResult(done);
       setConverged(seen);
-      onLinked(done.deviceId, seen);
+      onLinked();
     } catch (err: unknown) {
       setLinkError(parseTauriError(err, "Could not link the device"));
       setScopeRefused(refusalStatus(err) === 409);

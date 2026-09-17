@@ -16,18 +16,16 @@ import {
   scopeHint,
   scopeToggle,
   type AccountCatalog,
-  type DeviceRow,
   type RowNote,
 } from "../lib/account";
-import { aliasFromInput, aliasInputHint } from "../lib/device-link";
+import { aliasFromInput, aliasInputHint, type AccountDevice } from "../lib/device-link";
 import { truncateText } from "../utils/string";
 
 interface AccountDeviceRowProps {
-  device: DeviceRow;
+  device: AccountDevice;
   catalog: AccountCatalog;
   aliases: Record<string, string>;
   isHolder: boolean;
-  syncing: boolean;
   open: boolean;
   busy: boolean;
   note: RowNote | null;
@@ -51,7 +49,6 @@ export default function AccountDeviceRow({
   catalog,
   aliases,
   isHolder,
-  syncing,
   open,
   busy,
   note,
@@ -69,7 +66,7 @@ export default function AccountDeviceRow({
   onCancelRevoke,
   onRevoke,
 }: AccountDeviceRowProps) {
-  const status = deviceStatus(device, syncing);
+  const status = deviceStatus(device);
   const apps = deviceScopeApps(catalog.apps, device, catalog.namespaces, catalog.installed);
   const name = deviceLabel(device.deviceId, aliases);
   const shortId = truncateText(device.deviceId, 8);
@@ -145,11 +142,7 @@ export default function AccountDeviceRow({
         )}
         {/* The modifier is the DeviceStatus value itself; App.css carries one per member. */}
         <span className={`status-badge ${status}`}>
-          {status === "syncing" ? (
-            <RefreshCw size={11} className="spinning" />
-          ) : (
-            <span className="status-dot" />
-          )}
+          <span className="status-dot" />
           {DEVICE_STATUS_LABEL[status]}
         </span>
         <div className="account-row-actions">
@@ -272,7 +265,7 @@ export default function AccountDeviceRow({
           <section className="account-device-section">
             <h3>Namespaces</h3>
             {catalog.namespaces.map((namespace) => {
-              const state = namespaceFollowState(device, namespace, syncing);
+              const state = namespaceFollowState(device, namespace);
               return (
                 <div className="account-ns-row" key={namespace.namespaceId}>
                   <span className="account-ns-name">
@@ -287,11 +280,7 @@ export default function AccountDeviceRow({
                   </span>
                   {/* Likewise a FollowState value, spelled straight into the modifier. */}
                   <span className={`status-badge ${state}`}>
-                    {state === "syncing" ? (
-                      <RefreshCw size={11} className="spinning" />
-                    ) : (
-                      <span className="status-dot" />
-                    )}
+                    <span className="status-dot" />
                     {FOLLOW_STATE_LABEL[state]}
                   </span>
                 </div>

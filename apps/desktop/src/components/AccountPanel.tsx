@@ -18,6 +18,7 @@ import {
   nodeIdentity,
   relinkDevice,
   revokeDevice,
+  type AccountDevice,
 } from "../lib/device-link";
 import {
   accountAppRows,
@@ -30,7 +31,6 @@ import {
   widenSummary,
   type AccountAppRow,
   type AccountCatalog,
-  type DeviceRow,
   type RowNote,
 } from "../lib/account";
 import { parseTauriError } from "../utils/appUtils";
@@ -64,7 +64,7 @@ export default function AccountPanel() {
   const [identity, setIdentity] = useState<NodeIdentity | null>(null);
   const [identityLoading, setIdentityLoading] = useState(true);
   const [identityError, setIdentityError] = useState("");
-  const [devices, setDevices] = useState<DeviceRow[]>([]);
+  const [devices, setDevices] = useState<AccountDevice[]>([]);
   const [devicesLoading, setDevicesLoading] = useState(false);
   const [devicesError, setDevicesError] = useState("");
   const [aliases, setAliases] = useState<Record<string, string>>({});
@@ -163,31 +163,6 @@ export default function AccountPanel() {
     !!accountId,
   );
 
-  // A device we linked but never saw converge is not in the listing yet, so
-  // refetching would drop it: show it as syncing instead.
-  const handleLinked = (deviceId: string, converged: boolean) => {
-    if (converged) {
-      setDeviceReloads((n) => n + 1);
-      return;
-    }
-    setDevices((prev) =>
-      prev.some((d) => d.deviceId === deviceId)
-        ? prev
-        : [
-            ...prev,
-            {
-              deviceId,
-              signingKey: "",
-              isSelf: false,
-              revoked: false,
-              applications: [],
-              namespaces: [],
-              syncing: true,
-            },
-          ],
-    );
-  };
-
   const runRowAction = async (deviceId: string, action: () => Promise<string>) => {
     setBusyDevice(deviceId);
     setRowNote(null);
@@ -205,15 +180,15 @@ export default function AccountPanel() {
     }
   };
 
-  const sync = (device: DeviceRow) =>
+  const sync = (device: AccountDevice) =>
     runRowAction(device.deviceId, async () => relinkSummary(await relinkDevice(device.deviceId)));
 
-  const widen = (device: DeviceRow, applicationId: string) =>
+  const widen = (device: AccountDevice, applicationId: string) =>
     runRowAction(device.deviceId, async () =>
       widenSummary(await relinkDevice(device.deviceId, [...device.applications, applicationId]), 1),
     );
 
-  const revoke = (device: DeviceRow) => {
+  const revoke = (device: AccountDevice) => {
     setConfirmRevoke("");
     // A revocation reaches every namespace the device is in whichever one the
     // route names, so the first is as good as any.
@@ -225,7 +200,7 @@ export default function AccountPanel() {
 
   // Aliases are this node's own, so a rename changes nothing the device listing
   // carries: the map is corrected here rather than by refetching the roster.
-  const rename = async (device: DeviceRow) => {
+  const rename = async (device: AccountDevice) => {
     const alias = aliasFromInput(renameText);
     if (!alias) return;
     const previous = deviceLabel(device.deviceId, aliases);
@@ -330,7 +305,6 @@ export default function AccountPanel() {
                 catalog={catalog}
                 aliases={aliases}
                 isHolder={isHolder}
-                syncing={!!device.syncing}
                 open={!!expanded[device.deviceId]}
                 busy={busyDevice === device.deviceId}
                 note={rowNote?.deviceId === device.deviceId ? rowNote : null}
@@ -360,7 +334,7 @@ export default function AccountPanel() {
           <DevicePairWizard
             rootKey={identity?.accountRootPublicKey}
             accountNamespaceId={identity?.accountNamespaceId}
-            onLinked={handleLinked}
+            onLinked={() => setDeviceReloads((n) => n + 1)}
             onClose={() => setWizardOpen(false)}
           />
         )}

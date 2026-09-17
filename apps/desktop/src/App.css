@@ -448,10 +448,6 @@
   color: var(--success);
 }
 
-.status-badge.syncing {
-  color: var(--info);
-}
-
 .status-badge.not-following {
   color: var(--warning);
 }

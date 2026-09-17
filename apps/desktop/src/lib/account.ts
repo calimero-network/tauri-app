@@ -14,9 +14,6 @@ import type {
 } from "./device-link";
 import { appInstalled, decodeMetadata } from "../utils/appUtils";
 
-/** `syncing` marks a device we linked but have not yet seen in the listing. */
-export type DeviceRow = AccountDevice & { syncing?: boolean };
-
 /** What the page is saying about one row after an action on it. */
 export interface RowNote {
   deviceId: string;
@@ -56,29 +53,21 @@ export function inScope(device: AccountDevice, applicationId: string): boolean {
   return !device.applications.length || device.applications.includes(applicationId);
 }
 
-export type DeviceStatus = "active" | "syncing" | "revoked";
+export type DeviceStatus = "active" | "revoked";
 
 export const DEVICE_STATUS_LABEL: Record<DeviceStatus, string> = {
   active: "Active",
-  syncing: "Syncing",
   revoked: "Revoked",
 };
 
-export function deviceStatus(device: AccountDevice, syncing: boolean): DeviceStatus {
-  if (device.revoked) return "revoked";
-  return syncing ? "syncing" : "active";
+export function deviceStatus(device: AccountDevice): DeviceStatus {
+  return device.revoked ? "revoked" : "active";
 }
 
-export type FollowState =
-  | "following"
-  | "syncing"
-  | "not-in-scope"
-  | "not-following"
-  | "retired";
+export type FollowState = "following" | "not-in-scope" | "not-following" | "retired";
 
 export const FOLLOW_STATE_LABEL: Record<FollowState, string> = {
   following: "Following",
-  syncing: "Syncing",
   "not-in-scope": "Not in scope",
   "not-following": "Not following",
   retired: "Retired",
@@ -89,11 +78,9 @@ export const FOLLOW_STATE_LABEL: Record<FollowState, string> = {
 export function namespaceFollowState(
   device: AccountDevice,
   namespace: NamespaceSummary,
-  syncing: boolean,
 ): FollowState {
   if (device.revoked) return "retired";
   if (!inScope(device, namespace.targetApplicationId)) return "not-in-scope";
-  if (syncing) return "syncing";
   return device.namespaces.includes(namespace.namespaceId) ? "following" : "not-following";
 }
 

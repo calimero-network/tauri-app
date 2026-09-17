@@ -6,14 +6,20 @@ vi.mock('../lib/mero-client', () => ({
 }));
 
 let nodeUrl = 'http://localhost:2528';
-vi.mock('./settings', () => ({ getSettings: () => ({ nodeUrl }) }));
+let registries = ['https://registry-a.example', 'https://registry-b.example'];
+vi.mock('./settings', () => ({ getSettings: () => ({ nodeUrl, registries }) }));
+
+const fetchBundleDisplay = vi.fn();
+vi.mock('./registry', () => ({ fetchBundleDisplay: (...args: unknown[]) => fetchBundleDisplay(...args) }));
 
 import { listInstalledApps, invalidateInstalledApps } from './installedAppsCache';
 
 beforeEach(() => {
   vi.clearAllMocks();
   nodeUrl = 'http://localhost:2528';
+  registries = ['https://registry-a.example', 'https://registry-b.example'];
   invalidateInstalledApps();
+  fetchBundleDisplay.mockResolvedValue(null);
   listApplications.mockResolvedValue({ data: [{ id: 'app-1' }] });
 });
 
@@ -89,5 +95,91 @@ describe('listInstalledApps', () => {
 
     await expect(listInstalledApps()).rejects.toThrow('node down');
     await expect(listInstalledApps()).resolves.toEqual({ data: [{ id: 'app-1' }] });
+  });
+});
+
+describe('listInstalledApps display backfill', () => {
+  const blobShareRow = (pkg: string, version: string) => ({
+    id: 'app-1',
+    package: pkg,
+    version,
+    metadata: [],
+    blob: { bytecode: 'e348' },
+    source: 'calimero://pending-blob-share',
+  });
+
+  it('borrows name/icon from the first registry that answers', async () => {
+    const row = blobShareRow('com.calimero.chat', '1.0.0');
+    listApplications.mockResolvedValue({ data: [row] });
+    fetchBundleDisplay.mockResolvedValueOnce({ name: 'Mero Chat' });
+
+    const { data } = await listInstalledApps();
+
+    expect(data![0].metadata).toEqual({ name: 'Mero Chat' });
+    expect(fetchBundleDisplay).toHaveBeenCalledWith('https://registry-a.example', 'com.calimero.chat', '1.0.0');
+  });
+
+  it('falls through to the next registry when the first has nothing', async () => {
+    const row = blobShareRow('com.calimero.drive', '2.0.0');
+    listApplications.mockResolvedValue({ data: [row] });
+    fetchBundleDisplay.mockResolvedValueOnce(null).mockResolvedValueOnce({ name: 'Mero Drive' });
+
+    const { data } = await listInstalledApps();
+
+    expect(data![0].metadata).toEqual({ name: 'Mero Drive' });
+    expect(fetchBundleDisplay).toHaveBeenNthCalledWith(1, 'https://registry-a.example', 'com.calimero.drive', '2.0.0');
+    expect(fetchBundleDisplay).toHaveBeenNthCalledWith(2, 'https://registry-b.example', 'com.calimero.drive', '2.0.0');
+  });
+
+  it('leaves the row untouched when every registry has nothing', async () => {
+    const row = blobShareRow('com.calimero.nothing', '3.0.0');
+    listApplications.mockResolvedValue({ data: [row] });
+    fetchBundleDisplay.mockResolvedValue(null);
+
+    const { data } = await listInstalledApps();
+
+    expect(data![0].metadata).toEqual([]);
+  });
+
+  it('never calls the registry for a row that already has a name', async () => {
+    const row = { ...blobShareRow('com.calimero.named', '4.0.0'), metadata: { name: 'Already Named' } };
+    listApplications.mockResolvedValue({ data: [row] });
+
+    const { data } = await listInstalledApps();
+
+    expect(data![0].metadata).toEqual({ name: 'Already Named' });
+    expect(fetchBundleDisplay).not.toHaveBeenCalled();
+  });
+
+  it('memoizes a successful lookup so the 30s poll does not refetch it', async () => {
+    const row = blobShareRow('com.calimero.memo', '5.0.0');
+    listApplications.mockResolvedValue({ data: [row] });
+    fetchBundleDisplay.mockResolvedValueOnce({ name: 'Memo App' });
+
+    await listInstalledApps();
+    invalidateInstalledApps();
+    const { data } = await listInstalledApps();
+
+    expect(data![0].metadata).toEqual({ name: 'Memo App' });
+    expect(fetchBundleDisplay).toHaveBeenCalledTimes(1);
+  });
+
+  it('caps a hung registry lookup so it never delays the list past 4s', async () => {
+    vi.useFakeTimers();
+    try {
+      const row = blobShareRow('com.calimero.slow', '6.0.0');
+      listApplications.mockResolvedValue({ data: [row] });
+      fetchBundleDisplay
+        .mockImplementationOnce(() => new Promise(() => {}))
+        .mockResolvedValueOnce({ name: 'Slow App' });
+
+      const promise = listInstalledApps();
+      await vi.advanceTimersByTimeAsync(4000);
+      const { data } = await promise;
+
+      expect(data![0].metadata).toEqual({ name: 'Slow App' });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

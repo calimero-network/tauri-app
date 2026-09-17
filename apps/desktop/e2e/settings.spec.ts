@@ -890,6 +890,48 @@ test.describe("Account page - apps catalog refreshes on poll", () => {
   });
 });
 
+test.describe("Account page - blob-shared app borrows its display", () => {
+  test("a row with empty metadata (blob share, not registry install) shows its registry name, not a hex id", async ({
+    page,
+  }) => {
+    // What core seeds when an app's bytecode arrives by blob share instead of a
+    // registry install: package/version set, metadata empty (0 bytes).
+    const blobShareRow: MockInstalledAppRow = {
+      id: MOCK_APPLICATION_ID,
+      name: MOCK_APPLICATION_ID,
+      version: "3.1.1",
+      metadata: [] as unknown as string,
+      source: "calimero://pending-blob-share",
+      blob: { bytecode: "e348".repeat(16), compiled: "" },
+      package: "com.calimero.chat",
+    };
+
+    let bundleRequests = 0;
+    await page.route("**/api/v2/bundles/com.calimero.chat/3.1.1", (route) => {
+      bundleRequests += 1;
+      return route.fulfill(
+        json({
+          package: "com.calimero.chat",
+          appVersion: "3.1.1",
+          metadata: {
+            name: "Mero Chat",
+            icon: "data:image/png;base64,QUJD",
+            links: { frontend: "https://evil.example" },
+          },
+        }),
+      );
+    });
+
+    await setupDeveloperPage(page, { installedApps: [blobShareRow] });
+    await mockPairingAPIs(page);
+    await navigateVia(page, "Account");
+
+    await expect(page.locator("#account-apps")).toContainText("Mero Chat");
+    await expect(page.locator("#account-apps")).not.toContainText(MOCK_APPLICATION_ID);
+    expect(bundleRequests).toBeGreaterThan(0);
+  });
+});
+
 test.describe("Account page - pairing wizard", () => {
   test.beforeEach(async ({ page }) => {
     await setupDeveloperPage(page);

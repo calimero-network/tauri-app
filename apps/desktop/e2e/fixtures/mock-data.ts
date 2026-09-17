@@ -225,8 +225,10 @@ export const MOCK_UNINSTALLED_APP = {
   blob: { bytecode: "", compiled: "" },
 };
 
-/** Row shape used by Playwright route mocks (same as `MOCK_INSTALLED_APPS`). */
-export type MockInstalledAppRow = (typeof MOCK_INSTALLED_APPS)[number];
+/** Row shape used by Playwright route mocks (same as `MOCK_INSTALLED_APPS`).
+ *  `package` is optional: it is the real node's top-level field, carried
+ *  separately from `metadata` (which the fixtures usually embed it in instead). */
+export type MockInstalledAppRow = (typeof MOCK_INSTALLED_APPS)[number] & { package?: string };
 
 /**
  * JSON body for `GET .../admin-api/applications`.
@@ -237,6 +239,7 @@ export function listApplicationsWireBody(apps: MockInstalledAppRow[]): string {
     data: {
       apps: apps.map((app) => ({
         applicationId: app.id,
+        ...(app.package ? { package: app.package } : {}),
         name: app.name,
         version: app.version,
         metadata: app.metadata,

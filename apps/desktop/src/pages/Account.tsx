@@ -356,7 +356,10 @@ export default function Account() {
 
         <div className="settings-card">
           <h2>Pair this computer into an account</h2>
-          <DevicePairResponder enrolledDeviceId={identity?.deviceId ?? undefined} />
+          <DevicePairResponder
+            enrolledDeviceId={identity?.deviceId ?? undefined}
+            onLinked={() => setReloads((n) => n + 1)}
+          />
         </div>
       </main>
     </div>

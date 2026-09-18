@@ -192,6 +192,18 @@ describe("devicesEmptyMessage on a device held elsewhere", () => {
     const identity = { accountId: "a", deviceId: "d", holdsAccountRoot: false } as never;
     expect(devicesEmptyMessage(identity)).toContain("held on another device");
   });
+
+  it("says a pairing the holder has not accepted yet is not finished", () => {
+    const identity = {
+      accountId: "a",
+      deviceId: "d",
+      holdsAccountRoot: false,
+      deviceCertified: false,
+    } as never;
+    expect(devicesEmptyMessage(identity)).toBe(
+      "Pairing is not finished. Finish it on the computer that holds the account.",
+    );
+  });
 });
 
 describe("inScope", () => {

@@ -34,13 +34,16 @@ export function needsDisplayBackfill(app: AppRow): boolean {
 }
 
 // Keyed `${package}@${version}`. A published bundle's display never changes, so
-// a hit outlives the list cache the Account poll drops every 30 s; misses are retried.
+// a hit outlives the list cache the Account poll drops every 30 s. A miss is held
+// for the list TTL, so that poll does not ask every registry again on each tick.
 const displayCache = new Map<string, AppDisplay>();
+const displayMissedAt = new Map<string, number>();
 
 async function lookupDisplay(pkg: string, version: string): Promise<AppDisplay | null> {
   const key = `${pkg}@${version}`;
   const memoized = displayCache.get(key);
   if (memoized) return memoized;
+  if (Date.now() - (displayMissedAt.get(key) ?? -Infinity) < TTL_MS) return null;
 
   for (const registryUrl of getSettings().registries ?? []) {
     const controller = new AbortController();
@@ -55,6 +58,7 @@ async function lookupDisplay(pkg: string, version: string): Promise<AppDisplay |
       clearTimeout(timer);
     }
   }
+  displayMissedAt.set(key, Date.now());
   return null;
 }
 

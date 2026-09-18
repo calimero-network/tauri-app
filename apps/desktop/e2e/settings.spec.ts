@@ -1315,6 +1315,26 @@ test.describe("Account page - pairing responder", () => {
     await expect(page.locator("#pair-app-installs")).toContainText("installed");
   });
 
+  test("the page re-reads who this device is once it is linked", async ({ page }) => {
+    // Before pairing a node is its own account's holder; afterwards it is not.
+    let paired = false;
+    await page.route(API_ROUTES.identity, (route) =>
+      route.fulfill(json({ data: { ...MOCK_NODE_IDENTITY, holdsAccountRoot: !paired } })),
+    );
+    await page.reload();
+    await navigateVia(page, "Account");
+    await expect(page.getByRole("button", { name: "Add a device" })).toBeVisible();
+
+    paired = true;
+    await page.fill("#pair-invite-input", MOCK_PAIR_INVITE_BLOB);
+    await page.locator("#pair-init").click();
+    await page.locator("#pair-answer-next").click();
+    await expect(page.locator("#pair-link-state")).toContainText("Linked");
+    await page.locator("#pair-answer-close").click();
+
+    await expect(page.getByRole("button", { name: "Add a device" })).toHaveCount(0);
+  });
+
   test("closing the answer discards it rather than hiding it", async ({ page }) => {
     await page.fill("#pair-invite-input", MOCK_PAIR_INVITE_BLOB);
     await page.locator("#pair-init").click();

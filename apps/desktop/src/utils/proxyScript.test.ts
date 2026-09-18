@@ -25,8 +25,15 @@ if (typeof (globalThis as any).ProgressEvent === "undefined") {
  * the IIFE resolve to our mock; bare globals (URL, Headers, Response, …) are
  * still resolved from the Node 18+ global scope.
  */
-function injectProxy(mockWindow: any, nodeUrl = "http://localhost:2428") {
-  const src = RAW_PROXY_SCRIPT.replace("__CONFIGURED_NODE_URL__", nodeUrl);
+function injectProxy(
+  mockWindow: any,
+  nodeUrl = "http://localhost:2428",
+  isolated = false,
+) {
+  const src = RAW_PROXY_SCRIPT.replace(
+    "__CONFIGURED_NODE_URL__",
+    nodeUrl,
+  ).replace("__WEBVIEW_ISOLATED__", isolated ? "true" : "false");
   new Function("window", src)(mockWindow);
 }
 
@@ -489,5 +496,33 @@ describe("refresh brokering", () => {
     // so this is the only thing standing between the sentinel and the network.
     expect(originalFetch).not.toHaveBeenCalled();
     expect((await res.json()).data.access_token).toBe("fresh-access-token");
+  });
+});
+
+describe("isolated-window flag", () => {
+  // A cross-node window runs on its own WKWebsiteDataStore, and camera/mic do
+  // not come with it. From inside the page a missing `navigator.mediaDevices`
+  // looks identical to an embedder that never had it, so the shell publishes
+  // which window this is. Mero Meet keys its message off this: "open it against
+  // your primary node" and "open it in a browser" are different fixes.
+  it("is true in an isolated window", () => {
+    const w = makeMockWindow();
+    injectProxy(w, "http://localhost:2428", true);
+    expect(w.__CALIMERO_WEBVIEW_ISOLATED__).toBe(true);
+  });
+
+  it("is false in an ordinary one", () => {
+    const w = makeMockWindow();
+    injectProxy(w, "http://localhost:2428", false);
+    expect(w.__CALIMERO_WEBVIEW_ISOLATED__).toBe(false);
+  });
+
+  it("is a boolean, never the literal placeholder", () => {
+    // The substitution happens in Rust; if it is ever dropped, the page would
+    // see the string "__WEBVIEW_ISOLATED__" and `=== 'true'` would quietly make
+    // every window look un-isolated. Pin the type so that fails loudly.
+    const w = makeMockWindow();
+    injectProxy(w, "http://localhost:2428", true);
+    expect(typeof w.__CALIMERO_WEBVIEW_ISOLATED__).toBe("boolean");
   });
 });

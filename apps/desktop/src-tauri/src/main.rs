@@ -1251,6 +1251,15 @@ async fn create_app_window(
     // Replace placeholder in script with actual node URL
     proxy_script = proxy_script.replace("__CONFIGURED_NODE_URL__", node_url_to_use);
 
+    // Tell the page whether its webview is on an isolated data store. Apps that
+    // need camera/microphone cannot get them in such a window (see the note in
+    // proxy_script.js), and a missing API is indistinguishable from an
+    // unsupported embedder from inside the page — so the shell has to say.
+    proxy_script = proxy_script.replace(
+        "__WEBVIEW_ISOLATED__",
+        if isolation_key.is_some() { "true" } else { "false" },
+    );
+
     // Create window with proxy script injected BEFORE page loads
     let mut builder = WebviewWindowBuilder::new(
         &app_handle,

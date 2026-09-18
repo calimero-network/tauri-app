@@ -404,11 +404,8 @@ export async function fetchAppManifest(
   }
 }
 
-/**
- * Just the display fields (`name`/`icon`/`description`) a bundle's registry
- * metadata carries, for backfilling a row core seeded with empty metadata.
- * Never throws: any failure or non-OK response answers null.
- */
+/** The display fields of a bundle's registry metadata, for a row core seeded with
+ *  none. Never throws: any failure or non-OK response answers null. */
 export async function fetchBundleDisplay(
   registryUrl: string,
   pkg: string,

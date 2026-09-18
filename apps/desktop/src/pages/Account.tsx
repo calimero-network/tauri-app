@@ -146,10 +146,8 @@ export default function Account() {
     return () => controller.abort();
   }, [accountId, reloads, deviceReloads]);
 
-  // Core follows and unfollows this device's namespaces on its own, and a
-  // follower's application row can go from bytecode-less to installed between
-  // ticks, so the whole catalog is reloaded alongside the devices. A failed
-  // poll keeps what it has.
+  // Core follows namespaces and lands app blobs on its own between ticks, so the
+  // catalog is re-read with the devices. A failed poll keeps what it has.
   useVisiblePoll(
     () => {
       loadDevices()

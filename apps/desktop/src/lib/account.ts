@@ -31,9 +31,8 @@ export interface AccountCatalog {
 
 export const namespaceWord = (n: number) => (n === 1 ? "namespace" : "namespaces");
 
-/** What this node calls a device, or null where no alias names it and the row
- *  falls back to the short id. Core allows several aliases on one device; the
- *  first the listing carries is the one a row shows. */
+/** What this node calls a device, or null where no alias names it. Core allows
+ *  several aliases on one device; a row shows the first the listing carries. */
 export function deviceLabel(
   deviceId: string,
   aliases: Record<string, string>,
@@ -256,9 +255,8 @@ export function rescopeSummary({ descoped, bound }: RescopeResult): string {
   return bound.length ? `${removed}, added to ${bound.length}.` : `${removed}.`;
 }
 
-/** Only the holder of an account's root can certify a device into it, so a node
- *  paired into someone else's account is offered no invite. A node too old to say
- *  keeps the offer: refusing on a missing field would withdraw a working feature. */
+/** Only the holder of an account's root can certify a device into it. A node too
+ *  old to say keeps the offer rather than losing a feature over a missing field. */
 export function canInviteDevices(identity: NodeIdentity | null): boolean {
   return identity?.holdsAccountRoot !== false;
 }

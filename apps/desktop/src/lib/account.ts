@@ -268,6 +268,9 @@ export function canInviteDevices(identity: NodeIdentity | null): boolean {
 export function devicesEmptyMessage(identity: NodeIdentity | null): string {
   if (!identity) return "This node is not part of an account yet.";
   if (identity.holdsAccountRoot === false) {
+    if (identity.deviceCertified === false) {
+      return "Pairing is not finished. Finish it on the computer that holds the account.";
+    }
     return "This device is linked to an account held on another device. Its devices are managed there.";
   }
   if (identity.deviceId) {

@@ -41,6 +41,7 @@ import {
   pairInit,
   refusalStatus,
   relinkDevice,
+  rescopeDevice,
   revokeDevice,
   validatePairPayload,
 } from './device-link';
@@ -435,18 +436,68 @@ describe('relinkDevice', () => {
     expect(JSON.parse(String(calls[0].init?.body))).not.toHaveProperty('applications');
   });
 
-  it('sends the applications when widening the scope', async () => {
+  it('reports nothing rather than throwing when the node names no outcomes', async () => {
+    installFetch(json({ data: { accountId: 'e'.repeat(64), deviceId: HEX_64 } }));
+
+    await expect(relinkDevice(HEX_64)).resolves.toEqual({ linkedIn: [], skipped: [], pending: [] });
+  });
+});
+
+describe('rescopeDevice', () => {
+  it('names what the device lost and what it gained, and leaves out what was skipped', async () => {
+    installFetch(
+      json({
+        data: {
+          accountId: 'e'.repeat(64),
+          deviceId: HEX_64,
+          applications: ['App1'],
+          descoped: [{ namespaceId: 'ns-1', keyRotated: true }],
+          linkedIn: [{ namespaceId: 'ns-2', keyDelivered: false }],
+          skipped: [{ namespaceId: 'ns-3', reason: 'alreadyBound' }],
+        },
+      }),
+    );
+
+    await expect(rescopeDevice(HEX_64, { only: ['App1'] })).resolves.toEqual({
+      applications: ['App1'],
+      descoped: ['ns-1'],
+      bound: ['ns-2'],
+    });
+    expect(calls[0].url).toBe(`http://localhost:2528/admin-api/account/devices/${HEX_64}/scope`);
+    expect(calls[0].init?.method).toBe('PUT');
+    expect(JSON.parse(String(calls[0].init?.body))).toEqual({ scope: { only: ['App1'] } });
+  });
+
+  it('asks for everything with the tag core reads, not with an empty list', async () => {
     installFetch(json({ data: {} }));
 
-    await relinkDevice(HEX_64, ['App1']);
+    await rescopeDevice(HEX_64, 'all');
 
-    expect(JSON.parse(String(calls[0].init?.body)).applications).toEqual(['App1']);
+    expect(JSON.parse(String(calls[0].init?.body))).toEqual({ scope: 'all' });
   });
 
   it('reports nothing rather than throwing when the node names no outcomes', async () => {
     installFetch(json({ data: { accountId: 'e'.repeat(64), deviceId: HEX_64 } }));
 
-    await expect(relinkDevice(HEX_64)).resolves.toEqual({ linkedIn: [], skipped: [], pending: [] });
+    await expect(rescopeDevice(HEX_64, 'all')).resolves.toEqual({
+      applications: [],
+      descoped: [],
+      bound: [],
+    });
+  });
+
+  it('names a node too old to hold the route, which answers 404 with no body', async () => {
+    installFetch(new Response('', { status: 404, statusText: 'Not Found' }));
+
+    await expect(rescopeDevice(HEX_64, 'all')).rejects.toThrow(
+      "This node is too old to change a device's scope. Update it, then try again.",
+    );
+  });
+
+  it("keeps core's own sentence for a 404 that carries one", async () => {
+    installFetch(json({ error: { message: 'no such device' } }, { status: 404 }));
+
+    await expect(rescopeDevice(HEX_64, 'all')).rejects.toThrow('no such device');
   });
 });
 

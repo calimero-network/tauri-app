@@ -23,6 +23,7 @@ import {
   MOCK_PAIR_INVITE_BLOB,
   MOCK_PAIR_REPLY_BLOB,
   MOCK_RELINK,
+  MOCK_RESCOPE,
   MOCK_REVOKE,
   listApplicationsWireBody,
   type MockInstalledAppRow,
@@ -464,6 +465,9 @@ async function mockPairingAPIs(page: Page): Promise<void> {
   await page.route(API_ROUTES.relinkDevice, (route) =>
     route.fulfill(json({ data: MOCK_RELINK })),
   );
+  await page.route(API_ROUTES.rescopeDevice, (route) =>
+    route.fulfill(json({ data: MOCK_RESCOPE })),
+  );
   await page.route(API_ROUTES.revokeDevice, (route) =>
     route.fulfill(json({ data: MOCK_REVOKE })),
   );
@@ -510,6 +514,9 @@ test.describe("Account page - device listing", () => {
     await expect(rows.nth(0)).toContainText("This device");
     await expect(rows.nth(1)).toContainText("1 app");
     await expect(rows.nth(1)).toContainText("Active");
+    // The expanded row lists the namespaces; a count beside the scope only
+    // repeats it, and disagrees whenever two nodes are a moment apart.
+    await expect(rows.nth(0).locator(".account-device-meta")).toHaveText("All apps");
   });
 
   test("a named device is titled by its name, and keeps its id in the meta line", async ({
@@ -542,34 +549,149 @@ test.describe("Account page - device listing", () => {
     await expect(row.locator(".account-ns-row").nth(1)).toContainText("Not in scope");
   });
 
-  test("widening a scoped device relinks it with the app it was missing", async ({
-    page,
-  }) => {
-    const bodies: string[] = [];
-    await page.route(API_ROUTES.relinkDevice, (route) => {
-      bodies.push(route.request().postData() ?? "");
-      return route.fulfill(json({ data: MOCK_RELINK }));
-    });
-
+  /** The scopes this account's second device holds, as the listing reports them. */
+  async function withPairedScope(page: Page, applications: string[]): Promise<void> {
+    await page.route(API_ROUTES.accountDevices, (route) =>
+      route.fulfill(
+        json({
+          devices: [MOCK_ACCOUNT_DEVICES[0], { ...MOCK_ACCOUNT_DEVICES[1], applications }],
+        }),
+      ),
+    );
+    await navigateVia(page, "Account");
     await page.locator(`#device-expand-${MOCK_PAIR_INIT.deviceId}`).click();
+  }
+
+  /** What the scope route was asked for, once it has been asked. */
+  function scopeRequests(page: Page): Record<string, unknown>[] {
+    const bodies: Record<string, unknown>[] = [];
+    page.route(API_ROUTES.rescopeDevice, (route) => {
+      bodies.push(JSON.parse(route.request().postData() ?? "{}"));
+      return route.fulfill(json({ data: MOCK_RESCOPE }));
+    });
+    return bodies;
+  }
+
+  test("switching an app off narrows the scope to the rest of the list", async ({ page }) => {
+    const bodies = scopeRequests(page);
+    await withPairedScope(page, [MOCK_APPLICATION_ID, MOCK_OTHER_APPLICATION_ID]);
+
     await page
       .locator(`#device-app-${MOCK_PAIR_INIT.deviceId}-${MOCK_OTHER_APPLICATION_ID}`)
-      // Clicked, not checked: the switch reads the listing, which still says the
-      // app is out of scope until the relink lands.
       .click();
 
     await expect(page.locator(`#device-note-${MOCK_PAIR_INIT.deviceId}`)).toHaveText(
-      "Added 1 app, reaching 1 more namespace.",
+      "Removed from 1 namespace.",
     );
-    expect(JSON.parse(bodies[0]).applications).toEqual([
-      MOCK_APPLICATION_ID,
-      MOCK_OTHER_APPLICATION_ID,
-    ]);
+    expect(bodies[0]).toEqual({ scope: { only: [MOCK_APPLICATION_ID] } });
   });
 
-  test("the toggle of an app already in scope is locked, and the row says why once", async ({
+  test("the list stays on screen while it re-reads after a switch", async ({ page }) => {
+    scopeRequests(page);
+    await withPairedScope(page, [MOCK_APPLICATION_ID, MOCK_OTHER_APPLICATION_ID]);
+
+    let release = () => {};
+    const held = new Promise<void>((resolve) => (release = resolve));
+    await page.route(API_ROUTES.accountDevices, async (route) => {
+      await held;
+      return route.fulfill(json({ devices: MOCK_ACCOUNT_DEVICES }));
+    });
+    const reread = page.waitForRequest(API_ROUTES.accountDevices);
+
+    await page
+      .locator(`#device-app-${MOCK_PAIR_INIT.deviceId}-${MOCK_OTHER_APPLICATION_ID}`)
+      .click();
+    await reread;
+
+    await expect(page.locator(`#device-row-${MOCK_PAIR_INIT.deviceId}`)).toBeVisible();
+    release();
+  });
+
+  test("a row stays busy while another row finishes first", async ({ page }) => {
+    let release = () => {};
+    const held = new Promise<void>((resolve) => (release = resolve));
+    await page.route(API_ROUTES.rescopeDevice, async (route) => {
+      await held;
+      return route.fulfill(json({ data: MOCK_RESCOPE }));
+    });
+    await withPairedScope(page, [MOCK_APPLICATION_ID, MOCK_OTHER_APPLICATION_ID]);
+    const toggle = page.locator(
+      `#device-app-${MOCK_PAIR_INIT.deviceId}-${MOCK_OTHER_APPLICATION_ID}`,
+    );
+    const own = MOCK_NODE_IDENTITY.deviceId;
+
+    await toggle.click();
+    await page.locator(`#device-expand-${own}`).click();
+    await page.locator(`#device-rename-${own}`).click();
+    await page.locator(`#device-rename-input-${own}`).fill("this-mac");
+    await page.locator(`#device-rename-input-${own}`).press("Enter");
+    await expect(page.locator(`#device-row-${own} .account-device-name`)).toContainText("this-mac");
+
+    await expect(toggle).toBeDisabled();
+    release();
+  });
+
+  test("a scope change core refuses says why in the row, and the switch stays put", async ({
     page,
   }) => {
+    await page.route(API_ROUTES.rescopeDevice, (route) =>
+      route.fulfill({
+        ...json({ error: { message: "only the account root holder can replace a scope" } }),
+        status: 403,
+      }),
+    );
+    await withPairedScope(page, [MOCK_APPLICATION_ID, MOCK_OTHER_APPLICATION_ID]);
+    const toggle = page.locator(
+      `#device-app-${MOCK_PAIR_INIT.deviceId}-${MOCK_OTHER_APPLICATION_ID}`,
+    );
+
+    await toggle.click();
+
+    const note = page.locator(`#device-note-${MOCK_PAIR_INIT.deviceId}`);
+    await expect(note).toHaveText("only the account root holder can replace a scope");
+    await expect(note).toHaveClass(/field-error/);
+    await expect(toggle).toBeChecked();
+  });
+
+  test("switching an app on adds it without ever asking for everything", async ({ page }) => {
+    const bodies = scopeRequests(page);
+    await withPairedScope(page, [MOCK_APPLICATION_ID]);
+
+    await page
+      .locator(`#device-app-${MOCK_PAIR_INIT.deviceId}-${MOCK_OTHER_APPLICATION_ID}`)
+      .click();
+
+    expect(bodies[0]).toEqual({
+      scope: { only: [MOCK_APPLICATION_ID, MOCK_OTHER_APPLICATION_ID] },
+    });
+  });
+
+  test("the first switch going off freezes today's access, app by app", async ({ page }) => {
+    const bodies = scopeRequests(page);
+    await withPairedScope(page, []);
+    const all = page.locator(`#device-scope-all-${MOCK_PAIR_INIT.deviceId}`);
+
+    await expect(all).toBeChecked();
+    await all.click();
+
+    const scope = bodies[0].scope as { only: string[] };
+    expect(new Set(scope.only)).toEqual(
+      new Set([MOCK_APPLICATION_ID, MOCK_OTHER_APPLICATION_ID]),
+    );
+  });
+
+  test("the first switch going on asks for everything, apps added later included", async ({
+    page,
+  }) => {
+    const bodies = scopeRequests(page);
+    await withPairedScope(page, [MOCK_APPLICATION_ID]);
+
+    await page.locator(`#device-scope-all-${MOCK_PAIR_INIT.deviceId}`).click();
+
+    expect(bodies[0]).toEqual({ scope: "all" });
+  });
+
+  test("the last app left on is locked, and the row says why once", async ({ page }) => {
     await page.locator(`#device-expand-${MOCK_PAIR_INIT.deviceId}`).click();
     const held = page.locator(
       `#device-app-${MOCK_PAIR_INIT.deviceId}-${MOCK_APPLICATION_ID}`,
@@ -582,12 +704,10 @@ test.describe("Account page - device listing", () => {
     );
     await expect(
       page.locator(`#device-scope-hint-${MOCK_PAIR_INIT.deviceId}`),
-    ).toHaveText(
-      "To reduce what this device can access, revoke it and pair it again with fewer apps.",
-    );
+    ).toHaveText("A device acts for at least one app. Revoke it to remove it entirely.");
   });
 
-  test("the switch a relink can still turn on is not described by the lock hint", async ({
+  test("the switch that can still be turned on is not described by the lock hint", async ({
     page,
   }) => {
     await page.locator(`#device-expand-${MOCK_PAIR_INIT.deviceId}`).click();
@@ -599,9 +719,7 @@ test.describe("Account page - device listing", () => {
     await expect(open).not.toHaveAttribute("aria-describedby", /./);
   });
 
-  test("every toggle of a device that follows everything is locked on", async ({
-    page,
-  }) => {
+  test("every switch on the holder's own row is locked on", async ({ page }) => {
     await page.locator(`#device-expand-${MOCK_NODE_IDENTITY.deviceId}`).click();
     const toggle = page.locator(
       `#device-app-${MOCK_NODE_IDENTITY.deviceId}-${MOCK_APPLICATION_ID}`,
@@ -609,6 +727,7 @@ test.describe("Account page - device listing", () => {
 
     await expect(toggle).toBeDisabled();
     await expect(toggle).toBeChecked();
+    await expect(page.locator(`#device-scope-all-${MOCK_NODE_IDENTITY.deviceId}`)).toBeDisabled();
     await expect(
       page.locator(`#device-scope-hint-${MOCK_NODE_IDENTITY.deviceId}`),
     ).toHaveText("This device follows everything, including apps added later.");
@@ -787,7 +906,7 @@ test.describe("Account page - a device the account is held away from", () => {
     await expect(page.locator(`#device-sync-${MOCK_PAIR_INIT.deviceId}`)).toHaveCount(0);
   });
 
-  test("every toggle names the computer that can change a scope", async ({ page }) => {
+  test("every switch names the computer that can change a scope", async ({ page }) => {
     await setupDeveloperPage(page);
     await mockHeldElsewhere(page);
     await page.locator(`#device-expand-${MOCK_PAIR_INIT.deviceId}`).click();
@@ -796,6 +915,7 @@ test.describe("Account page - a device the account is held away from", () => {
     );
 
     await expect(toggle).toBeDisabled();
+    await expect(page.locator(`#device-scope-all-${MOCK_PAIR_INIT.deviceId}`)).toBeDisabled();
     await expect(
       page.locator(`#device-scope-hint-${MOCK_PAIR_INIT.deviceId}`),
     ).toHaveText("Only the computer holding the account root can change scope.");
@@ -1260,6 +1380,26 @@ test.describe("Account page - pairing responder", () => {
 
     await expect(page.locator("#pair-link-state")).toContainText("Linked");
     await expect(page.locator("#pair-app-installs")).toContainText("installed");
+  });
+
+  test("the page re-reads who this device is once it is linked", async ({ page }) => {
+    // Before pairing a node is its own account's holder; afterwards it is not.
+    let paired = false;
+    await page.route(API_ROUTES.identity, (route) =>
+      route.fulfill(json({ data: { ...MOCK_NODE_IDENTITY, holdsAccountRoot: !paired } })),
+    );
+    await page.reload();
+    await navigateVia(page, "Account");
+    await expect(page.getByRole("button", { name: "Add a device" })).toBeVisible();
+
+    paired = true;
+    await page.fill("#pair-invite-input", MOCK_PAIR_INVITE_BLOB);
+    await page.locator("#pair-init").click();
+    await page.locator("#pair-answer-next").click();
+    await expect(page.locator("#pair-link-state")).toContainText("Linked");
+    await page.locator("#pair-answer-close").click();
+
+    await expect(page.getByRole("button", { name: "Add a device" })).toHaveCount(0);
   });
 
   test("closing the answer discards it rather than hiding it", async ({ page }) => {

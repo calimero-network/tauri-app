@@ -6,7 +6,7 @@ import AccountIdentityCard from "../components/AccountIdentityCard";
 import { DevicePairWizard, DevicePairResponder, type InstalledApp } from "../components/DevicePairing";
 import { SkeletonTable } from "../components/Skeleton";
 import { useVisiblePoll } from "../hooks/useVisiblePoll";
-import type { NodeIdentity } from "@calimero-network/mero-js";
+import type { DeviceScope, NodeIdentity } from "@calimero-network/mero-js";
 import {
   aliasFromInput,
   createDeviceAlias,
@@ -17,6 +17,7 @@ import {
   listNamespaces,
   nodeIdentity,
   relinkDevice,
+  rescopeDevice,
   revokeDevice,
   type AccountDevice,
 } from "../lib/device-link";
@@ -27,8 +28,8 @@ import {
   devicesEmptyMessage,
   namespaceWord,
   relinkSummary,
+  rescopeSummary,
   thisDeviceBanner,
-  widenSummary,
   type AccountAppRow,
   type AccountCatalog,
   type RowNote,
@@ -38,6 +39,8 @@ import { apiClient } from "../lib/mero-client";
 import { invalidateInstalledApps, listInstalledApps } from "../utils/installedAppsCache";
 import "../components/AccountPanel.css";
 import "./Account.css";
+
+const without = (ids: string[], id: string) => ids.filter((at) => at !== id);
 
 const dropKey = <T,>(map: Record<string, T>, key: string): Record<string, T> =>
   Object.fromEntries(Object.entries(map).filter(([at]) => at !== key));
@@ -74,7 +77,7 @@ export default function Account() {
   const [wizardOpen, setWizardOpen] = useState(false);
   const [reloads, setReloads] = useState(0);
   const [deviceReloads, setDeviceReloads] = useState(0);
-  const [busyDevice, setBusyDevice] = useState("");
+  const [busyDevices, setBusyDevices] = useState<string[]>([]);
   const [confirmRevoke, setConfirmRevoke] = useState("");
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [catalog, setCatalog] = useState<AccountCatalog>({
@@ -143,10 +146,8 @@ export default function Account() {
     return () => controller.abort();
   }, [accountId, reloads, deviceReloads]);
 
-  // Core follows and unfollows this device's namespaces on its own, and a
-  // follower's application row can go from bytecode-less to installed between
-  // ticks, so the whole catalog is reloaded alongside the devices. A failed
-  // poll keeps what it has.
+  // Core follows namespaces and lands app blobs on its own between ticks, so the
+  // catalog is re-read with the devices. A failed poll keeps what it has.
   useVisiblePoll(
     () => {
       loadDevices()
@@ -165,7 +166,7 @@ export default function Account() {
   );
 
   const runRowAction = async (deviceId: string, action: () => Promise<string>) => {
-    setBusyDevice(deviceId);
+    setBusyDevices((ids) => [...ids, deviceId]);
     setRowNote(null);
     try {
       setRowNote({ deviceId, text: await action() });
@@ -177,16 +178,16 @@ export default function Account() {
         error: true,
       });
     } finally {
-      setBusyDevice("");
+      setBusyDevices((ids) => without(ids, deviceId));
     }
   };
 
   const sync = (device: AccountDevice) =>
     runRowAction(device.deviceId, async () => relinkSummary(await relinkDevice(device.deviceId)));
 
-  const widen = (device: AccountDevice, applicationId: string) =>
+  const rescope = (device: AccountDevice, scope: DeviceScope) =>
     runRowAction(device.deviceId, async () =>
-      widenSummary(await relinkDevice(device.deviceId, [...device.applications, applicationId]), 1),
+      rescopeSummary(await rescopeDevice(device.deviceId, scope)),
     );
 
   const revoke = (device: AccountDevice) => {
@@ -205,7 +206,7 @@ export default function Account() {
     const alias = aliasFromInput(renameText);
     if (!alias) return;
     const previous = deviceLabel(device.deviceId, aliases);
-    setBusyDevice(device.deviceId);
+    setBusyDevices((ids) => [...ids, device.deviceId]);
     setRowNote(null);
     try {
       await createDeviceAlias({ alias, deviceId: device.deviceId });
@@ -224,7 +225,7 @@ export default function Account() {
         error: true,
       });
     } finally {
-      setBusyDevice("");
+      setBusyDevices((ids) => without(ids, device.deviceId));
     }
   };
 
@@ -284,7 +285,7 @@ export default function Account() {
               </button>
             )}
           </div>
-          {identityLoading || devicesLoading ? (
+          {(identityLoading || devicesLoading) && devices.length === 0 ? (
             <SkeletonTable rows={2} columns={5} />
           ) : devicesError ? (
             <>
@@ -312,7 +313,7 @@ export default function Account() {
                   aliases={aliases}
                   isHolder={isHolder}
                   open={!!expanded[device.deviceId]}
-                  busy={busyDevice === device.deviceId}
+                  busy={busyDevices.includes(device.deviceId)}
                   note={rowNote?.deviceId === device.deviceId ? rowNote : null}
                   renaming={renaming === device.deviceId}
                   renameText={renameText}
@@ -327,7 +328,7 @@ export default function Account() {
                   onRenameText={setRenameText}
                   onCancelRename={() => setRenaming("")}
                   onRename={() => rename(device)}
-                  onWiden={(applicationId) => widen(device, applicationId)}
+                  onRescope={(scope) => rescope(device, scope)}
                   onSync={() => sync(device)}
                   onAskRevoke={() => setConfirmRevoke(device.deviceId)}
                   onCancelRevoke={() => setConfirmRevoke("")}
@@ -355,7 +356,10 @@ export default function Account() {
 
         <div className="settings-card">
           <h2>Pair this computer into an account</h2>
-          <DevicePairResponder enrolledDeviceId={identity?.deviceId ?? undefined} />
+          <DevicePairResponder
+            enrolledDeviceId={identity?.deviceId ?? undefined}
+            onLinked={() => setReloads((n) => n + 1)}
+          />
         </div>
       </main>
     </div>

@@ -485,6 +485,20 @@ describe('rescopeDevice', () => {
       bound: [],
     });
   });
+
+  it('names a node too old to hold the route, which answers 404 with no body', async () => {
+    installFetch(new Response('', { status: 404, statusText: 'Not Found' }));
+
+    await expect(rescopeDevice(HEX_64, 'all')).rejects.toThrow(
+      "This node is too old to change a device's scope. Update it, then try again.",
+    );
+  });
+
+  it("keeps core's own sentence for a 404 that carries one", async () => {
+    installFetch(json({ error: { message: 'no such device' } }, { status: 404 }));
+
+    await expect(rescopeDevice(HEX_64, 'all')).rejects.toThrow('no such device');
+  });
 });
 
 describe('revokeDevice', () => {

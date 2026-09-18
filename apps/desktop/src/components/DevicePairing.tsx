@@ -640,7 +640,13 @@ interface InstallState {
 }
 
 /** The other end of the wizard: what the computer being added runs. */
-export function DevicePairResponder({ enrolledDeviceId }: { enrolledDeviceId?: string }) {
+export function DevicePairResponder({
+  enrolledDeviceId,
+  onLinked,
+}: {
+  enrolledDeviceId?: string;
+  onLinked?: () => void;
+}) {
   const [inviteText, setInviteText] = useState("");
   const [result, setResult] = useState<PairInitResult | null>(null);
   const [busy, setBusy] = useState(false);
@@ -705,6 +711,8 @@ export function DevicePairResponder({ enrolledDeviceId }: { enrolledDeviceId?: s
       }
       if (cancelled) return;
       setLinked(true);
+      // Pairing moves this node to another account, so who it is has changed.
+      onLinked?.();
       await installArrivingApps();
     })();
 

@@ -173,6 +173,25 @@ describe('listInstalledApps display backfill', () => {
     expect(fetchBundleDisplay).toHaveBeenCalledTimes(1);
   });
 
+  it('remembers a miss for the list TTL, then asks the registries again', async () => {
+    vi.useFakeTimers();
+    try {
+      listApplications.mockResolvedValue({ data: [blobShareRow('com.calimero.unlisted', '7.0.0')] });
+
+      await listInstalledApps();
+      invalidateInstalledApps();
+      await listInstalledApps();
+      expect(fetchBundleDisplay).toHaveBeenCalledTimes(registries.length);
+
+      vi.advanceTimersByTime(5 * 60 * 1000);
+      invalidateInstalledApps();
+      await listInstalledApps();
+      expect(fetchBundleDisplay).toHaveBeenCalledTimes(registries.length * 2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('cancels a hung registry lookup at 4s rather than leaving it running', async () => {
     vi.useFakeTimers();
     try {

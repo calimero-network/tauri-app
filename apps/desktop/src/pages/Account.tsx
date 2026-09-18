@@ -40,6 +40,8 @@ import { invalidateInstalledApps, listInstalledApps } from "../utils/installedAp
 import "../components/AccountPanel.css";
 import "./Account.css";
 
+const without = (ids: string[], id: string) => ids.filter((at) => at !== id);
+
 const dropKey = <T,>(map: Record<string, T>, key: string): Record<string, T> =>
   Object.fromEntries(Object.entries(map).filter(([at]) => at !== key));
 
@@ -75,7 +77,7 @@ export default function Account() {
   const [wizardOpen, setWizardOpen] = useState(false);
   const [reloads, setReloads] = useState(0);
   const [deviceReloads, setDeviceReloads] = useState(0);
-  const [busyDevice, setBusyDevice] = useState("");
+  const [busyDevices, setBusyDevices] = useState<string[]>([]);
   const [confirmRevoke, setConfirmRevoke] = useState("");
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [catalog, setCatalog] = useState<AccountCatalog>({
@@ -166,7 +168,7 @@ export default function Account() {
   );
 
   const runRowAction = async (deviceId: string, action: () => Promise<string>) => {
-    setBusyDevice(deviceId);
+    setBusyDevices((ids) => [...ids, deviceId]);
     setRowNote(null);
     try {
       setRowNote({ deviceId, text: await action() });
@@ -178,7 +180,7 @@ export default function Account() {
         error: true,
       });
     } finally {
-      setBusyDevice("");
+      setBusyDevices((ids) => without(ids, deviceId));
     }
   };
 
@@ -206,7 +208,7 @@ export default function Account() {
     const alias = aliasFromInput(renameText);
     if (!alias) return;
     const previous = deviceLabel(device.deviceId, aliases);
-    setBusyDevice(device.deviceId);
+    setBusyDevices((ids) => [...ids, device.deviceId]);
     setRowNote(null);
     try {
       await createDeviceAlias({ alias, deviceId: device.deviceId });
@@ -225,7 +227,7 @@ export default function Account() {
         error: true,
       });
     } finally {
-      setBusyDevice("");
+      setBusyDevices((ids) => without(ids, device.deviceId));
     }
   };
 
@@ -285,7 +287,7 @@ export default function Account() {
               </button>
             )}
           </div>
-          {identityLoading || devicesLoading ? (
+          {(identityLoading || devicesLoading) && devices.length === 0 ? (
             <SkeletonTable rows={2} columns={5} />
           ) : devicesError ? (
             <>
@@ -313,7 +315,7 @@ export default function Account() {
                   aliases={aliases}
                   isHolder={isHolder}
                   open={!!expanded[device.deviceId]}
-                  busy={busyDevice === device.deviceId}
+                  busy={busyDevices.includes(device.deviceId)}
                   note={rowNote?.deviceId === device.deviceId ? rowNote : null}
                   renaming={renaming === device.deviceId}
                   renameText={renameText}

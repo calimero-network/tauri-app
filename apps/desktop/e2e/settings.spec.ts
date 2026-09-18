@@ -586,6 +586,73 @@ test.describe("Account page - device listing", () => {
     expect(bodies[0]).toEqual({ scope: { only: [MOCK_APPLICATION_ID] } });
   });
 
+  test("the list stays on screen while it re-reads after a switch", async ({ page }) => {
+    scopeRequests(page);
+    await withPairedScope(page, [MOCK_APPLICATION_ID, MOCK_OTHER_APPLICATION_ID]);
+
+    let release = () => {};
+    const held = new Promise<void>((resolve) => (release = resolve));
+    await page.route(API_ROUTES.accountDevices, async (route) => {
+      await held;
+      return route.fulfill(json({ devices: MOCK_ACCOUNT_DEVICES }));
+    });
+    const reread = page.waitForRequest(API_ROUTES.accountDevices);
+
+    await page
+      .locator(`#device-app-${MOCK_PAIR_INIT.deviceId}-${MOCK_OTHER_APPLICATION_ID}`)
+      .click();
+    await reread;
+
+    await expect(page.locator(`#device-row-${MOCK_PAIR_INIT.deviceId}`)).toBeVisible();
+    release();
+  });
+
+  test("a row stays busy while another row finishes first", async ({ page }) => {
+    let release = () => {};
+    const held = new Promise<void>((resolve) => (release = resolve));
+    await page.route(API_ROUTES.rescopeDevice, async (route) => {
+      await held;
+      return route.fulfill(json({ data: MOCK_RESCOPE }));
+    });
+    await withPairedScope(page, [MOCK_APPLICATION_ID, MOCK_OTHER_APPLICATION_ID]);
+    const toggle = page.locator(
+      `#device-app-${MOCK_PAIR_INIT.deviceId}-${MOCK_OTHER_APPLICATION_ID}`,
+    );
+    const own = MOCK_NODE_IDENTITY.deviceId;
+
+    await toggle.click();
+    await page.locator(`#device-expand-${own}`).click();
+    await page.locator(`#device-rename-${own}`).click();
+    await page.locator(`#device-rename-input-${own}`).fill("this-mac");
+    await page.locator(`#device-rename-input-${own}`).press("Enter");
+    await expect(page.locator(`#device-row-${own} .account-device-name`)).toContainText("this-mac");
+
+    await expect(toggle).toBeDisabled();
+    release();
+  });
+
+  test("a scope change core refuses says why in the row, and the switch stays put", async ({
+    page,
+  }) => {
+    await page.route(API_ROUTES.rescopeDevice, (route) =>
+      route.fulfill({
+        ...json({ error: { message: "only the account root holder can replace a scope" } }),
+        status: 403,
+      }),
+    );
+    await withPairedScope(page, [MOCK_APPLICATION_ID, MOCK_OTHER_APPLICATION_ID]);
+    const toggle = page.locator(
+      `#device-app-${MOCK_PAIR_INIT.deviceId}-${MOCK_OTHER_APPLICATION_ID}`,
+    );
+
+    await toggle.click();
+
+    const note = page.locator(`#device-note-${MOCK_PAIR_INIT.deviceId}`);
+    await expect(note).toHaveText("only the account root holder can replace a scope");
+    await expect(note).toHaveClass(/field-error/);
+    await expect(toggle).toBeChecked();
+  });
+
   test("switching an app on adds it without ever asking for everything", async ({ page }) => {
     const bodies = scopeRequests(page);
     await withPairedScope(page, [MOCK_APPLICATION_ID]);

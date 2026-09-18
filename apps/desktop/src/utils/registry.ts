@@ -405,6 +405,40 @@ export async function fetchAppManifest(
 }
 
 /**
+ * Just the display fields (`name`/`icon`/`description`) a bundle's registry
+ * metadata carries, for backfilling a row core seeded with empty metadata.
+ * Never throws: any failure or non-OK response answers null.
+ */
+export async function fetchBundleDisplay(
+  registryUrl: string,
+  pkg: string,
+  version: string,
+  signal?: AbortSignal,
+): Promise<{ name?: string; icon?: string; description?: string } | null> {
+  if (!APP_ID_RE.test(pkg) || !VERSION_RE.test(version)) return null;
+  try {
+    const url = new URL(`/api/v2/bundles/${encodeURIComponent(pkg)}/${encodeURIComponent(version)}`, registryUrl);
+    const response = await fetch(url.toString(), {
+      method: 'GET',
+      headers: { 'Content-Type': 'application/json' },
+      signal,
+    });
+    if (!response.ok) return null;
+
+    const bundle = await response.json();
+    const metadata = bundle?.metadata ?? {};
+    const display: { name?: string; icon?: string; description?: string } = {};
+    if (typeof metadata.name === 'string' && metadata.name) display.name = metadata.name;
+    if (typeof metadata.icon === 'string' && metadata.icon.startsWith('data:image/')) display.icon = metadata.icon;
+    if (typeof metadata.description === 'string' && metadata.description) display.description = metadata.description;
+    // A nameless answer backfills nothing, so the caller moves on to the next registry.
+    return display.name ? display : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Record a download with the registry (fire-and-forget).
  * Call after a successful app install so download counts stay accurate.
  * Never throws; logs warnings on invalid URL or fetch failure.

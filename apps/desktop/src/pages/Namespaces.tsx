@@ -15,8 +15,8 @@ import type { GroupInfo, MetadataRecord } from "@calimero-network/mero-js";
 import { useToast } from "../contexts/ToastContext";
 import AppIcon from "../components/AppIcon";
 import { ChevronLeft, Users, Box, Layers, Copy, ChevronRight, Shield, Globe, Plus, X, Trash2, UserMinus, Link, MoreHorizontal, LogIn, LogOut } from "lucide-react";
-import { decodeMetadata } from "../utils/appUtils";
-import { listInstalledApps } from "../utils/installedAppsCache";
+import { appInstalled, decodeMetadata, parseTauriError } from "../utils/appUtils";
+import { invalidateInstalledApps, listInstalledApps } from "../utils/installedAppsCache";
 import { getSettings } from "../utils/settings";
 import {
   enableHaForNamespace,
@@ -44,6 +44,7 @@ import {
   type EvictionResult,
 } from "../utils/teeEviction";
 import { useCloudEnabled } from "../hooks/useCloudEnabled";
+import { useVisiblePoll } from "../hooks/useVisiblePoll";
 import "./Namespaces.css";
 
 function parseApiError(e: any): string {
@@ -95,6 +96,9 @@ interface InstalledApp {
   icon: string | null;
   frontendUrl: string | null;
   metadata?: unknown;
+  /** The node names an app as soon as a namespace targets it; the blob is what
+   *  makes it runnable here. */
+  installed: boolean;
 }
 
 function readInstalledApps(): Promise<InstalledApp[]> {
@@ -120,7 +124,15 @@ function readInstalledApps(): Promise<InstalledApp[]> {
       } catch {
         // ignore
       }
-      return { id: app.id, name, package: pkg, version, icon, frontendUrl };
+      return {
+        id: app.id,
+        name,
+        package: pkg ?? app.package ?? null,
+        version,
+        icon,
+        frontendUrl,
+        installed: appInstalled(app),
+      };
     });
   });
 }
@@ -244,6 +256,9 @@ function Namespaces() {
   const activeNsRootId = (view.type === "namespace" || view.type === "group") ? view.ns.namespaceId : null;
 
   const { namespaces, loading, error, refetch: refetchNamespaces } = useNamespaces();
+  // A device follows and unfollows this account's projects without the desktop
+  // asking, so the listing has to notice on its own.
+  useVisiblePoll(refetchNamespaces, 30000);
   const { groups: nsGroups, loading: nsLoadingGroups, refetch: refetchNsGroups } = useNamespaceGroups(activeNsId) as any;
   const { groupInfo: groupInfoRaw, loading: groupInfoLoading } = useGroupInfo(activeGroupId);
   const { groupInfo: nsRootGroupInfoRaw } = useGroupInfo(activeNsRootId);
@@ -488,9 +503,31 @@ function Namespaces() {
   }, []);
 
   const [installedApps, setInstalledApps] = useState<InstalledApp[]>([]);
+  const [installingApp, setInstallingApp] = useState("");
   useEffect(() => {
     readInstalledApps().then(setInstalledApps).catch(() => setInstalledApps([]));
   }, []);
+
+  // A namespace this node follows can target an app it does not hold, which the
+  // node names but cannot run until the bundle is fetched.
+  const installApp = async (app: InstalledApp) => {
+    if (!app.package || !app.version) return;
+    setInstallingApp(app.id);
+    try {
+      const response = await apiClient.node.installApplication({
+        package: app.package,
+        version: app.version,
+      });
+      if (response.error) throw new Error(response.error.message);
+      invalidateInstalledApps();
+      setInstalledApps(await readInstalledApps());
+      toast.success(`Installed ${app.name}`);
+    } catch (e) {
+      toast.error(parseTauriError(e, `Failed to install ${app.name}`));
+    } finally {
+      setInstallingApp("");
+    }
+  };
 
   const appById = useMemo(
     () =>
@@ -1558,7 +1595,15 @@ function Namespaces() {
     );
   };
 
-  const renderNamespaceCard = (ns: Namespace) => (
+  /** The app a namespace targets, when this node names it but cannot run it. */
+  const missingApp = (ns: Namespace): InstalledApp | null => {
+    const app = appById[ns.targetApplicationId];
+    return app && !app.installed && app.package && app.version ? app : null;
+  };
+
+  const renderNamespaceCard = (ns: Namespace) => {
+    const missing = missingApp(ns);
+    return (
     <div
       key={ns.namespaceId}
       className="ns-card"
@@ -1591,8 +1636,19 @@ function Namespaces() {
           <Shield size={12} /> {ns.upgradePolicy}
         </div>
       )}
+      {missing && (
+        <button
+          className="ns-action-btn ns-card-install"
+          id={`ns-install-${ns.namespaceId}`}
+          disabled={installingApp === missing.id}
+          onClick={(e) => { e.stopPropagation(); void installApp(missing); }}
+        >
+          {installingApp === missing.id ? "Installing…" : `Install ${missing.name}`}
+        </button>
+      )}
     </div>
-  );
+    );
+  };
 
   // ── Modals ──
   const modalOverlay = (
@@ -1753,7 +1809,7 @@ function Namespaces() {
             </div>
           </div>
           {error && <div className="error-message">{error.message}</div>}
-          {loading ? (
+          {loading && namespaces.length === 0 ? (
             <div className="loading">Loading namespaces...</div>
           ) : !error && appGroups.length === 0 ? (
             <div className="empty-state">
@@ -1840,7 +1896,7 @@ function Namespaces() {
             </div>
           </div>
           {error && <div className="error-message">{error.message}</div>}
-          {loading ? (
+          {loading && namespaces.length === 0 ? (
             <div className="loading">Loading namespaces...</div>
           ) : appNamespaces.length === 0 ? (
             <div className="empty-state">

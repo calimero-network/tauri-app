@@ -7,6 +7,7 @@ import {
   HTTPError,
   type AccountApplicationEntry,
   type AccountDeviceEntry,
+  type CreateDeviceAliasRequest,
   type AccountPairCompleteResponseData,
   type AccountPairInitResponseData,
   type NodeIdentity,
@@ -20,6 +21,10 @@ const LIST_LIMIT = 1000;
 /** The node revoked our token family; no retry can succeed. */
 const REVOKED_AUTH_ERRORS = ['token_reuse', 'token_revoked'];
 const REVOKED_MESSAGE = 'Your node session was revoked. Sign in again, then try again.';
+
+/** Core's `Alias` grammar: `crates/primitives/src/alias.rs`, 1 to 50 of these characters. */
+const ALIAS_PATTERN = /^[A-Za-z0-9._-]{1,50}$/;
+const ALIAS_HINT = 'Use letters, digits, dots, dashes or underscores, up to 50 characters.';
 
 const HEX_64 = /^[0-9a-fA-F]{64}$/;
 const ALL_ZERO = /^0{64}$/;
@@ -35,6 +40,8 @@ export type AccountApplication = AccountApplicationEntry;
 export interface RelinkResult {
   linkedIn: string[];
   skipped: string[];
+  /** Skipped for want of a scope key, which a later relink can still reach. */
+  pending: string[];
 }
 
 export interface NamespaceSummary {
@@ -116,16 +123,48 @@ export async function listAccountDevices(): Promise<AccountDevice[]> {
   return (await nodeCall(admin().listAccountDevices())) ?? [];
 }
 
+/** Aliases are node-local: nothing replicates them, so this is what this node
+ *  calls the account's devices, not what the account calls them. */
+export async function listDeviceAliases(): Promise<Record<string, string>> {
+  return (await nodeCall(admin().listDeviceAliases())) ?? {};
+}
+
+export async function createDeviceAlias(request: CreateDeviceAliasRequest): Promise<void> {
+  await nodeCall(admin().createDeviceAlias(request));
+}
+
+export async function deleteDeviceAlias(name: string): Promise<void> {
+  await nodeCall(admin().deleteDeviceAlias(name));
+}
+
+/** What a name field holds once core's own alias grammar is applied, or null
+ *  where it holds nothing worth sending. */
+export function aliasFromInput(text: string): string | null {
+  const alias = text.trim();
+  return ALIAS_PATTERN.test(alias) ? alias : null;
+}
+
+/** A sentence for a name a user typed that core's grammar would refuse, or
+ *  null for one that is empty or already valid. */
+export function aliasInputHint(text: string): string | null {
+  const alias = text.trim();
+  return alias.length > 0 && !ALIAS_PATTERN.test(alias) ? ALIAS_HINT : null;
+}
+
 export async function listAccountApplications(): Promise<AccountApplication[]> {
   const applications = (await nodeCall(admin().listAccountApplications())) ?? [];
   return applications.filter((app) => !ALL_ZERO.test(app.applicationId));
 }
 
+/** The account namespace carries the device into the account's projects itself,
+ *  so the request names no namespaces of its own. */
 export function pairInit(
   accountRootPublicKey: string,
-  namespaces: string[],
+  accountNamespace: string,
 ): Promise<PairInitResult> {
-  return nodeCall(admin().initAccountPairing({ accountRootPublicKey, namespaces }));
+  return nodeCall(
+    admin().initAccountPairing({ accountRootPublicKey, accountNamespace, namespaces: [] }),
+  );
 }
 
 export function pairComplete(
@@ -152,6 +191,9 @@ export async function relinkDevice(
   return {
     linkedIn: (result?.linkedIn ?? []).map((entry) => entry.namespaceId),
     skipped: (result?.skipped ?? []).map((entry) => entry.namespaceId),
+    pending: (result?.skipped ?? [])
+      .filter((entry) => entry.reason === "noScopeKey")
+      .map((entry) => entry.namespaceId),
   };
 }
 

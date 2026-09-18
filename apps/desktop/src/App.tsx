@@ -39,10 +39,11 @@ const Onboarding = lazy(() => import("./pages/Onboarding"));
 const Marketplace = lazy(() => import("./pages/Marketplace"));
 const InstalledApps = lazy(() => import("./pages/InstalledApps"));
 const Namespaces = lazy(() => import("./pages/Namespaces"));
+const Account = lazy(() => import("./pages/Account"));
 const NodeManagement = lazy(() => import("./pages/NodeManagement"));
 const ConfirmAction = lazy(() => import("./pages/ConfirmAction"));
 
-type Page = 'home' | 'marketplace' | 'installed' | 'namespaces' | 'nodes' | 'confirm';
+type Page = 'home' | 'marketplace' | 'installed' | 'namespaces' | 'account' | 'nodes' | 'confirm';
 
 // 'confirm' takes over the whole window rather than rendering inside the shell.
 type ShellPage = Exclude<Page, 'confirm'>;
@@ -578,7 +579,13 @@ function App() {
         {/* Settings short-circuits the page shell, where the ToastContainer is
             mounted, so it needs its own or its toasts never render. */}
         <ToastContainer />
-        <Settings onBack={handleSettingsBack} />
+        <Settings
+          onBack={handleSettingsBack}
+          onOpenAccount={async () => {
+            await handleSettingsBack();
+            setCurrentPage('account');
+          }}
+        />
       </ErrorBoundary>
     );
   }
@@ -639,6 +646,10 @@ function App() {
           <Namespaces />
         </MeroContext.Provider>
       ),
+    },
+    account: {
+      title: 'Account',
+      element: <Account />,
     },
     nodes: {
       title: 'Nodes',

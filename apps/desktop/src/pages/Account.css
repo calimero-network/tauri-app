@@ -1,0 +1,31 @@
+.account-page {
+  padding: 24px;
+  max-width: 1000px;
+  margin: 0 auto;
+  animation: fadeUp 0.4s ease-out;
+}
+
+.account-page-header {
+  margin-bottom: 24px;
+}
+
+.account-page-header h1 {
+  margin: 0 0 4px 0;
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: -0.4px;
+}
+
+.account-page-header p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+
+/* The value .settings-content uses, so the cards stack the same on both pages. */
+.account-page-main {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}

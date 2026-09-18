@@ -18,11 +18,12 @@ import { checkForUpdates, installUpdate, getCurrentVersion } from "../utils/upda
 import { useTheme } from "../contexts/ThemeContext";
 import { useToast } from "../contexts/ToastContext";
 import { ArrowLeft, RotateCcw, Trash2, Cloud, Bot, Copy, Check, RefreshCw, Download, MonitorSmartphone } from "lucide-react";
-import AccountPanel from "../components/AccountPanel";
 import "./Settings.css";
 
 interface SettingsProps {
   onBack?: () => void;
+  /** Leaves Settings for the Account page, where devices are managed. */
+  onOpenAccount?: () => void;
 }
 
 /** What the nuke dialog knows about what it would destroy. Only `ready` may confirm:
@@ -53,7 +54,7 @@ export function canConfirmNuke(
   return confirmed && !nuking && status.kind === 'ready';
 }
 
-function Settings({ onBack }: SettingsProps) {
+function Settings({ onBack, onOpenAccount }: SettingsProps) {
   const { theme, toggleTheme } = useTheme();
   const toast = useToast();
   const [registries, setRegistries] = useState<string[]>([]);
@@ -780,7 +781,21 @@ function Settings({ onBack }: SettingsProps) {
 
         {activeTab === 'account' && (
           <div className="settings-content">
-            <AccountPanel />
+            <div className="settings-card">
+              <h2>Account</h2>
+              <p className="field-hint">
+                This node's devices, what each one may act for, and the apps this account
+                uses now live on their own page.
+              </p>
+              <button
+                type="button"
+                id="settings-open-account"
+                className="button button-primary settings-account-link"
+                onClick={onOpenAccount}
+              >
+                Manage devices on the Account page
+              </button>
+            </div>
           </div>
         )}
 

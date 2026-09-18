@@ -1,6 +1,7 @@
 import { test, expect } from "./fixtures/test";
 import type { Page } from "@playwright/test";
 import {
+  navigateVia,
   setupAuthenticatedPage,
   setupDeveloperPage,
   scrollSettingsControlIntoView,
@@ -10,19 +11,21 @@ import {
   DEFAULT_REGISTRY_URL,
   API_ROUTES,
   MOCK_ACCOUNT_APPLICATIONS,
+  MOCK_ACCOUNT_APP_ROWS,
   MOCK_ACCOUNT_DEVICES,
+  MOCK_DEVICE_ALIASES,
   MOCK_APPLICATION_ID,
-  MOCK_NAMESPACE_ID,
   MOCK_NAMESPACES,
   MOCK_NODE_IDENTITY,
   MOCK_OTHER_APPLICATION_ID,
-  MOCK_OTHER_NAMESPACE_ID,
   MOCK_PAIR_COMPLETE,
   MOCK_PAIR_INIT,
   MOCK_PAIR_INVITE_BLOB,
   MOCK_PAIR_REPLY_BLOB,
   MOCK_RELINK,
   MOCK_REVOKE,
+  listApplicationsWireBody,
+  type MockInstalledAppRow,
 } from "./fixtures/mock-data";
 
 // ─── Navigate to Settings ──────────────────────────────────────────────────
@@ -323,7 +326,7 @@ test.describe("Tab switching", () => {
     await expect(page.locator("#registry-url")).not.toBeVisible();
   });
 });
-// ─── Account tab ────────────────────────────────────────────────────────────
+// ─── Account page ───────────────────────────────────────────────────────────
 
 const json = (body: unknown) => ({
   status: 200,
@@ -331,7 +334,7 @@ const json = (body: unknown) => ({
   body: JSON.stringify(body),
 });
 
-test.describe("Account tab", () => {
+test.describe("Account page", () => {
   test.beforeEach(async ({ page }) => {
     await setupAuthenticatedPage(page);
     await page.route(API_ROUTES.identity, (route) =>
@@ -341,39 +344,49 @@ test.describe("Account tab", () => {
     // depend on the device listing's wire shape.
     await page.route(API_ROUTES.namespaces, (route) => route.fulfill(json({ data: [] })));
     await page.route(API_ROUTES.accountDevices, (route) => route.fulfill(json({ devices: [] })));
-    await page.click('button[title="Settings"]');
+    await navigateVia(page, "Account");
   });
 
-  test("Account tab is visible", async ({ page }) => {
-    await expect(page.locator("#settings-tab-account")).toBeVisible();
-  });
-
-  test("clicking the Account tab shows the panel", async ({ page }) => {
-    await page.locator("#settings-tab-account").click();
+  test("the page shows this device and the account's devices", async ({ page }) => {
     await expect(
       page.getByRole("heading", { name: "This device" }),
     ).toBeVisible();
     await expect(
-      page.getByRole("heading", { name: "Devices on this account" }),
+      page.getByRole("heading", { name: "Devices" }),
     ).toBeVisible();
   });
 
   test("identity fields render from the node's identity", async ({ page }) => {
-    await page.locator("#settings-tab-account").click();
-
-    await expect(page.locator("#value-account-id")).toHaveText(
+    // Two rows a person recognises the node by, shortened; the full value stays
+    // on the title and behind Copy.
+    await expect(page.locator("#value-account-id")).toHaveAttribute(
+      "title",
       MOCK_NODE_IDENTITY.accountId,
     );
-    await expect(page.locator("#value-device-id")).toHaveText(
+    await expect(page.locator("#value-account-id")).not.toHaveText(
+      MOCK_NODE_IDENTITY.accountId,
+    );
+    await expect(page.locator("#value-device-id")).toHaveAttribute(
+      "title",
       MOCK_NODE_IDENTITY.deviceId,
     );
-    await expect(page.locator("#value-public-key")).toHaveText(
+    await expect(page.locator("#copy-account-id")).toBeVisible();
+    await expect(page.locator("#value-public-key")).toHaveCount(0);
+
+    await page.locator("#identity-technical-toggle").click();
+    await expect(page.locator("#value-public-key")).toHaveAttribute(
+      "title",
       MOCK_NODE_IDENTITY.publicKey,
     );
-    await expect(page.locator("#value-account-root-public-key")).toHaveText(
+    await expect(page.locator("#value-account-root-public-key")).toHaveAttribute(
+      "title",
       MOCK_NODE_IDENTITY.accountRootPublicKey,
     );
-    await expect(page.locator("#copy-account-id")).toBeVisible();
+    await expect(page.locator("#value-account-namespace")).toHaveAttribute(
+      "title",
+      MOCK_NODE_IDENTITY.accountNamespaceId,
+    );
+    await expect(page.locator("#identity-technical-toggle")).toHaveText("Hide identifiers");
   });
 
   test("a node with no identity yet is a normal state, not an error", async ({
@@ -386,7 +399,8 @@ test.describe("Account tab", () => {
         body: JSON.stringify({ error: "not found" }),
       }),
     );
-    await page.locator("#settings-tab-account").click();
+    await page.reload();
+    await navigateVia(page, "Account");
 
     await expect(page.locator("#account-no-identity")).toBeVisible();
     await expect(page.locator("#account-retry")).toHaveCount(0);
@@ -395,13 +409,35 @@ test.describe("Account tab", () => {
   test("adding a device is offered on the bundled node, with no developer mode", async ({
     page,
   }) => {
-    await page.locator("#settings-tab-account").click();
-    await scrollSettingsControlIntoView(page, "#add-device");
     await expect(page.locator("#add-device")).toBeEnabled();
   });
 });
 
-// ─── Account tab - device pairing ───────────────────────────────────────────
+test.describe("Settings points at the Account page", () => {
+  test.beforeEach(async ({ page }) => {
+    await setupAuthenticatedPage(page);
+    await page.route(API_ROUTES.identity, (route) =>
+      route.fulfill(json({ data: MOCK_NODE_IDENTITY })),
+    );
+    await page.route(API_ROUTES.namespaces, (route) => route.fulfill(json({ data: [] })));
+    await page.route(API_ROUTES.accountDevices, (route) => route.fulfill(json({ devices: [] })));
+    await page.click('button[title="Settings"]');
+    await page.locator("#settings-tab-account").click();
+  });
+
+  test("the tab keeps only a link, and the link lands on the page", async ({ page }) => {
+    await expect(page.locator("#add-device")).toHaveCount(0);
+    await expect(page.locator("#settings-open-account")).toHaveText(
+      "Manage devices on the Account page",
+    );
+
+    await page.locator("#settings-open-account").click();
+    await expect(page.getByRole("heading", { name: "This device" })).toBeVisible();
+    await expect(page.locator("#add-device")).toBeEnabled();
+  });
+});
+
+// ─── Account page - device pairing ──────────────────────────────────────────
 
 /** This account's two devices and namespaces, plus every account-level route. */
 async function mockPairingAPIs(page: Page): Promise<void> {
@@ -417,6 +453,14 @@ async function mockPairingAPIs(page: Page): Promise<void> {
   await page.route(API_ROUTES.accountDevices, (route) =>
     route.fulfill(json({ devices: MOCK_ACCOUNT_DEVICES })),
   );
+  await page.route(API_ROUTES.deviceAliases, (route) =>
+    route.fulfill(json({ data: MOCK_DEVICE_ALIASES })),
+  );
+  await page.route(API_ROUTES.createDeviceAlias, (route) => route.fulfill(json({ data: {} })));
+  await page.route(API_ROUTES.deleteDeviceAlias, (route) => route.fulfill(json({ data: {} })));
+  await page.route(API_ROUTES.lookupDeviceAlias, (route) =>
+    route.fulfill(json({ data: { value: MOCK_PAIR_INIT.deviceId } })),
+  );
   await page.route(API_ROUTES.relinkDevice, (route) =>
     route.fulfill(json({ data: MOCK_RELINK })),
   );
@@ -431,38 +475,34 @@ async function mockPairingAPIs(page: Page): Promise<void> {
   );
 }
 
-/** The namespaces an invite blob on screen actually carries. */
-async function inviteNamespacesOnScreen(page: Page): Promise<string[]> {
+/** What an invite blob on screen actually carries, past its base64. */
+async function inviteBodyOnScreen(page: Page): Promise<Record<string, unknown>> {
   const blob = (await page.locator("#pair-invite").innerText()).trim();
-  return JSON.parse(atob(blob.replace("mero-pair:", ""))).namespaces;
+  return JSON.parse(atob(blob.replace("mero-pair:", "")));
 }
 
-test.describe("Account tab - pairing needs no developer mode", () => {
+test.describe("Account page - pairing needs no developer mode", () => {
   test("both halves of the exchange are offered on an ordinary session", async ({
     page,
   }) => {
     await setupAuthenticatedPage(page);
     await mockPairingAPIs(page);
-    await page.click('button[title="Settings"]');
-    await page.locator("#settings-tab-account").click();
+    await navigateVia(page, "Account");
 
-    await scrollSettingsControlIntoView(page, "#add-device");
     await expect(page.locator("#add-device")).toBeEnabled();
     await expect(page.locator("#pair-invite-input")).toBeVisible();
   });
 });
 
-test.describe("Account tab - device listing", () => {
+test.describe("Account page - device listing", () => {
   test.beforeEach(async ({ page }) => {
     await setupDeveloperPage(page);
     await mockPairingAPIs(page);
-    await page.click('button[title="Settings"]');
-    await page.locator("#settings-tab-account").click();
-    await scrollSettingsControlIntoView(page, "#add-device");
+    await navigateVia(page, "Account");
   });
 
   test("one row per device, with its scope and its status", async ({ page }) => {
-    const rows = page.locator(".data-table tbody tr");
+    const rows = page.locator(".account-device-row");
     await expect(rows).toHaveCount(2);
 
     // This node's own device: no application scope at all, which is every app.
@@ -470,6 +510,188 @@ test.describe("Account tab - device listing", () => {
     await expect(rows.nth(0)).toContainText("This device");
     await expect(rows.nth(1)).toContainText("1 app");
     await expect(rows.nth(1)).toContainText("Active");
+  });
+
+  test("a named device is titled by its name, and keeps its id in the meta line", async ({
+    page,
+  }) => {
+    const rows = page.locator(".account-device-row");
+
+    await expect(rows.nth(1).locator(".account-device-name")).toContainText("Alice's iPad");
+    await expect(rows.nth(1).locator(".account-device-meta")).toContainText(
+      MOCK_PAIR_INIT.deviceId.slice(0, 8),
+    );
+    // Nothing named this node's own device, so its title is the short id as before.
+    await expect(rows.nth(0).locator(".account-device-name")).toContainText(
+      MOCK_NODE_IDENTITY.deviceId.slice(0, 8),
+    );
+  });
+
+  test("a row expands into the apps it may act for and the namespaces it follows", async ({
+    page,
+  }) => {
+    const row = page.locator(`#device-row-${MOCK_PAIR_INIT.deviceId}`);
+    await expect(row.locator(".account-device-body")).toHaveCount(0);
+
+    await page.locator(`#device-expand-${MOCK_PAIR_INIT.deviceId}`).click();
+
+    await expect(row).toContainText("Apps this device may act for");
+    await expect(row).toContainText("1 of 2 apps");
+    // Personal is this device's own app; Files is the one its scope leaves out.
+    await expect(row.locator(".account-ns-row").nth(0)).toContainText("Following");
+    await expect(row.locator(".account-ns-row").nth(1)).toContainText("Not in scope");
+  });
+
+  test("widening a scoped device relinks it with the app it was missing", async ({
+    page,
+  }) => {
+    const bodies: string[] = [];
+    await page.route(API_ROUTES.relinkDevice, (route) => {
+      bodies.push(route.request().postData() ?? "");
+      return route.fulfill(json({ data: MOCK_RELINK }));
+    });
+
+    await page.locator(`#device-expand-${MOCK_PAIR_INIT.deviceId}`).click();
+    await page
+      .locator(`#device-app-${MOCK_PAIR_INIT.deviceId}-${MOCK_OTHER_APPLICATION_ID}`)
+      // Clicked, not checked: the switch reads the listing, which still says the
+      // app is out of scope until the relink lands.
+      .click();
+
+    await expect(page.locator(`#device-note-${MOCK_PAIR_INIT.deviceId}`)).toHaveText(
+      "Added 1 app, reaching 1 more namespace.",
+    );
+    expect(JSON.parse(bodies[0]).applications).toEqual([
+      MOCK_APPLICATION_ID,
+      MOCK_OTHER_APPLICATION_ID,
+    ]);
+  });
+
+  test("the toggle of an app already in scope is locked, and the row says why once", async ({
+    page,
+  }) => {
+    await page.locator(`#device-expand-${MOCK_PAIR_INIT.deviceId}`).click();
+    const held = page.locator(
+      `#device-app-${MOCK_PAIR_INIT.deviceId}-${MOCK_APPLICATION_ID}`,
+    );
+
+    await expect(held).toBeDisabled();
+    await expect(held).toHaveAttribute(
+      "aria-describedby",
+      `device-scope-hint-${MOCK_PAIR_INIT.deviceId}`,
+    );
+    await expect(
+      page.locator(`#device-scope-hint-${MOCK_PAIR_INIT.deviceId}`),
+    ).toHaveText(
+      "To reduce what this device can access, revoke it and pair it again with fewer apps.",
+    );
+  });
+
+  test("the switch a relink can still turn on is not described by the lock hint", async ({
+    page,
+  }) => {
+    await page.locator(`#device-expand-${MOCK_PAIR_INIT.deviceId}`).click();
+    const open = page.locator(
+      `#device-app-${MOCK_PAIR_INIT.deviceId}-${MOCK_OTHER_APPLICATION_ID}`,
+    );
+
+    await expect(open).toBeEnabled();
+    await expect(open).not.toHaveAttribute("aria-describedby", /./);
+  });
+
+  test("every toggle of a device that follows everything is locked on", async ({
+    page,
+  }) => {
+    await page.locator(`#device-expand-${MOCK_NODE_IDENTITY.deviceId}`).click();
+    const toggle = page.locator(
+      `#device-app-${MOCK_NODE_IDENTITY.deviceId}-${MOCK_APPLICATION_ID}`,
+    );
+
+    await expect(toggle).toBeDisabled();
+    await expect(toggle).toBeChecked();
+    await expect(
+      page.locator(`#device-scope-hint-${MOCK_NODE_IDENTITY.deviceId}`),
+    ).toHaveText("This device follows everything, including apps added later.");
+  });
+
+  test("renaming a device stores the new name and drops the old one", async ({
+    page,
+  }) => {
+    const calls: string[] = [];
+    await page.route(API_ROUTES.createDeviceAlias, (route) => {
+      calls.push(`create ${route.request().postData()}`);
+      return route.fulfill(json({ data: {} }));
+    });
+    await page.route(API_ROUTES.deleteDeviceAlias, (route) => {
+      calls.push(`delete ${decodeURIComponent(new URL(route.request().url()).pathname)}`);
+      return route.fulfill(json({ data: {} }));
+    });
+
+    await page.locator(`#device-expand-${MOCK_PAIR_INIT.deviceId}`).click();
+    await page.locator(`#device-rename-${MOCK_PAIR_INIT.deviceId}`).click();
+    const field = page.locator(`#device-rename-input-${MOCK_PAIR_INIT.deviceId}`);
+    const save = page.locator(`#device-rename-save-${MOCK_PAIR_INIT.deviceId}`);
+    await expect(field).toHaveValue("Alice's iPad");
+
+    await field.fill("Alice's tablet");
+    await expect(
+      page.locator(`#device-rename-hint-${MOCK_PAIR_INIT.deviceId}`),
+    ).toHaveText("Use letters, digits, dots, dashes or underscores, up to 50 characters.");
+    await expect(save).toBeDisabled();
+
+    await field.fill("alices-tablet");
+    await expect(page.locator(`#device-rename-hint-${MOCK_PAIR_INIT.deviceId}`)).toHaveCount(0);
+    await save.click();
+
+    // The name is the row's before any poll, and the old alias is dropped only
+    // once the new one is stored.
+    await expect(
+      page.locator(`#device-row-${MOCK_PAIR_INIT.deviceId} .account-device-name`),
+    ).toContainText("alices-tablet");
+    // The row takes the new name before the delete is even sent, so the calls are
+    // waited for rather than read off the back of that assertion.
+    await expect.poll(() => calls.length).toBe(2);
+    expect(calls).toEqual([
+      `create {"alias":"alices-tablet","deviceId":"${MOCK_PAIR_INIT.deviceId}"}`,
+      "delete /admin-api/alias/delete/device/Alice's iPad",
+    ]);
+  });
+
+  test("Enter is enough to save a rename", async ({ page }) => {
+    await page.locator(`#device-expand-${MOCK_PAIR_INIT.deviceId}`).click();
+    await page.locator(`#device-rename-${MOCK_PAIR_INIT.deviceId}`).click();
+    await page.locator(`#device-rename-input-${MOCK_PAIR_INIT.deviceId}`).fill("spare-tablet");
+    await page.locator(`#device-rename-input-${MOCK_PAIR_INIT.deviceId}`).press("Enter");
+
+    await expect(
+      page.locator(`#device-row-${MOCK_PAIR_INIT.deviceId} .account-device-name`),
+    ).toContainText("spare-tablet");
+  });
+
+  test("Escape leaves the device named as it was", async ({ page }) => {
+    let named = 0;
+    await page.route(API_ROUTES.createDeviceAlias, (route) => {
+      named += 1;
+      return route.fulfill(json({ data: {} }));
+    });
+
+    await page.locator(`#device-expand-${MOCK_PAIR_INIT.deviceId}`).click();
+    await page.locator(`#device-rename-${MOCK_PAIR_INIT.deviceId}`).click();
+    await page.locator(`#device-rename-input-${MOCK_PAIR_INIT.deviceId}`).fill("Nothing doing");
+    await page.locator(`#device-rename-input-${MOCK_PAIR_INIT.deviceId}`).press("Escape");
+
+    await expect(page.locator(`#device-rename-input-${MOCK_PAIR_INIT.deviceId}`)).toHaveCount(0);
+    await expect(
+      page.locator(`#device-row-${MOCK_PAIR_INIT.deviceId} .account-device-name`),
+    ).toContainText("Alice's iPad");
+    expect(named).toBe(0);
+  });
+
+  test("a collapsed row offers no rename", async ({ page }) => {
+    await expect(page.locator(`#device-rename-${MOCK_PAIR_INIT.deviceId}`)).toHaveCount(0);
+
+    await page.locator(`#device-expand-${MOCK_PAIR_INIT.deviceId}`).click();
+    await expect(page.locator(`#device-rename-${MOCK_PAIR_INIT.deviceId}`)).toBeVisible();
   });
 
   test("this device is offered neither a sync nor a revoke", async ({ page }) => {
@@ -481,13 +703,12 @@ test.describe("Account tab - device listing", () => {
     ).toHaveCount(0);
   });
 
-  test("syncing a device reports what it repaired and what it skipped", async ({
-    page,
-  }) => {
+  test("syncing a device reports what it repaired", async ({ page }) => {
     await page.locator(`#device-sync-${MOCK_PAIR_INIT.deviceId}`).click();
 
+    // A namespace out of the device's scope is no news; only a repair is.
     await expect(page.locator(`#device-note-${MOCK_PAIR_INIT.deviceId}`)).toHaveText(
-      "Repaired 1 namespace, skipped 1.",
+      "Repaired 1 namespace.",
     );
   });
 
@@ -518,75 +739,397 @@ test.describe("Account tab - device listing", () => {
   });
 });
 
-test.describe("Account tab - pairing wizard", () => {
+test.describe("Account page - a device the account is held away from", () => {
+  /** The same account seen from a paired device: it holds no root of its own. */
+  async function mockHeldElsewhere(
+    page: Page,
+    identity: Record<string, unknown> = {},
+    devices = MOCK_ACCOUNT_DEVICES,
+  ): Promise<void> {
+    await mockPairingAPIs(page);
+    await page.route(API_ROUTES.identity, (route) =>
+      route.fulfill(
+        json({ data: { ...MOCK_NODE_IDENTITY, holdsAccountRoot: false, ...identity } }),
+      ),
+    );
+    await page.route(API_ROUTES.accountDevices, (route) =>
+      route.fulfill(json({ devices })),
+    );
+    await navigateVia(page, "Account");
+  }
+
+  test("it may look but not invite or revoke", async ({ page }) => {
+    await setupDeveloperPage(page);
+    await mockHeldElsewhere(page);
+
+    await expect(page.locator(".account-device-row")).toHaveCount(2);
+    await expect(page.locator("#add-device")).toHaveCount(0);
+    await expect(page.locator(`#device-revoke-${MOCK_PAIR_INIT.deviceId}`)).toHaveCount(0);
+  });
+
+  test("it may name its own row and no other", async ({ page }) => {
+    await setupDeveloperPage(page);
+    await mockHeldElsewhere(page);
+
+    await page.locator(`#device-expand-${MOCK_NODE_IDENTITY.deviceId}`).click();
+    await page.locator(`#device-expand-${MOCK_PAIR_INIT.deviceId}`).click();
+
+    await expect(page.locator(`#device-rename-${MOCK_NODE_IDENTITY.deviceId}`)).toBeVisible();
+    await expect(page.locator(`#device-rename-${MOCK_PAIR_INIT.deviceId}`)).toHaveCount(0);
+  });
+
+  test("sync is offered on no row, since only the holder can relink", async ({ page }) => {
+    await setupDeveloperPage(page);
+    await mockHeldElsewhere(page);
+
+    await expect(page.locator(`#device-row-${MOCK_NODE_IDENTITY.deviceId}`)).toBeVisible();
+    await expect(page.locator(`#device-sync-${MOCK_NODE_IDENTITY.deviceId}`)).toHaveCount(0);
+    await expect(page.locator(`#device-sync-${MOCK_PAIR_INIT.deviceId}`)).toHaveCount(0);
+  });
+
+  test("every toggle names the computer that can change a scope", async ({ page }) => {
+    await setupDeveloperPage(page);
+    await mockHeldElsewhere(page);
+    await page.locator(`#device-expand-${MOCK_PAIR_INIT.deviceId}`).click();
+    const toggle = page.locator(
+      `#device-app-${MOCK_PAIR_INIT.deviceId}-${MOCK_OTHER_APPLICATION_ID}`,
+    );
+
+    await expect(toggle).toBeDisabled();
+    await expect(
+      page.locator(`#device-scope-hint-${MOCK_PAIR_INIT.deviceId}`),
+    ).toHaveText("Only the computer holding the account root can change scope.");
+  });
+
+  test("a withdrawn device says so in red before anything else on the card", async ({
+    page,
+  }) => {
+    await setupDeveloperPage(page);
+    await mockHeldElsewhere(page, {}, [
+      { ...MOCK_ACCOUNT_DEVICES[0], revoked: true },
+      MOCK_ACCOUNT_DEVICES[1],
+    ]);
+
+    await expect(page.locator("#account-banner-revoked")).toContainText(
+      "can no longer write",
+    );
+  });
+});
+
+test.describe("Account page - apps on this account", () => {
+  test.beforeEach(async ({ page }) => {
+    // Seeded through the shell's own first read: the installed-app list is cached
+    // for the page, so a route registered after that read never reaches the card.
+    await setupDeveloperPage(page, { installedApps: MOCK_ACCOUNT_APP_ROWS });
+    await mockPairingAPIs(page);
+    await navigateVia(page, "Account");
+  });
+
+  test("every app a namespace targets is listed, with what reaches it", async ({
+    page,
+  }) => {
+    const rows = page.locator("#account-apps .account-app-row");
+    await expect(rows).toHaveCount(2);
+    await expect(rows.filter({ hasText: "Mero Chat" })).toContainText(
+      "mero-chat · 1 namespace · 2 devices in scope",
+    );
+    await expect(
+      page.locator(`#app-installed-${MOCK_APPLICATION_ID}`),
+    ).toContainText("Installed");
+  });
+
+  test("an app this node has no blob for is offered for install", async ({ page }) => {
+    const bodies: string[] = [];
+    await page.route(API_ROUTES.installApplication, (route) => {
+      bodies.push(route.request().postData() ?? "");
+      return route.fulfill(json({ data: { applicationId: MOCK_OTHER_APPLICATION_ID } }));
+    });
+
+    await page.locator(`#app-install-${MOCK_OTHER_APPLICATION_ID}`).click();
+
+    await expect
+      .poll(() => bodies.length)
+      .toBeGreaterThan(0);
+    expect(JSON.parse(bodies[0])).toEqual({ package: "mero-drive", version: "2.0.0" });
+  });
+});
+
+test.describe("Account page - apps catalog refreshes on poll", () => {
+  test("a follower's row flips to installed once the poll re-reads the catalog", async ({
+    page,
+  }) => {
+    await page.clock.install();
+
+    // What core seeds for a follower before the blob arrives: no bytecode,
+    // and no package to offer an install from either.
+    const notYetArrived: MockInstalledAppRow = {
+      id: MOCK_APPLICATION_ID,
+      name: "mero-chat",
+      version: "",
+      metadata: btoa(JSON.stringify({ name: "Mero Chat" })),
+      source: "registry",
+      blob: { bytecode: "", compiled: "" },
+    };
+
+    await setupDeveloperPage(page, { installedApps: [notYetArrived] });
+    await mockPairingAPIs(page);
+    await navigateVia(page, "Account");
+
+    await expect(page.locator(`#app-missing-${MOCK_APPLICATION_ID}`)).toContainText(
+      "Not installed here",
+    );
+
+    await page.route(API_ROUTES.listApplications, (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: listApplicationsWireBody([MOCK_ACCOUNT_APP_ROWS[0]]),
+      }),
+    );
+
+    await page.clock.fastForward(30_000);
+
+    await expect(page.locator(`#app-installed-${MOCK_APPLICATION_ID}`)).toContainText(
+      "Installed",
+    );
+  });
+});
+
+test.describe("Account page - blob-shared app borrows its display", () => {
+  test("a row with empty metadata (blob share, not registry install) shows its registry name, not a hex id", async ({
+    page,
+  }) => {
+    // What core seeds when an app's bytecode arrives by blob share instead of a
+    // registry install: package/version set, metadata empty (0 bytes).
+    const blobShareRow: MockInstalledAppRow = {
+      id: MOCK_APPLICATION_ID,
+      name: MOCK_APPLICATION_ID,
+      version: "3.1.1",
+      metadata: [] as unknown as string,
+      source: "calimero://pending-blob-share",
+      blob: { bytecode: "e348".repeat(16), compiled: "" },
+      package: "com.calimero.chat",
+    };
+
+    let bundleRequests = 0;
+    await page.route("**/api/v2/bundles/com.calimero.chat/3.1.1", (route) => {
+      bundleRequests += 1;
+      return route.fulfill(
+        json({
+          package: "com.calimero.chat",
+          appVersion: "3.1.1",
+          metadata: {
+            name: "Mero Chat",
+            icon: "data:image/png;base64,QUJD",
+            links: { frontend: "https://evil.example" },
+          },
+        }),
+      );
+    });
+
+    await setupDeveloperPage(page, { installedApps: [blobShareRow] });
+    await mockPairingAPIs(page);
+    await navigateVia(page, "Account");
+
+    await expect(page.locator("#account-apps")).toContainText("Mero Chat");
+    await expect(page.locator("#account-apps")).not.toContainText(MOCK_APPLICATION_ID);
+    expect(bundleRequests).toBeGreaterThan(0);
+  });
+});
+
+test.describe("Account page - pairing wizard", () => {
   test.beforeEach(async ({ page }) => {
     await setupDeveloperPage(page);
     await mockPairingAPIs(page);
-    await page.click('button[title="Settings"]');
-    await page.locator("#settings-tab-account").click();
-    await scrollSettingsControlIntoView(page, "#add-device");
+    await navigateVia(page, "Account");
     await page.locator("#add-device").click();
   });
 
-  test("the scope step opens on everything, with no app picker in the way", async ({
+  test("the invite step opens on everything, with no tiles in the way", async ({
     page,
   }) => {
+    await expect(page.getByRole("heading", { name: "1. Show the invite" })).toBeVisible();
     await expect(page.locator("#pair-scope-all")).toBeChecked();
     await expect(page.locator("#pair-app-list")).toHaveCount(0);
-    await expect(page.locator("#pair-scope-next")).toBeEnabled();
+    await expect(page.locator("#pair-next")).toBeEnabled();
   });
 
-  test("everything hands the new device every namespace", async ({ page }) => {
-    await page.locator("#pair-scope-next").click();
-
-    // Decoded, not matched as text: the ids are inside base64, where a substring
-    // assertion would pass on a blob that names the wrong set.
-    expect(await inviteNamespacesOnScreen(page)).toEqual([
-      MOCK_NAMESPACE_ID,
-      MOCK_OTHER_NAMESPACE_ID,
-    ]);
-  });
-
-  test("choosing one app narrows the invite to that app's namespaces", async ({
-    page,
-  }) => {
+  test("ticking a tile marks it chosen", async ({ page }) => {
     await page.locator("#pair-scope-apps").check();
-    await page.locator(`#pair-app-${MOCK_OTHER_APPLICATION_ID}`).check();
-    await page.locator("#pair-scope-next").click();
+    await page.locator(`#pair-app-${MOCK_OTHER_APPLICATION_ID}`).click();
 
-    expect(await inviteNamespacesOnScreen(page)).toEqual([MOCK_OTHER_NAMESPACE_ID]);
+    await expect(
+      page.locator(`#pair-app-${MOCK_OTHER_APPLICATION_ID}`),
+    ).toHaveAttribute("aria-pressed", "true");
   });
 
-  test("the app picker is labelled by namespace, not by a raw id", async ({
-    page,
-  }) => {
+  test("a tile names the app and what picking it would cover", async ({ page }) => {
     await page.locator("#pair-scope-apps").check();
 
     await expect(page.locator("#pair-app-list")).toContainText("Personal");
     await expect(page.locator("#pair-app-list")).toContainText("Files");
+    await expect(page.locator("#pair-app-list")).toContainText("1 namespace");
     await expect(page.locator("#pair-app-list")).not.toContainText(
       MOCK_APPLICATION_ID,
     );
   });
 
-  test("choosing no app leaves nothing to invite anyone to", async ({ page }) => {
+  test("ticking nothing under the narrowed scope holds the step", async ({ page }) => {
     await page.locator("#pair-scope-apps").check();
 
-    await expect(page.locator("#pair-scope-next")).toBeDisabled();
+    await expect(page.locator("#pair-next")).toBeDisabled();
   });
 
-  test("step 1 hands over an invite blob", async ({ page }) => {
-    await page.locator("#pair-scope-next").click();
-
-    await expect(page.locator("#pair-invite")).toContainText("mero-pair:");
-    await expect(page.locator("#copy-pair-invite")).toBeVisible();
-  });
-
-  test("step 2 takes the response and the code in separate fields", async ({
+  test("the invite blob names this account's namespace and no namespace list", async ({
     page,
   }) => {
-    await page.locator("#pair-scope-next").click();
+    await expect(page.locator("#pair-invite")).toContainText("mero-pair:");
+    await expect(page.locator("#copy-pair-invite")).toBeVisible();
+    const body = await inviteBodyOnScreen(page);
+    expect(body).toMatchObject({
+      accountNamespace: MOCK_NODE_IDENTITY.accountNamespaceId,
+    });
+    expect("namespaces" in body).toBe(false);
+  });
+
+  test("the wizard opens on an account with no namespace yet", async ({ page }) => {
+    await page.route(API_ROUTES.namespaces, (route) => route.fulfill(json({ data: [] })));
+    await page.route(API_ROUTES.accountApplications, (route) =>
+      route.fulfill(json({ applications: [] })),
+    );
+    await page.reload();
+    await navigateVia(page, "Account");
+    await page.locator("#add-device").click();
+
+    await expect(page.locator("#pair-node-too-old")).toHaveCount(0);
+    await expect(page.locator("#pair-invite")).toContainText("mero-pair:");
+  });
+
+  test("a node reporting no account namespace is named as too old to pair", async ({
+    page,
+  }) => {
+    await page.route(API_ROUTES.identity, (route) =>
+      route.fulfill(json({ data: { ...MOCK_NODE_IDENTITY, accountNamespaceId: undefined } })),
+    );
+    await page.reload();
+    await navigateVia(page, "Account");
+    await page.locator("#add-device").click();
+
+    await expect(page.locator("#pair-node-too-old")).toHaveText(
+      "This node is too old to pair devices. Update it, then come back.",
+    );
+    await expect(page.locator("#pair-invite")).toHaveCount(0);
+    await expect(page.locator("#pair-cancel")).toBeVisible();
+  });
+
+  test("pair-complete carries the apps the tiles chose", async ({ page }) => {
+    const bodies: string[] = [];
+    await page.route(API_ROUTES.pairComplete, (route) => {
+      bodies.push(route.request().postData() ?? "");
+      return route.fulfill(json({ data: MOCK_PAIR_COMPLETE }));
+    });
+
+    await page.locator("#pair-scope-apps").check();
+    await page.locator(`#pair-app-${MOCK_OTHER_APPLICATION_ID}`).click();
     await page.locator("#pair-next").click();
+    await page.fill("#pair-response", MOCK_PAIR_REPLY_BLOB);
+    await page.fill("#pair-code", MOCK_PAIR_INIT.confirmationCode);
+    await page.locator("#pair-complete").click();
+
+    await expect(page.locator("#pair-success")).toBeVisible();
+    expect(JSON.parse(bodies[0]).applications).toEqual([MOCK_OTHER_APPLICATION_ID]);
+  });
+
+  test("a name typed on the confirm step is stored against the device", async ({
+    page,
+  }) => {
+    const bodies: string[] = [];
+    await page.route(API_ROUTES.createDeviceAlias, (route) => {
+      bodies.push(route.request().postData() ?? "");
+      return route.fulfill(json({ data: {} }));
+    });
+
+    await page.locator("#pair-next").click();
+    await page.fill("#pair-response", MOCK_PAIR_REPLY_BLOB);
+    await page.fill("#pair-code", MOCK_PAIR_INIT.confirmationCode);
+    await page.fill("#pair-name", "  alices-iphone  ");
+    await page.locator("#pair-complete").click();
+
+    await expect(page.locator("#pair-success")).toBeVisible();
+    expect(JSON.parse(bodies[0])).toEqual({
+      alias: "alices-iphone",
+      deviceId: MOCK_PAIR_INIT.deviceId,
+    });
+  });
+
+  test("leaving the name empty names nothing", async ({ page }) => {
+    let named = 0;
+    await page.route(API_ROUTES.createDeviceAlias, (route) => {
+      named += 1;
+      return route.fulfill(json({ data: {} }));
+    });
+
+    await page.locator("#pair-next").click();
+    await page.fill("#pair-response", MOCK_PAIR_REPLY_BLOB);
+    await page.fill("#pair-code", MOCK_PAIR_INIT.confirmationCode);
+    await page.locator("#pair-complete").click();
+
+    await expect(page.locator("#pair-success")).toBeVisible();
+    expect(named).toBe(0);
+  });
+
+  test("a name outside core's alias grammar shows a hint and names nothing", async ({
+    page,
+  }) => {
+    let named = 0;
+    await page.route(API_ROUTES.createDeviceAlias, (route) => {
+      named += 1;
+      return route.fulfill(json({ data: {} }));
+    });
+
+    await page.locator("#pair-next").click();
+    await page.fill("#pair-response", MOCK_PAIR_REPLY_BLOB);
+    await page.fill("#pair-code", MOCK_PAIR_INIT.confirmationCode);
+    await page.fill("#pair-name", "Alice's iPhone");
+
+    await expect(page.locator("#pair-name-hint")).toHaveText(
+      "Use letters, digits, dots, dashes or underscores, up to 50 characters.",
+    );
+    await page.locator("#pair-complete").click();
+
+    await expect(page.locator("#pair-success")).toBeVisible();
+    expect(named).toBe(0);
+  });
+
+  test("a name the node refuses is said out loud, and the device stays added", async ({
+    page,
+  }) => {
+    await page.route(API_ROUTES.createDeviceAlias, (route) =>
+      route.fulfill({
+        status: 400,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "alias contains an invalid character" }),
+      }),
+    );
+
+    await page.locator("#pair-next").click();
+    await page.fill("#pair-response", MOCK_PAIR_REPLY_BLOB);
+    await page.fill("#pair-code", MOCK_PAIR_INIT.confirmationCode);
+    await page.fill("#pair-name", "already-taken");
+    await page.locator("#pair-complete").click();
+
+    await expect(page.locator("#pair-success")).toBeVisible();
+    await expect(page.locator("#pair-name-error")).toHaveText(
+      "alias contains an invalid character",
+    );
+  });
+
+  test("the confirm step takes the reply and the code in separate fields", async ({
+    page,
+  }) => {
+    await page.locator("#pair-next").click();
+
+    await expect(page.getByRole("heading", { name: "2. Confirm the device" })).toBeVisible();
 
     await expect(page.locator("#pair-response")).toBeVisible();
     await expect(page.locator("#pair-code")).toBeVisible();
@@ -607,7 +1150,6 @@ test.describe("Account tab - pairing wizard", () => {
   test("a truncated response is named as such before it is sent", async ({
     page,
   }) => {
-    await page.locator("#pair-scope-next").click();
     await page.locator("#pair-next").click();
     await page.fill("#pair-response", "mero-pair-reply:" + btoa('{"deviceId":"abc"}'));
 
@@ -618,7 +1160,6 @@ test.describe("Account tab - pairing wizard", () => {
   });
 
   test("linking shows a loader and then the success state", async ({ page }) => {
-    await page.locator("#pair-scope-next").click();
     await page.locator("#pair-next").click();
     await page.fill("#pair-response", MOCK_PAIR_REPLY_BLOB);
     await page.fill("#pair-code", MOCK_PAIR_INIT.confirmationCode);
@@ -631,20 +1172,31 @@ test.describe("Account tab - pairing wizard", () => {
   });
 });
 
-test.describe("Account tab - pairing responder", () => {
+test.describe("Account page - pairing responder", () => {
   test.beforeEach(async ({ page }) => {
     await setupDeveloperPage(page);
     await mockPairingAPIs(page);
-    await page.click('button[title="Settings"]');
-    await page.locator("#settings-tab-account").click();
-    await scrollSettingsControlIntoView(page, "#pair-invite-input");
+    await navigateVia(page, "Account");
   });
 
   test("an invite yields a response blob and a spoken confirmation code", async ({
     page,
   }) => {
+    const initBodies: string[] = [];
+    await page.route(API_ROUTES.pairInit, (route) => {
+      initBodies.push(route.request().postData() ?? "");
+      return route.fulfill(json({ data: MOCK_PAIR_INIT }));
+    });
+
     await page.fill("#pair-invite-input", MOCK_PAIR_INVITE_BLOB);
     await page.locator("#pair-init").click();
+
+    await expect(page.locator("#pair-reply")).toContainText("mero-pair-reply:");
+    expect(JSON.parse(initBodies[0])).toEqual({
+      accountRootPublicKey: MOCK_NODE_IDENTITY.accountRootPublicKey,
+      accountNamespace: MOCK_NODE_IDENTITY.accountNamespaceId,
+      namespaces: [],
+    });
 
     await expect(page.locator("#pair-reply")).toContainText("mero-pair-reply:");
 
@@ -725,10 +1277,10 @@ test.describe("Account tab - pairing responder", () => {
     await expect(page.locator("#pair-app-installs")).toHaveCount(0);
   });
 
-  test("an invite naming no namespace is not one", async ({ page }) => {
+  test("an invite naming no account namespace is not one", async ({ page }) => {
     const empty =
       "mero-pair:" +
-      btoa(JSON.stringify({ rootKey: MOCK_NODE_IDENTITY.accountRootPublicKey, namespaces: [] }));
+      btoa(JSON.stringify({ rootKey: MOCK_NODE_IDENTITY.accountRootPublicKey }));
     await page.fill("#pair-invite-input", empty);
 
     await expect(page.locator("#pair-invite-invalid")).toBeVisible();

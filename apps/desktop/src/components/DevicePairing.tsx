@@ -1,9 +1,13 @@
 import { useState, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { Check, KeyRound, Loader2, X } from "lucide-react";
+import AppIcon from "./AppIcon";
 import CopyButton from "./CopyButton";
 import { SkeletonText } from "./Skeleton";
 import {
+  aliasFromInput,
+  aliasInputHint,
+  createDeviceAlias,
   listAccountApplications,
   refusalStatus,
   listAccountDevices,
@@ -22,6 +26,7 @@ import { decodeMetadata, parseTauriError } from "../utils/appUtils";
 import { listInstalledApps, invalidateInstalledApps } from "../utils/installedAppsCache";
 import { apiClient } from "../lib/mero-client";
 import { truncateText } from "../utils/string";
+import "./AccountPanel.css";
 
 /** Marks a blob as the invite the account holder hands out. */
 const INVITE_PREFIX = "mero-pair:";
@@ -43,7 +48,9 @@ export interface PairInviteApp {
 
 export interface PairInvite {
   rootKey: string;
-  namespaces: string[];
+  /** The account's own namespace. Following it is what carries the new device
+   *  into the account's projects, so the invite names no namespaces itself. */
+  accountNamespace: string;
   apps?: PairInviteApp[];
 }
 
@@ -85,13 +92,24 @@ export function encodeInvite(invite: PairInvite): string {
 export function decodeInvite(blob: string): PairInvite | null {
   const body = decodeBlob(INVITE_PREFIX, blob);
   const rootKey = str(body?.rootKey);
-  const namespaces = Array.isArray(body?.namespaces)
-    ? body.namespaces.filter((id): id is string => typeof id === "string" && id.length > 0)
-    : [];
-  // Core refuses an empty namespace list, so an invite carrying none is not one.
-  if (!rootKey || !namespaces.length) return null;
+  const accountNamespace = str(body?.accountNamespace);
+  // Core refuses a request naming neither, so a blob naming neither is not an invite.
+  if (!rootKey || !accountNamespace) return null;
   const apps = installableApps(body?.apps);
-  return { rootKey, namespaces, ...(apps.length ? { apps } : {}) };
+  return { rootKey, accountNamespace, ...(apps.length ? { apps } : {}) };
+}
+
+/** The invite a holder hands out. */
+export function buildInvite({
+  rootKey,
+  accountNamespace,
+  apps,
+}: {
+  rootKey: string;
+  accountNamespace: string;
+  apps: PairInviteApp[];
+}): PairInvite {
+  return { rootKey, accountNamespace, ...(apps.length ? { apps } : {}) };
 }
 
 /** The confirmation code is deliberately left out: a code that travels with the
@@ -116,18 +134,6 @@ export function decodeReply(blob: string): PairReply | null {
   };
 }
 
-/** What the new device listens on: every namespace, or those the chosen
- *  applications target. `undefined` applications is "everything". */
-export function inviteNamespaces(
-  namespaces: NamespaceSummary[],
-  applications?: string[],
-): string[] {
-  const chosen = applications
-    ? namespaces.filter((ns) => applications.includes(ns.targetApplicationId))
-    : namespaces;
-  return chosen.map((ns) => ns.namespaceId);
-}
-
 /** What the label needs off an installed application; the node's row carries more. */
 export interface InstalledApp {
   id: string;
@@ -136,6 +142,8 @@ export interface InstalledApp {
   /** Registry coordinates, absent on an app installed outside a registry. */
   package?: string;
   version?: string;
+  /** Absent while a namespace has named the app but its blob has not arrived. */
+  blob?: { bytecode?: string };
 }
 
 /** The apps an invite offers to install: those in scope carrying the coordinates
@@ -152,28 +160,49 @@ export function inviteApps(
   );
 }
 
-/** The namespaces an application is spoken in, named where they have names. A
- *  scope is chosen per application, so this says what picking one would cover. */
-export function applicationNamespaces(
-  applicationId: string,
-  namespaces: NamespaceSummary[],
-): string {
-  return namespaces
-    .filter((ns) => ns.targetApplicationId === applicationId)
-    .map((ns) => ns.name || truncateText(ns.namespaceId, 8))
-    .join(", ");
+/** One app the invite can be scoped to, and what picking it would cover. */
+export interface ScopeTile {
+  applicationId: string;
+  name: string;
+  namespaces: number;
+  icon?: string;
 }
 
-/** The lines one scope choice shows: its name, then the namespaces it covers
- *  when those say something the name did not already. */
-export function scopeRow(
-  applicationId: string,
+/** The apps a scope can name: those the account already speaks in, plus those
+ *  installed here, which a namespace may be created for after the pairing. */
+export function scopeTiles(
+  applications: AccountApplication[],
   namespaces: NamespaceSummary[],
-  installed?: InstalledApp[],
-): string[] {
-  const name = applicationLabel(applicationId, namespaces, installed);
-  const covered = applicationNamespaces(applicationId, namespaces);
-  return covered && covered !== name ? [name, covered] : [name];
+  installed: InstalledApp[],
+): ScopeTile[] {
+  const counts = new Map(applications.map((app) => [app.applicationId, app.namespaces.length]));
+  for (const app of installed) if (!counts.has(app.id)) counts.set(app.id, 0);
+
+  return Array.from(counts, ([applicationId, count]) => {
+    const icon = applicationIcon(applicationId, installed);
+    return {
+      applicationId,
+      name: applicationLabel(applicationId, namespaces, installed),
+      namespaces: count,
+      ...(icon ? { icon } : {}),
+    };
+  }).sort((a, b) => {
+    if (!a.namespaces !== !b.namespaces) return a.namespaces ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+}
+
+/** An app with no namespace is still worth picking: the device follows the ones
+ *  created for it later. */
+export function tileNamespaceCount(count: number): string {
+  if (!count) return "no namespace yet";
+  return `${count} namespace${count === 1 ? "" : "s"}`;
+}
+
+/** Everything needs nothing ticked; the narrowed scope is not a scope until it
+ *  names one app. */
+export function canLeaveScopeStep(everything: boolean, chosen: string[]): boolean {
+  return everything || chosen.length > 0;
 }
 
 /** The application's own name where the node has one, since the question being
@@ -193,6 +222,16 @@ export function applicationLabel(
   return names.length ? names.join(", ") : truncateText(applicationId, 12);
 }
 
+/** The launcher icon the bundle carries, when this node has the app installed. */
+export function applicationIcon(
+  applicationId: string,
+  installed?: InstalledApp[],
+): string | undefined {
+  const app = installed?.find((entry) => entry.id === applicationId);
+  const icon = app && decodeMetadata(app.metadata)?.icon;
+  return typeof icon === "string" && icon ? icon : undefined;
+}
+
 async function waitForDevice(deviceId: string): Promise<boolean> {
   const deadline = Date.now() + POLL_CEILING_MS;
   while (Date.now() < deadline) {
@@ -206,21 +245,25 @@ async function waitForDevice(deviceId: string): Promise<boolean> {
 interface WizardProps {
   /** From this node's identity; without one it cannot invite anybody. */
   rootKey?: string;
-  onLinked: (deviceId: string, converged: boolean) => void;
+  /** Also from identity, absent on a node too old to hold an account namespace. */
+  accountNamespaceId?: string | null;
+  onLinked: () => void;
   onClose: () => void;
 }
 
-export function DevicePairWizard({ rootKey, onLinked, onClose }: WizardProps) {
+export function DevicePairWizard({ rootKey, accountNamespaceId, onLinked, onClose }: WizardProps) {
   const [namespaces, setNamespaces] = useState<NamespaceSummary[]>([]);
   const [applications, setApplications] = useState<AccountApplication[]>([]);
   const [installed, setInstalled] = useState<InstalledApp[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
-  const [step, setStep] = useState<0 | 1 | 2>(0);
+  const [step, setStep] = useState<0 | 1>(0);
   const [everything, setEverything] = useState(true);
   const [chosenApps, setChosenApps] = useState<string[]>([]);
   const [replyText, setReplyText] = useState("");
   const [code, setCode] = useState("");
+  const [deviceName, setDeviceName] = useState("");
+  const [nameError, setNameError] = useState("");
   const [linking, setLinking] = useState(false);
   const [linkError, setLinkError] = useState("");
   // A 409 refuses the SCOPE, not the payload, so retyping the code cannot help.
@@ -257,10 +300,8 @@ export function DevicePairWizard({ rootKey, onLinked, onClose }: WizardProps) {
     return () => controller.abort();
   }, [rootKey, reloads]);
 
-  // The one value the two halves of pairing disagree about on purpose: the
-  // invite names namespaces to listen on, pair-complete names applications.
   const scopedApps = everything ? undefined : chosenApps;
-  const inviteNs = inviteNamespaces(namespaces, scopedApps);
+  const tiles = scopeTiles(applications, namespaces, installed);
 
   const reply = decodeReply(replyText);
   const payload = reply ? { ...reply, confirmationCode: code } : null;
@@ -284,10 +325,18 @@ export function DevicePairWizard({ rootKey, onLinked, onClose }: WizardProps) {
     setScopeRefused(false);
     try {
       const done = await pairComplete(payload, scopedApps);
+      // The device is certified either way, so a refused name is reported rather
+      // than thrown: it is a convenience this node stores on its own.
+      const alias = aliasFromInput(deviceName);
+      if (alias) {
+        await createDeviceAlias({ alias, deviceId: done.deviceId }).catch((err: unknown) =>
+          setNameError(parseTauriError(err, "Could not save that name")),
+        );
+      }
       const seen = await waitForDevice(done.deviceId);
       setResult(done);
       setConverged(seen);
-      onLinked(done.deviceId, seen);
+      onLinked();
     } catch (err: unknown) {
       setLinkError(parseTauriError(err, "Could not link the device"));
       setScopeRefused(refusalStatus(err) === 409);
@@ -334,12 +383,13 @@ export function DevicePairWizard({ rootKey, onLinked, onClose }: WizardProps) {
     );
   }
 
-  if (!namespaces.length) {
+  // The account namespace is the whole invite: without one there is nothing a
+  // new device could be told to follow.
+  if (!accountNamespaceId) {
     return (
       <div className="account-wizard">
-        <p className="field-hint" id="pair-no-namespace">
-          This node is not part of anything yet, so there is nothing to add a device to. Join
-          or create something first, then come back.
+        <p className="field-hint" id="pair-node-too-old">
+          This node is too old to pair devices. Update it, then come back.
         </p>
         <button type="button" id="pair-cancel" className="button button-secondary" onClick={onClose}>
           Close
@@ -357,6 +407,11 @@ export function DevicePairWizard({ rootKey, onLinked, onClose }: WizardProps) {
             ? "The device has its account key."
             : "The account key has not reached it yet - the device's sync pull will retry."}
         </p>
+        {nameError && (
+          <p className="field-error" id="pair-name-error">
+            {nameError}
+          </p>
+        )}
         {!converged && (
           <p className="field-hint" id="pair-syncing-note">
             It has not appeared in the list here yet; it is still syncing.
@@ -378,10 +433,24 @@ export function DevicePairWizard({ rootKey, onLinked, onClose }: WizardProps) {
     );
   }
 
+  const invite = encodeInvite(
+    buildInvite({
+      rootKey,
+      accountNamespace: accountNamespaceId,
+      apps: inviteApps(scopedApps, installed),
+    }),
+  );
+
   if (step === 0) {
     return (
       <div className="account-wizard">
-        <p className="field-hint">What should this device have?</p>
+        <h3 className="account-wizard-title">1. Show the invite</h3>
+        <p className="field-hint">
+          Copy this invite to the new device and paste it into its Account page. It carries
+          the account, not a list of namespaces; the device learns those on its own. You can
+          widen the scope from the device's row afterwards.
+        </p>
+        <span className="settings-field-label">What may this device act for?</span>
         <label className="account-scope-choice">
           <input
             type="radio"
@@ -390,7 +459,7 @@ export function DevicePairWizard({ rootKey, onLinked, onClose }: WizardProps) {
             checked={everything}
             onChange={() => setEverything(true)}
           />
-          <span>Everything on this account</span>
+          <span>Everything on this account, now and later</span>
         </label>
         <label className="account-scope-choice">
           <input
@@ -400,47 +469,62 @@ export function DevicePairWizard({ rootKey, onLinked, onClose }: WizardProps) {
             checked={!everything}
             onChange={() => setEverything(false)}
           />
-          <span>Only the apps I choose</span>
+          <span>
+            Only the apps I choose{" "}
+            <span className="account-scope-note">
+              (it follows every namespace for these apps, including ones you join later)
+            </span>
+          </span>
         </label>
-        {!everything && (
-          <div className="account-scope-apps" id="pair-app-list">
-            {applications.length === 0 ? (
-              <p className="field-hint" id="pair-no-apps">
-                This account speaks in no app yet.
-              </p>
-            ) : (
-              applications.map((app) => (
-                <label className="account-scope-choice account-scope-app" key={app.applicationId}>
-                  <input
-                    type="checkbox"
-                    id={`pair-app-${app.applicationId}`}
-                    checked={chosenApps.includes(app.applicationId)}
-                    onChange={() => toggleApp(app.applicationId)}
-                  />
-                  <span className="account-scope-app-text">
-                    {scopeRow(app.applicationId, namespaces, installed).map((line, i) => (
-                        <span
-                          key={line}
-                          className={i === 0 ? "account-scope-app-name" : "account-scope-app-ns"}
-                        >
-                          {line}
-                        </span>
-                      ))}
-                  </span>
-                </label>
-              ))
-            )}
+        {!everything &&
+          (tiles.length === 0 ? (
+            <p className="field-hint" id="pair-no-apps">
+              This account speaks in no app yet, and this node has none installed.
+            </p>
+          ) : (
+            <div className="account-tiles" id="pair-app-list">
+              {tiles.map((tile) => {
+                const chosen = chosenApps.includes(tile.applicationId);
+                return (
+                  <button
+                    type="button"
+                    key={tile.applicationId}
+                    id={`pair-app-${tile.applicationId}`}
+                    className={`account-tile${chosen ? " is-on" : ""}`}
+                    aria-pressed={chosen}
+                    onClick={() => toggleApp(tile.applicationId)}
+                  >
+                    <AppIcon icon={tile.icon} name={tile.name} seed={tile.applicationId} size={32} />
+                    <span className="account-tile-name">{tile.name}</span>
+                    <span className="account-tile-meta">
+                      {tileNamespaceCount(tile.namespaces)}
+                    </span>
+                    {chosen && (
+                      <span className="account-tile-check">
+                        <Check size={10} />
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          ))}
+        <div className="settings-field">
+          <div className="agent-config-header">
+            <span className="settings-field-label">Invite</span>
+            <CopyButton id="copy-pair-invite" value={invite} />
           </div>
-        )}
+          <pre className="agent-config account-blob" tabIndex={0} id="pair-invite">{invite}</pre>
+        </div>
         <div className="account-wizard-actions">
           <button
             type="button"
-            id="pair-scope-next"
+            id="pair-next"
             className="button button-primary"
             onClick={() => setStep(1)}
-            disabled={!inviteNs.length}
+            disabled={!canLeaveScopeStep(everything, chosenApps)}
           >
-            Next
+            I pasted it, next
           </button>
           <button type="button" id="pair-cancel" className="button button-secondary" onClick={onClose}>
             Cancel
@@ -450,122 +534,91 @@ export function DevicePairWizard({ rootKey, onLinked, onClose }: WizardProps) {
     );
   }
 
-  const invite = encodeInvite({
-    rootKey,
-    namespaces: inviteNs,
-    apps: inviteApps(scopedApps, installed),
-  });
-
   return (
     <div className="account-wizard">
-      {step === 1 ? (
-        <>
-          <p className="field-hint">
-            On the computer you are adding, open Settings, then Account, and paste this into
-            "Pair this computer into an account".
-          </p>
-          <div className="settings-field">
-            <div className="agent-config-header">
-              <span className="settings-field-label">Invite</span>
-              <CopyButton id="copy-pair-invite" value={invite} />
-            </div>
-            <pre className="agent-config account-blob" tabIndex={0} id="pair-invite">{invite}</pre>
-          </div>
-          <div className="account-wizard-actions">
-            <button
-              type="button"
-              id="pair-next"
-              className="button button-primary"
-              onClick={() => setStep(2)}
-            >
-              Next
-            </button>
-            <button
-              type="button"
-              id="pair-scope-back"
-              className="button button-secondary"
-              onClick={() => setStep(0)}
-            >
-              Back
-            </button>
-            <button type="button" id="pair-cancel" className="button button-secondary" onClick={onClose}>
-              Cancel
-            </button>
-          </div>
-        </>
-      ) : (
-        <>
-          <p className="field-hint">
-            The other computer now shows a response and a confirmation code. Paste the response
-            here, then type the code as it appears on that screen.
-          </p>
-          <div className="settings-field">
-            <label htmlFor="pair-response">Response from the other computer</label>
-            <textarea
-              id="pair-response"
-              className="account-blob-input"
-              rows={4}
-              value={replyText}
-              onChange={(e) => setReplyText(e.target.value)}
-              placeholder={`${REPLY_PREFIX}…`}
-            />
-          </div>
-          <div className="settings-field">
-            <label htmlFor="pair-code">
-              Confirmation code, read off the other computer's screen
-            </label>
-            <input
-              id="pair-code"
-              type="text"
-              value={code}
-              onChange={(e) => setCode(normalizeConfirmationCode(e.target.value))}
-              placeholder="ABCD-1234"
-            />
-            <p className="field-hint">
-              Type it in yourself. It is not part of the response, so that a rewritten response
-              cannot carry a matching code.
-            </p>
-          </div>
-          {invalid && <p className="field-error" id="pair-invalid">{invalid}</p>}
-          {linkError && <p className="field-error" id="pair-error">{linkError}</p>}
-          {scopeRefused && (
-            <button
-              type="button"
-              id="pair-change-scope"
-              className="button button-secondary"
-              onClick={() => {
-                setScopeRefused(false);
-                setLinkError("");
-                setStep(0);
-              }}
-            >
-              Change the apps
-            </button>
-          )}
-          <div className="account-wizard-actions">
-            <button
-              type="button"
-              id="pair-complete"
-              className="button button-primary"
-              onClick={link}
-              disabled={!payload || !!invalid}
-            >
-              Link device
-            </button>
-            <button
-              type="button"
-              id="pair-back"
-              className="button button-secondary"
-              onClick={() => setStep(1)}
-            >
-              Back
-            </button>
-            <button type="button" id="pair-cancel" className="button button-secondary" onClick={onClose}>
-              Cancel
-            </button>
-          </div>
-        </>
+      <h3 className="account-wizard-title">2. Confirm the device</h3>
+      <p className="field-hint">
+        Paste the reply the device shows, then type the code it displays. The code proves the
+        reply was not altered on the way.
+      </p>
+      <div className="settings-field">
+        <label htmlFor="pair-response">Reply from the device</label>
+        <textarea
+          id="pair-response"
+          className="account-blob-input"
+          rows={4}
+          value={replyText}
+          onChange={(e) => setReplyText(e.target.value)}
+          placeholder={`${REPLY_PREFIX}…`}
+        />
+      </div>
+      <div className="settings-field">
+        <label htmlFor="pair-code">Confirmation code</label>
+        <input
+          id="pair-code"
+          type="text"
+          value={code}
+          onChange={(e) => setCode(normalizeConfirmationCode(e.target.value))}
+          placeholder="ABCD-1234"
+        />
+        <p className="field-hint">
+          Type it in yourself. It is not part of the reply, so that a rewritten reply cannot
+          carry a matching code.
+        </p>
+      </div>
+      <div className="settings-field">
+        <label htmlFor="pair-name">Name this device</label>
+        <input
+          id="pair-name"
+          type="text"
+          value={deviceName}
+          onChange={(e) => setDeviceName(e.target.value)}
+          placeholder="alices-iphone"
+        />
+        {aliasInputHint(deviceName) ? (
+          <p className="field-hint" id="pair-name-hint">{aliasInputHint(deviceName)}</p>
+        ) : (
+          <p className="field-hint">Optional, and kept on this computer only.</p>
+        )}
+      </div>
+      {invalid && <p className="field-error" id="pair-invalid">{invalid}</p>}
+      {linkError && <p className="field-error" id="pair-error">{linkError}</p>}
+      {scopeRefused && (
+        <button
+          type="button"
+          id="pair-change-scope"
+          className="button button-secondary"
+          onClick={() => {
+            setScopeRefused(false);
+            setLinkError("");
+            setStep(0);
+          }}
+        >
+          Change the apps
+        </button>
       )}
+      <div className="account-wizard-actions">
+        <button
+          type="button"
+          id="pair-complete"
+          className="button button-primary"
+          onClick={link}
+          disabled={!payload || !!invalid}
+        >
+          Add this device
+        </button>
+        <button
+          type="button"
+          id="pair-back"
+          className="button button-secondary"
+          onClick={() => setStep(0)}
+        >
+          Back
+        </button>
+        <button type="button" id="pair-cancel" className="button button-secondary" onClick={onClose}>
+          Cancel
+        </button>
+      </div>
     </div>
   );
 }
@@ -617,7 +670,7 @@ export function DevicePairResponder({ enrolledDeviceId }: { enrolledDeviceId?: s
     try {
       // Kept on failure: pair-init is idempotent, so the holder can just retry
       // against this same response instead of restarting the wizard.
-      setResult(await pairInit(invite.rootKey, invite.namespaces));
+      setResult(await pairInit(invite.rootKey, invite.accountNamespace));
       setInstalls([]);
       setInstalling(false);
       setLinked(false);

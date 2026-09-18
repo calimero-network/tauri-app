@@ -220,6 +220,12 @@ body {
   box-shadow: none;
 }
 
+/* A button standing in a list row rather than at the foot of a card. */
+.button.button-small {
+  padding: 6px 12px;
+  font-size: 12px;
+}
+
 /* Solid fill so the main action outranks a neighbouring .button. */
 .button.button-primary {
   background: var(--accent-primary);
@@ -322,6 +328,311 @@ body {
   color: var(--error);
 }
 
+/* ── Card and field shell ──
+   Shared by the settings page and the account page, which load their own
+   sheets separately. */
+.settings-card {
+  background: var(--gradient-surface), var(--surface-glass);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  padding: 32px;
+  box-shadow: var(--shadow-sm);
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  position: relative;
+  overflow: hidden;
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
+
+.settings-card::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--accent-light), transparent);
+  opacity: 0;
+  transition: opacity 0.3s;
+}
+
+.settings-card:hover {
+  box-shadow: var(--shadow-sm);
+  border-color: var(--border-hover);
+}
+
+.settings-card:hover::after {
+  opacity: 1;
+}
+
+.settings-card h2 {
+  margin: 0 0 24px 0;
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.settings-field {
+  margin-bottom: 24px;
+}
+
+.settings-field:last-child {
+  margin-bottom: 0;
+}
+
+.settings-field > label:not(.toggle-label),
+.settings-field-label {
+  display: block;
+  margin-bottom: 8px;
+  font-weight: 600;
+  color: var(--text-primary);
+  font-size: 14px;
+}
+
+.settings-field input,
+.settings-field select,
+.settings-field textarea {
+  width: 100%;
+  padding: 12px 16px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  font-size: 14px;
+  background: var(--surface-glass-soft);
+  color: var(--text-primary);
+  transition: all 0.2s;
+  font-family: inherit;
+}
+
+.settings-field input:focus,
+.settings-field select:focus,
+.settings-field textarea:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+  background: var(--surface-glass);
+  box-shadow: 0 0 0 3px var(--accent-light);
+}
+
+.settings-field input:disabled,
+.settings-field select:disabled {
+  background: var(--surface-glass-soft);
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.agent-config-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+/* The gap under the header belongs to the header, not the label, or the button
+   sits off-centre against it. */
+.agent-config-header .settings-field-label {
+  margin-bottom: 0;
+}
+
+/* Standalone rather than a .button variant: index.css defines .button later in the
+   bundle, so any size set on a .button modifier here silently loses the cascade. */
+.agent-config-copy {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-family: inherit;
+  font-size: 12px;
+  background: var(--button-glass);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.agent-config-copy:hover {
+  background: var(--button-glass-hover);
+  border-color: var(--border-hover);
+  color: var(--text-primary);
+}
+
+.agent-config-copy--copied,
+.agent-config-copy--copied:hover {
+  color: var(--success);
+  border-color: var(--success);
+}
+
+.agent-config {
+  margin: 0;
+  padding: 14px 16px;
+  /* Capped so the long setup prompt doesn't dominate the card; Copy takes it all. */
+  max-height: 240px;
+  overflow: auto;
+  /* Wrapped, not `pre`: the prompt's prose lines are long, and scrolling sideways
+     to read them is worse than a soft wrap. */
+  white-space: pre-wrap;
+  background: var(--surface-glass-soft);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+/* ── Disclosure row: a list row that expands in place ── */
+.disclosure-row {
+  background: var(--surface-glass-soft);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+}
+
+.disclosure-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+}
+
+/* Stretches across the head, so the whole title block is the hit area. */
+.disclosure-trigger {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.disclosure-chevron {
+  flex: none;
+  color: var(--text-tertiary);
+  transition: transform 0.15s;
+}
+
+.disclosure-row.is-open .disclosure-chevron {
+  transform: rotate(90deg);
+}
+
+.disclosure-body {
+  border-top: 1px solid var(--border-color);
+}
+
+/* ── Toggle switch ── */
+.toggle-switch {
+  display: flex;
+  align-items: center;
+  position: relative;
+}
+
+/* Overlay the slider hit area so the native checkbox stays in layout (Playwright
+   visibility / check()) while the custom slider still shows underneath. */
+.toggle-switch input[type="checkbox"] {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 48px;
+  height: 26px;
+  margin: 0;
+  padding: 0;
+  opacity: 0.02;
+  cursor: pointer;
+  z-index: 3;
+  flex-shrink: 0;
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  border: none;
+}
+
+.toggle-label {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  cursor: pointer;
+  user-select: none;
+  margin: 0;
+  position: relative;
+  z-index: 1;
+}
+
+.toggle-slider {
+  position: relative;
+  width: 48px;
+  height: 26px;
+  background: var(--surface-glass-soft);
+  border: 1px solid var(--border-color);
+  border-radius: 13px;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  flex-shrink: 0;
+}
+
+.toggle-slider::before {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 20px;
+  height: 20px;
+  background: white;
+  border-radius: 50%;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+.toggle-switch input[type="checkbox"]:checked + .toggle-label .toggle-slider {
+  background: var(--accent-primary);
+  border-color: var(--accent-primary);
+}
+
+.toggle-switch input[type="checkbox"]:checked + .toggle-label .toggle-slider::before {
+  transform: translateX(22px);
+}
+
+.toggle-text {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary);
+  min-width: 60px;
+}
+
+/* 34x20, for a switch standing in a list row rather than beside a settings field. */
+.toggle-switch-small {
+  flex: none;
+}
+
+.toggle-switch-small input[type="checkbox"],
+.toggle-switch-small .toggle-slider {
+  width: 34px;
+  height: 20px;
+}
+
+.toggle-switch-small .toggle-slider {
+  border-radius: 10px;
+}
+
+.toggle-switch-small .toggle-slider::before {
+  width: 14px;
+  height: 14px;
+}
+
+.toggle-switch-small input[type="checkbox"]:checked + .toggle-label .toggle-slider::before {
+  transform: translateX(16px);
+}
+
+.toggle-switch input[type="checkbox"]:disabled,
+.toggle-switch input[type="checkbox"]:disabled + .toggle-label {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 /* ── Inline confirmation for a destructive action ── */
 .reset-confirm-form {
   margin-top: 12px;
@@ -363,6 +674,14 @@ body {
 
 .empty-state a:hover {
   text-decoration: underline;
+}
+
+/* A section that has nothing in it yet, as opposed to .field-hint under a field. */
+.empty-hint {
+  color: var(--text-tertiary);
+  font-size: 14px;
+  font-style: italic;
+  padding: 12px 0;
 }
 
 .error-message {

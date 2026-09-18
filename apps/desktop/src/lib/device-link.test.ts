@@ -31,6 +31,8 @@ vi.mock('./mero-client', async (importOriginal) => {
 
 // Imported once, unlike agent-connect's suite: device-link.ts keeps no module state.
 import {
+  aliasFromInput,
+  aliasInputHint,
   listAccountApplications,
   listAccountDevices,
   listNamespaces,
@@ -71,6 +73,7 @@ function json(body: unknown, init?: ResponseInit): Response {
 }
 
 const HEX_64 = 'a'.repeat(64);
+const ACCOUNT_NS = '9'.repeat(64);
 const HEX_128 = 'b'.repeat(128);
 
 /** A pair-init result as the other device would read it out. */
@@ -302,16 +305,17 @@ describe('listAccountApplications', () => {
 });
 
 describe('pairInit', () => {
-  it('posts the account root key and every namespace the device is to listen on', async () => {
+  it('posts the account root key and the account namespace, and names no others', async () => {
     const data = validPayload({ accountId: 'e'.repeat(64) });
     installFetch(json({ data }));
 
-    await expect(pairInit(HEX_64, ['ns-1', 'ns-2'])).resolves.toEqual(data);
+    await expect(pairInit(HEX_64, ACCOUNT_NS)).resolves.toEqual(data);
     expect(calls[0].url).toBe('http://localhost:2528/admin-api/account/pair-init');
     expect(calls[0].init?.method).toBe('POST');
     expect(JSON.parse(String(calls[0].init?.body))).toEqual({
       accountRootPublicKey: HEX_64,
-      namespaces: ['ns-1', 'ns-2'],
+      accountNamespace: ACCOUNT_NS,
+      namespaces: [],
     });
   });
 
@@ -321,7 +325,7 @@ describe('pairInit', () => {
   it('surfaces the node error message, with no status line in front of it', async () => {
     installFetch(json({ error: 'no account root on this node' }, { status: 400 }));
 
-    await expect(pairInit(HEX_64, ['ns-1'])).rejects.toMatchObject({
+    await expect(pairInit(HEX_64, ACCOUNT_NS)).rejects.toMatchObject({
       message: 'no account root on this node',
       status: 400,
     });
@@ -330,7 +334,7 @@ describe('pairInit', () => {
   it('reports a revoked token family as terminal, in words a user can act on', async () => {
     installFetch(new Response('{}', { status: 401, headers: { 'x-auth-error': 'token_reuse' } }));
 
-    await expect(pairInit(HEX_64, ['ns-1'])).rejects.toThrow(
+    await expect(pairInit(HEX_64, ACCOUNT_NS)).rejects.toThrow(
       'Your node session was revoked. Sign in again, then try again.',
     );
   });
@@ -338,13 +342,13 @@ describe('pairInit', () => {
   it('falls back to the status when the body carries no message', async () => {
     installFetch(new Response('', { status: 503 }));
 
-    await expect(pairInit(HEX_64, ['ns-1'])).rejects.toThrow('HTTP 503');
+    await expect(pairInit(HEX_64, ACCOUNT_NS)).rejects.toThrow('HTTP 503');
   });
 
   it('quotes a plain-text refusal verbatim, which the sdk message drops', async () => {
     installFetch(new Response('this node takes part in none of those namespaces', { status: 409 }));
 
-    await expect(pairInit(HEX_64, ['ns-1'])).rejects.toMatchObject({
+    await expect(pairInit(HEX_64, ACCOUNT_NS)).rejects.toMatchObject({
       message: 'this node takes part in none of those namespaces',
       status: 409,
     });
@@ -405,6 +409,7 @@ describe('relinkDevice', () => {
           skipped: [
             { namespaceId: 'ns-2', reason: 'alreadyBound' },
             { namespaceId: 'ns-3', reason: 'outOfScope' },
+            { namespaceId: 'ns-4', reason: 'noScopeKey' },
           ],
         },
       }),
@@ -412,7 +417,9 @@ describe('relinkDevice', () => {
 
     await expect(relinkDevice(HEX_64)).resolves.toEqual({
       linkedIn: ['ns-1'],
-      skipped: ['ns-2', 'ns-3'],
+      skipped: ['ns-2', 'ns-3', 'ns-4'],
+      // Only the skip a later relink can still reach.
+      pending: ['ns-4'],
     });
     expect(calls[0].url).toBe(
       `http://localhost:2528/admin-api/account/devices/${HEX_64}/relink`,
@@ -439,7 +446,7 @@ describe('relinkDevice', () => {
   it('reports nothing rather than throwing when the node names no outcomes', async () => {
     installFetch(json({ data: { accountId: 'e'.repeat(64), deviceId: HEX_64 } }));
 
-    await expect(relinkDevice(HEX_64)).resolves.toEqual({ linkedIn: [], skipped: [] });
+    await expect(relinkDevice(HEX_64)).resolves.toEqual({ linkedIn: [], skipped: [], pending: [] });
   });
 });
 
@@ -506,5 +513,52 @@ describe('listAccountApplications on a device that syncs no namespace metadata',
     );
     const apps = await listAccountApplications();
     expect(apps.map((a) => a.applicationId)).toEqual(['ca'.repeat(32)]);
+  });
+});
+
+describe('aliasFromInput', () => {
+  it('trims surrounding space from an otherwise valid name', () => {
+    expect(aliasFromInput('  alices-iphone  ')).toBe('alices-iphone');
+  });
+
+  it('reads an empty field, or one holding only space, as no name at all', () => {
+    expect(aliasFromInput('')).toBeNull();
+    expect(aliasFromInput('   ')).toBeNull();
+  });
+
+  it('refuses a name past what core stores, and takes one at the limit', () => {
+    expect(aliasFromInput('n'.repeat(50))).toBe('n'.repeat(50));
+    expect(aliasFromInput('n'.repeat(51))).toBeNull();
+  });
+
+  it('refuses spaces inside the name', () => {
+    expect(aliasFromInput('alices iphone')).toBeNull();
+  });
+
+  it("refuses an apostrophe", () => {
+    expect(aliasFromInput("Alice's iPhone")).toBeNull();
+  });
+
+  it('accepts letters, digits, dots, dashes and underscores', () => {
+    expect(aliasFromInput('alices-iphone')).toBe('alices-iphone');
+    expect(aliasFromInput('IPHONE_2')).toBe('IPHONE_2');
+    expect(aliasFromInput('a.b')).toBe('a.b');
+  });
+});
+
+describe('aliasInputHint', () => {
+  it('gives no hint for an empty or valid name', () => {
+    expect(aliasInputHint('')).toBeNull();
+    expect(aliasInputHint('   ')).toBeNull();
+    expect(aliasInputHint('alices-iphone')).toBeNull();
+  });
+
+  it('names the allowed characters for an invalid name', () => {
+    expect(aliasInputHint("Alice's iPhone")).toBe(
+      'Use letters, digits, dots, dashes or underscores, up to 50 characters.',
+    );
+    expect(aliasInputHint('n'.repeat(51))).toBe(
+      'Use letters, digits, dots, dashes or underscores, up to 50 characters.',
+    );
   });
 });

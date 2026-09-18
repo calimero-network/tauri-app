@@ -167,6 +167,12 @@ export async function mockCoreAPIs(
     }),
   );
 
+  // No device has a name until a test gives it one; the Account page asks on
+  // every render, so an unanswered route would escape to the real node.
+  await page.route(API_ROUTES.deviceAliases, (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ data: {} }) }),
+  );
+
   await page.route(API_ROUTES.listContexts, (route) => {
     if (route.request().method() === "GET") {
       return route.fulfill({
@@ -483,7 +489,7 @@ export async function scrollSettingsControlIntoView(
 
 export async function navigateVia(
   page: Page,
-  label: "Home" | "Nodes" | "Namespaces" | "Applications" | "Marketplace",
+  label: "Home" | "Nodes" | "Namespaces" | "Account" | "Applications" | "Marketplace",
 ): Promise<void> {
   await waitForAppShellReady(page);
   await page.locator("aside.sidebar").getByTitle(label).click();

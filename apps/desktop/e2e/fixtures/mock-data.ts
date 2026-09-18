@@ -195,6 +195,8 @@ export const MOCK_INSTALLED_APPS = [
       }),
     ),
     source: "registry",
+    // The node sends a blob for every application it can actually run.
+    blob: { bytecode: "a".repeat(64), compiled: "" },
   },
   {
     id: "installed-app-2",
@@ -208,11 +210,25 @@ export const MOCK_INSTALLED_APPS = [
       }),
     ),
     source: "registry",
+    blob: { bytecode: "b".repeat(64), compiled: "" },
   },
 ];
 
-/** Row shape used by Playwright route mocks (same as `MOCK_INSTALLED_APPS`). */
-export type MockInstalledAppRow = (typeof MOCK_INSTALLED_APPS)[number];
+/** What the node lists for an app a followed namespace names but whose blob has
+ *  not arrived: coordinates to install from, and nothing to run. */
+export const MOCK_UNINSTALLED_APP = {
+  id: "missing-app-1",
+  name: "mero-notes",
+  version: "1.0.0",
+  metadata: btoa(JSON.stringify({ name: "Mero Notes", package: "mero-notes" })),
+  source: "registry",
+  blob: { bytecode: "", compiled: "" },
+};
+
+/** Row shape used by Playwright route mocks (same as `MOCK_INSTALLED_APPS`).
+ *  `package` is optional: it is the real node's top-level field, carried
+ *  separately from `metadata` (which the fixtures usually embed it in instead). */
+export type MockInstalledAppRow = (typeof MOCK_INSTALLED_APPS)[number] & { package?: string };
 
 /**
  * JSON body for `GET .../admin-api/applications`.
@@ -223,10 +239,12 @@ export function listApplicationsWireBody(apps: MockInstalledAppRow[]): string {
     data: {
       apps: apps.map((app) => ({
         applicationId: app.id,
+        ...(app.package ? { package: app.package } : {}),
         name: app.name,
         version: app.version,
         metadata: app.metadata,
         source: app.source,
+        blob: app.blob,
       })),
     },
   });
@@ -265,6 +283,8 @@ export const MOCK_NODE_IDENTITY = {
   deviceId: "d".repeat(32),
   publicKey: "EdMockDevicePublicKey11111111111111111111111",
   accountRootPublicKey: "c".repeat(64),
+  accountNamespaceId: "9".repeat(64),
+  deviceCertified: true,
 };
 
 // ─── Device pairing ─────────────────────────────────────────────────────────
@@ -291,6 +311,27 @@ export const MOCK_NAMESPACES = [
 export const MOCK_ACCOUNT_APPLICATIONS = [
   { applicationId: MOCK_APPLICATION_ID, namespaces: [MOCK_NAMESPACE_ID] },
   { applicationId: MOCK_OTHER_APPLICATION_ID, namespaces: [MOCK_OTHER_NAMESPACE_ID] },
+];
+
+/** The account's two apps as the node lists them: one it holds the blob for,
+ *  one only named by a namespace this node follows. */
+export const MOCK_ACCOUNT_APP_ROWS = [
+  {
+    id: MOCK_APPLICATION_ID,
+    name: "mero-chat",
+    version: "1.2.0",
+    metadata: btoa(JSON.stringify({ name: "Mero Chat", package: "mero-chat" })),
+    source: "registry",
+    blob: { bytecode: "c".repeat(64), compiled: "" },
+  },
+  {
+    id: MOCK_OTHER_APPLICATION_ID,
+    name: "mero-drive",
+    version: "2.0.0",
+    metadata: btoa(JSON.stringify({ name: "Mero Drive", package: "mero-drive" })),
+    source: "registry",
+    blob: { bytecode: "", compiled: "" },
+  },
 ];
 
 export const MOCK_PAIR_INIT = {
@@ -330,6 +371,12 @@ export const MOCK_ACCOUNT_DEVICES = [
   },
 ];
 
+/** Aliases are node-local, so only some of an account's devices carry one. Core
+ *  answers with a flat `{ alias: deviceId }` map. */
+export const MOCK_DEVICE_ALIASES: Record<string, string> = {
+  "Alice's iPad": MOCK_PAIR_INIT.deviceId,
+};
+
 export const MOCK_RELINK = {
   accountId: MOCK_NODE_IDENTITY.accountId,
   deviceId: MOCK_PAIR_INIT.deviceId,
@@ -350,7 +397,7 @@ export const MOCK_PAIR_INVITE_BLOB =
   btoa(
     JSON.stringify({
       rootKey: MOCK_NODE_IDENTITY.accountRootPublicKey,
-      namespaces: [MOCK_NAMESPACE_ID, MOCK_OTHER_NAMESPACE_ID],
+      accountNamespace: MOCK_NODE_IDENTITY.accountNamespaceId,
       // Registry coordinates, as a holder's invite carries them.
       apps: [{ package: "com.calimero.chat", version: "3.1.1" }],
     }),
@@ -386,6 +433,10 @@ export const API_ROUTES = {
   // does not swallow the namespace-scoped routes below it.
   namespaces: "**/admin-api/namespaces*",
   accountDevices: "**/admin-api/account/devices",
+  deviceAliases: "**/admin-api/alias/list/device",
+  createDeviceAlias: "**/admin-api/alias/create/device",
+  lookupDeviceAlias: "**/admin-api/alias/lookup/device/*",
+  deleteDeviceAlias: "**/admin-api/alias/delete/device/*",
   accountApplications: "**/admin-api/account/applications",
   relinkDevice: "**/admin-api/account/devices/*/relink",
   revokeDevice: "**/admin-api/namespaces/*/account/revoke",

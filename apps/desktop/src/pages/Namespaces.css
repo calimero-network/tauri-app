@@ -493,6 +493,12 @@
   text-transform: capitalize;
 }
 
+.ns-card-install {
+  width: 100%;
+  margin: 10px 0 0;
+  justify-content: center;
+}
+
 /* ─── Copy Button ─── */
 .copy-btn {
   display: inline-flex;
@@ -627,13 +633,6 @@
 .mono {
   font-family: 'JetBrains Mono', 'Fira Code', monospace;
   font-size: 12px;
-}
-
-.empty-hint {
-  color: var(--text-tertiary);
-  font-size: 14px;
-  font-style: italic;
-  padding: 12px 0;
 }
 
 .ns-row-info {

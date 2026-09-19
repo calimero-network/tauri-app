@@ -5,6 +5,29 @@
     // Get configured node URL (injected by Rust backend)
     // This is replaced at runtime by Rust when creating the window
     const configuredNodeUrl = '__CONFIGURED_NODE_URL__';
+
+    // ── Is this window's webview on an ISOLATED data store? ──────────────────
+    //
+    // A cross-node window gets its own WKWebsiteDataStore (see create_app_window
+    // -> data_store_identifier) so two nodes' sessions cannot collide. That is
+    // correct for storage, and it is NOT free: a non-default WKWebsiteDataStore
+    // on macOS does not carry the app's camera/microphone capture, so
+    // `navigator.mediaDevices` is absent in these windows however the bundle is
+    // signed and whatever the UI delegate grants.
+    //
+    // An app cannot detect that from inside the page — a missing API looks the
+    // same as an unsupported embedder — so the shell says so here. Mero Meet
+    // reads this to tell "open it in a browser" apart from "open it against your
+    // primary node", which are different fixes.
+    try {
+      Object.defineProperty(window, '__CALIMERO_WEBVIEW_ISOLATED__', {
+        value: '__WEBVIEW_ISOLATED__' === 'true',
+        writable: false,
+        configurable: true,
+      });
+    } catch (e) {
+      /* a page that froze window is not worth failing the proxy over */
+    }
     const defaultNodeUrl = 'http://localhost:2528';
     const nodeUrl = configuredNodeUrl !== '__CONFIGURED_NODE_URL__' ? configuredNodeUrl : defaultNodeUrl;
 

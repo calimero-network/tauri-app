@@ -216,34 +216,43 @@ export async function startCloudLogin(): Promise<CloudUserInfo | null> {
   await invoke('open_url_in_browser', { url: loginUrl });
 
   // Poll for the deep link callback
-  const googleToken = await pollForCloudAuth();
-  if (!googleToken) return null;
+  const callbackToken = await pollForCloudAuth();
+  if (!callbackToken) return null;
 
-  // Exchange the Google credential for a 7-day MDMA session. The
-  // session token is what gets persisted and used for every cloud API
-  // call — the Google token is one-shot. If the exchange fails
-  // (server temporarily unavailable, network blip) we fall back to
-  // the raw Google token; the backend's migration-window middleware
-  // still accepts Google tokens, so the user is not blocked. The
-  // fallback expires in ~1 hour and the user will re-auth at that
-  // point.
-  const exchange = await exchangeGoogleForMdmaSession(googleToken);
-  const token = exchange?.session_token ?? googleToken;
-  const userInfo = exchange?.user ?? decodeIdToken(googleToken);
+  // The cloud sends whichever credential it holds. When the browser already
+  // has a signed-in cloud session it sends THAT — an MDMA session JWT, not a
+  // Google one — because re-running Google sign-in for a user who is already
+  // signed in is a round trip for nothing.
+  //
+  // It has to be recognised here. Posting a session token to
+  // `/api/auth/google` is not a valid exchange: it fails, and the old code
+  // then fell back to using it raw, which happened to work while quietly
+  // skipping the account bootstrap the exchange response carries. Detecting it
+  // is explicit instead.
+  const alreadySession = isMdmaSessionToken(callbackToken);
+  const exchange = alreadySession ? null : await exchangeGoogleForMdmaSession(callbackToken);
+  const token = exchange?.session_token ?? callbackToken;
+  const userInfo = exchange?.user ?? decodeIdToken(callbackToken);
   if (!userInfo) return null;
 
   // Auto-register by fetching cloud node (creates account on first call)
   await getCloudNode(token).catch(() => null);
 
-  // Save to settings
+  // Save to settings.
+  //
+  // An MDMA session JWT carries `email` but not `name`/`picture`, so
+  // `decodeIdToken` yields empty strings for those. Writing them through would
+  // blank a profile this app already had from an earlier Google sign-in, so an
+  // empty value keeps whatever is stored rather than overwriting it. `email`
+  // is always present on both token kinds and is written unconditionally.
   const settings = getSettings();
   saveSettings({
     ...settings,
     cloudConnected: true,
     cloudIdToken: token,
     cloudUserEmail: userInfo.email,
-    cloudUserName: userInfo.name,
-    cloudUserPicture: userInfo.picture,
+    cloudUserName: userInfo.name || settings.cloudUserName || '',
+    cloudUserPicture: userInfo.picture || settings.cloudUserPicture || '',
   });
 
   return userInfo;

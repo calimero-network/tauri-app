@@ -1,3 +1,4 @@
+import { hexEncodeUtf8 } from '@calimero-network/mero-js';
 import type { GetTeeAdmissionPolicyResponseData } from '@calimero-network/mero-js';
 import { apiClient, nodeErrorMessage } from '../lib/mero-client';
 import { getSettings, saveSettings } from './settings';
@@ -488,6 +489,111 @@ export async function requestNamespaceOwnershipProof(
     }),
   );
   return ownershipProof(data as IssueOwnershipProofResponseData | null);
+}
+
+// ── Account linking (bind a Calimero account to this cloud login) ──
+
+/** What the cloud records once an account is linked. */
+export interface LinkedCloudAccount {
+  accountId: string;
+  /** The cloud login the account now belongs to. */
+  userEmail: string;
+}
+
+/**
+ * Bind this node's Calimero account to the signed-in cloud login.
+ *
+ * Two identities that are otherwise unrelated: a cloud login is an email, a
+ * Calimero identity is a 32-byte account. The cloud cannot take our word for
+ * which account is ours — anyone can mint a root offline — so it issues a
+ * challenge and we return a signature by the account ROOT over it.
+ *
+ * **Root-signed, and it has to be.** A device certificate is also root-signed
+ * and is the credential we could most easily produce instead, but it asserts
+ * that a device was certified at some past moment and travels in the clear in
+ * every device-link op. It says "a device of X is asking", never "X is mine".
+ * Root-signing is also what makes this survive the case the link exists for:
+ * someone who lost their device still holds the phrase.
+ *
+ * **The root never reaches this process.** It lives in the node's store, so the
+ * node signs and we carry the result. That is why the challenge and the
+ * submission are separate cloud calls with a node call between them, rather
+ * than mero-js's one-shot `signInWithAccount`, which needs the secret locally.
+ *
+ * The challenge is sealed against the caller's email and spent on acceptance, so
+ * a proof gathered for one cloud login cannot link the account under another,
+ * and a captured one cannot be replayed.
+ *
+ * Errors worth surfacing distinctly: **409** means the account already belongs
+ * to a different cloud login, which is not something retrying fixes — one
+ * keypair has one owner, globally. **402** means the plan's account limit is
+ * reached.
+ */
+export async function linkAccountToCloud(
+  idToken: string,
+): Promise<LinkedCloudAccount> {
+  // 1. The cloud issues a challenge bound to this login.
+  const challengeRes = await cloudFetch(
+    '/api/cloud/me/accounts/challenge',
+    idToken,
+  );
+  if (!challengeRes.ok) {
+    const error = await challengeRes.json().catch(() => null);
+    throw new Error(error?.detail || 'Failed to get an account-link challenge');
+  }
+  const { nonce } = (await challengeRes.json()) as { nonce: string };
+  if (!nonce) {
+    throw new Error('The cloud issued an empty account-link challenge');
+  }
+
+  // 2. The node signs it with the account root. `hexEncodeUtf8` is the SDK's,
+  //    not ours: the conversion from the cloud's text challenge to the node's
+  //    bytes has to match what the verifier re-derives, and a local copy of it
+  //    is a signature over the wrong message that fails only at the far end.
+  const signed = await named(
+    'Failed to sign the account-link challenge',
+    admin().signWithAccountRoot({
+      domain: 'mdma.account-link',
+      payload: hexEncodeUtf8(nonce),
+    }),
+  );
+
+  // 3. The cloud verifies and records the binding. snake_case because this is a
+  //    cloud request body; the node answered in camelCase.
+  const linkRes = await cloudFetch('/api/cloud/me/accounts', idToken, {
+    method: 'POST',
+    body: JSON.stringify({
+      account_id: signed.accountId,
+      root_public_key: signed.rootPublicKey,
+      nonce,
+      signature: signed.signature,
+    }),
+  });
+  if (!linkRes.ok) {
+    const error = await linkRes.json().catch(() => null);
+    const detail =
+      typeof error?.detail === 'string' ? error.detail : error?.detail?.message;
+    if (linkRes.status === 409) {
+      throw new Error(
+        detail || 'That account is already linked to a different cloud login',
+      );
+    }
+    if (linkRes.status === 402) {
+      throw new Error(
+        detail || 'Account limit reached for your plan — upgrade to link another',
+      );
+    }
+    throw new Error(detail || 'Failed to link the account');
+  }
+
+  const body = (await linkRes.json()) as {
+    account_id?: string;
+    user_email?: string;
+  };
+  return {
+    accountId: body.account_id ?? signed.accountId,
+    userEmail: body.user_email ?? '',
+  };
 }
 
 /**

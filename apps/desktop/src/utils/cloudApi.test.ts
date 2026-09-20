@@ -26,6 +26,7 @@ vi.mock('./settings', () => ({
 }));
 
 import {
+  linkAccountToCloud,
   requestOwnershipProof,
   enableHaForNamespace,
   getCloudNamespaces,
@@ -166,6 +167,126 @@ describe('requestOwnershipProof', () => {
     await expect(
       requestOwnershipProof('group-1', { contextId: 'ctx', subject: 'u@e' }),
     ).rejects.toThrow(new Error('Failed to issue ownership proof: not a direct admin'));
+  });
+});
+
+describe('linkAccountToCloud', () => {
+  let restore: () => void;
+  afterEach(() => restore?.());
+
+  const TOKEN = 'cloud-session-token';
+  const NONCE = 'eyJ1c2UiOiJhY2NvdW50LWxpbmsifQ.c2VhbA';
+
+  /** Challenge → node signature → link, in the order the flow makes them. */
+  function installLinkFetch(
+    linkResponse: () => Response,
+    signResponse: () => Response = () =>
+      jsonResponse({
+        data: {
+          rootPublicKey: 'f'.repeat(64),
+          signature: 'c2lnbmF0dXJl',
+          accountId: 'a'.repeat(64),
+        },
+      }),
+  ) {
+    return installFetch((url) => {
+      if (String(url).endsWith('/api/cloud/me/accounts/challenge')) {
+        return jsonResponse({ nonce: NONCE, expires_at_ms: Date.now() + 60_000 });
+      }
+      if (String(url).includes('/admin-api/account/sign-with-root')) {
+        return signResponse();
+      }
+      return linkResponse();
+    });
+  }
+
+  it('signs the cloud challenge with the account root and submits the binding', async () => {
+    const { calls, restore: r } = installLinkFetch(() =>
+      jsonResponse({ account_id: 'a'.repeat(64), user_email: 'u@example.com' }),
+    );
+    restore = r;
+
+    const out = await linkAccountToCloud(TOKEN);
+
+    const [challenge, sign, link] = calls;
+    expect(challenge.url).toBe(`${CLOUD_BASE_URL}/api/cloud/me/accounts/challenge`);
+
+    // The node is asked for the LINK domain, never login or recovery: mdma keeps
+    // them separate precisely so a signature gathered here cannot open a session.
+    expect(sign.url).toBe('http://node/admin-api/account/sign-with-root');
+    const signBody = JSON.parse(String(sign.init?.body));
+    expect(signBody.domain).toBe('mdma.account-link');
+    // The payload is the challenge's UTF-8, hex-encoded — what the verifier
+    // re-derives. Asserted against a fresh encoding rather than a literal, so
+    // this stays true if the fixture nonce changes.
+    expect(signBody.payload).toBe(
+      Array.from(new TextEncoder().encode(NONCE), (b) =>
+        b.toString(16).padStart(2, '0'),
+      ).join(''),
+    );
+
+    // snake_case out to the cloud, camelCase in from the node. The nonce is the
+    // one the cloud issued, not one we minted: a client-chosen nonce proves
+    // nothing to a verifier that never issued it.
+    expect(link.url).toBe(`${CLOUD_BASE_URL}/api/cloud/me/accounts`);
+    expect(link.init?.method).toBe('POST');
+    expect(JSON.parse(String(link.init?.body))).toEqual({
+      account_id: 'a'.repeat(64),
+      root_public_key: 'f'.repeat(64),
+      nonce: NONCE,
+      signature: 'c2lnbmF0dXJl',
+    });
+
+    expect(out).toEqual({ accountId: 'a'.repeat(64), userEmail: 'u@example.com' });
+  });
+
+  it('reports a 409 as the account belonging to another login', async () => {
+    // Distinct copy because retrying cannot fix it: UNIQUE(account_id) is
+    // global, so one keypair has exactly one owner.
+    const { restore: r } = installLinkFetch(() =>
+      jsonResponse({ detail: 'Account is linked to another user' }, 409),
+    );
+    restore = r;
+    await expect(linkAccountToCloud(TOKEN)).rejects.toThrow(
+      /linked to another user/,
+    );
+  });
+
+  it('reports a 402 as a plan limit', async () => {
+    const { restore: r } = installLinkFetch(() =>
+      jsonResponse({ detail: { message: 'Account limit reached' } }, 402),
+    );
+    restore = r;
+    await expect(linkAccountToCloud(TOKEN)).rejects.toThrow(/limit reached/);
+  });
+
+  it('never reaches the cloud when the node refuses to sign', async () => {
+    let linkAttempted = false;
+    const { restore: r } = installLinkFetch(
+      () => {
+        linkAttempted = true;
+        return jsonResponse({});
+      },
+      () => jsonResponse({ error: { message: 'no account root' } }, 400),
+    );
+    restore = r;
+
+    await expect(linkAccountToCloud(TOKEN)).rejects.toThrow(
+      /Failed to sign the account-link challenge: no account root/,
+    );
+    // A link submitted without a signature would be refused anyway, but the
+    // useful property is that the failure names the step that actually failed.
+    expect(linkAttempted).toBe(false);
+  });
+
+  it('refuses an empty challenge rather than signing nothing', async () => {
+    const { restore: r } = installFetch((url) =>
+      String(url).endsWith('/challenge')
+        ? jsonResponse({ nonce: '' })
+        : jsonResponse({}),
+    );
+    restore = r;
+    await expect(linkAccountToCloud(TOKEN)).rejects.toThrow(/empty account-link challenge/);
   });
 });
 

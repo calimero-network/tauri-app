@@ -3,8 +3,10 @@ import { Plus } from "lucide-react";
 import AccountAppsCard from "../components/AccountAppsCard";
 import AccountDeviceRow from "../components/AccountDeviceRow";
 import AccountIdentityCard from "../components/AccountIdentityCard";
+import CloudAccountLinkCard from "../components/CloudAccountLinkCard";
 import { DevicePairWizard, DevicePairResponder, type InstalledApp } from "../components/DevicePairing";
 import { SkeletonTable } from "../components/Skeleton";
+import { useCloudEnabled } from "../hooks/useCloudEnabled";
 import { useVisiblePoll } from "../hooks/useVisiblePoll";
 import type { DeviceScope, NodeIdentity } from "@calimero-network/mero-js";
 import {
@@ -253,6 +255,7 @@ export default function Account() {
   };
 
   const isHolder = canInviteDevices(identity);
+  const cloudEnabled = useCloudEnabled();
 
   return (
     <div className="account-page">
@@ -268,6 +271,13 @@ export default function Account() {
           banner={thisDeviceBanner(devices)}
           onRetry={() => setReloads((n) => n + 1)}
         />
+
+        {cloudEnabled && (
+          <CloudAccountLinkCard
+            accountId={identity?.accountId ?? null}
+            isHolder={isHolder}
+          />
+        )}
 
         <div className="settings-card">
           <div className="account-devices-header">

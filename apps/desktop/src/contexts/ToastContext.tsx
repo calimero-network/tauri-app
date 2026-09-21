@@ -11,9 +11,18 @@ export interface Toast {
 
 interface ToastActions {
   removeToast: (id: string) => void;
-  success: (message: string, duration?: number) => void;
-  error: (message: string, duration?: number) => void;
-  warning: (message: string, duration?: number) => void;
+  // Each returns the new toast's id. They always did at runtime; the type said
+  // `void`, so a caller could not hold a long-running toast open and dismiss it
+  // when the work finished — which is exactly what progress needs.
+  success: (message: string, duration?: number) => string;
+  error: (message: string, duration?: number) => string;
+  warning: (message: string, duration?: number) => string;
+  /**
+   * `duration: 0` never auto-dismisses. Pair it with the returned id and
+   * `removeToast` for work whose length is not known in advance, such as
+   * installing an app from the registry.
+   */
+  info: (message: string, duration?: number) => string;
 }
 
 // Split so firing a toast only re-renders the container, not every page that
@@ -56,10 +65,14 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     return showToast('warning', message, duration);
   }, [showToast]);
 
+  const info = useCallback((message: string, duration?: number) => {
+    return showToast('info', message, duration);
+  }, [showToast]);
+
   // Every callback above is identity-stable, so this value never changes.
   const actions = useMemo<ToastActions>(
-    () => ({ removeToast, success, error, warning }),
-    [removeToast, success, error, warning]
+    () => ({ removeToast, success, error, warning, info }),
+    [removeToast, success, error, warning, info]
   );
 
   return (

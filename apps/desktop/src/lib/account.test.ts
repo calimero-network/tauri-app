@@ -9,6 +9,7 @@ vi.mock("./device-link", () => ({
 
 import {
   canRevoke,
+  cloudLinkState,
   canSync,
   canInviteDevices,
   deviceLabel,
@@ -572,5 +573,40 @@ describe("deviceLabel", () => {
 
   it("names nothing when the node holds no aliases at all", () => {
     expect(deviceLabel(paired, {})).toBeNull();
+  });
+});
+
+describe("cloudLinkState", () => {
+  const ACC = "a".repeat(64);
+  const OTHER = "b".repeat(64);
+
+  it("reports an already-linked account as linked", () => {
+    expect(cloudLinkState(ACC, [OTHER, ACC], 2)).toBe("linked");
+  });
+
+  it("offers the link when the plan has room", () => {
+    expect(cloudLinkState(ACC, [OTHER], 5)).toBe("linkable");
+    expect(cloudLinkState(ACC, [], 1)).toBe("linkable");
+  });
+
+  it("treats a null limit as unlimited, not as zero", () => {
+    // The distinction the API actually draws: `null` is an unlimited plan,
+    // `0` is a plan that permits none. Collapsing them hides the button from
+    // everyone on an unlimited plan.
+    expect(cloudLinkState(ACC, [OTHER, OTHER], null)).toBe("linkable");
+    expect(cloudLinkState(ACC, [], 0)).toBe("at-limit");
+  });
+
+  it("never reports a linked account as at the limit", () => {
+    // A full plan plus an account that already holds one of its slots. Saying
+    // "at limit" here would show an upgrade prompt to someone who needs
+    // nothing, and hide the fact that they are already linked.
+    expect(cloudLinkState(ACC, [OTHER, ACC], 2)).toBe("linked");
+  });
+
+  it("refuses the link while the account id is still unknown", () => {
+    // Identity is still loading. Without the id there is nothing to compare,
+    // so a full plan must not read as "linkable" and offer a doomed request.
+    expect(cloudLinkState(null, [OTHER], 1)).toBe("at-limit");
   });
 });

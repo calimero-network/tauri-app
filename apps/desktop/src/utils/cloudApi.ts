@@ -500,6 +500,42 @@ export interface LinkedCloudAccount {
   userEmail: string;
 }
 
+/** One Calimero account this cloud login already owns. */
+export interface CloudLinkedAccount {
+  accountId: string;
+  /** ISO-8601, or null when the record predates the column. */
+  linkedAt: string | null;
+}
+
+/**
+ * The accounts already linked to this cloud login, and the plan's cap.
+ *
+ * Read before offering to link, so the button reflects what the cloud already
+ * knows rather than inviting a request that comes back 409. `limit` is `null`
+ * for an unlimited plan — distinct from `0`, which is a plan that permits none.
+ */
+export async function listCloudAccounts(
+  idToken: string,
+): Promise<{ accounts: CloudLinkedAccount[]; limit: number | null }> {
+  const res = await cloudFetch('/api/cloud/me/accounts', idToken);
+  if (!res.ok) {
+    const error = await res.json().catch(() => null);
+    throw new Error(error?.detail || 'Failed to read your linked accounts');
+  }
+  const body = (await res.json()) as {
+    accounts?: { account_id?: string; linked_at?: string | null }[];
+    limit?: number | null;
+  };
+  return {
+    accounts: (body.accounts ?? [])
+      .filter((a): a is { account_id: string; linked_at?: string | null } =>
+        typeof a.account_id === 'string',
+      )
+      .map((a) => ({ accountId: a.account_id, linkedAt: a.linked_at ?? null })),
+    limit: body.limit ?? null,
+  };
+}
+
 /**
  * Bind this node's Calimero account to the signed-in cloud login.
  *

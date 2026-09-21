@@ -285,3 +285,23 @@ export function relinkSummary({ linkedIn, pending }: RelinkResult): string {
   const repaired = `Repaired ${linkedIn.length} ${namespaceWord(linkedIn.length)}`;
   return pending.length ? `${repaired}, ${pending.length} not reachable yet.` : `${repaired}.`;
 }
+
+/**
+ * Whether this account's cloud link can still be offered.
+ *
+ * Split out of the card because it is the only judgement it makes, and the
+ * three states it distinguishes are easy to collapse by accident. `limit` is
+ * `null` for an unlimited plan, which is NOT the same as `0` — a plan that
+ * permits none. And an account already linked is not competing for a slot, so
+ * it is never "at the limit" even on a full plan; treating it as such would
+ * show an upgrade prompt to someone who needs nothing.
+ */
+export function cloudLinkState(
+  accountId: string | null,
+  linkedAccountIds: string[],
+  limit: number | null,
+): "linked" | "linkable" | "at-limit" {
+  if (accountId && linkedAccountIds.includes(accountId)) return "linked";
+  if (limit !== null && linkedAccountIds.length >= limit) return "at-limit";
+  return "linkable";
+}

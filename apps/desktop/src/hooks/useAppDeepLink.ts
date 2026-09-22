@@ -50,6 +50,33 @@ function once(fn: () => void): () => void {
 }
 
 /**
+ * Wraps a reporter so that anything it is asked to say first takes down a
+ * message that outranks it.
+ *
+ * The drain's “waiting for the node to finish starting” is only true while the
+ * resolver says nothing at all — which is exactly the `'retry'` path, since
+ * every other outcome reports something. Once the node answers, that message
+ * would sit next to “Installing …” describing a state the app has left, for
+ * the whole length of the slowest step in the path.
+ */
+export function supersede(stop: () => void, inner: Reporter): Reporter {
+  return {
+    progress: (message) => {
+      stop();
+      return inner.progress(message);
+    },
+    failed: (message) => {
+      stop();
+      inner.failed(message);
+    },
+    done: (message) => {
+      stop();
+      inner.done(message);
+    },
+  };
+}
+
+/**
  * Install-on-demand: fetch the latest published bundle for `pkg` (the deep-link
  * slug is the registry package) and install it on the node. Returns the new
  * applicationId, or null on failure. Empty metadata — the node reads the
@@ -246,11 +273,11 @@ export function useAppDeepLink(enabled: boolean): void {
     // twice. Key includes params so distinct links are treated separately.
     const handled = new Set<string>();
     const keyOf = (dl: AppDeepLink) => `${dl.slug}/${dl.action}?${dl.params}`;
-    const handle = async (dl: AppDeepLink): Promise<OpenOutcome> => {
+    const handle = async (dl: AppDeepLink, using: Reporter = report): Promise<OpenOutcome> => {
       const key = keyOf(dl);
       if (handled.has(key)) return 'opened'; // another path already took it
       handled.add(key);
-      const outcome = await resolveAndOpen(dl, report);
+      const outcome = await resolveAndOpen(dl, using);
       if (outcome === 'retry') handled.delete(key); // allow a later attempt
       return outcome;
     };
@@ -270,6 +297,9 @@ export function useAppDeepLink(enabled: boolean): void {
       clearWaiting?.();
       clearWaiting = null;
     };
+    // The attempt that finally gets through is the one that takes the waiting
+    // message down — not the end of that attempt, which is after the install.
+    const drainReport = supersede(stopWaiting, report);
 
     (async () => {
       for (let attempt = 0; !cancelled; attempt++) {
@@ -280,9 +310,9 @@ export function useAppDeepLink(enabled: boolean): void {
           let dl = await invoke<AppDeepLink | null>('get_pending_app_deep_link');
           if (!dl) dl = await invoke<AppDeepLink | null>('get_current_app_deep_link');
           if (dl) {
-            const outcome = await handle(dl);
+            const outcome = await handle(dl, drainReport);
             if (outcome !== 'retry') {
-              stopWaiting();
+              stopWaiting(); // a no-op unless the outcome was silent
               await invoke('clear_pending_app_deep_link').catch(() => {});
               return;
             }

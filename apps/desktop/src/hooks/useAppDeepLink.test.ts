@@ -27,7 +27,7 @@ vi.mock("../utils/appUtils", () => ({
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
-import { resolveAndOpen, type Reporter } from "./useAppDeepLink";
+import { resolveAndOpen, supersede, type Reporter } from "./useAppDeepLink";
 
 /** A Reporter that records what the user would have been shown. */
 function recorder() {
@@ -138,5 +138,47 @@ describe("a deep link always tells the user what happened", () => {
     expect(await resolveAndOpen(LINK, r.report)).toBe("retry");
     expect(r.failures).toEqual([]);
     expect(r.shown).toEqual([]);
+  });
+
+  // The drain holds a "waiting for the node" message up across retries. The
+  // attempt that gets through must take it down as it starts talking, not when
+  // it finishes — install-on-demand sits in between, and that is the slow step
+  // the whole change exists to narrate.
+  it("drops the waiting message the moment the resolver has anything to say", async () => {
+    listInstalledApps
+      .mockResolvedValueOnce({ error: { message: "node not ready" } })
+      .mockResolvedValueOnce({ data: [] })
+      .mockResolvedValueOnce({ data: [INSTALLED] });
+    fetchAppsFromRegistry.mockResolvedValue([{ id: "com.calimero.drive", latest_version: "1.2.3" }]);
+    installApplication.mockResolvedValue({ data: { applicationId: "app-1" } });
+
+    const r = recorder();
+    let waiting = false;
+    const stop = () => {
+      waiting = false;
+    };
+    const drainReport = supersede(stop, r.report);
+
+    expect(await resolveAndOpen(LINK, drainReport)).toBe("retry");
+    // Nothing was said, so the drain puts the waiting message up.
+    waiting = true;
+
+    // Whatever the next attempt shows, the waiting message is already gone by
+    // the time that message is on screen.
+    const seenWhileWaiting: string[] = [];
+    const watched: Reporter = {
+      progress: (m) => {
+        const clear = drainReport.progress(m);
+        if (waiting) seenWhileWaiting.push(m);
+        return clear;
+      },
+      failed: (m) => drainReport.failed(m),
+      done: (m) => drainReport.done(m),
+    };
+    expect(await resolveAndOpen(LINK, watched)).toBe("opened");
+
+    expect(r.shown.some((m) => m.includes("Installing"))).toBe(true);
+    expect(seenWhileWaiting).toEqual([]);
+    expect(waiting).toBe(false);
   });
 });

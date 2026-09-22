@@ -19,16 +19,31 @@ pub fn resolved(path: &Path) -> PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
+/// Flags the merod *root* command takes, ahead of the subcommand. Everything
+/// after the subcommand belongs to the subcommand instead, and `run` has flags
+/// of its own — which is how the subcommand is located below without having to
+/// know any flag's arity.
+#[cfg(unix)]
+const ROOT_FLAGS: [&str; 2] = ["home", "node"];
+
 /// The executable path and `--home` can both contain spaces, so nothing is
 /// isolated by whitespace position: a flag's value runs to the next flag.
 #[cfg(unix)]
 fn parse_node_listing(listing: &str) -> Vec<DiscoveredNode> {
+    /// `name value…`, as ` --` splitting leaves it. A segment whose name the
+    /// root command does not take is the first of the subcommand's own flags.
+    fn is_root_flag(segment: &str) -> bool {
+        let name = segment
+            .split_once(char::is_whitespace)
+            .map_or(segment, |(name, _)| name);
+        ROOT_FLAGS.contains(&name)
+    }
+
     // A flag's value runs to the next flag, never to the next space: both the
     // executable path and `--home` can contain them.
-    fn flag_value<'a>(flags: &'a str, flag: &str) -> Option<&'a str> {
-        let needle = format!("{flag} ");
-        let rest = &flags[flags.find(&needle)? + needle.len()..];
-        Some(rest[..rest.find(" --").unwrap_or(rest.len())].trim_end())
+    fn flag_value<'a>(root: &[&'a str], flag: &str) -> Option<&'a str> {
+        root.iter()
+            .find_map(|segment| Some(segment.strip_prefix(flag)?.strip_prefix(' ')?.trim_end()))
     }
 
     listing
@@ -41,16 +56,33 @@ fn parse_node_listing(listing: &str) -> Vec<DiscoveredNode> {
             if exe.rsplit('/').next() != Some("merod") {
                 return None;
             }
-            // merod's shape is `<exe> [flags] <subcommand>`, so the subcommand is
-            // the final token - not any token, which a path ending in "run" matches.
-            let (flags, subcommand) = command.rsplit_once(char::is_whitespace)?;
+
+            // merod's shape is `<exe> [root flags] <subcommand> [subcommand
+            // flags]`. The subcommand is NOT simply the final token: this app
+            // starts every node with `run --exit-on-stdin-close`, and `run`
+            // also takes `--exit-on-eof <FD>` and `--auth-mode <MODE>`, so the
+            // line can end in a flag or in a flag's value. Nor is it any token
+            // spelled "run", which a home path ending in `run/` matches.
+            //
+            // Split on " --" instead — one segment per flag — and let the flag
+            // names say where the root command stops: the subcommand trails the
+            // last root segment's value (`--node default run`).
+            let segments: Vec<&str> = command.split(" --").skip(1).collect();
+            let root_len = segments
+                .iter()
+                .position(|segment| !is_root_flag(segment))
+                .unwrap_or(segments.len());
+            let mut root: Vec<&str> = segments[..root_len].to_vec();
+            let (value, subcommand) = root.pop()?.rsplit_once(char::is_whitespace)?;
             if subcommand != "run" {
                 return None;
             }
+            root.push(value);
+
             Some(DiscoveredNode {
                 pid,
-                home: flag_value(flags, "--home")?.to_string(),
-                node: flag_value(flags, "--node")?.to_string(),
+                home: flag_value(&root, "home")?.to_string(),
+                node: flag_value(&root, "node")?.to_string(),
                 exe: exe.to_string(),
             })
         })
@@ -240,6 +272,65 @@ mod tests {
             discovered(listing),
             vec![(4711, "/Users/x/dev".into(), "alice".into())]
         );
+    }
+
+    /// THE REGRESSION: this app starts every node it launches with
+    /// `run --exit-on-stdin-close` (main.rs), so the subcommand is not the final
+    /// token. A parser that demanded it saw none of its own nodes — the start
+    /// guard then put a second writer on a live store (RocksDB "LOCK: Resource
+    /// temporarily unavailable"), the Nodes list showed them as stopped, and the
+    /// delete guard would have wiped a running node's data directory.
+    #[test]
+    fn finds_a_node_started_with_exit_on_stdin_close() {
+        let listing = "75035 /Applications/Calimero Desktop.app/Contents/Resources/merod/merod \
+                       --home /Users/x/.calimero --node default run --exit-on-stdin-close";
+        assert_eq!(
+            discovered(listing),
+            vec![(75035, "/Users/x/.calimero".into(), "default".into())]
+        );
+    }
+
+    /// `run` also takes flags that carry a value, so the line can end in the
+    /// value rather than the flag - skipping trailing `--…` tokens is not enough.
+    #[test]
+    fn finds_a_node_whose_last_token_is_a_subcommand_flag_value() {
+        let listing = "77 /usr/local/bin/merod --home /Users/x/.calimero --node n1 run \
+                       --exit-on-eof 3";
+        assert_eq!(
+            discovered(listing),
+            vec![(77, "/Users/x/.calimero".into(), "n1".into())]
+        );
+    }
+
+    /// Several subcommand flags, and a root flag order the app does not use.
+    #[test]
+    fn finds_a_node_behind_several_subcommand_flags() {
+        let listing = "78 /usr/local/bin/merod --node n1 --home /Users/x/My Nodes run \
+                       --auth-mode embedded --exit-on-stdin-close";
+        assert_eq!(
+            discovered(listing),
+            vec![(78, "/Users/x/My Nodes".into(), "n1".into())]
+        );
+    }
+
+    /// A subcommand flag must not stop a home path ending in "run" from parsing:
+    /// the root flags say where the root command stops, the last token does not.
+    #[test]
+    fn a_home_ending_in_run_survives_a_subcommand_flag() {
+        let listing = "79 /usr/local/bin/merod --home /Users/x/last run --node n1 run \
+                       --exit-on-stdin-close";
+        assert_eq!(
+            discovered(listing),
+            vec![(79, "/Users/x/last run".into(), "n1".into())]
+        );
+    }
+
+    /// Still not a node: the subcommand is what it is however many flags follow.
+    #[test]
+    fn another_subcommand_is_not_a_node_even_with_trailing_flags() {
+        let listing = "80 /usr/local/bin/merod --home /Users/x/.calimero --node n1 init \
+                       --auth-mode embedded";
+        assert_eq!(discovered(listing), vec![]);
     }
 
     /// A home directory can end in a folder named "run", which is not a subcommand.

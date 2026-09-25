@@ -4,9 +4,12 @@ import {
   navigateVia,
   setupAuthenticatedPage,
   setupDeveloperPage,
+  setupSimpleModePage,
+  seedSettings,
   scrollSettingsControlIntoView,
 } from "./fixtures/helpers";
 import {
+  AUTHENTICATED_SETTINGS,
   STORAGE_KEYS,
   DEFAULT_REGISTRY_URL,
   API_ROUTES,
@@ -72,21 +75,24 @@ test.describe("General tab toggles", () => {
     await page.click('button[title="Settings"]');
   });
 
-  test("toggles are visible, with developer mode off by default", async ({
+  test("toggles are visible, with developer mode on by default", async ({
     page,
   }) => {
     await scrollSettingsControlIntoView(page, "#theme-toggle");
     await expect(page.locator("#theme-toggle")).toBeVisible();
     await scrollSettingsControlIntoView(page, "#developer-mode");
     await expect(page.locator("#developer-mode")).toBeVisible();
-    await expect(page.locator("#developer-mode")).not.toBeChecked();
+    await expect(page.locator("#developer-mode")).toBeChecked();
     await scrollSettingsControlIntoView(page, "#debug-logs");
     await expect(page.locator("#debug-logs")).toBeVisible();
   });
 
-  test("toggling developer mode on updates localStorage", async ({ page }) => {
+  test("toggling developer mode off records an explicit opt-out", async ({
+    page,
+  }) => {
     await scrollSettingsControlIntoView(page, "#developer-mode");
-    await page.locator("#developer-mode").check();
+    await expect(page.locator("#developer-mode")).toBeChecked();
+    await page.locator("#developer-mode").uncheck();
 
     const raw = await page.evaluate(
       (key) => localStorage.getItem(key),
@@ -94,23 +100,36 @@ test.describe("General tab toggles", () => {
     );
     expect(raw).toBeTruthy();
     const settings = JSON.parse(raw!);
-    expect(settings.developerMode).toBe(true);
+    expect(settings.developerMode).toBe(false);
+    expect(settings.developerModeChosen).toBe(true);
   });
 
-  test("toggling developer mode off updates localStorage", async ({
+  test("toggling developer mode back on updates localStorage", async ({
     page,
   }) => {
     await scrollSettingsControlIntoView(page, "#developer-mode");
-    await page.locator("#developer-mode").check();
-    await expect(page.locator("#developer-mode")).toBeChecked();
-
     await page.locator("#developer-mode").uncheck();
+    await expect(page.locator("#developer-mode")).not.toBeChecked();
+
+    await page.locator("#developer-mode").check();
     const raw = await page.evaluate(
       (key) => localStorage.getItem(key),
       STORAGE_KEYS.settings,
     );
     const settings = JSON.parse(raw!);
-    expect(settings.developerMode).toBe(false);
+    expect(settings.developerMode).toBe(true);
+    expect(settings.developerModeChosen).toBe(true);
+  });
+
+  test("an opt-out survives a reload", async ({ page }) => {
+    await scrollSettingsControlIntoView(page, "#developer-mode");
+    await page.locator("#developer-mode").uncheck();
+
+    await page.reload();
+    await expect(page.locator('button[title="Namespaces"]')).not.toBeVisible();
+    await page.click('button[title="Settings"]');
+    await scrollSettingsControlIntoView(page, "#developer-mode");
+    await expect(page.locator("#developer-mode")).not.toBeChecked();
   });
 
   test("dark mode toggle changes theme class on body", async ({ page }) => {
@@ -145,7 +164,7 @@ test.describe("Developer mode enables sidebar links", () => {
   test("enabling developer mode reveals Namespaces & Nodes links", async ({
     page,
   }) => {
-    await setupAuthenticatedPage(page);
+    await setupSimpleModePage(page);
 
     await expect(page.locator('button[title="Namespaces"]')).not.toBeVisible();
     await expect(page.locator('button[title="Nodes"]')).not.toBeVisible();
@@ -176,6 +195,26 @@ test.describe("Developer mode enables sidebar links", () => {
 
     await expect(page.locator('button[title="Namespaces"]')).not.toBeVisible();
     await expect(page.locator('button[title="Nodes"]')).not.toBeVisible();
+  });
+});
+
+// ─── Developer mode on for existing installs ─────────────────────────────────
+
+test.describe("Developer mode for an existing install", () => {
+  test("a stored false the user never chose is treated as the old default", async ({
+    page,
+  }) => {
+    // Before developer mode defaulted on, every settings write persisted
+    // developerMode: false, so this is what an untouched existing install holds.
+    await setupAuthenticatedPage(page);
+    await seedSettings(page, {
+      ...AUTHENTICATED_SETTINGS,
+      developerMode: false,
+    });
+    await page.reload();
+
+    await expect(page.locator('button[title="Namespaces"]')).toBeVisible();
+    await expect(page.locator('button[title="Nodes"]')).toBeVisible();
   });
 });
 
@@ -1444,11 +1483,11 @@ test.describe("Settings toasts render", () => {
   // ToastContainer, so without its own mount these fire into a void.
   test("a toast fired from Settings is visible", async ({ page }) => {
     await scrollSettingsControlIntoView(page, "#developer-mode");
-    await page.locator("#developer-mode").check();
+    await page.locator("#developer-mode").uncheck();
 
     await expect(page.locator(".toast-container .toast")).toBeVisible();
     await expect(page.locator(".toast-message")).toHaveText(
-      "Developer mode enabled",
+      "Developer mode disabled",
     );
   });
 });

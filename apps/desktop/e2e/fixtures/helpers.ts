@@ -5,6 +5,7 @@ import {
   STORAGE_KEYS,
   AUTHENTICATED_SETTINGS,
   DEVELOPER_SETTINGS,
+  SIMPLE_MODE_SETTINGS,
   EMBEDDED_NODE_SETTINGS,
   MOCK_ACCESS_TOKEN,
   MOCK_REFRESH_TOKEN,
@@ -129,6 +130,18 @@ export async function seedAuthenticatedState(page: Page): Promise<void> {
  */
 export async function seedDeveloperState(page: Page): Promise<void> {
   await seedSettings(page, DEVELOPER_SETTINGS);
+  await seedAuthTokens(page);
+  await page.evaluate(() => {
+    localStorage.setItem("calimero-autostart-default-applied", "1");
+  });
+}
+
+/**
+ * Seeds localStorage for authenticated + developer mode explicitly turned off
+ * (the simplified single-node UI).
+ */
+export async function seedSimpleModeState(page: Page): Promise<void> {
+  await seedSettings(page, SIMPLE_MODE_SETTINGS);
   await seedAuthTokens(page);
   await page.evaluate(() => {
     localStorage.setItem("calimero-autostart-default-applied", "1");
@@ -525,6 +538,20 @@ export async function setupDeveloperPage(
   await mockCoreAPIs(page, options);
   await page.goto("/");
   await seedDeveloperState(page);
+  await page.reload();
+  await waitForAppShellReady(page);
+}
+
+/**
+ * Full setup for a user who turned developer mode off (simplified single-node UI).
+ */
+export async function setupSimpleModePage(
+  page: Page,
+  options?: MockCoreAPIsOptions,
+): Promise<void> {
+  await mockCoreAPIs(page, options);
+  await page.goto("/");
+  await seedSimpleModeState(page);
   await page.reload();
   await waitForAppShellReady(page);
 }

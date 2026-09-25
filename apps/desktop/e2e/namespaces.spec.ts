@@ -2,6 +2,7 @@ import { test, expect } from "./fixtures/test";
 import {
   setupDeveloperPage,
   setupAuthenticatedPage,
+  setupSimpleModePage,
   navigateVia,
 } from "./fixtures/helpers";
 import {
@@ -17,11 +18,21 @@ test.describe("Namespaces – requires developer mode", () => {
   test("Namespaces link is not in sidebar without developer mode", async ({
     page,
   }) => {
-    await setupAuthenticatedPage(page);
+    await setupSimpleModePage(page);
 
     const sidebar = page.locator("aside.sidebar");
     await expect(sidebar).toBeVisible();
     await expect(sidebar.getByTitle("Namespaces")).not.toBeVisible();
+  });
+
+  test("Namespaces link appears by default, since developer mode is on", async ({
+    page,
+  }) => {
+    await setupAuthenticatedPage(page);
+
+    const sidebar = page.locator("aside.sidebar");
+    await expect(sidebar).toBeVisible();
+    await expect(sidebar.getByTitle("Namespaces")).toBeVisible();
   });
 
   test("Namespaces link appears in sidebar with developer mode", async ({

@@ -102,13 +102,50 @@ describe('buildSettings defaults', () => {
     expect(getSettings().registries).toEqual(['https://apps.calimero.network/']);
   });
 
-  it('defaults developerMode, debugLogs, onboardingCompleted and cloudConnected to false', () => {
+  it('defaults debugLogs, onboardingCompleted and cloudConnected to false', () => {
     localStorage.setItem('calimero-desktop-settings', JSON.stringify({ nodeUrl: 'http://localhost:2528' }));
     const settings = getSettings();
-    expect(settings.developerMode).toBe(false);
     expect(settings.debugLogs).toBe(false);
     expect(settings.onboardingCompleted).toBe(false);
     expect(settings.cloudConnected).toBe(false);
+  });
+});
+
+describe('developer mode default', () => {
+  it('is on for a fresh install with nothing stored', () => {
+    expect(getSettings().developerMode).toBe(true);
+  });
+
+  it('is on when stored settings never mention it', () => {
+    localStorage.setItem('calimero-desktop-settings', JSON.stringify({ nodeUrl: 'http://localhost:2528' }));
+    expect(getSettings().developerMode).toBe(true);
+  });
+
+  it('is on for an existing install whose false was only the persisted old default', () => {
+    // Every write spreads getSettings(), which used to fill in developerMode: false,
+    // so a stored false with no developerModeChosen is not the user's choice.
+    localStorage.setItem(
+      'calimero-desktop-settings',
+      JSON.stringify({ nodeUrl: 'http://localhost:2528', developerMode: false, onboardingCompleted: true })
+    );
+    expect(getSettings().developerMode).toBe(true);
+  });
+
+  it('respects an explicit opt-out made through the toggle', () => {
+    saveSettings({ ...getSettings(), developerMode: false, developerModeChosen: true });
+    expect(getSettings().developerMode).toBe(false);
+  });
+
+  it('keeps the opt-out across unrelated writes that spread the settings', () => {
+    saveSettings({ ...getSettings(), developerMode: false, developerModeChosen: true });
+    saveSettings({ ...getSettings(), debugLogs: true });
+    expect(getSettings().developerMode).toBe(false);
+    expect(getSettings().debugLogs).toBe(true);
+  });
+
+  it('respects an explicit opt-in', () => {
+    saveSettings({ ...getSettings(), developerMode: true, developerModeChosen: true });
+    expect(getSettings().developerMode).toBe(true);
   });
 });
 

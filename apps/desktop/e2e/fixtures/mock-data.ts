@@ -23,6 +23,7 @@ export interface AppSettings {
   embeddedNodeDataDir?: string;
   embeddedNodeName?: string;
   developerMode?: boolean;
+  developerModeChosen?: boolean;
   debugLogs?: boolean;
   onboardingCompleted?: boolean;
 }
@@ -41,6 +42,13 @@ export const AUTHENTICATED_SETTINGS: AppSettings = {
 export const DEVELOPER_SETTINGS: AppSettings = {
   ...AUTHENTICATED_SETTINGS,
   developerMode: true,
+};
+
+/** Developer mode is on by default; this is a user who switched it off in Settings. */
+export const SIMPLE_MODE_SETTINGS: AppSettings = {
+  ...AUTHENTICATED_SETTINGS,
+  developerMode: false,
+  developerModeChosen: true,
 };
 
 // ─── Fake JWT token (base64-encoded payload with far-future exp) ─────────────

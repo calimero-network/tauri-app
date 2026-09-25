@@ -9,7 +9,8 @@ export interface AppSettings {
   embeddedNodeSwarmPort?: number; // libp2p swarm port for embedded node (default: DEFAULT_EMBEDDED_SWARM_PORT)
   embeddedNodeDataDir?: string; // Data directory for embedded node (default: ~/.calimero)
   embeddedNodeName?: string; // Node name for embedded node
-  developerMode?: boolean; // Developer mode - shows advanced features like multiple nodes and contexts
+  developerMode?: boolean; // Developer mode - shows advanced features like multiple nodes and contexts. On unless the user turned it off (see developerModeChosen)
+  developerModeChosen?: boolean; // True once the user flipped the Developer Mode toggle themselves; only then is a stored developerMode honoured
   debugLogs?: boolean; // Enable debug-level logging for the merod node
   cloudEnabled?: boolean; // Runtime override for the cloud feature flag. undefined = use build-time default (VITE_ENABLE_CLOUD / DEV)
   onboardingCompleted?: boolean; // True once user has completed first-time setup - never show onboarding again
@@ -56,15 +57,29 @@ function parseStored(stored: string | null): AppSettings | null {
   }
 }
 
+/**
+ * Developer mode is on unless the user explicitly switched it off.
+ *
+ * A stored `developerMode: false` alone is not a choice: this function used to
+ * default it to false, and every settings write spreads getSettings(), so that
+ * default was persisted for every install that saved anything. Only the
+ * Settings toggle sets `developerModeChosen`, so it is what separates an opt-out
+ * from the old default.
+ */
+function resolveDeveloperMode(rawSettings: AppSettings): boolean {
+  if (!rawSettings.developerModeChosen) return true;
+  return rawSettings.developerMode ?? true;
+}
+
 function buildSettings(rawSettings: AppSettings | null): AppSettings {
   if (!rawSettings) {
-    return { nodeUrl: DEFAULT_NODE_URL, registries: [DEFAULT_REGISTRY_URL] };
+    return { nodeUrl: DEFAULT_NODE_URL, registries: [DEFAULT_REGISTRY_URL], developerMode: true };
   }
   return {
     ...rawSettings,
     nodeUrl: rawSettings.nodeUrl || DEFAULT_NODE_URL,
     registries: rawSettings.registries?.length ? rawSettings.registries : [DEFAULT_REGISTRY_URL],
-    developerMode: rawSettings.developerMode ?? false,
+    developerMode: resolveDeveloperMode(rawSettings),
     debugLogs: rawSettings.debugLogs ?? false,
     onboardingCompleted: rawSettings.onboardingCompleted ?? false,
     cloudConnected: rawSettings.cloudConnected ?? false,

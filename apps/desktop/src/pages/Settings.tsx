@@ -62,7 +62,7 @@ function Settings({ onBack, onOpenAccount }: SettingsProps) {
   
   // Node management state (removed - now in NodeManagement page)
   const [activeTab, setActiveTab] = useState<'general' | 'registries' | 'agent' | 'account' | 'cloud'>('general');
-  const [developerMode, setDeveloperMode] = useState(false);
+  const [developerMode, setDeveloperMode] = useState(true);
   const [debugLogs, setDebugLogs] = useState(false);
   const [cloudEnabled, setCloudEnabled] = useState(false);
   const [cloudConnected, setCloudConnected] = useState(false);
@@ -153,7 +153,7 @@ function Settings({ onBack, onOpenAccount }: SettingsProps) {
   useEffect(() => {
     const settings = getSettings();
     setRegistries(settings.registries || []);
-    setDeveloperMode(settings.developerMode ?? false);
+    setDeveloperMode(settings.developerMode ?? true);
     setDebugLogs(settings.debugLogs ?? false);
     // Effective cloud flag: explicit runtime override if set, else the build-time default.
     setCloudEnabled(typeof settings.cloudEnabled === 'boolean' ? settings.cloudEnabled : isCloudEnabled());
@@ -224,6 +224,9 @@ function Settings({ onBack, onOpenAccount }: SettingsProps) {
     saveSettings({
       ...settings,
       developerMode: newValue,
+      // Marks this as the user's own choice, so an opt-out survives the
+      // on-by-default (see resolveDeveloperMode in utils/settings).
+      developerModeChosen: true,
     });
     toast.success(`Developer mode ${newValue ? 'enabled' : 'disabled'}`);
   };
@@ -471,8 +474,8 @@ function Settings({ onBack, onOpenAccount }: SettingsProps) {
                   </label>
                 </div>
             <p className="field-hint">
-                  Enable to show advanced features like multiple node management and contexts tab.
-                  When disabled, the app uses a simplified single-node mode.
+                  On by default: shows advanced features like multiple node management and the namespaces tab.
+                  Turn it off for a simplified single-node mode.
             </p>
           </div>
           <div className="settings-field">

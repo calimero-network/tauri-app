@@ -114,7 +114,7 @@ function NodeManagement() {
   const [releases, setReleases] = useState<ReleaseInfo[]>([]);
   const [releasesError, setReleasesError] = useState<string>("");
   const [releasesStale, setReleasesStale] = useState(false);
-  const developerMode = getSettings().developerMode ?? false;
+  const developerMode = getSettings().developerMode ?? true;
   const {
     byNode: nodeVersions,
     measured: versionMeasured,

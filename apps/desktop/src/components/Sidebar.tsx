@@ -15,7 +15,7 @@ interface SidebarProps {
 
 export default function Sidebar({ currentPage, onNavigate, onOpenSettings, nodeDisconnected = false }: SidebarProps) {
   const settings = getSettings();
-  const developerMode = settings.developerMode ?? false;
+  const developerMode = settings.developerMode ?? true;
 
   const navItems = [
     { id: 'home' as const, label: 'Home', icon: Home },

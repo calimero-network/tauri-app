@@ -1,6 +1,6 @@
 .versions-panel {
   border: 1px solid var(--border-color);
-  border-radius: 8px;
+  border-radius: 0;
   padding: 16px;
   background: var(--bg-secondary);
 }

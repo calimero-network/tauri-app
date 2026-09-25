@@ -1,9 +1,7 @@
 .sidebar {
   width: 240px;
   height: 100vh;
-  background: var(--surface-glass-strong);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
+  background: var(--bg-primary);
   border-right: 1px solid var(--border-color);
   display: flex;
   flex-direction: column;
@@ -28,15 +26,11 @@
 }
 
 .logo-icon {
-  height: 28px;
+  height: 24px;
   width: auto;
   flex-shrink: 0;
   object-fit: contain;
-  filter: brightness(0) invert(1);
-}
-
-[data-theme="light"] .logo-icon {
-  filter: brightness(0);
+  filter: var(--logo-filter);
 }
 
 .sidebar-nav {
@@ -50,16 +44,19 @@
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 10px 12px;
-  margin-bottom: 4px;
+  padding: 11px 12px;
+  margin-bottom: 2px;
   background: transparent;
   border: none;
-  border-radius: var(--radius-md);
+  border-radius: 0;
   color: var(--text-secondary);
-  font-size: 14px;
-  font-weight: 500;
+  /* The landing's nav link: small tracked capitals. */
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
   cursor: pointer;
-  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: background-color var(--dur-color) ease-out, color var(--dur-color) ease-out;
   text-align: left;
   position: relative;
   overflow: hidden;
@@ -73,24 +70,19 @@
   bottom: 0;
   width: 3px;
   background: var(--accent-primary);
-  border-radius: 0 2px 2px 0;
+  border-radius: 0;
   transform: scaleY(0);
-  transition: transform 0.2s ease;
+  transition: transform 0.4s var(--ease-out);
 }
 
 .sidebar-nav-item:hover {
-  background: rgba(255, 255, 255, 0.04);
+  background: rgb(var(--ink-rgb) / 0.04);
   color: var(--text-primary);
-}
-
-[data-theme="light"] .sidebar-nav-item:hover {
-  background: rgba(0, 0, 0, 0.04);
 }
 
 .sidebar-nav-item.active {
   background: var(--accent-light);
   color: var(--accent-primary);
-  font-weight: 600;
 }
 
 .sidebar-nav-item.active::before {
@@ -102,15 +94,10 @@
 }
 
 .nav-icon {
-  width: 20px;
-  height: 20px;
+  width: 18px;
+  height: 18px;
   flex-shrink: 0;
   color: inherit;
-  transition: transform 0.2s ease;
-}
-
-.sidebar-nav-item:hover .nav-icon {
-  transform: scale(1.08);
 }
 
 .nav-label {

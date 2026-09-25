@@ -23,7 +23,7 @@ import { useTheme } from "../contexts/ThemeContext";
 import { ArrowLeft, ArrowRight, Check, Download, CheckCircle2, ChevronDown, ChevronUp, AlertTriangle, Settings, RefreshCw } from "lucide-react";
 import AppIcon from "../components/AppIcon";
 import { VerifiedMark } from "../components/AppCard";
-import calimeroLogo from "../assets/calimero-logo.svg";
+import calimeroLogo from "../assets/brand/calimero-wordmark.svg";
 import "./Onboarding.css";
 
 interface OnboardingProps {

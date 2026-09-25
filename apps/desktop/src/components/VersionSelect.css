@@ -12,10 +12,10 @@
   min-width: 170px;
   padding: 7px 10px;
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-sm);
+  border-radius: 0;
   background: var(--bg-tertiary);
   color: var(--text-primary);
-  font-family: 'SF Mono', ui-monospace, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 13px;
   cursor: pointer;
   transition:
@@ -61,7 +61,7 @@
 .version-select-latest {
   flex-shrink: 0;
   padding: 1px 6px;
-  border-radius: 999px;
+  border-radius: 0;
   border: 1px solid var(--border-color);
   background: var(--accent-light);
   color: var(--accent-primary);
@@ -82,7 +82,7 @@
   overflow-y: auto;
   background: var(--bg-elevated);
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
+  border-radius: 0;
   box-shadow: var(--shadow-lg);
 }
 
@@ -91,9 +91,9 @@
   align-items: center;
   gap: 8px;
   padding: 7px 9px;
-  border-radius: var(--radius-sm);
+  border-radius: 0;
   color: var(--text-primary);
-  font-family: 'SF Mono', ui-monospace, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 13px;
   cursor: pointer;
   white-space: nowrap;

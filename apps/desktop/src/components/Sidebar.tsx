@@ -1,6 +1,6 @@
 import { getSettings } from "../utils/settings";
 import { Home, Layers, Package, Store, Settings2 as SettingsIcon, Server, UserRound } from "lucide-react";
-import calimeroLogo from "../assets/calimero-logo.svg";
+import calimeroLogo from "../assets/brand/calimero-wordmark.svg";
 import "./Sidebar.css";
 
 type NavPage = 'home' | 'marketplace' | 'installed' | 'namespaces' | 'account' | 'nodes';

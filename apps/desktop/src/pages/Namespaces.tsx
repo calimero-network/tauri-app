@@ -1789,6 +1789,7 @@ function Namespaces() {
         <main className="ns-main">
           <div className="ns-page-top">
             <div className="ns-page-top-left">
+              <span className="eyebrow">Developer</span>
               <h1>Namespaces</h1>
               <p className="ns-page-subtitle">
                 A namespace is an app-bound workspace. It holds contexts (running app instances, e.g. a chat channel) and subgroups (nested groups that hold their own contexts). Pick an application to see its namespaces.

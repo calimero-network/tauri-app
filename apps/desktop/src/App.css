@@ -13,41 +13,6 @@
   position: relative;
 }
 
-/* ── Ambient Background Orbs ── */
-.app::before,
-.app::after {
-  content: none;
-  position: fixed;
-  border-radius: 50%;
-  pointer-events: none;
-  z-index: 0;
-  filter: blur(100px);
-  opacity: 0;
-}
-.app::before {
-  width: 500px;
-  height: 500px;
-  background: radial-gradient(circle, rgba(165, 255, 17, 0.1) 0%, transparent 72%);
-  top: -120px;
-  right: -80px;
-  animation: none;
-}
-.app::after {
-  width: 400px;
-  height: 400px;
-  background: radial-gradient(circle, rgba(165, 255, 17, 0.06) 0%, transparent 72%);
-  bottom: -100px;
-  left: -60px;
-  animation: none;
-}
-
-[data-theme="light"] .app::before {
-  background: radial-gradient(circle, rgba(106, 171, 0, 0.09) 0%, transparent 70%);
-}
-[data-theme="light"] .app::after {
-  background: radial-gradient(circle, rgba(106, 171, 0, 0.06) 0%, transparent 70%);
-}
-
 /* ── Login Screen ── */
 .login-screen {
   display: flex;
@@ -63,21 +28,6 @@
   overflow: hidden;
 }
 
-.login-screen::before {
-  content: none;
-  position: absolute;
-  width: 600px;
-  height: 600px;
-  border-radius: 50%;
-  background: radial-gradient(circle, rgba(165, 255, 17, 0.08) 0%, transparent 58%);
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  filter: blur(80px);
-  pointer-events: none;
-  animation: none;
-}
-
 .login-screen-header {
   display: flex;
   justify-content: space-between;
@@ -85,14 +35,8 @@
   padding: 16px 24px;
   border-bottom: 1px solid var(--border-color);
   background: var(--header-glass);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
   position: relative;
   z-index: 2;
-}
-
-[data-theme="light"] .login-screen-header {
-  background: var(--header-glass);
 }
 
 .login-screen-brand {
@@ -101,14 +45,10 @@
 }
 
 .login-screen-logo {
-  height: 36px;
+  height: 28px;
   width: auto;
   display: block;
-  filter: brightness(0) invert(1);
-}
-
-[data-theme="light"] .login-screen-logo {
-  filter: brightness(0);
+  filter: var(--logo-filter);
 }
 
 .login-screen-main {
@@ -145,18 +85,12 @@
   justify-content: space-between;
   align-items: center;
   background: var(--header-glass);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
   height: var(--header-height);
   padding: 0 24px;
   border-bottom: 1px solid var(--border-color);
   flex-shrink: 0;
   position: relative;
   z-index: 5;
-}
-
-[data-theme="light"] .header {
-  background: var(--header-glass);
 }
 
 .header-title {
@@ -166,37 +100,30 @@
 }
 
 .header-title h1 {
-  font-size: 18px;
-  font-weight: 600;
+  font-size: 13px;
+  font-weight: 700;
   color: var(--text-primary);
   margin: 0;
-  letter-spacing: -0.3px;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
 }
 
 .version-badge {
   font-size: 10px;
   color: var(--accent-primary);
-  font-weight: 500;
-  padding: 2px 8px;
-  background: var(--accent-light);
-  border: 1px solid rgba(165, 255, 17, 0.12);
-  border-radius: var(--radius-sm);
-  letter-spacing: 0.5px;
-  text-transform: uppercase;
-}
-
-.header h1 {
-  font-size: 22px;
   font-weight: 700;
-  color: var(--text-primary);
-  margin: 0;
-  letter-spacing: -0.4px;
+  padding: 2px 8px;
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  border-radius: 0;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
 }
 
 /* ── Main Content ── */
 .main {
   flex: 1;
-  padding: 28px;
+  padding: 36px 40px;
   overflow-y: auto;
   background: transparent;
   position: relative;
@@ -206,15 +133,12 @@
 .welcome-section {
   margin-bottom: 28px;
   text-align: left;
-  animation: fadeUp 0.5s ease-out;
+  animation: fadeUp var(--dur-enter) var(--ease-out);
 }
 
 .welcome-section h2 {
-  font-size: 26px;
-  font-weight: 700;
   color: var(--text-primary);
-  margin-bottom: 8px;
-  letter-spacing: -0.5px;
+  margin-bottom: 12px;
 }
 
 .welcome-description {
@@ -226,37 +150,18 @@
 .card {
   background: var(--gradient-surface), var(--surface-glass);
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-lg);
+  border-radius: 0;
   padding: 22px;
   box-shadow: var(--shadow-sm);
-  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: border-color var(--dur-color) ease-out, background-color var(--dur-color) ease-out;
   position: relative;
   overflow: hidden;
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-}
-
-.card::after {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, var(--accent-light), transparent);
-  opacity: 0;
-  transition: opacity 0.3s;
 }
 
 .card:hover {
-  background: var(--gradient-surface), rgba(16, 21, 18, 0.72);
+  background: var(--gradient-surface), var(--surface-hover);
   border-color: var(--border-hover);
   box-shadow: var(--shadow-md);
-  transform: translateY(-2px);
-}
-
-.card:hover::after {
-  opacity: 1;
 }
 
 .card-header {
@@ -269,7 +174,7 @@
 .card-header h2 {
   margin: 0;
   font-size: 16px;
-  font-weight: 600;
+  font-weight: 700;
   color: var(--text-primary);
 }
 
@@ -295,10 +200,10 @@
   color: var(--text-secondary);
   font-size: 13px;
   margin-bottom: 20px;
-  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-family: var(--font-mono);
   background: var(--surface-glass-soft);
   padding: 6px 10px;
-  border-radius: var(--radius-sm);
+  border-radius: 0;
   display: inline-block;
 }
 
@@ -320,13 +225,11 @@
 
 .status-indicator.connected {
   background: var(--success);
-  box-shadow: 0 0 10px rgba(34, 197, 94, 0.4);
-  animation: pulse-glow 2s ease-in-out infinite;
+  animation: pulse-glow 2.4s ease-in-out infinite;
 }
 
 .status-indicator.disconnected {
   background: var(--error);
-  box-shadow: 0 0 10px rgba(239, 68, 68, 0.3);
 }
 
 /* ── Google Sign-In button ── */
@@ -338,7 +241,7 @@
   background: #fff;
   color: #3c4043;
   border: 1px solid #dadce0;
-  border-radius: 8px;
+  border-radius: 0;
   font-size: 14px;
   font-weight: 500;
   font-family: inherit;
@@ -365,27 +268,25 @@
 .error {
   margin-top: 16px;
   padding: 12px 16px;
-  background: rgba(239, 68, 68, 0.08);
-  border: 1px solid rgba(239, 68, 68, 0.2);
+  background: rgb(var(--error-rgb) / 0.08);
+  border: 1px solid rgb(var(--error-rgb) / 0.2);
   color: var(--error);
-  border-radius: var(--radius-md);
+  border-radius: 0;
   font-size: 14px;
 }
 
 /* ── Status Card (simple) ── */
 .status-cards-simple {
   margin-bottom: 32px;
-  animation: fadeUp 0.5s ease-out 0.15s both;
+  animation: fadeUp var(--dur-enter) var(--ease-out) 0.06s both;
 }
 
 .status-card-simple {
   background: var(--gradient-surface), var(--surface-glass);
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-lg);
+  border-radius: 0;
   padding: 22px;
   box-shadow: var(--shadow-sm);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
 }
 
 .status-header-simple {
@@ -396,8 +297,10 @@
 
 .status-header-simple h3 {
   margin: 0;
-  font-size: 16px;
-  font-weight: 600;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
   color: var(--text-primary);
 }
 
@@ -409,24 +312,25 @@
   padding: 5px 12px;
   background: var(--surface-glass-soft);
   border: 1px solid var(--border-color);
-  border-radius: 20px;
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.3px;
+  border-radius: 0;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
   color: var(--text-secondary);
   white-space: nowrap;
 }
 
 .status-badge.connected {
-  background: rgba(34, 197, 94, 0.12);
+  background: rgb(var(--success-rgb) / 0.12);
   color: var(--success);
-  border: 1px solid rgba(34, 197, 94, 0.2);
+  border: 1px solid rgb(var(--success-rgb) / 0.2);
 }
 
 .status-badge.disconnected {
-  background: rgba(239, 68, 68, 0.12);
+  background: rgb(var(--error-rgb) / 0.12);
   color: var(--error);
-  border: 1px solid rgba(239, 68, 68, 0.2);
+  border: 1px solid rgb(var(--error-rgb) / 0.2);
 }
 
 .status-dot {
@@ -438,7 +342,7 @@
 }
 
 .status-badge.connected .status-dot {
-  box-shadow: 0 0 6px currentColor;
+  animation: pulse-glow 2.4s ease-in-out infinite;
 }
 
 /* The account's device and namespace states, which keep the neutral pill and
@@ -464,9 +368,9 @@
 .status-error {
   margin: 0;
   padding: 12px;
-  background: rgba(239, 68, 68, 0.08);
-  border: 1px solid rgba(239, 68, 68, 0.15);
-  border-radius: var(--radius-md);
+  background: rgb(var(--error-rgb) / 0.08);
+  border: 1px solid rgb(var(--error-rgb) / 0.15);
+  border-radius: 0;
   color: var(--error);
   font-size: 13px;
 }
@@ -498,7 +402,7 @@
 /* ── Recent Applications ── */
 .recent-apps-section {
   margin-bottom: 32px;
-  animation: fadeUp 0.5s ease-out 0.25s both;
+  animation: fadeUp var(--dur-enter) var(--ease-out) 0.18s both;
 }
 
 /* Owned here: home renders this grid too, and page CSS loads lazily. */
@@ -516,7 +420,7 @@
   margin: 0 auto;
   width: 100%;
   box-sizing: border-box;
-  animation: fadeUp 0.5s ease-out 0.2s both;
+  animation: fadeUp var(--dur-enter) var(--ease-out) 0.12s both;
 }
 
 @media (max-width: 768px) {
@@ -534,10 +438,11 @@
 
 .section-header h3 {
   margin: 0;
-  font-size: 18px;
-  font-weight: 600;
-  color: var(--text-primary);
-  letter-spacing: -0.3px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
 }
 
 .view-all-link {
@@ -547,11 +452,13 @@
   background: transparent;
   border: none;
   color: var(--accent-primary);
-  font-size: 13px;
-  font-weight: 500;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-button);
   cursor: pointer;
   padding: 5px 10px;
-  border-radius: var(--radius-sm);
+  border-radius: 0;
   transition: all 0.2s;
 }
 
@@ -567,21 +474,17 @@
   padding: 20px 14px 16px;
   background: var(--gradient-surface), var(--surface-glass);
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-lg);
+  border-radius: 0;
   cursor: pointer;
-  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: border-color var(--dur-color) ease-out, background-color var(--dur-color) ease-out;
   text-align: center;
   width: 100%;
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
   position: relative;
 }
 
 .app-card-mini:hover {
-  background: var(--gradient-surface), rgba(16, 21, 18, 0.72);
-  border-color: var(--accent-dim);
-  transform: translateY(-3px);
-  box-shadow: var(--shadow-glow);
+  background: var(--gradient-surface), var(--surface-hover);
+  border-color: var(--accent-primary);
 }
 
 .app-card-mini .app-icon {
@@ -616,13 +519,11 @@
 .empty-state-card {
   background: var(--gradient-surface), var(--surface-glass);
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-xl);
+  border-radius: 0;
   padding: 56px 36px;
   text-align: center;
   margin-bottom: 32px;
-  animation: fadeUp 0.5s ease-out;
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  animation: fadeUp var(--dur-enter) var(--ease-out);
 }
 
 .empty-state-card .empty-icon {
@@ -663,7 +564,7 @@
   background: transparent;
   color: var(--text-primary);
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
+  border-radius: 0;
   font-size: 14px;
   font-weight: 600;
   cursor: pointer;
@@ -672,9 +573,8 @@
 }
 
 .btn-browse-marketplace:hover {
-  border-color: var(--border-hover);
-  transform: translateY(-2px);
-  box-shadow: var(--shadow-sm);
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
 }
 
 .btn-browse-marketplace:hover .browse-icon {
@@ -689,14 +589,16 @@
 /* ── Quick Actions ── */
 .quick-actions {
   margin-top: 24px;
-  animation: fadeUp 0.5s ease-out 0.3s both;
+  animation: fadeUp var(--dur-enter) var(--ease-out) 0.24s both;
 }
 
 .quick-actions h3 {
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--text-primary);
-  margin-bottom: 14px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
+  margin-bottom: 18px;
 }
 
 .actions-grid {
@@ -708,23 +610,20 @@
 .action-card {
   background: var(--gradient-surface), var(--surface-glass);
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-lg);
+  border-radius: 0;
   padding: 18px;
   display: flex;
   align-items: flex-start;
   gap: 14px;
   cursor: pointer;
-  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: border-color var(--dur-color) ease-out, background-color var(--dur-color) ease-out;
   text-align: left;
   width: 100%;
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
 }
 
 .action-card:hover {
-  border-color: var(--accent-dim);
-  transform: translateY(-2px);
-  box-shadow: var(--shadow-glow);
+  border-color: var(--accent-primary);
+  background: var(--surface-hover);
 }
 
 .action-icon {
@@ -767,24 +666,10 @@
   overflow: hidden;
 }
 
-.loading-screen::before {
-  content: none;
-  position: absolute;
-  width: 500px;
-  height: 500px;
-  border-radius: 50%;
-  background: radial-gradient(circle, rgba(165, 255, 17, 0.08) 0%, transparent 58%);
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  filter: blur(60px);
-  animation: none;
-}
-
 .loading-spinner-large {
   width: 56px;
   height: 56px;
-  border: 3px solid var(--border-color);
+  border: 2px solid var(--border-color);
   border-top-color: var(--accent-primary);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
@@ -795,7 +680,9 @@
 
 .loading-screen h2 {
   font-size: 22px;
-  font-weight: 600;
+  font-weight: 950;
+  text-transform: uppercase;
+  letter-spacing: 0.01em;
   color: var(--text-primary);
   margin-bottom: 8px;
   position: relative;
@@ -809,3 +696,28 @@
   position: relative;
   z-index: 1;
 }
+
+/* ── Page headlines ──
+   calimero.network's h1: uppercase, weight 950, tight. Set here once for
+   every page's own title rather than in each page sheet; `.app` lifts the
+   specificity over the page sheets, which load after this one. */
+.app .main h1,
+.app .welcome-section h2,
+.settings-page .settings-title {
+  font-size: clamp(28px, 1.2rem + 1.6vw, 40px);
+  font-weight: 950;
+  text-transform: uppercase;
+  letter-spacing: 0.01em;
+  line-height: 1.05;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+/* The eyebrow sits tight over the headline it labels. */
+.app .main .eyebrow,
+.app .settings-main .eyebrow {
+  margin-bottom: 12px;
+}
+
+/* Section entrances ride the shared reveal (index.css) on mount only; a
+   page sheet that adds its own delay keeps it, so the stagger is short. */

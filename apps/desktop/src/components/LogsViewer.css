@@ -10,11 +10,9 @@
 }
 
 .logs-viewer-modal {
-  background: var(--surface-glass-strong);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
+  background: var(--bg-secondary);
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-lg);
+  border-radius: 0;
   box-shadow: var(--shadow-lg);
   max-width: 95vw;
   max-height: 90vh;
@@ -53,11 +51,9 @@
   background: var(--button-glass);
   color: var(--text-primary);
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
+  border-radius: 0;
   cursor: pointer;
   transition: all 0.15s;
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
 }
 
 .logs-viewer-btn:hover:not(:disabled) {
@@ -111,7 +107,7 @@
   font-size: 13px;
   background: var(--surface-glass-soft);
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
+  border-radius: 0;
   color: var(--text-primary);
   outline: none;
 }
@@ -142,7 +138,7 @@
   font-size: 13px;
   background: var(--surface-glass-soft);
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
+  border-radius: 0;
   color: var(--text-primary);
   cursor: pointer;
 }
@@ -156,7 +152,7 @@
   flex: 1;
   overflow: auto;
   padding: 16px 20px;
-  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.5;
   color: var(--text-secondary);

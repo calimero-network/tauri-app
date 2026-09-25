@@ -411,6 +411,7 @@ function Marketplace({ clientReady = true }: MarketplaceProps) {
   return (
     <div className="marketplace-page">
       <header className="marketplace-header">
+        <span className="eyebrow">App Registry</span>
         <h1>Application Marketplace</h1>
         <div className="marketplace-header-row">
           <p>Browse and install applications from configured registries</p>
@@ -526,7 +527,7 @@ function Marketplace({ clientReady = true }: MarketplaceProps) {
             {Array.from({ length: 6 }).map((_, index) => (
               <div key={index} className="app-card skeleton-card">
                 <div className="app-card-header">
-                  <Skeleton variant="rectangular" width="40px" height="40px" borderRadius="10px" />
+                  <Skeleton variant="rectangular" width="40px" height="40px" />
                   <div className="app-title-section">
                     <Skeleton variant="text" width="70%" height="16px" />
                     <Skeleton variant="text" width="40%" height="12px" />
@@ -544,7 +545,7 @@ function Marketplace({ clientReady = true }: MarketplaceProps) {
                   </div>
                 </div>
                 <div className="app-card-actions">
-                  <Skeleton variant="rectangular" width="100%" height="38px" borderRadius="10px" />
+                  <Skeleton variant="rectangular" width="100%" height="38px" />
                 </div>
               </div>
             ))}

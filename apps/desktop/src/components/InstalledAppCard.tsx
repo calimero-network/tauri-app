@@ -113,7 +113,7 @@ export default function InstalledAppCard({
           {nodeSelect}
           {frontendUrl ? (
             <button
-              className="button button-secondary installed-app-open"
+              className="button installed-app-open"
               data-testid="open-app"
               title={`Open ${name}`}
               onClick={(e) => {
@@ -132,7 +132,7 @@ export default function InstalledAppCard({
 
         <div className="installed-app-more" onClick={(e) => e.stopPropagation()}>
           <button
-            className="button installed-app-more-btn"
+            className="button button-secondary installed-app-more-btn"
             title="More options"
             aria-label={`More options for ${name}`}
             aria-expanded={menuOpen}

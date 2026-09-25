@@ -320,6 +320,7 @@ function Settings({ onBack, onOpenAccount }: SettingsProps) {
       </header>
 
       <main className="settings-main">
+        <span className="eyebrow">Preferences</span>
         <h1 className="settings-title">Settings</h1>
         <div className="settings-tabs">
           <button 
@@ -870,10 +871,10 @@ function Settings({ onBack, onOpenAccount }: SettingsProps) {
                       <span style={{
                         marginLeft: 'auto',
                         padding: '2px 10px',
-                        borderRadius: '12px',
-                        fontSize: '0.75rem',
-                        fontWeight: 600,
-                        textTransform: 'capitalize',
+                        fontSize: '0.7rem',
+                        fontWeight: 700,
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.12em',
                         background: 'var(--accent-light)',
                         color: 'var(--accent-primary)',
                         border: '1px solid var(--accent-dim)',

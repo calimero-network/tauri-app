@@ -444,10 +444,10 @@ describe('enableHaForNamespace', () => {
           jsonResponse({
             release_tag: 'v1',
             allowed_mrtd: ['mrtd-1'],
-            allowed_rtmr0: [],
-            allowed_rtmr1: [],
-            allowed_rtmr2: [],
-            allowed_rtmr3: [],
+            allowed_rtmr0: ['rtmr0-1'],
+            allowed_rtmr1: ['rtmr1-1'],
+            allowed_rtmr2: ['rtmr2-1'],
+            allowed_rtmr3: ['rtmr3-1'],
           }),
         '/admin-api/groups/ns-root/settings/tee-admission-policy': () =>
           new Response('{}', { status: 200 }),
@@ -525,10 +525,10 @@ describe('enableHaForNamespace', () => {
           jsonResponse({
             release_tag: 'v1',
             allowed_mrtd: ['mrtd-1'],
-            allowed_rtmr0: [],
-            allowed_rtmr1: [],
-            allowed_rtmr2: [],
-            allowed_rtmr3: [],
+            allowed_rtmr0: ['rtmr0-1'],
+            allowed_rtmr1: ['rtmr1-1'],
+            allowed_rtmr2: ['rtmr2-1'],
+            allowed_rtmr3: ['rtmr3-1'],
           }),
         '/admin-api/groups/ns-root/settings/tee-admission-policy': () =>
           new Response('{}', { status: 200 }),

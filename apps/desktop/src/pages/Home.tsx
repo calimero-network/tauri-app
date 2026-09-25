@@ -53,6 +53,7 @@ function Home({ connected, error, clientReady, onReconnect, onNavigate, onOpenSe
   return (
     <>
       <div className="welcome-section">
+        <span className="eyebrow">Calimero Desktop</span>
         <h2>Welcome to Calimero Desktop</h2>
         <p className="welcome-description">
           Your gateway to decentralized applications. Get started by installing apps from the marketplace.

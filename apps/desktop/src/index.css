@@ -1,120 +1,244 @@
+/* ---------------------------------------------------------------------------
+ * Power Grotesk, the calimero.network face.
+ *
+ * Bundled from src/assets rather than fetched: the webview's CSP allows
+ * `font-src 'self' data:` only, and the desktop app has to render offline.
+ * The landing's five weights — 200, 300, 400, 700 and 950 — so a 500 resolves
+ * to 400 and a 600 to 700, the landing's own two-weight rhythm.
+ * ------------------------------------------------------------------------- */
+@font-face {
+  font-family: 'Power Grotesk';
+  src: url('./assets/fonts/powerGrotesk/PowerGrotesk-Black.woff2') format('woff2');
+  font-weight: 950;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Power Grotesk';
+  src: url('./assets/fonts/powerGrotesk/PowerGrotesk-Bold.woff2') format('woff2');
+  font-weight: 700;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Power Grotesk';
+  src: url('./assets/fonts/powerGrotesk/PowerGrotesk-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Power Grotesk';
+  src: url('./assets/fonts/powerGrotesk/PowerGrotesk-Light.woff2') format('woff2');
+  font-weight: 300;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Power Grotesk';
+  src: url('./assets/fonts/powerGrotesk/PowerGrotesk-UltraLight.woff2') format('woff2');
+  font-weight: 200;
+  font-display: swap;
+}
+
 * {
   margin: 0;
   padding: 0;
   box-sizing: border-box;
 }
 
+/* ── Dark (default): the calimero.network palette ──
+   The same numbers the landing, Calimero Cloud and the App Registry use: a
+   charcoal ground (#131215), two surfaces a step above it, #282828 hairlines,
+   near-white ink, a #8e8e8e secondary and the brand lime with DARK ink on it.
+   The token NAMES are the ones every page sheet already reads, so the
+   palette changes here and the pages follow. */
 :root {
-  /* Match attestation-verifier dark palette */
-  --bg-primary: #0d1117;
-  --bg-secondary: #161b22;
-  --bg-tertiary: #21262d;
-  --bg-elevated: #1c2128;
-  --text-primary: #e6edf3;
-  --text-secondary: #8b949e;
-  --text-tertiary: #6e7681;
-  --border-color: #30363d;
-  --border-hover: rgba(165, 255, 17, 0.18);
+  color-scheme: dark;
+
+  --bg-primary: #131215;
+  --bg-secondary: #1a191c;
+  --bg-tertiary: #211f23;
+  --bg-elevated: #1a191c;
+  --text-primary: #fcfcfc;
+  --text-secondary: #8e8e8e;
+  --text-tertiary: #707070;
+  --border-color: #282828;
+  --border-strong: #404040;
+  --border-hover: #404040;
+
+  /* The lime. `--accent-primary` is the accent as INK (text, icons, a
+     1px outline); `--accent-fill` is the solid lime a primary button is
+     filled with, and `--on-accent` the ink drawn on it. In dark mode the two
+     are the same colour; on paper the ink walks darker for contrast and the
+     fill stays lime. */
+  --accent-rgb: 165 255 17;
   --accent-primary: #a5ff11;
-  --accent-hover: #8ed40d;
-  --accent-dim: rgba(165, 255, 17, 0.35);
-  --accent-light: rgba(165, 255, 17, 0.08);
-  --accent-glow: rgba(165, 255, 17, 0.15);
-  --success: #3fb950;
-  --error: #f85149;
-  --error-bg: rgba(248, 81, 73, 0.08);
-  --error-border: rgba(248, 81, 73, 0.2);
-  --warning: #d29922;
-  --info: #3b82f6;
-  --shadow-sm: 0 1px 3px 0 rgba(0, 0, 0, 0.35);
-  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.28);
-  --shadow-lg: 0 16px 36px rgba(0, 0, 0, 0.34);
-  --shadow-xl: 0 24px 48px rgba(0, 0, 0, 0.4);
-  --shadow-glow: 0 0 20px rgba(165, 255, 17, 0.08);
-  --gradient-primary: linear-gradient(135deg, #a5ff11 0%, #73b30c 100%);
-  --gradient-secondary: linear-gradient(135deg, #73b30c 0%, #2d380b 100%);
-  --gradient-surface: linear-gradient(180deg, rgba(255,255,255,0.025) 0%, transparent 100%);
-  --surface-glass: rgba(22, 27, 34, 0.55);
-  --surface-glass-soft: rgba(13, 17, 23, 0.5);
-  --surface-glass-strong: rgba(13, 17, 23, 0.72);
-  --header-glass: rgba(13, 17, 23, 0.78);
-  --button-glass: rgba(165, 255, 17, 0.06);
-  --button-glass-hover: rgba(165, 255, 17, 0.1);
+  --accent-hover: #b8ff4a;
+  --accent-fill: #a5ff11;
+  --accent-fill-hover: #b8ff4a;
+  --on-accent: #131215;
+  --accent-dim: rgb(var(--accent-rgb) / 0.35);
+  --accent-light: rgb(var(--accent-rgb) / 0.08);
+  --accent-glow: rgb(var(--accent-rgb) / 0.15);
+
+  /* Ink as a channel triplet, for the translucent washes (hover rows,
+     scrollbars, dividers) that must darken on paper rather than lighten. */
+  --ink-rgb: 252 252 252;
+
+  --success-rgb: 95 214 138;
+  --error-rgb: 255 107 107;
+  --warning-rgb: 245 185 66;
+  --info-rgb: 110 168 255;
+  --success: rgb(var(--success-rgb));
+  --error: rgb(var(--error-rgb));
+  --error-strong: #ff5252;
+  /* Ink on a solid error fill: charcoal on the bright dark-mode red, white
+     on the deeper light-mode one. */
+  --on-error: #131215;
+  --error-bg: rgb(var(--error-rgb) / 0.08);
+  --error-border: rgb(var(--error-rgb) / 0.24);
+  --warning: rgb(var(--warning-rgb));
+  --info: rgb(var(--info-rgb));
+
+  /* Flat, as the landing is: a surface is told apart by its line, not by a
+     shadow. Only floating things (menus, dialogs, toasts) keep depth. */
+  --shadow-sm: none;
+  --shadow-md: none;
+  --shadow-lg: 0 24px 48px rgb(0 0 0 / 0.5);
+  --shadow-xl: 0 24px 48px rgb(0 0 0 / 0.5);
+  --shadow-glow: none;
+  /* The landing's button hover: a lime bloom, not a lift. */
+  --shadow-button: 0 0 20px 0 rgb(165 255 17 / 0.45);
+
+  --gradient-primary: #a5ff11;
+  --gradient-secondary: #211f23;
+  --gradient-surface: linear-gradient(transparent, transparent);
+  --surface-glass: #1a191c;
+  --surface-glass-soft: #131215;
+  --surface-glass-strong: #131215;
+  --surface-hover: #211f23;
+  --header-glass: #131215;
+  --button-glass: transparent;
+  --button-glass-hover: rgb(var(--accent-rgb) / 0.08);
+
+  /* The white wordmark, shown as it is. */
+  --logo-filter: none;
+
+  /* The page's vertical column lines — the landing's grid-line. */
+  --grid-line: rgb(252 252 252 / 0.035);
+
+  --font-sans: 'Power Grotesk', arial, helvetica, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, 'SF Mono', SFMono-Regular, Menlo, monospace;
+  /* Letter-spacing for the all-caps roles, from the landing's type scale. */
+  --tracking-eyebrow: 0.28em;
+  --tracking-label: 0.16em;
+  --tracking-button: 0.15em;
+
+  /* Motion. One curve for everything that enters — the landing's card
+     reveal — and a plain ease-out for colour. No overshoot anywhere. */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --dur-enter: 600ms;
+  --dur-color: 0.3s;
+
   --header-height: 56px;
   --z-modal: 1000; /* full-screen backdrops, alongside the update notice; toasts and menus stay above at 10000 */
-  --radius-sm: 6px;
-  --radius-md: 10px;
-  --radius-lg: 16px;
-  --radius-xl: 24px;
-  --desktop-space-background: radial-gradient(circle at 50% -10%, rgba(165, 255, 17, 0.1) 0%, rgba(165, 255, 17, 0.04) 18%, rgba(13, 17, 23, 0) 42%);
-  --desktop-space-size: cover;
-  --desktop-space-position: top center;
-  --desktop-space-repeat: no-repeat;
+  /* Square. The landing has no rounded surface anywhere. */
+  --radius-sm: 0;
+  --radius-md: 0;
+  --radius-lg: 0;
+  --radius-xl: 0;
+  --desktop-space-background: linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
+  --desktop-space-size: 25% 100%;
+  --desktop-space-position: 0 0;
+  --desktop-space-repeat: repeat-x;
 }
 
+/* ── Light (opt-in) ──
+   The landing's charcoal and paper swapped, as Calimero Cloud does it: an
+   off-white ground, white cards, #dcdcd4 lines, charcoal ink.
+   ⚠️ #a5ff11 on white is ~1.2:1 as TEXT, so the accent INK becomes #487800
+   (4.5:1+ on the paper). The raw lime stays for fills, with dark ink on it. */
 [data-theme="light"] {
-  --bg-primary: #fafafa;
-  --bg-secondary: #f4f4f5;
-  --bg-tertiary: #e4e4e7;
+  color-scheme: light;
+
+  --bg-primary: #f5f5f0;
+  --bg-secondary: #ffffff;
+  --bg-tertiary: #ebebe4;
   --bg-elevated: #ffffff;
-  --text-primary: #09090b;
-  --text-secondary: #52525b;
-  --text-tertiary: #71717a;
-  --border-color: rgba(0, 0, 0, 0.08);
-  --border-hover: rgba(0, 0, 0, 0.15);
-  --accent-primary: #6aab00;
-  --accent-hover: #4d7d00;
-  --accent-dim: rgba(106, 171, 0, 0.35);
-  --accent-light: rgba(106, 171, 0, 0.08);
-  --accent-glow: rgba(106, 171, 0, 0.12);
-  --success: #16a34a;
-  --error: #dc2626;
-  --error-bg: rgba(220, 38, 38, 0.08);
-  --error-border: rgba(220, 38, 38, 0.2);
-  --warning: #d97706;
-  --info: #2563eb;
-  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
-  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
-  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
-  --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
-  --shadow-glow: 0 0 20px rgba(106, 171, 0, 0.06);
-  --gradient-primary: linear-gradient(135deg, #6aab00 0%, #4d7d00 100%);
-  --gradient-secondary: linear-gradient(135deg, #4d7d00 0%, #2d4700 100%);
-  --gradient-surface: linear-gradient(180deg, rgba(0,0,0,0.02) 0%, transparent 100%);
-  --surface-glass: rgba(255, 255, 255, 0.7);
-  --surface-glass-soft: rgba(255, 255, 255, 0.55);
-  --surface-glass-strong: rgba(255, 255, 255, 0.82);
-  --header-glass: rgba(250, 250, 250, 0.82);
-  --button-glass: rgba(106, 171, 0, 0.08);
-  --button-glass-hover: rgba(106, 171, 0, 0.14);
-  --desktop-space-background:
-    radial-gradient(circle at 16% 10%, rgba(193, 226, 138, 0.3) 0%, transparent 22%),
-    radial-gradient(circle at 84% 12%, rgba(193, 226, 138, 0.18) 0%, transparent 18%),
-    radial-gradient(circle at 50% 72%, rgba(193, 226, 138, 0.12) 0%, transparent 26%),
-    radial-gradient(circle at 12% 18%, rgba(16, 24, 40, 0.16) 0 1px, transparent 1.8px),
-    radial-gradient(circle at 28% 62%, rgba(16, 24, 40, 0.14) 0 1px, transparent 1.8px),
-    radial-gradient(circle at 44% 22%, rgba(16, 24, 40, 0.16) 0 1px, transparent 1.7px),
-    radial-gradient(circle at 58% 78%, rgba(16, 24, 40, 0.12) 0 1px, transparent 1.9px),
-    radial-gradient(circle at 74% 34%, rgba(16, 24, 40, 0.18) 0 1px, transparent 1.8px),
-    radial-gradient(circle at 88% 16%, rgba(16, 24, 40, 0.14) 0 1px, transparent 1.8px),
-    radial-gradient(circle at 8% 86%, rgba(16, 24, 40, 0.16) 0 1px, transparent 1.9px),
-    radial-gradient(circle at 66% 54%, rgba(16, 24, 40, 0.1) 0 1px, transparent 1.8px),
-    radial-gradient(circle at 92% 72%, rgba(16, 24, 40, 0.18) 0 1px, transparent 1.8px),
-    linear-gradient(180deg, #fbfcff 0%, #f4f8f3 45%, #edf3ec 100%);
+  --text-primary: #131215;
+  --text-secondary: #5e5e5e;
+  --text-tertiary: #6b6b70;
+  --border-color: #dcdcd4;
+  --border-strong: #b9b9b0;
+  --border-hover: #b9b9b0;
+
+  --accent-rgb: 72 120 0;
+  --accent-primary: #487800;
+  --accent-hover: #385e00;
+  --accent-fill: #a5ff11;
+  --accent-fill-hover: #b8ff4a;
+  --on-accent: #131215;
+
+  --ink-rgb: 19 18 21;
+
+  --success-rgb: 27 122 58;
+  --error-rgb: 198 40 40;
+  --warning-rgb: 138 90 0;
+  --info-rgb: 37 99 235;
+  --error-strong: #a61f1f;
+  --on-error: #ffffff;
+
+  --shadow-lg: 0 16px 40px rgb(19 18 21 / 0.12), 0 2px 6px rgb(19 18 21 / 0.06);
+  --shadow-xl: 0 16px 40px rgb(19 18 21 / 0.12), 0 2px 6px rgb(19 18 21 / 0.06);
+  /* A lime bloom on white reads as a smudge; a hard ink offset reads as
+     the landing's line-art instead. */
+  --shadow-button: 3px 3px 0 0 #131215;
+
+  --gradient-secondary: #ebebe4;
+  --surface-glass: #ffffff;
+  --surface-glass-soft: #fafaf7;
+  --surface-glass-strong: #f5f5f0;
+  --surface-hover: #fafaf7;
+  --header-glass: #f5f5f0;
+
+  /* The white wordmark flattened to near-black ink. */
+  --logo-filter: brightness(0) invert(0.08);
+
+  --grid-line: rgb(19 18 21 / 0.05);
+}
+
+html {
+  font-family: var(--font-sans);
 }
 
 body {
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
-    Oxygen, Ubuntu, Cantarell, "Open Sans", "Helvetica Neue", sans-serif;
+  font-family: var(--font-sans);
+  /* The landing sets its copy with a hair of positive tracking; an app UI
+     is denser, so half of it. */
+  letter-spacing: 0.015em;
+  line-height: 1.55;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   background-color: var(--bg-primary);
-  background-image: var(--desktop-space-background);
-  background-size: var(--desktop-space-size);
-  background-position: var(--desktop-space-position);
-  background-repeat: var(--desktop-space-repeat);
   color: var(--text-primary);
-  transition: background-color 0.3s ease, color 0.3s ease;
+  transition: background-color var(--dur-color) ease-out, color var(--dur-color) ease-out;
+}
+
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
+  letter-spacing: inherit;
+}
+
+code,
+pre,
+kbd,
+samp {
+  font-family: var(--font-mono);
+  letter-spacing: 0;
 }
 
 #root {
@@ -124,31 +248,33 @@ body {
   position: relative;
 }
 
-/* Smooth transitions for theme changes */
+/* Smooth transitions for theme changes — colour only, never layout. */
 * {
-  transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+  transition: background-color var(--dur-color) ease-out, color var(--dur-color) ease-out, border-color var(--dur-color) ease-out;
 }
 
-/* ── Background Orbs (animated ambient glow) ── */
-@keyframes float-orb-1 {
-  0%, 100% { transform: translate(0, 0) scale(1); }
-  33% { transform: translate(30px, -50px) scale(1.1); }
-  66% { transform: translate(-20px, 20px) scale(0.95); }
-}
-@keyframes float-orb-2 {
-  0%, 100% { transform: translate(0, 0) scale(1); }
-  33% { transform: translate(-40px, 30px) scale(1.05); }
-  66% { transform: translate(50px, -40px) scale(0.9); }
-}
-@keyframes float-orb-3 {
-  0%, 100% { transform: translate(0, 0) scale(1); }
-  33% { transform: translate(20px, 40px) scale(1.08); }
-  66% { transform: translate(-30px, -30px) scale(0.92); }
+:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 2px;
 }
 
-/* ── Shared animation keyframes ── */
+/* ── Type roles, from calimero.network ──
+   The landing's eyebrow and label-s: all caps, widely tracked. */
+.eyebrow {
+  display: block;
+  font-size: 12px;
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-eyebrow);
+  color: var(--accent-primary);
+}
+
+/* ── Shared animation keyframes ──
+   The landing's reveal: a short rise and a fade on one ease-out curve. The
+   base styles of every element are its FINAL state, so with the animation
+   removed (reduced motion) nothing is left hidden. */
 @keyframes fadeUp {
-  from { opacity: 0; transform: translateY(16px); }
+  from { opacity: 0; transform: translateY(20px); }
   to { opacity: 1; transform: translateY(0); }
 }
 @keyframes fadeIn {
@@ -156,17 +282,18 @@ body {
   to { opacity: 1; }
 }
 @keyframes scaleIn {
-  from { opacity: 0; transform: scale(0.95); }
-  to { opacity: 1; transform: scale(1); }
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 @keyframes shimmer {
   0% { background-position: -200% center; }
   100% { background-position: 200% center; }
 }
 @keyframes pulse-glow {
-  0%, 100% { box-shadow: 0 0 0 0 var(--accent-glow); }
-  50% { box-shadow: 0 0 20px 4px var(--accent-glow); }
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
 }
+
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
@@ -184,59 +311,67 @@ body {
   }
 }
 
-/* ── Buttons ── */
+/* ── Buttons ──
+   calimero.network's: square, all caps, tracked. The default `.button` is the
+   landing's secondary — a lime outline that fills on hover — and
+   `.button-primary` the solid lime with dark ink. Hover is a bloom, never a
+   lift: nothing on the page moves under the pointer. */
 .button {
-  background: var(--button-glass);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: transparent;
   color: var(--accent-primary);
-  border: 1px solid rgba(165, 255, 17, 0.18);
-  padding: 9px 18px;
-  border-radius: var(--radius-md);
-  font-size: 13px;
-  font-weight: 600;
+  border: 1px solid var(--accent-primary);
+  padding: 10px 20px;
+  border-radius: 0;
+  font-size: 12px;
+  font-weight: 700;
   font-family: inherit;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-button);
+  line-height: 1.2;
   cursor: pointer;
-  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  transition:
+    background-color var(--dur-color) ease-out,
+    border-color var(--dur-color) ease-out,
+    color var(--dur-color) ease-out,
+    box-shadow var(--dur-color) ease-out;
   box-shadow: none;
-  letter-spacing: 0.2px;
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
 }
 
-.button:hover {
-  background: var(--button-glass-hover);
-  border-color: rgba(165, 255, 17, 0.28);
-  transform: translateY(-1px);
-  box-shadow: var(--shadow-sm);
-}
-
-.button:active {
-  transform: translateY(0) scale(0.98);
+.button:hover:not(:disabled) {
+  background: var(--accent-fill);
+  border-color: var(--accent-fill);
+  color: var(--on-accent);
+  box-shadow: var(--shadow-button);
 }
 
 .button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
-  transform: none;
   box-shadow: none;
 }
 
 /* A button standing in a list row rather than at the foot of a card. */
 .button.button-small {
-  padding: 6px 12px;
-  font-size: 12px;
+  padding: 7px 12px;
+  font-size: 11px;
 }
 
 /* Solid fill so the main action outranks a neighbouring .button. */
 .button.button-primary {
-  background: var(--accent-primary);
-  color: #09090b;
-  border-color: var(--accent-primary);
+  background: var(--accent-fill);
+  color: var(--on-accent);
+  border-color: var(--accent-fill);
 }
 
 .button.button-primary:hover:not(:disabled) {
-  background: var(--accent-hover);
-  border-color: var(--accent-hover);
-  color: #09090b;
+  background: var(--accent-fill);
+  border-color: var(--accent-fill);
+  color: var(--on-accent);
+  box-shadow: var(--shadow-button);
 }
 
 /* Inert surface rather than a dimmed accent: a translucent accent fill still reads
@@ -252,45 +387,49 @@ body {
 .button.button-secondary {
   background: transparent;
   color: var(--text-secondary);
-  border-color: var(--border-color);
+  border-color: var(--border-strong);
 }
 
 .button.button-secondary:hover:not(:disabled) {
-  background: var(--surface-glass-soft);
+  background: rgb(var(--ink-rgb) / 0.04);
   color: var(--text-primary);
-  border-color: var(--border-hover);
+  border-color: var(--text-secondary);
+  box-shadow: none;
 }
 
 .button.button-danger {
-  background: var(--error);
-  color: #fff;
+  background: transparent;
+  color: var(--error);
   border-color: var(--error);
 }
 
 .button.button-danger:hover:not(:disabled) {
-  background: #dc2626;
-  border-color: #dc2626;
-  color: #fff;
-  transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.35);
+  background: var(--error);
+  border-color: var(--error);
+  color: var(--on-error);
+  box-shadow: 0 0 20px 0 rgb(var(--error-rgb) / 0.35);
+}
+
+[data-theme="light"] .button.button-danger:hover:not(:disabled) {
+  box-shadow: 3px 3px 0 0 #131215;
 }
 
 .button.button-success {
-  background: var(--success);
-  color: #fff;
+  background: transparent;
+  color: var(--success);
   border-color: var(--success);
 }
 
 .button.button-success:hover:not(:disabled) {
-  background: var(--success);
+  background: rgb(var(--success-rgb) / 0.1);
   border-color: var(--success);
-  opacity: 0.9;
-  transform: translateY(-1px);
+  color: var(--success);
+  box-shadow: none;
 }
 
 /* Always rendered disabled: it marks an app as installed rather than offering an action. */
 .button.button-success:disabled {
-  opacity: 0.7;
+  opacity: 0.85;
 }
 
 /* ── Form fields ── */
@@ -334,41 +473,21 @@ body {
 .settings-card {
   background: var(--gradient-surface), var(--surface-glass);
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-lg);
+  border-radius: 0;
   padding: 32px;
-  box-shadow: var(--shadow-sm);
-  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: border-color var(--dur-color) ease-out;
   position: relative;
   overflow: hidden;
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
-}
-
-.settings-card::after {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, var(--accent-light), transparent);
-  opacity: 0;
-  transition: opacity 0.3s;
 }
 
 .settings-card:hover {
-  box-shadow: var(--shadow-sm);
-  border-color: var(--border-hover);
-}
-
-.settings-card:hover::after {
-  opacity: 1;
+  border-color: var(--border-strong);
 }
 
 .settings-card h2 {
   margin: 0 0 24px 0;
-  font-size: 20px;
-  font-weight: 600;
+  font-size: 18px;
+  font-weight: 700;
   color: var(--text-primary);
 }
 
@@ -395,7 +514,7 @@ body {
   width: 100%;
   padding: 12px 16px;
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
+  border-radius: 0;
   font-size: 14px;
   background: var(--surface-glass-soft);
   color: var(--text-primary);
@@ -446,7 +565,7 @@ body {
   background: var(--button-glass);
   color: var(--text-secondary);
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-sm);
+  border-radius: 0;
   cursor: pointer;
   transition: all 0.15s;
 }
@@ -474,8 +593,8 @@ body {
   white-space: pre-wrap;
   background: var(--surface-glass-soft);
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
-  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  border-radius: 0;
+  font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.6;
   color: var(--text-secondary);
@@ -485,7 +604,7 @@ body {
 .disclosure-row {
   background: var(--surface-glass-soft);
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
+  border-radius: 0;
 }
 
 .disclosure-head {
@@ -568,9 +687,9 @@ body {
   width: 48px;
   height: 26px;
   background: var(--surface-glass-soft);
-  border: 1px solid var(--border-color);
-  border-radius: 13px;
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  border: 1px solid var(--border-strong);
+  border-radius: 0;
+  transition: background-color var(--dur-color) ease-out, border-color var(--dur-color) ease-out;
   flex-shrink: 0;
 }
 
@@ -581,18 +700,19 @@ body {
   left: 2px;
   width: 20px;
   height: 20px;
-  background: white;
-  border-radius: 50%;
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+  /* A square knob, as every corner in the design is square. */
+  background: var(--text-secondary);
+  border-radius: 0;
+  transition: transform 0.4s var(--ease-out), background-color var(--dur-color) ease-out;
 }
 
 .toggle-switch input[type="checkbox"]:checked + .toggle-label .toggle-slider {
-  background: var(--accent-primary);
-  border-color: var(--accent-primary);
+  background: var(--accent-fill);
+  border-color: var(--accent-fill);
 }
 
 .toggle-switch input[type="checkbox"]:checked + .toggle-label .toggle-slider::before {
+  background: var(--on-accent);
   transform: translateX(22px);
 }
 
@@ -615,7 +735,7 @@ body {
 }
 
 .toggle-switch-small .toggle-slider {
-  border-radius: 10px;
+  border-radius: 0;
 }
 
 .toggle-switch-small .toggle-slider::before {
@@ -639,7 +759,7 @@ body {
   padding: 16px;
   background: var(--surface-glass-soft);
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
+  border-radius: 0;
 }
 
 .reset-confirm-warning {
@@ -660,7 +780,7 @@ body {
   padding: 60px 20px;
   text-align: center;
   color: var(--text-secondary);
-  animation: fadeUp 0.5s ease-out;
+  animation: fadeUp var(--dur-enter) var(--ease-out);
 }
 
 .empty-state p {
@@ -689,7 +809,7 @@ body {
   margin-bottom: 16px;
   background: var(--error-bg);
   border: 1px solid var(--error-border);
-  border-radius: var(--radius-md);
+  border-radius: 0;
   color: var(--error);
 }
 
@@ -704,23 +824,33 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.1);
-  border-radius: 3px;
+  background: rgb(var(--ink-rgb) / 0.1);
+  border-radius: 0;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.18);
+  background: rgb(var(--ink-rgb) / 0.18);
 }
 
-[data-theme="light"] ::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.12);
-}
-[data-theme="light"] ::-webkit-scrollbar-thumb:hover {
-  background: rgba(0, 0, 0, 0.2);
-}
-
-/* Selection */
+/* Selection: the lime, with the ink a lime fill always carries. */
 ::selection {
-  background-color: rgba(165, 255, 17, 0.2);
-  color: #fff;
+  background-color: var(--accent-fill);
+  color: var(--on-accent);
+}
+
+/* ── Reduced motion ──
+   A viewer who has asked their OS for less motion gets none of it. This has
+   to cover `animation` as well as `transition`: every entrance's base style
+   is its final state, so cutting the animation leaves the page as it ends. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-delay: 0ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    transition-delay: 0ms !important;
+    scroll-behavior: auto !important;
+  }
 }

@@ -1,11 +1,7 @@
 .skeleton {
-  background: rgba(255, 255, 255, 0.07);
+  background: rgb(var(--ink-rgb) / 0.07);
   position: relative;
   overflow: hidden;
-}
-
-[data-theme="light"] .skeleton {
-  background: rgba(0, 0, 0, 0.07);
 }
 
 .skeleton-pulse {
@@ -27,7 +23,7 @@
   background: linear-gradient(
     90deg,
     transparent,
-    rgba(255, 255, 255, 0.12),
+    rgb(var(--ink-rgb) / 0.12),
     transparent
   );
   animation: skeleton-wave 1.5s ease-in-out infinite;
@@ -66,7 +62,7 @@
 .skeleton-table-container {
   width: 100%;
   overflow-x: auto;
-  border-radius: 8px;
+  border-radius: 0;
   border: 1px solid var(--border-color);
   background: var(--surface-glass-soft);
 }
@@ -103,7 +99,7 @@
 .skeleton-card {
   background: var(--surface-glass-soft);
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
+  border-radius: 0;
   padding: 20px;
   display: flex;
   flex-direction: column;

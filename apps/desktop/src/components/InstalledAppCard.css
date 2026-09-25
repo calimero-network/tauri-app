@@ -10,12 +10,13 @@
    promise an interaction that does not exist. */
 .installed-app-card:hover {
   transform: none;
-  border-color: var(--border-hover);
+  border-color: var(--border-strong);
   box-shadow: none;
+  background: var(--surface-glass);
 }
 
 .installed-app-version {
-  font-family: 'SF Mono', ui-monospace, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   color: var(--accent-primary);
 }
 

@@ -534,6 +534,7 @@ function NodeManagement() {
   return (
     <div className="node-management-page">
       <header className="node-management-header">
+        <span className="eyebrow">Infrastructure</span>
         <h1>Nodes</h1>
         <p className="page-subtitle">Configure which node the app connects to. Create and manage local nodes below.</p>
       </header>

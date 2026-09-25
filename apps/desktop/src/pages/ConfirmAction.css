@@ -1,7 +1,8 @@
 .confirm-action-page {
-  padding: 24px;
+  padding: 40px 24px;
   max-width: 600px;
   margin: 0 auto;
+  animation: fadeUp var(--dur-enter) var(--ease-out) both;
 }
 
 .breadcrumbs {
@@ -16,8 +17,11 @@
   color: var(--accent-primary);
   cursor: pointer;
   padding: 0;
-  text-decoration: underline;
-  font-size: 14px;
+  text-decoration: none;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
 }
 
 .breadcrumb-link:hover {
@@ -31,23 +35,29 @@
 
 .breadcrumb-current {
   color: var(--text-primary);
-  font-weight: 500;
+  font-weight: 700;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
 }
 
 .confirm-action-content {
   background: var(--surface-glass);
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-lg);
+  border-radius: 0;
   padding: 32px;
   box-shadow: var(--shadow-md);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
 }
 
 .confirm-action-content h1 {
   margin: 0 0 24px 0;
-  font-size: 24px;
+  font-size: 28px;
   color: var(--text-primary);
+  font-weight: 950;
+  text-transform: uppercase;
+  letter-spacing: 0.01em;
+  line-height: 1.05;
+  overflow-wrap: anywhere;
 }
 
 .confirm-message {
@@ -61,7 +71,7 @@
 }
 
 .item-name {
-  font-weight: 600;
+  font-weight: 700;
   color: var(--text-primary);
   font-size: 16px;
 }
@@ -73,13 +83,12 @@
 }
 
 .confirm-actions .button {
-  padding: 10px 20px;
-  border: 1px solid var(--border-color);
-  border-radius: 6px;
+  padding: 12px 22px;
+  border-radius: 0;
   cursor: pointer;
-  font-size: 14px;
-  font-weight: 500;
-  transition: all 0.15s;
+  font-size: 12px;
+  font-weight: 700;
+  transition: all var(--dur-color) ease-out;
 }
 
 .confirm-actions .button-secondary {
@@ -89,21 +98,20 @@
 }
 
 .confirm-actions .button-secondary:hover {
-  background: var(--accent-light);
-  border-color: var(--accent-dim);
-  color: var(--accent-primary);
+  background: rgb(var(--ink-rgb) / 0.04);
+  border-color: var(--text-secondary);
+  color: var(--text-primary);
 }
 
 .confirm-actions .button-danger {
-  background: var(--error);
-  color: white;
+  background: transparent;
+  color: var(--error);
   border-color: var(--error);
 }
 
 .confirm-actions .button-danger:hover {
-  background: #dc2626;
-  border-color: #dc2626;
-  color: white;
-  transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
+  background: var(--error);
+  border-color: var(--error);
+  color: var(--on-error);
+  box-shadow: 0 0 20px 0 rgb(var(--error-rgb) / 0.35);
 }

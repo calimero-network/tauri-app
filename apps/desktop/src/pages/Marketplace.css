@@ -4,7 +4,7 @@
   margin: 0 auto;
   width: 100%;
   box-sizing: border-box;
-  animation: fadeUp 0.4s ease-out;
+  animation: fadeUp var(--dur-enter) var(--ease-out);
 }
 
 .marketplace-header {
@@ -36,23 +36,26 @@
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 5px 12px;
+  padding: 6px 12px;
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
+  border-radius: 0;
   background: transparent;
   color: var(--text-secondary);
-  font-size: 12px;
-  font-weight: 500;
+  font-size: 10px;
+  font-weight: 700;
   cursor: pointer;
   transition: all 0.15s;
   white-space: nowrap;
   flex-shrink: 0;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-button);
+  border-color: var(--border-strong);
 }
 
 .explore-registry-btn:hover {
-  border-color: var(--accent-dim);
+  border-color: var(--accent-primary);
   color: var(--accent-primary);
-  background: var(--accent-light);
+  background: transparent;
 }
 
 .marketplace-main {
@@ -68,7 +71,7 @@
   display: flex;
   flex-direction: column;
   gap: 16px;
-  animation: fadeUp 0.5s ease-out 0.1s both;
+  animation: fadeUp var(--dur-enter) var(--ease-out) 0.1s both;
 }
 
 .search-container {
@@ -88,20 +91,20 @@
 
 .search-input {
   width: 100%;
-  padding: 10px 16px 10px 42px;
+  padding: 12px 16px 12px 42px;
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
+  border-radius: 0;
   font-size: 14px;
   background: var(--surface-glass-soft);
   color: var(--text-primary);
-  transition: all 0.2s;
+  transition: border-color var(--dur-color) ease-out, box-shadow var(--dur-color) ease-out;
+  border-color: var(--border-strong);
 }
 
 .search-input:focus {
   outline: none;
   border-color: var(--accent-primary);
-  box-shadow: 0 0 0 3px var(--accent-light);
-  background: var(--surface-glass);
+  box-shadow: 0 0 0 1px var(--accent-primary);
 }
 
 .search-clear {
@@ -112,7 +115,7 @@
   color: var(--text-tertiary);
   cursor: pointer;
   padding: 4px;
-  border-radius: var(--radius-sm);
+  border-radius: 0;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -141,9 +144,9 @@
   height: 32px;
   padding: 0 14px;
   border: 1px solid var(--border-color);
-  border-radius: 999px;
-  font-size: 13px;
-  font-weight: 500;
+  border-radius: 0;
+  font-size: 11px;
+  font-weight: 700;
   color: var(--text-secondary);
   background: transparent;
   cursor: pointer;
@@ -151,6 +154,8 @@
   white-space: nowrap;
   display: flex;
   align-items: center;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
 }
 
 .filter-pill:hover {
@@ -159,10 +164,9 @@
 }
 
 .filter-pill.active {
-  background: var(--accent-light);
-  border-color: var(--accent-dim);
-  color: var(--accent-primary);
-  font-weight: 600;
+  background: var(--accent-fill);
+  border-color: var(--accent-fill);
+  color: var(--on-accent);
 }
 
 .refresh-btn {
@@ -173,7 +177,7 @@
   justify-content: center;
   background: transparent;
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
+  border-radius: 0;
   color: var(--text-secondary);
   cursor: pointer;
   transition: all 0.15s;
@@ -268,11 +272,14 @@
   border: none;
   background: transparent;
   color: var(--text-tertiary);
-  font-size: 12.5px;
+  font-size: 10.5px;
   cursor: pointer;
-  border-radius: var(--radius-md);
+  border-radius: 0;
   transition: color 0.15s;
   white-space: nowrap;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
 }
 
 .facet-clear:hover {
@@ -293,13 +300,16 @@
   height: 26px;
   padding: 0 10px;
   border: 1px solid var(--border-color);
-  border-radius: 999px;
+  border-radius: 0;
   background: transparent;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: 10.5px;
   cursor: pointer;
   transition: all 0.15s;
   white-space: nowrap;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
 }
 
 .facet-chip:hover {
@@ -309,9 +319,8 @@
 
 .facet-chip.active {
   background: var(--accent-light);
-  border-color: var(--accent-dim);
+  border-color: var(--accent-primary);
   color: var(--accent-primary);
-  font-weight: 600;
 }
 
 .facet-count {
@@ -327,6 +336,9 @@
 
 .marketplace-count {
   margin: 0;
-  font-size: 12px;
+  font-size: 11px;
   color: var(--text-tertiary);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
 }

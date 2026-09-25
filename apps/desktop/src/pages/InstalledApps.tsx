@@ -215,6 +215,7 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
     <div className="installed-apps-page">
       <header className="installed-apps-header">
         <div>
+          <span className="eyebrow">On this node</span>
           <h1>Applications</h1>
           <p>Manage your installed applications</p>
         </div>
@@ -258,7 +259,7 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
             {Array.from({ length: 6 }).map((_, i) => (
               <div key={i} className="app-card installed-app-card" aria-hidden>
                 <div className="app-card-top">
-                  <Skeleton variant="rectangular" width="48px" height="48px" borderRadius="12px" />
+                  <Skeleton variant="rectangular" width="48px" height="48px" />
                   <div className="app-card-headings">
                     <Skeleton variant="text" width={`${55 + (i % 3) * 12}%`} height="14px" />
                     <Skeleton variant="text" width={`${70 + (i % 4) * 6}%`} height="11px" />
@@ -267,8 +268,8 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
                 <Skeleton variant="text" width="100%" height="12px" />
                 <Skeleton variant="text" width={`${60 + (i % 3) * 10}%`} height="12px" />
                 <div className="installed-app-actions">
-                  <Skeleton variant="rectangular" width="72px" height="28px" borderRadius="6px" />
-                  <Skeleton variant="rectangular" width="32px" height="28px" borderRadius="6px" />
+                  <Skeleton variant="rectangular" width="72px" height="28px" />
+                  <Skeleton variant="rectangular" width="32px" height="28px" />
                 </div>
               </div>
             ))}

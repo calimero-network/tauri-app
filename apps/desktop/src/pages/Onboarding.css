@@ -4,7 +4,10 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: flex-start;
+  /* Centred as a group (progress + card), so a short step does not hang
+     from the top of the window. `safe` falls back to the start when a
+     long step overflows, instead of clipping its top. */
+  justify-content: safe center;
   min-height: 100vh;
   height: 100vh;
   background-color: var(--bg-primary);
@@ -12,42 +15,12 @@
   background-size: var(--desktop-space-size);
   background-position: var(--desktop-space-position);
   background-repeat: var(--desktop-space-repeat);
-  padding: 20px;
-  transition: background 0.3s ease;
+  padding: 32px 20px;
+  transition: background-color var(--dur-color) ease-out;
   overflow-y: auto;
   overflow-x: hidden;
   position: relative;
   box-sizing: border-box;
-}
-
-.onboarding-page::before {
-  content: none;
-  position: fixed;
-  width: 500px;
-  height: 500px;
-  border-radius: 50%;
-  background: radial-gradient(circle, rgba(165, 255, 17, 0.08) 0%, transparent 68%);
-  top: -100px;
-  right: -80px;
-  filter: blur(80px);
-  pointer-events: none;
-  animation: none;
-  z-index: 0;
-}
-
-.onboarding-page::after {
-  content: none;
-  position: fixed;
-  width: 400px;
-  height: 400px;
-  border-radius: 50%;
-  background: radial-gradient(circle, rgba(165, 255, 17, 0.05) 0%, transparent 70%);
-  bottom: -80px;
-  left: -60px;
-  filter: blur(80px);
-  pointer-events: none;
-  animation: none;
-  z-index: 0;
 }
 
 /* Progress Indicator */
@@ -63,7 +36,7 @@
   order: -1;
   /* Fade only (no translate): this element is stable across steps and keystrokes,
      so a vertical entrance would read as the progress bar "jumping". */
-  animation: fadeIn 0.4s ease-out;
+  animation: fadeIn var(--dur-enter) var(--ease-out) both;
 }
 
 .progress-steps {
@@ -85,7 +58,7 @@
   height: 2px;
   background: var(--border-color);
   z-index: 0;
-  border-radius: 1px;
+  border-radius: 0;
 }
 
 .progress-fill-line {
@@ -96,8 +69,8 @@
   height: 2px;
   background: var(--accent-primary);
   z-index: 1;
-  border-radius: 1px;
-  transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  border-radius: 0;
+  transition: width var(--dur-enter) var(--ease-out);
 }
 
 .progress-step {
@@ -110,39 +83,35 @@
 }
 
 .progress-dot {
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
+  width: 10px;
+  height: 10px;
+  border-radius: 0;
   background: var(--surface-glass-soft);
   border: 2px solid var(--border-color);
   position: relative;
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  box-shadow: 0 0 0 0 var(--accent-light);
+  transition: background-color 0.4s var(--ease-out), border-color 0.4s var(--ease-out), box-shadow 0.4s var(--ease-out);
 }
 
 .progress-step.active .progress-dot {
   background: var(--accent-primary);
   border-color: var(--accent-primary);
-  transform: scale(1.2);
-  box-shadow: 0 0 0 3px var(--accent-light);
+  box-shadow: none;
 }
 
 .progress-step.current .progress-dot {
   background: var(--accent-primary);
   border-color: var(--accent-primary);
-  transform: scale(1.4);
-  box-shadow: 0 0 0 4px var(--accent-light), 0 0 16px rgba(165, 255, 17, 0.2);
+  box-shadow: 0 0 0 4px var(--accent-light);
 }
 
 /* Step Container */
 .onboarding-step-container {
   background: var(--gradient-surface), var(--surface-glass);
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-xl);
+  border-radius: 0;
   padding: 32px 40px;
   width: 100%;
   max-width: 640px;
-  box-shadow: var(--shadow-lg);
   display: flex;
   flex-direction: column;
   min-height: auto;
@@ -153,18 +122,45 @@
   overflow-y: auto;
   overflow-x: hidden;
   scroll-behavior: smooth;
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
   z-index: 1;
   /* Keyed by currentStep in the TSX, so this replays as a clean per-step
-     entrance — subtle rise + fade, not a big vertical jump. */
-  animation: stepIn 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+     entrance. The card itself only fades — it keeps its place, so the step
+     change never reads as the window jumping — and its content rises in
+     after it, one short beat per block (below). */
+  animation: fadeIn 0.45s var(--ease-out) both;
 }
 
-@keyframes stepIn {
-  from { opacity: 0; transform: translateY(8px); }
-  to { opacity: 1; transform: translateY(0); }
+/* The landing's reveal, staggered 60ms a block: logo, eyebrow, title, copy,
+   then the form and the actions. Base styles are the final state, so with
+   reduced motion (index.css) every block is simply there. */
+.step-content > * {
+  animation: fadeUp var(--dur-enter) var(--ease-out) both;
 }
+.step-content > :nth-child(2) { animation-delay: 60ms; }
+.step-content > :nth-child(3) { animation-delay: 120ms; }
+.step-content > :nth-child(4) { animation-delay: 180ms; }
+.step-content > :nth-child(5) { animation-delay: 240ms; }
+.step-content > :nth-child(n + 6) { animation-delay: 300ms; }
+
+/* The actions sit outside .step-content; they arrive last. */
+.onboarding-step-container > .step-actions {
+  animation: fadeUp var(--dur-enter) var(--ease-out) 300ms both;
+}
+
+/* A list inside a step (the principles, the choice cards) runs its own
+   short stagger once its block has started. */
+.step-principles > *,
+.node-setup-choice-cards > * {
+  animation: fadeUp var(--dur-enter) var(--ease-out) both;
+}
+.step-principles > :nth-child(1),
+.node-setup-choice-cards > :nth-child(1) { animation-delay: 180ms; }
+.step-principles > :nth-child(2),
+.node-setup-choice-cards > :nth-child(2) { animation-delay: 240ms; }
+.step-principles > :nth-child(3),
+.node-setup-choice-cards > :nth-child(3) { animation-delay: 300ms; }
+.step-principles > :nth-child(n + 4),
+.node-setup-choice-cards > :nth-child(n + 4) { animation-delay: 360ms; }
 
 /* Back Button */
 .step-back-button {
@@ -177,7 +173,7 @@
   font-size: 14px;
   cursor: pointer;
   padding: 10px;
-  border-radius: var(--radius-lg);
+  border-radius: 0;
   transition: all 0.2s;
   display: flex;
   align-items: center;
@@ -187,9 +183,8 @@
 }
 
 .step-back-button:hover {
-  background: var(--button-glass);
-  border-color: var(--border-hover);
-  transform: translateX(-2px);
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
 }
 
 /* Step Content */
@@ -226,20 +221,17 @@
   height: auto;
   max-width: 100%;
   object-fit: contain;
-  filter: brightness(0) invert(1);
-}
-
-[data-theme="light"] .step-logo-wrapper .calimero-logo {
-  filter: brightness(0);
+  filter: var(--logo-filter);
 }
 
 .step-title {
-  margin: 0 0 10px 0;
-  font-size: 24px;
-  font-weight: 700;
+  margin: 0 0 14px 0;
+  font-size: 28px;
+  font-weight: 950;
+  text-transform: uppercase;
   color: var(--text-primary);
-  line-height: 1.25;
-  letter-spacing: -0.4px;
+  line-height: 1.05;
+  letter-spacing: 0.01em;
 }
 
 .step-description {
@@ -271,17 +263,16 @@
   padding: 10px 14px;
   background: var(--surface-glass-soft);
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
+  border-radius: 0;
   color: var(--text-primary);
   font-size: 13px;
   line-height: 1.45;
   text-align: left;
-  transition: border-color 0.2s, transform 0.2s;
+  transition: border-color var(--dur-color) ease-out;
 }
 
 .principle-item:hover {
-  border-color: var(--border-hover);
-  transform: translateY(-1px);
+  border-color: var(--border-strong);
 }
 
 .principle-item svg {
@@ -329,7 +320,7 @@
   }
 
   .step-title {
-    font-size: 28px;
+    font-size: 34px;
   }
 
 }
@@ -337,7 +328,7 @@
 /* Step Messages */
 .step-message {
   padding: 12px 16px;
-  border-radius: var(--radius-lg);
+  border-radius: 0;
   margin: 8px 0 0;
   display: flex;
   align-items: center;
@@ -345,18 +336,18 @@
   font-size: 13px;
   width: 100%;
   max-width: 500px;
-  animation: fadeIn 0.25s ease-out;
+  animation: fadeIn 0.4s var(--ease-out);
 }
 
 .step-message-success {
-  background: rgba(34, 197, 94, 0.1);
-  border: 1px solid rgba(34, 197, 94, 0.2);
+  background: rgb(var(--success-rgb) / 0.1);
+  border: 1px solid rgb(var(--success-rgb) / 0.2);
   color: var(--text-primary);
 }
 
 .step-message-error {
-  background: rgba(239, 68, 68, 0.1);
-  border: 1px solid rgba(239, 68, 68, 0.2);
+  background: rgb(var(--error-rgb) / 0.1);
+  border: 1px solid rgb(var(--error-rgb) / 0.2);
   color: var(--text-primary);
 }
 
@@ -390,10 +381,12 @@
 
 .step-form label {
   display: block;
-  margin-bottom: 7px;
-  font-weight: 600;
-  color: var(--text-primary);
-  font-size: 13px;
+  margin-bottom: 8px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
 }
 
 .step-form input,
@@ -401,12 +394,12 @@
 .step-form select {
   width: 100%;
   padding: 11px 14px;
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-strong);
+  border-radius: 0;
   font-size: 14px;
   background: var(--surface-glass-soft);
   color: var(--text-primary);
-  transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
+  transition: border-color var(--dur-color) ease-out, box-shadow var(--dur-color) ease-out;
   box-sizing: border-box;
 }
 
@@ -420,8 +413,7 @@
 .step-form select:focus {
   outline: none;
   border-color: var(--accent-primary);
-  background: var(--surface-glass);
-  box-shadow: 0 0 0 4px var(--accent-light);
+  box-shadow: 0 0 0 1px var(--accent-primary);
 }
 
 .step-form input:disabled {
@@ -443,7 +435,7 @@
   padding: 14px 20px;
   background: var(--surface-glass-soft);
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-lg);
+  border-radius: 0;
   color: var(--text-primary);
   font-size: 14px;
   font-weight: 500;
@@ -493,58 +485,71 @@
 }
 
 .step-button {
-  padding: 12px 26px;
+  padding: 13px 26px;
   border: 1px solid transparent;
-  border-radius: var(--radius-lg);
-  font-size: 14px;
-  font-weight: 600;
+  border-radius: 0;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-button);
   cursor: pointer;
-  transition: transform 0.15s cubic-bezier(0.4, 0, 0.2, 1), background 0.15s, border-color 0.15s, box-shadow 0.15s;
+  transition:
+    background-color var(--dur-color) ease-out,
+    border-color var(--dur-color) ease-out,
+    color var(--dur-color) ease-out,
+    box-shadow var(--dur-color) ease-out;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
   min-width: 160px;
-  letter-spacing: 0.2px;
 }
 
+/* Solid lime with dark ink, blooming on hover — the landing's primary. */
 .step-button-primary {
-  background: var(--button-glass);
-  color: var(--accent-primary);
-  border-color: rgba(165, 255, 17, 0.2);
+  background: var(--accent-fill);
+  color: var(--on-accent);
+  border-color: var(--accent-fill);
   box-shadow: none;
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
 }
 
 .step-button-primary:hover:not(:disabled) {
-  transform: translateY(-2px);
-  background: var(--button-glass-hover);
-  border-color: rgba(165, 255, 17, 0.28);
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--shadow-button);
 }
 
-.step-button-primary:active:not(:disabled) {
-  transform: translateY(0);
+.step-button-primary svg {
+  transition: transform 0.4s var(--ease-out);
+}
+
+.step-button-primary:hover:not(:disabled) svg {
+  transform: translateX(3px);
 }
 
 .step-button:disabled {
   opacity: 0.6;
   cursor: not-allowed;
-  transform: none !important;
+  box-shadow: none !important;
 }
 
+.step-button-primary:disabled {
+  background: var(--bg-tertiary);
+  border-color: var(--border-color);
+  color: var(--text-secondary);
+  opacity: 1;
+}
+
+/* The landing's secondary: an outline in the accent that fills on hover. */
 .step-button-secondary {
-  background: var(--surface-glass-soft);
-  color: var(--text-primary);
-  border: 1px solid var(--border-color);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+  background: transparent;
+  color: var(--accent-primary);
+  border: 1px solid var(--accent-primary);
 }
 
 .step-button-secondary:hover:not(:disabled) {
-  background: var(--button-glass);
-  border-color: var(--border-hover);
+  background: var(--accent-fill);
+  border-color: var(--accent-fill);
+  color: var(--on-accent);
+  box-shadow: var(--shadow-button);
 }
 
 /* Node setup choice cards */
@@ -564,17 +569,15 @@
   text-align: left;
   background: var(--surface-glass-soft);
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-lg);
+  border-radius: 0;
   cursor: pointer;
-  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1), border-color 0.2s, background 0.2s, box-shadow 0.2s;
+  transition: border-color var(--dur-color) ease-out, background-color var(--dur-color) ease-out;
   color: var(--text-primary);
 }
 
 .node-setup-choice-card:hover {
   border-color: var(--accent-primary);
   background: var(--surface-glass);
-  box-shadow: 0 0 0 2px var(--accent-light), var(--shadow-glow);
-  transform: translateY(-2px);
 }
 
 .node-setup-choice-card strong {
@@ -675,8 +678,6 @@
     position: sticky;
     bottom: 0;
     background: var(--surface-glass-strong);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
     border-top: 1px solid var(--border-color);
     margin-left: -20px;
     margin-right: -20px;
@@ -750,8 +751,6 @@
     position: sticky;
     bottom: 0;
     background: var(--surface-glass-strong);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
     border-top: 1px solid var(--border-color);
     margin-left: -20px;
     margin-right: -20px;
@@ -834,8 +833,6 @@
     position: sticky;
     bottom: 0;
     background: var(--surface-glass-strong);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
     border-top: 1px solid var(--border-color);
     margin-left: -16px;
     margin-right: -16px;
@@ -903,7 +900,7 @@
 .onboarding-card > div > div {
   background: var(--surface-glass) !important;
   border: 1px solid var(--border-color) !important;
-  border-radius: var(--radius-lg) !important;
+  border-radius: 0 !important;
   padding: 24px !important;
   color: var(--text-primary) !important;
 }
@@ -913,7 +910,7 @@
   border: 1px solid var(--border-color) !important;
   color: var(--text-primary) !important;
   padding: 14px 16px !important;
-  border-radius: var(--radius-lg) !important;
+  border-radius: 0 !important;
   font-size: 15px !important;
 }
 
@@ -944,11 +941,13 @@
   background: var(--surface-glass-soft) !important;
   border: 1px solid var(--border-color) !important;
   color: var(--text-primary) !important;
-  border-radius: var(--radius-lg) !important;
+  border-radius: 0 !important;
   padding: 12px 24px !important;
-  font-size: 14px !important;
-  font-weight: 500 !important;
-  transition: all 0.2s !important;
+  font-size: 12px !important;
+  font-weight: 700 !important;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-button);
+  transition: all var(--dur-color) ease-out !important;
 }
 
 .onboarding-card button:hover:not(:disabled) {
@@ -958,15 +957,14 @@
 
 .onboarding-card button[type="submit"],
 .onboarding-card button.primary {
-  background: var(--button-glass) !important;
-  border-color: rgba(165, 255, 17, 0.2) !important;
-  color: var(--accent-primary) !important;
+  background: var(--accent-fill) !important;
+  border-color: var(--accent-fill) !important;
+  color: var(--on-accent) !important;
 }
 
 .onboarding-card button[type="submit"]:hover:not(:disabled),
 .onboarding-card button.primary:hover:not(:disabled) {
-  background: var(--button-glass-hover) !important;
-  border-color: rgba(165, 255, 17, 0.28) !important;
+  box-shadow: var(--shadow-button) !important;
 }
 
 .onboarding-card [class*="error"],
@@ -996,7 +994,7 @@
   width: 100%;
   padding: 14px 16px;
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-lg);
+  border-radius: 0;
   font-size: 15px;
   background: var(--surface-glass-soft);
   color: var(--text-primary);
@@ -1024,7 +1022,7 @@
   width: 100%;
   padding: 10px 12px;
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
+  border-radius: 0;
   font-size: 14px;
   background: var(--surface-glass-soft);
   color: var(--text-primary);
@@ -1049,7 +1047,7 @@
   padding: 12px 16px;
   background: var(--surface-glass-soft);
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-lg);
+  border-radius: 0;
   color: var(--text-primary);
   font-size: 14px;
   font-weight: 500;
@@ -1081,7 +1079,7 @@
   border-top: 1px solid var(--border-color);
   /* Fade in place — no vertical slide, so revealing the section doesn't shove
      the surrounding fields around. */
-  animation: onbFade 0.2s ease-out;
+  animation: onbFade 0.4s var(--ease-out);
   position: relative;
   z-index: 0;
   overflow: visible;
@@ -1120,21 +1118,20 @@
 .onboarding-cog-btn {
   width: 40px;
   height: 40px;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  color: rgba(255, 255, 255, 0.5);
+  border-radius: 0;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  color: var(--text-secondary);
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
   transition: background 0.15s, color 0.15s;
-  backdrop-filter: blur(8px);
 }
 
 .onboarding-cog-btn:hover {
-  background: rgba(255, 255, 255, 0.14);
-  color: rgba(255, 255, 255, 0.9);
+  background: rgb(var(--ink-rgb) / 0.14);
+  color: var(--text-primary);
 }
 
 .onboarding-floating-overlay {
@@ -1144,12 +1141,12 @@
 }
 
 .onboarding-floating-menu {
-  background: #1a1a1a;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 10px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 0;
   padding: 6px;
   min-width: 190px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--shadow-lg);
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -1160,10 +1157,10 @@
   align-items: center;
   gap: 8px;
   padding: 9px 12px;
-  border-radius: 6px;
+  border-radius: 0;
   border: none;
   background: transparent;
-  color: rgba(255, 255, 255, 0.8);
+  color: var(--text-primary);
   font-size: 13px;
   cursor: pointer;
   width: 100%;
@@ -1172,7 +1169,7 @@
 }
 
 .floating-menu-item:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.08);
+  background: rgb(var(--ink-rgb) / 0.08);
 }
 
 .floating-menu-item:disabled {
@@ -1181,16 +1178,16 @@
 }
 
 .floating-menu-item-danger {
-  color: #f87171;
+  color: var(--error);
 }
 
 .floating-menu-item-danger:hover:not(:disabled) {
-  background: rgba(248, 113, 113, 0.1);
+  background: rgb(var(--error-rgb) / 0.1);
 }
 
 .floating-menu-divider {
   height: 1px;
-  background: rgba(255, 255, 255, 0.08);
+  background: rgb(var(--ink-rgb) / 0.08);
   margin: 2px 0;
 }
 
@@ -1272,7 +1269,7 @@
 .onboarding-app-card {
   background: var(--gradient-surface), var(--surface-glass);
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-lg);
+  border-radius: 0;
   padding: 20px;
   display: flex;
   flex-direction: column;
@@ -1281,18 +1278,14 @@
      is also a grid ITEM, and both defaults resolve to its content width. */
   min-width: 0;
   transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
   height: 100%;
   box-sizing: border-box;
   text-align: left;
 }
 
 .onboarding-app-card:hover {
-  background: var(--gradient-surface), rgba(16, 21, 18, 0.72);
-  border-color: var(--accent-dim);
-  transform: translateY(-2px);
-  box-shadow: var(--shadow-glow);
+  background: var(--gradient-surface), var(--surface-hover);
+  border-color: var(--accent-primary);
 }
 
 .app-card-header {
@@ -1304,7 +1297,7 @@
 .app-icon-placeholder {
   width: 48px;
   height: 48px;
-  border-radius: var(--radius-md);
+  border-radius: 0;
   background: var(--surface-glass-soft);
   display: flex;
   align-items: center;
@@ -1349,27 +1342,28 @@
 .app-install-button {
   width: 100%;
   padding: 10px 16px;
-  background: var(--button-glass);
+  background: transparent;
   color: var(--accent-primary);
-  border: 1px solid rgba(165, 255, 17, 0.2);
-  border-radius: var(--radius-md);
-  font-size: 14px;
-  font-weight: 500;
+  border: 1px solid var(--accent-primary);
+  border-radius: 0;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-button);
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
-  transition: all 0.2s;
+  transition: all var(--dur-color) ease-out;
   margin-top: auto;
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
 }
 
 .app-install-button:hover:not(:disabled) {
-  background: var(--button-glass-hover);
-  border-color: rgba(165, 255, 17, 0.28);
-  transform: translateY(-1px);
+  background: var(--accent-fill);
+  border-color: var(--accent-fill);
+  color: var(--on-accent);
+  box-shadow: var(--shadow-button);
 }
 
 .app-install-button:disabled {
@@ -1398,7 +1392,7 @@
 }
 
 .onboarding-app-package {
-  font-family: 'SF Mono', ui-monospace, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

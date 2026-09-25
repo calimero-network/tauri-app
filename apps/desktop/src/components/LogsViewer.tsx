@@ -92,8 +92,8 @@ export function LogsViewer({
       new Convert({
         newline: true,
         escapeXML: true,
-        fg: theme === "dark" ? "#a1a1aa" : "#27272a",
-        bg: theme === "dark" ? "#09090b" : "#fafafa",
+        fg: theme === "dark" ? "#b8b8b8" : "#2d2c30",
+        bg: theme === "dark" ? "#131215" : "#fafaf7",
       }),
     [theme]
   );

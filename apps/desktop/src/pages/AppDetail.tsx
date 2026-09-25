@@ -164,6 +164,7 @@ export default function AppDetail({
       <header className="app-detail-header">
         <AppIcon icon={app.icon} name={title} seed={app.id} size={72} />
         <div className="app-detail-identity">
+          <span className="eyebrow">Application</span>
           <h1 className="app-detail-title">{title}</h1>
           <p className="app-detail-package">
             <span className="app-detail-mono">{app.id}</span>

@@ -39,7 +39,6 @@ export default function AppIcon({
   className?: string | undefined;
 }) {
   const [failed, setFailed] = useState(false);
-  const radius = size >= 64 ? 16 : size >= 40 ? 12 : 9;
 
   if (icon && !failed) {
     return (
@@ -53,7 +52,7 @@ export default function AppIcon({
         decoding="async"
         onError={() => setFailed(true)}
         className={`app-icon-img ${className}`}
-        style={{ width: size, height: size, borderRadius: radius }}
+        style={{ width: size, height: size }}
       />
     );
   }
@@ -69,7 +68,6 @@ export default function AppIcon({
       style={{
         width: size,
         height: size,
-        borderRadius: radius,
         fontSize: Math.round(size * 0.4),
         background: `linear-gradient(140deg, hsl(${hue} 45% 32%), hsl(${(hue + 40) % 360} 45% 20%))`,
       }}

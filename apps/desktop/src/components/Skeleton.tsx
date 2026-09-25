@@ -21,7 +21,7 @@ export default function Skeleton({
   const style: React.CSSProperties = {
     width: width || '100%',
     height: height || (variant === 'text' ? '1em' : '1rem'),
-    borderRadius: borderRadius || (variant === 'circular' ? '50%' : variant === 'text' ? '4px' : '4px'),
+    borderRadius: borderRadius || (variant === 'circular' ? '50%' : variant === 'text' ? '0' : '0'),
   };
 
   return (

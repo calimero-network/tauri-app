@@ -27,7 +27,7 @@ import ToastContainer from "./components/ToastContainer";
 import { getCurrentVersion } from "./utils/updater";
 import { invoke } from "@tauri-apps/api/core";
 import { Settings as SettingsIcon } from "lucide-react";
-import calimeroLogo from "./assets/calimero-logo.svg";
+import calimeroLogo from "./assets/brand/calimero-wordmark.svg";
 import { useTheme } from "./contexts/ThemeContext";
 import { useNodeVersions } from "./contexts/NodeVersionsContext";
 import "./App.css";

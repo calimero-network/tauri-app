@@ -3,7 +3,7 @@
   bottom: 24px;
   right: 24px;
   z-index: 1000;
-  animation: slideIn 0.3s ease-out;
+  animation: slideIn var(--dur-enter) var(--ease-out);
 }
 
 /* Mandatory update: full-screen scrim so nothing behind it is reachable. */
@@ -13,10 +13,8 @@
   align-items: center;
   justify-content: center;
   padding: 24px;
-  background: rgba(9, 9, 11, 0.8);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-  animation: fadeIn 0.2s ease-out;
+  background: rgb(19 18 21 / 0.8);
+  animation: fadeIn 0.4s var(--ease-out);
 }
 
 .update-notification-blocking .update-notification-content {
@@ -40,7 +38,7 @@
 
 @keyframes slideIn {
   from {
-    transform: translateY(100%);
+    transform: translateY(16px);
     opacity: 0;
   }
   to {
@@ -54,11 +52,9 @@
   align-items: center;
   gap: 16px;
   padding: 16px 20px;
-  background: var(--surface-glass-strong);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border: 1px solid var(--border-hover);
-  border-radius: 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-strong);
+  border-radius: 0;
   box-shadow: var(--shadow-xl);
   max-width: 480px;
 }
@@ -70,7 +66,7 @@
   width: 40px;
   height: 40px;
   background: var(--accent-light);
-  border-radius: 10px;
+  border-radius: 0;
   color: var(--accent-primary);
   flex-shrink: 0;
 }
@@ -109,7 +105,7 @@
 
 .update-button {
   padding: 8px 16px;
-  border-radius: 8px;
+  border-radius: 0;
   font-size: 13px;
   font-weight: 500;
   cursor: pointer;
@@ -134,12 +130,13 @@
 }
 
 .update-button-primary {
-  background: var(--accent-primary);
-  color: #09090b;
+  background: var(--accent-fill);
+  color: var(--on-accent);
 }
 
 .update-button-primary:hover:not(:disabled) {
-  background: var(--accent-hover);
+  background: var(--accent-fill);
+  box-shadow: var(--shadow-button);
 }
 
 /* Responsive */

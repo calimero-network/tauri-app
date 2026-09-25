@@ -253,21 +253,33 @@ async function named<T>(action: string, call: Promise<T>): Promise<T> {
  * TEE nodes can be admitted into the group's governance DAG.
  *
  * `acceptMock` is always false - only real TDX attestations are accepted.
- * `allowedMrtd` comes from the cloud's fleet measurements; core rejects an
- * empty set with "at least one MRTD must be specified".
+ *
+ * Every register the cloud publishes is pinned, not just the two core insists
+ * on. `published-mrtds.json` carries an allowlist per register for each image
+ * profile, and mdma's dispatcher already checks an observed quote against MRTD
+ * and RTMR0-3 - so admitting on a subset would let a node accept a quote the
+ * cloud itself would reject.
+ *
+ * Core refuses an empty MRTD and, since 0.11.0-rc.42, an empty RTMR3; an empty
+ * RTMR0-2 is accepted and simply skips that register, which is what makes
+ * passing them a choice rather than a requirement. It is made deliberately.
+ *
+ * The whole measurements object is taken rather than positional arrays: these
+ * are five hex lists of identical shape, and passing any two the wrong way
+ * round would set a policy no node matches, silently.
  */
 export function setTeeAdmissionPolicy(
   groupId: string,
-  allowedMrtd?: string[],
+  measurements: FleetMeasurements,
 ): Promise<void> {
   return named(
     'Failed to set TEE admission policy',
     admin().setTeeAdmissionPolicy(groupId, {
-      allowedMrtd: allowedMrtd ?? [],
-      allowedRtmr0: [],
-      allowedRtmr1: [],
-      allowedRtmr2: [],
-      allowedRtmr3: [],
+      allowedMrtd: measurements.allowed_mrtd,
+      allowedRtmr0: measurements.allowed_rtmr0,
+      allowedRtmr1: measurements.allowed_rtmr1,
+      allowedRtmr2: measurements.allowed_rtmr2,
+      allowedRtmr3: measurements.allowed_rtmr3,
       allowedTcbStatuses: [],
       acceptMock: false,
     }),
@@ -278,6 +290,15 @@ export function setTeeAdmissionPolicy(
 export interface TeeAdmissionPolicyState {
   enabled: boolean;
   allowedMrtd: string[];
+  /**
+   * Every register is read back, for the same reason every one is written: a
+   * policy whose RTMR1 no longer matches the fleet's is as stale as one whose
+   * MRTD does not, and comparing a subset would report it current.
+   */
+  allowedRtmr0: string[];
+  allowedRtmr1: string[];
+  allowedRtmr2: string[];
+  allowedRtmr3: string[];
 }
 
 /**
@@ -287,6 +308,13 @@ export interface TeeAdmissionPolicyState {
  * when no policy is set - NOT a 404 - so an absent policy is distinguishable
  * from a set one.
  */
+/** One register's allowlist off a response the SDK does not type. */
+function hexList(raw: unknown): string[] {
+  return Array.isArray(raw)
+    ? raw.filter((m: unknown): m is string => typeof m === 'string')
+    : [];
+}
+
 export async function getTeeAdmissionPolicy(
   groupId: string,
 ): Promise<TeeAdmissionPolicyState> {
@@ -299,9 +327,11 @@ export async function getTeeAdmissionPolicy(
     | null;
   return {
     enabled: policy?.enabled === true,
-    allowedMrtd: Array.isArray(policy?.allowedMrtd)
-      ? policy.allowedMrtd.filter((m): m is string => typeof m === 'string')
-      : [],
+    allowedMrtd: hexList(policy?.allowedMrtd),
+    allowedRtmr0: hexList(policy?.allowedRtmr0),
+    allowedRtmr1: hexList(policy?.allowedRtmr1),
+    allowedRtmr2: hexList(policy?.allowedRtmr2),
+    allowedRtmr3: hexList(policy?.allowedRtmr3),
   };
 }
 
@@ -339,15 +369,28 @@ export async function ensureTeeAdmissionPolicy(
   }
   if (role !== 'Admin') return 'skipped';
 
-  const desired = (await getFleetMeasurements(idToken)).allowed_mrtd;
-  if (!desired.length) return 'skipped';
+  const desired = await getFleetMeasurements(idToken);
+  // Core refuses a policy with an empty MRTD or an empty RTMR3, so without both
+  // there is nothing to assert - and asserting part of one would write a policy
+  // no node matches. RTMR0-2 may legitimately be empty for a profile that
+  // publishes none; an empty list simply skips that register.
+  if (!desired.allowed_mrtd.length || !desired.allowed_rtmr3.length) {
+    return 'skipped';
+  }
 
   const current = await getTeeAdmissionPolicy(namespaceId);
-  const currentSet = current.enabled ? new Set(current.allowedMrtd) : null;
+  const sameSet = (want: string[], have: string[]) =>
+    new Set(have).size === new Set(want).size && want.every((m) => have.includes(m));
+  // Register by register, because the policy is written register by register: a
+  // fleet that rotates only RTMR1 leaves a node admitting on a measurement the
+  // cloud no longer publishes, and comparing MRTD alone would report it current.
   const matches =
-    currentSet !== null &&
-    currentSet.size === new Set(desired).size &&
-    desired.every((m) => currentSet.has(m));
+    current.enabled &&
+    sameSet(desired.allowed_mrtd, current.allowedMrtd) &&
+    sameSet(desired.allowed_rtmr0, current.allowedRtmr0) &&
+    sameSet(desired.allowed_rtmr1, current.allowedRtmr1) &&
+    sameSet(desired.allowed_rtmr2, current.allowedRtmr2) &&
+    sameSet(desired.allowed_rtmr3, current.allowedRtmr3);
   if (matches) return 'ok';
 
   await setTeeAdmissionPolicy(namespaceId, desired);
@@ -741,13 +784,15 @@ export async function enableHaForNamespace(
 
   // ── Step 2–4: measurements → tee-policy → register ──
   const measurements = await getFleetMeasurements(idToken);
-  if (!measurements.allowed_mrtd.length) {
-    throw new Error('No fleet MRTD measurements available — cannot set admission policy');
+  if (!measurements.allowed_mrtd.length || !measurements.allowed_rtmr3.length) {
+    throw new Error(
+      'Incomplete fleet measurements — cannot set admission policy. Core requires at least one MRTD and at least one RTMR3.',
+    );
   }
 
   // The namespace root's group_id equals the namespaceId. Set the policy
   // there and only there — subgroups inherit it via resolve-to-root.
-  await setTeeAdmissionPolicy(namespaceId, measurements.allowed_mrtd);
+  await setTeeAdmissionPolicy(namespaceId, measurements);
 
   // Namespace path: send an empty group list plus exactly ONE
   // namespace-scoped ownership proof. merod gates proof

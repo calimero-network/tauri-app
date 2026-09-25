@@ -603,15 +603,27 @@ describe('ensureTeeAdmissionPolicy', () => {
     jsonResponse({ members: [{ identity: 'me', role: 'Admin' }] });
   const membersMember = () =>
     jsonResponse({ members: [{ identity: 'me', role: 'Member' }] });
-  const measurements = (mrtd: string[]) =>
-    jsonResponse({
-      release_tag: 'v1',
-      allowed_mrtd: mrtd,
-      allowed_rtmr0: [],
-      allowed_rtmr1: [],
-      allowed_rtmr2: [],
-      allowed_rtmr3: [],
-    });
+  // Every register is populated, because a real `published-mrtds.json` carries
+  // an allowlist per register and the policy pins all of them. Left empty, the
+  // fixture would describe a fleet core refuses a policy for, and every
+  // assertion below would pass against a shape that cannot work.
+  const FLEET = {
+    allowed_rtmr0: ['rtmr0-1'],
+    allowed_rtmr1: ['rtmr1-1'],
+    allowed_rtmr2: ['rtmr2-1'],
+    allowed_rtmr3: ['rtmr3-1'],
+  };
+  const measurements = (mrtd: string[], over: Partial<typeof FLEET> = {}) =>
+    jsonResponse({ release_tag: 'v1', allowed_mrtd: mrtd, ...FLEET, ...over });
+  /** What the node reports back when its policy already matches `FLEET`. */
+  const onNode = (mrtd: string[]) => ({
+    enabled: true,
+    allowedMrtd: mrtd,
+    allowedRtmr0: FLEET.allowed_rtmr0,
+    allowedRtmr1: FLEET.allowed_rtmr1,
+    allowedRtmr2: FLEET.allowed_rtmr2,
+    allowedRtmr3: FLEET.allowed_rtmr3,
+  });
   const idToken = () => makeJwt({ iss: 'mdma', email: 'u@e' });
 
   it('skips (no measurements, no PUT) when the node is not the namespace admin', async () => {
@@ -678,7 +690,7 @@ describe('ensureTeeAdmissionPolicy', () => {
         '/members': membersAdmin,
         '/fleet/measurements': () => measurements(['mrtd-1']),
         '/tee-admission-policy': () =>
-          jsonResponse({ enabled: true, allowedMrtd: ['mrtd-1'] }),
+          jsonResponse(onNode(['mrtd-1'])),
       }),
     );
     restore = r;
@@ -727,7 +739,7 @@ describe('ensureTeeAdmissionPolicy', () => {
             putBody = JSON.parse(String(init.body));
             return new Response('{}', { status: 200 });
           }
-          return jsonResponse({ enabled: true, allowedMrtd: ['mrtd-OLD'] });
+          return jsonResponse(onNode(['mrtd-OLD']));
         },
       }),
     );

@@ -1455,3 +1455,107 @@
   border: 1px solid rgb(var(--error-rgb) / 0.2);
   border-radius: 0;
 }
+
+/* ── Fleet machines under the HA toggle ──
+   One row per machine serving this namespace: what it proved, which image it
+   is on, and whether its heartbeat is current. The two badges answer
+   different questions and can disagree — a machine can be admitted here and
+   still be on an older image, because a namespace admits every release the
+   fleet publishes, not only the newest. */
+
+.ha-machines {
+  margin-top: 14px;
+  border-top: 1px solid var(--border-color);
+  padding-top: 12px;
+}
+
+.ha-machines-title {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.ha-machines-empty {
+  margin-top: 12px;
+}
+
+.ha-machine-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 7px 0;
+}
+
+.ha-machine-row + .ha-machine-row {
+  border-top: 1px solid var(--border-color);
+}
+
+.ha-machine-peer {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-secondary);
+  /* The peer id is the only identifier a user can match against the cloud
+     console, so it takes the row's spare width rather than the badges. */
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.ha-machine-badge,
+.ha-machine-release {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+  cursor: help;
+}
+
+.ha-machine-match {
+  background: rgb(var(--success-rgb) / 0.12);
+  color: var(--success);
+  border: 1px solid rgb(var(--success-rgb) / 0.25);
+}
+
+/* The one a user has to act on: this machine cannot replicate here. */
+.ha-machine-mismatch {
+  background: rgb(var(--error-rgb) / 0.12);
+  color: var(--error);
+  border: 1px solid rgb(var(--error-rgb) / 0.25);
+}
+
+.ha-machine-unverified,
+.ha-machine-not_enforced {
+  background: var(--surface-glass-soft);
+  color: var(--text-tertiary);
+  border: 1px solid var(--border-color);
+}
+
+.ha-machine-release-current {
+  background: var(--surface-glass-soft);
+  color: var(--text-tertiary);
+  border: 1px solid var(--border-color);
+}
+
+/* Not an error on its own — an older image is admitted while the fleet still
+   publishes it — so it warns rather than alarms. */
+.ha-machine-release-behind {
+  background: rgb(var(--warning-rgb) / 0.12);
+  color: var(--warning);
+  border: 1px solid rgb(var(--warning-rgb) / 0.25);
+}
+
+.ha-machine-release-unknown {
+  background: var(--surface-glass-soft);
+  color: var(--text-tertiary);
+  border: 1px solid var(--border-color);
+}
+
+.ha-machine-seen {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}

@@ -161,6 +161,109 @@ export async function getFleetMeasurements(
   return res.json();
 }
 
+/**
+ * What a machine PROVED, as the cloud recorded it.
+ *
+ * These are read out of a verified quote at registration, not reported by the
+ * node, so they are evidence rather than a claim. `null` where a peer never
+ * registered - which is different from registering and proving nothing.
+ */
+export interface MachineAttestation {
+  mrtd: string;
+  rtmr0: string | null;
+  rtmr1: string | null;
+  rtmr2: string | null;
+  rtmr3: string | null;
+  tcb_status: string | null;
+  registered_at: string | null;
+}
+
+/**
+ * How a machine's attestation stands against what one namespace admits.
+ *
+ * Per namespace, not per machine: each namespace snapshotted its own allowlist
+ * when HA was enabled, so one machine can satisfy one of your namespaces and
+ * not another.
+ */
+export type MeasurementMatch =
+  | 'match'
+  | 'mismatch'
+  /** The peer never registered, so it proved nothing. */
+  | 'unverified'
+  /** The namespace carries no allowlist, so admission checked no measurement. */
+  | 'not_enforced';
+
+export interface MachineNamespace {
+  namespace_id: string;
+  status: string;
+  authorship_ready: boolean;
+  confirmed_at: string | null;
+  last_seen_at: string | null;
+  fresh: boolean;
+  measurement_match: MeasurementMatch;
+}
+
+export interface CloudMachine {
+  peer_id: string;
+  relay_url: string | null;
+  executor_account: string | null;
+  attestation: MachineAttestation | null;
+  namespaces: MachineNamespace[];
+  can_execute: boolean;
+}
+
+/**
+ * Every attested machine currently serving something this account owns.
+ *
+ * Returns an empty list rather than throwing: a user with no HA namespace has
+ * no machines, which is a state and not an error, and this only ever decorates
+ * a view.
+ */
+export async function getCloudMachines(
+  idToken: string,
+): Promise<CloudMachine[]> {
+  const res = await cloudFetch('/api/cloud/me/machines', idToken);
+  if (!res.ok) return [];
+  const body = await res.json();
+  return Array.isArray(body?.machines) ? body.machines : [];
+}
+
+/** Whether a machine is running the image the fleet publishes today. */
+export type ReleaseStanding =
+  | 'current'
+  /**
+   * Running a published image, but not the one the fleet publishes now - it
+   * has not been recreated onto the current release yet.
+   */
+  | 'behind'
+  /** Never registered, so there is nothing to compare. */
+  | 'unknown';
+
+/**
+ * Compare on RTMR3, which is the only register that identifies an image.
+ *
+ * MRTD measures the virtual firmware: it is identical across every profile of a
+ * release and unchanged across most releases - the same value served 2.3.62
+ * through 2.3.68 - so comparing it reports every machine as current, including
+ * one a release behind. RTMR3 is where the node records role, profile and root
+ * hash, which is why core insists a policy name one.
+ *
+ * `measurements` is what the fleet publishes NOW, so `behind` means exactly
+ * that: a machine whose image is no longer the current one.
+ */
+export function releaseStanding(
+  attestation: MachineAttestation | null,
+  measurements: Pick<FleetMeasurements, 'allowed_rtmr3'> | null,
+): ReleaseStanding {
+  const attested = attestation?.rtmr3?.trim().toLowerCase();
+  if (!attested) return 'unknown';
+  const allowed = measurements?.allowed_rtmr3 ?? [];
+  if (!allowed.length) return 'unknown';
+  return allowed.some((a) => a.trim().toLowerCase() === attested)
+    ? 'current'
+    : 'behind';
+}
+
 export interface NamespaceHaGroup {
   group_id: string;
   context_id: string;

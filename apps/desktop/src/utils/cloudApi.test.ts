@@ -31,6 +31,8 @@ import {
   enableHaForNamespace,
   getCloudNamespaces,
   ensureTeeAdmissionPolicy,
+  getCloudMachines,
+  releaseStanding,
   CLOUD_BASE_URL,
 } from './cloudApi';
 
@@ -748,5 +750,96 @@ describe('ensureTeeAdmissionPolicy', () => {
       ensureTeeAdmissionPolicy(idToken(), 'ns-root'),
     ).resolves.toBe('reasserted');
     expect(putBody?.allowedMrtd).toEqual(['mrtd-NEW']);
+  });
+});
+
+describe('releaseStanding', () => {
+  // The real shape: MRTD, RTMR0 and RTMR1 are the same in both releases —
+  // 2.3.67 and 2.3.68 publish an identical MRTD — and only RTMR2/RTMR3 move.
+  const SHARED_MRTD = 'c1'.repeat(48);
+  const CURRENT_RTMR3 = 'd3'.repeat(48);
+  const PREVIOUS_RTMR3 = 'c3'.repeat(48);
+
+  const fleet = { allowed_rtmr3: [CURRENT_RTMR3] };
+  const attested = (rtmr3: string | null) => ({
+    mrtd: SHARED_MRTD,
+    rtmr0: null,
+    rtmr1: null,
+    rtmr2: null,
+    rtmr3,
+    tcb_status: 'UpToDate',
+    registered_at: null,
+  });
+
+  it('reads a machine on the previous release as behind, though its MRTD matches', () => {
+    // THE POINT. Comparing MRTD — the register every release shares — reports
+    // this machine as current, which is how a node a release behind went
+    // unnoticed while its namespace refused to admit it.
+    expect(releaseStanding(attested(PREVIOUS_RTMR3), fleet)).toBe('behind');
+  });
+
+  it('reads a machine on the published image as current', () => {
+    expect(releaseStanding(attested(CURRENT_RTMR3), fleet)).toBe('current');
+  });
+
+  it('is case- and whitespace-insensitive, as hex carries neither', () => {
+    expect(
+      releaseStanding(attested(` ${CURRENT_RTMR3.toUpperCase()} `), fleet),
+    ).toBe('current');
+  });
+
+  it('admits any of several releases when the fleet publishes several', () => {
+    // A fleet mid-rollout publishes both, so neither machine is behind.
+    const spanning = { allowed_rtmr3: [PREVIOUS_RTMR3, CURRENT_RTMR3] };
+    expect(releaseStanding(attested(PREVIOUS_RTMR3), spanning)).toBe('current');
+    expect(releaseStanding(attested(CURRENT_RTMR3), spanning)).toBe('current');
+  });
+
+  it('says unknown — never current — for a machine that never registered', () => {
+    expect(releaseStanding(null, fleet)).toBe('unknown');
+    expect(releaseStanding(attested(null), fleet)).toBe('unknown');
+  });
+
+  it('says unknown when the fleet publishes no RTMR3 to compare against', () => {
+    // Nothing to compare is not evidence of being current.
+    expect(releaseStanding(attested(CURRENT_RTMR3), { allowed_rtmr3: [] })).toBe(
+      'unknown',
+    );
+    expect(releaseStanding(attested(CURRENT_RTMR3), null)).toBe('unknown');
+  });
+});
+
+describe('getCloudMachines', () => {
+  let restore: (() => void) | undefined;
+  afterEach(() => {
+    restore?.();
+    restore = undefined;
+  });
+
+  it('returns the machines the cloud reports', async () => {
+    const { restore: r } = installFetch(() =>
+      jsonResponse({
+        machines: [
+          { peer_id: 'p1', attestation: null, namespaces: [], can_execute: false },
+        ],
+      }),
+    );
+    restore = r;
+    const machines = await getCloudMachines('tok');
+    expect(machines).toHaveLength(1);
+    expect(machines[0].peer_id).toBe('p1');
+  });
+
+  it('returns an empty list rather than throwing when the call fails', async () => {
+    // No HA namespace is a state, not an error, and this only decorates a view.
+    const { restore: r } = installFetch(() => jsonResponse({}, 500));
+    restore = r;
+    await expect(getCloudMachines('tok')).resolves.toEqual([]);
+  });
+
+  it('tolerates a body with no machines array', async () => {
+    const { restore: r } = installFetch(() => jsonResponse({}));
+    restore = r;
+    await expect(getCloudMachines('tok')).resolves.toEqual([]);
   });
 });

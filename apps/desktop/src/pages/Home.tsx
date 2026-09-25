@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, memo } from "react";
 import { decodeMetadata, openAppFrontend } from "../utils/appUtils";
+import InstalledAppCard from "../components/InstalledAppCard";
 import { listInstalledApps } from "../utils/installedAppsCache";
 import { Settings as SettingsIcon, ArrowRight, Package, ShoppingCart } from "lucide-react";
 
@@ -92,40 +93,19 @@ function Home({ connected, error, clientReady, onReconnect, onNavigate, onOpenSe
               <ArrowRight size={14} />
             </button>
           </div>
-          <div className="apps-grid">
+          {/* The Applications page's own card, so an app looks the same in
+              both places (its icon, package id, description, version), minus
+              the More menu: Home only opens apps, it never uninstalls them. */}
+          <div className="installed-apps-grid" data-testid="home-apps-grid">
             {installedApps.slice(0, 4).map((app: any, index: number) => {
-              let appName = app.id;
-              let frontendUrl: string | null = null;
-              let iconData: string | undefined;
-              try {
-                const metadata = decodeMetadata(app.metadata);
-                if (metadata) {
-                  appName = metadata.name || metadata.alias || app.id;
-                  frontendUrl = metadata?.links?.frontend || null;
-                  iconData = metadata?.icon;
-                }
-              } catch {
-                // Use app.id as fallback
-              }
-
+              const metadata = decodeMetadata(app.metadata);
+              const appName = metadata?.name || app.name || app.id;
               return (
-                <button
-                  key={`${app?.id != null && String(app.id) !== '' ? String(app.id) : 'app'}-${index}`}
-                  type="button"
-                  onClick={() => {
-                    if (frontendUrl) {
-                      handleOpenAppFrontend(frontendUrl, appName, app.id, iconData);
-                    } else {
-                      onNavigate('installed');
-                    }
-                  }}
-                  className="app-card-mini"
-                  title={frontendUrl ? `Open ${appName}` : `View ${appName} details`}
-                >
-                  <Package className="app-icon" size={28} />
-                  <span className="app-name">{appName}</span>
-                  {frontendUrl && <span className="app-card-open-hint">Open</span>}
-                </button>
+                <InstalledAppCard
+                  key={app.id || app.name || app.source || `home-app-${index}`}
+                  app={app}
+                  onOpen={(url: string) => handleOpenAppFrontend(url, appName, app.id, metadata?.icon)}
+                />
               );
             })}
           </div>

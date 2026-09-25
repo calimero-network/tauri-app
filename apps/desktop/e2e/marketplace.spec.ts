@@ -569,3 +569,36 @@ test.describe("Marketplace ↔ Applications navigation", () => {
     ).toBeVisible();
   });
 });
+
+// ─── Home: Your Applications ─────────────────────────────────────────────────
+
+test.describe("Home – Your Applications", () => {
+  test.beforeEach(async ({ page }) => {
+    await setupAuthenticatedPage(page);
+    await expect(page.getByTestId("home-apps-grid")).toBeVisible();
+  });
+
+  test("shows the same card as the Applications page, icon included", async ({ page }) => {
+    // Home used to draw every app as the same generic package glyph with a bare
+    // name, whatever icon the bundle carried.
+    const grid = page.getByTestId("home-apps-grid");
+    const chat = grid.locator("[data-testid='installed-app-card']", { hasText: "Only Peers Chat" });
+    await expect(chat.locator("img.app-icon-img")).toBeVisible();
+    await expect(chat).toContainText("Decentralized chat");
+
+    const demo = grid.locator("[data-testid='installed-app-card']", { hasText: "Blockchain Demo" });
+    await expect(demo.getByTestId("app-icon-fallback")).toHaveText("B");
+  });
+
+  test("offers Open, and nothing that removes an app", async ({ page }) => {
+    const grid = page.getByTestId("home-apps-grid");
+    const chat = grid.locator("[data-testid='installed-app-card']", { hasText: "Only Peers Chat" });
+    await expect(chat.getByTestId("open-app")).toBeVisible();
+    // No More menu on Home, so Uninstall is unreachable from here.
+    await expect(grid.locator(".installed-app-more-btn")).toHaveCount(0);
+
+    const demo = grid.locator("[data-testid='installed-app-card']", { hasText: "Blockchain Demo" });
+    await expect(demo.getByTestId("open-app")).toHaveCount(0);
+    await expect(demo).toContainText("No web frontend");
+  });
+});

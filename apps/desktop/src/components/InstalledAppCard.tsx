@@ -35,6 +35,9 @@ export interface InstalledApplicationRow {
  * laid out against the CARD and then clipped by its `overflow: hidden`. It
  * opens; it simply cannot be seen or clicked. The page renders it as a sibling
  * of the grid.
+ *
+ * Home renders the same card without `onToggleMenu`: the More button (and so
+ * Uninstall) is left out, and Open is the only action.
  */
 export default function InstalledAppCard({
   app,
@@ -45,9 +48,10 @@ export default function InstalledAppCard({
   nodeSelect,
 }: {
   app: InstalledApplicationRow;
-  menuOpen: boolean;
-  onToggleMenu: (e: React.MouseEvent) => void;
-  onContextMenu: (e: React.MouseEvent) => void;
+  menuOpen?: boolean;
+  /** Omitted on Home, where the card only opens the app. */
+  onToggleMenu?: (e: React.MouseEvent) => void;
+  onContextMenu?: (e: React.MouseEvent) => void;
   onOpen: (frontendUrl: string) => void;
   /** The developer-mode "which node does this run against" picker, when shown. */
   nodeSelect?: React.ReactNode;
@@ -130,17 +134,19 @@ export default function InstalledAppCard({
           )}
         </div>
 
-        <div className="installed-app-more" onClick={(e) => e.stopPropagation()}>
-          <button
-            className="button button-secondary installed-app-more-btn"
-            title="More options"
-            aria-label={`More options for ${name}`}
-            aria-expanded={menuOpen}
-            onClick={onToggleMenu}
-          >
-            <MoreHorizontal size={15} />
-          </button>
-        </div>
+        {onToggleMenu && (
+          <div className="installed-app-more" onClick={(e) => e.stopPropagation()}>
+            <button
+              className="button button-secondary installed-app-more-btn"
+              title="More options"
+              aria-label={`More options for ${name}`}
+              aria-expanded={menuOpen ?? false}
+              onClick={onToggleMenu}
+            >
+              <MoreHorizontal size={15} />
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

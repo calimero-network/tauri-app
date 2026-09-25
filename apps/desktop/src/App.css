@@ -466,55 +466,6 @@
   background: var(--accent-light);
 }
 
-.app-card-mini {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 10px;
-  padding: 20px 14px 16px;
-  background: var(--gradient-surface), var(--surface-glass);
-  border: 1px solid var(--border-color);
-  border-radius: 0;
-  cursor: pointer;
-  transition: border-color var(--dur-color) ease-out, background-color var(--dur-color) ease-out;
-  text-align: center;
-  width: 100%;
-  position: relative;
-}
-
-.app-card-mini:hover {
-  background: var(--gradient-surface), var(--surface-hover);
-  border-color: var(--accent-primary);
-}
-
-.app-card-mini .app-icon {
-  color: var(--accent-primary);
-  flex-shrink: 0;
-}
-
-.app-card-mini .app-name {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  width: 100%;
-}
-
-.app-card-open-hint {
-  font-size: 11px;
-  color: var(--text-tertiary);
-  font-weight: 400;
-  letter-spacing: 0.3px;
-  opacity: 0;
-  transition: opacity 0.2s;
-}
-
-.app-card-mini:hover .app-card-open-hint {
-  opacity: 1;
-}
-
 /* ── Empty State ── */
 .empty-state-card {
   background: var(--gradient-surface), var(--surface-glass);

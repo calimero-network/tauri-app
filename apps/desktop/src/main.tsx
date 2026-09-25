@@ -5,6 +5,7 @@ import { ThemeProvider } from "./contexts/ThemeContext";
 import { ToastProvider } from "./contexts/ToastContext";
 import { NodeVersionsProvider } from "./contexts/NodeVersionsContext";
 import ErrorBoundary from "./components/ErrorBoundary";
+import UpdateNotification from "./components/UpdateNotification";
 import { installRefreshSingleFlight } from "./lib/token-broker";
 import { installInputHygiene } from "./utils/inputHygiene";
 import "./index.css";
@@ -32,6 +33,12 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
             <Suspense fallback={null}>
               <App />
             </Suspense>
+          </ErrorBoundary>
+          {/* Outside App so every screen offers an update — onboarding, login
+              and Settings short-circuit App's shell, and a banner that only
+              lives in the dashboard is one most users never see. */}
+          <ErrorBoundary componentName="UpdateNotification" fallback={<></>}>
+            <UpdateNotification />
           </ErrorBoundary>
         </NodeVersionsProvider>
       </ToastProvider>

@@ -84,9 +84,35 @@ function buildUpdaterPlatforms(manifests, assetsDir, baseUrl, errors) {
     }
 
     console.log(`Added ${platform}: ${updaterAsset.name}`);
+
+    addInstallerUpdaterTargets(platform, manifest, assetsDir, baseUrl, platforms, errors);
   }
 
   return platforms;
+}
+
+/**
+ * Installers that also update themselves in place (.deb, .rpm): each gets its own
+ * `{os}-{arch}-{installer}` key, which the updater prefers over `{os}-{arch}`.
+ */
+function addInstallerUpdaterTargets(platform, manifest, assetsDir, baseUrl, platforms, errors) {
+  for (const artifact of PLATFORM_CONFIG[platform].artifacts) {
+    if (artifact.type !== "installer" || !artifact.updaterTargets) continue;
+
+    const asset = manifest.assets.find((a) => a.name.endsWith(artifact.suffix));
+    if (!asset) continue;
+
+    const signature = findSignature(assetsDir, asset.name);
+    if (!signature) {
+      errors.push(`${platform}: no signature next to ${asset.name}`);
+      continue;
+    }
+
+    for (const tauriPlatform of artifact.updaterTargets) {
+      platforms[tauriPlatform] = { url: `${baseUrl}/${asset.name}`, signature };
+    }
+    console.log(`Added ${platform} (${artifact.format}): ${asset.name}`);
+  }
 }
 
 function buildDownloads(manifests, baseUrl) {

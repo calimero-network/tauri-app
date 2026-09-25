@@ -8,6 +8,11 @@ const LINUX_BUNDLE_DIR = "apps/desktop/src-tauri/target/release/bundle";
 
 // Order matters: it fixes the platform order in latest.json and the pre-sort
 // order of release.json's downloads. Within a platform, so does artifact order.
+//
+// `updaterTargets` on an installer: the updater keys that install it in place.
+// The Tauri updater looks up `{os}-{arch}-{installer}` before `{os}-{arch}`, and
+// an app installed from a .deb/.rpm can only update from a .deb/.rpm — handed
+// the AppImage tarball it fails every time with "invalid updater format".
 const PLATFORM_CONFIG = {
   macos: {
     arch: "universal",
@@ -98,6 +103,12 @@ const PLATFORM_CONFIG = {
         type: "installer",
         format: "deb",
         label: "Linux (Debian/Ubuntu)",
+        updaterTargets: ["linux-x86_64-deb"],
+      },
+      {
+        pattern: /\.deb\.sig$/,
+        suffix: "_linux_x64.deb.sig",
+        type: "signature",
       },
       {
         pattern: /\.rpm$/,
@@ -105,6 +116,12 @@ const PLATFORM_CONFIG = {
         type: "installer",
         format: "rpm",
         label: "Linux (Fedora/RHEL)",
+        updaterTargets: ["linux-x86_64-rpm"],
+      },
+      {
+        pattern: /\.rpm\.sig$/,
+        suffix: "_linux_x64.rpm.sig",
+        type: "signature",
       },
     ],
   },
@@ -122,6 +139,12 @@ const PLATFORM_CONFIG = {
         format: "deb",
         label: "Chromebook (Debian/ARM64)",
         primary: true,
+        updaterTargets: ["linux-aarch64-deb"],
+      },
+      {
+        pattern: /\.deb\.sig$/,
+        suffix: "_linux_arm64.deb.sig",
+        type: "signature",
       },
       {
         pattern: /\.AppImage$/,

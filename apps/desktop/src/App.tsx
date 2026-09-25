@@ -20,7 +20,6 @@ import { useToast } from "./contexts/ToastContext";
 import { checkOnboardingState } from "./utils/onboarding";
 import { openAppFrontend, parseTauriError } from "./utils/appUtils";
 import { useAppDeepLink } from "./hooks/useAppDeepLink";
-import UpdateNotification from "./components/UpdateNotification";
 import Sidebar from "./components/Sidebar";
 import { NodeStatusIndicator } from "./components/NodeStatusIndicator";
 import ToastContainer from "./components/ToastContainer";
@@ -660,7 +659,6 @@ function App() {
   return (
     <div className="app">
       <ToastContainer />
-      <UpdateNotification />
 
       <div className="app-layout">
         <Sidebar

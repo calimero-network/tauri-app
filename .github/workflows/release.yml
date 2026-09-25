@@ -176,12 +176,16 @@ jobs:
               --repo "${{ github.repository }}" \
               --notes-file release-notes.md
           else
-            echo "Creating release v$VERSION"
+            # As a DRAFT: installed apps poll releases/latest/download/latest.json,
+            # and a published release with its assets still uploading answers
+            # that URL with a 404 — every client checking in that window saw a
+            # failed update check. It goes public once every asset is in place.
+            echo "Creating draft release v$VERSION"
             gh release create "v$VERSION" \
               --repo "${{ github.repository }}" \
               --title "v$VERSION" \
               --notes-file release-notes.md \
-              --latest
+              --draft
           fi
 
           echo "## Release v$VERSION Published" >> $GITHUB_STEP_SUMMARY
@@ -191,15 +195,32 @@ jobs:
           # --clobber so a rerun replaces first-attempt assets instead of failing.
           # manifest-<platform>.json is the internal handoff from collect-assets to
           # the generator, so it stays out of the release.
+          # latest.json goes last: on a rerun of an already-public release the
+          # manifest must never point at a bundle that is not uploaded yet.
+          upload() {
+            filename=$(basename "$1")
+            echo "Uploading: $filename"
+            gh release upload "v$VERSION" "$1" --repo "${{ github.repository }}" --clobber
+            echo "- \`$filename\` ($(ls -lh "$1" | awk '{print $5}'))" >> $GITHUB_STEP_SUMMARY
+          }
           for file in release-assets/*; do
             [ -f "$file" ] || continue
             filename=$(basename "$file")
-            case "$filename" in manifest-*.json) continue ;; esac
-
-            echo "Uploading: $filename"
-            gh release upload "v$VERSION" "$file" --repo "${{ github.repository }}" --clobber
-            echo "- \`$filename\` ($(ls -lh "$file" | awk '{print $5}'))" >> $GITHUB_STEP_SUMMARY
+            case "$filename" in manifest-*.json|latest.json) continue ;; esac
+            upload "$file"
           done
+          upload release-assets/latest.json
+
+          # Publish and mark latest only while it is still a draft (this run's, or
+          # one a failed first attempt left) — a rerun of an old, already public
+          # release must not snatch "latest" back from a newer one.
+          IS_DRAFT=$(gh release view "v$VERSION" --repo "${{ github.repository }}" --json isDraft -q .isDraft)
+          if [ "$IS_DRAFT" = "true" ]; then
+            gh release edit "v$VERSION" \
+              --repo "${{ github.repository }}" \
+              --draft=false \
+              --latest
+          fi
 
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Links" >> $GITHUB_STEP_SUMMARY

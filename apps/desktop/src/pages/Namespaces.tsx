@@ -14,7 +14,7 @@ import {
 import type { GroupInfo, MetadataRecord } from "@calimero-network/mero-js";
 import { useToast } from "../contexts/ToastContext";
 import AppIcon from "../components/AppIcon";
-import { ChevronLeft, Users, Box, Layers, Copy, ChevronRight, Shield, Globe, Plus, X, Trash2, UserMinus, Link, MoreHorizontal, LogIn, LogOut } from "lucide-react";
+import { ChevronLeft, Users, Box, Layers, Copy, ChevronRight, Shield, Globe, Plus, X, Trash2, UserMinus, Link, MoreHorizontal, LogIn, LogOut, HardDrive } from "lucide-react";
 import { appInstalled, decodeMetadata, parseTauriError } from "../utils/appUtils";
 import { invalidateInstalledApps, listInstalledApps } from "../utils/installedAppsCache";
 import { getSettings } from "../utils/settings";
@@ -45,6 +45,7 @@ import {
 } from "../utils/teeEviction";
 import { useCloudEnabled } from "../hooks/useCloudEnabled";
 import { useVisiblePoll } from "../hooks/useVisiblePoll";
+import { describeBytes, formatBytes, parseUsage, sumUsage, usageFor, type NamespaceBytes } from "../utils/diskUsage";
 import "./Namespaces.css";
 
 function parseApiError(e: any): string {
@@ -259,6 +260,20 @@ function Namespaces() {
   // A device follows and unfollows this account's projects without the desktop
   // asking, so the listing has to notice on its own.
   useVisiblePoll(refetchNamespaces, 30000);
+  // Disk used per namespace on THIS node, from `/admin-api/usage`. `null` when
+  // the node cannot answer (a merod older than the route, or a remote node that
+  // refuses it): sizes are then hidden rather than shown as zero. Slower than
+  // the listing because the figures are estimates that move gradually.
+  const [usage, setUsage] = useState<Map<string, NamespaceBytes> | null>(null);
+  const fetchUsage = useCallback(async () => {
+    if (!mero) return;
+    try {
+      setUsage(parseUsage(await mero.admin.getUsage()));
+    } catch {
+      setUsage(null);
+    }
+  }, [mero]);
+  useVisiblePoll(() => { void fetchUsage(); }, 60000);
   const { groups: nsGroups, loading: nsLoadingGroups, refetch: refetchNsGroups } = useNamespaceGroups(activeNsId) as any;
   const { groupInfo: groupInfoRaw, loading: groupInfoLoading } = useGroupInfo(activeGroupId);
   const { groupInfo: nsRootGroupInfoRaw } = useGroupInfo(activeNsRootId);
@@ -1552,6 +1567,7 @@ function Namespaces() {
     const app = g.app;
     const title = app?.name ?? "Unknown application";
     const count = g.namespaces.length;
+    const appBytes = sumUsage(usage, g.namespaces.map((n) => n.namespaceId));
     return (
       <div
         key={g.applicationId}
@@ -1590,6 +1606,18 @@ function Namespaces() {
           <span className="ns-app-card-count">
             <Layers size={13} /> {count} {count === 1 ? "namespace" : "namespaces"}
           </span>
+          {appBytes !== null && (
+            <>
+              <span aria-hidden="true" className="ns-app-card-dot">·</span>
+              <span
+                className="ns-app-card-count"
+                data-testid="ns-app-card-disk"
+                title="Disk used on this node by this app's namespaces (estimate; shared blobs and app code not included)"
+              >
+                <HardDrive size={13} /> {formatBytes(appBytes)}
+              </span>
+            </>
+          )}
         </div>
       </div>
     );
@@ -1630,6 +1658,12 @@ function Namespaces() {
         <span title="Subgroups — nested groups inside this namespace, each holding its own contexts"><Layers size={14} /> {(ns as any).subgroupCount ?? 0}</span>
         <span title="Members — identities with access to this namespace"><Users size={14} /> {(ns as any).memberCount ?? 0}</span>
         <span title="Contexts — running app instances (e.g. a chat channel) directly under the namespace"><Box size={14} /> {(ns as any).contextCount ?? 0}</span>
+        {(() => {
+          const b = usageFor(usage, ns.namespaceId);
+          return b ? (
+            <span title={describeBytes(b)} data-testid="ns-card-disk"><HardDrive size={14} /> {formatBytes(b.total)}</span>
+          ) : null;
+        })()}
       </div>
       {ns.upgradePolicy && (
         <div className="ns-card-policy">
@@ -1794,6 +1828,18 @@ function Namespaces() {
               <p className="ns-page-subtitle">
                 A namespace is an app-bound workspace. It holds contexts (running app instances, e.g. a chat channel) and subgroups (nested groups that hold their own contexts). Pick an application to see its namespaces.
               </p>
+              {(() => {
+                const nodeBytes = sumUsage(usage, namespaces.map((n) => n.namespaceId));
+                return nodeBytes !== null ? (
+                  <p
+                    className="ns-page-subtitle"
+                    data-testid="ns-disk-total"
+                    title="Estimated from this node's store: state, history and governance per namespace. Shared blobs and app code are not included."
+                  >
+                    <HardDrive size={13} style={{ verticalAlign: "-2px" }} /> {formatBytes(nodeBytes)} on disk across {namespaces.length} {namespaces.length === 1 ? "namespace" : "namespaces"}
+                  </p>
+                ) : null;
+              })()}
             </div>
             {/* Creating is deliberately not offered here. A namespace is bound
                 to one application, so it is created from that application's
@@ -2007,6 +2053,15 @@ function Namespaces() {
               <div className="stat-value" style={{ fontSize: "0.85rem" }}>{ns.upgradePolicy || "—"}</div>
               <div className="stat-label">Upgrade Policy</div>
             </div>
+            {(() => {
+              const b = usageFor(usage, ns.namespaceId);
+              return b ? (
+                <div className="stat-card" title={describeBytes(b)} data-testid="ns-detail-disk">
+                  <div className="stat-value">{formatBytes(b.total)}</div>
+                  <div className="stat-label">Disk</div>
+                </div>
+              ) : null;
+            })()}
           </div>
 
           <div className="ns-detail-section">

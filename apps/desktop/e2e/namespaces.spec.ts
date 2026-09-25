@@ -220,6 +220,69 @@ const MISSING_APP_NAMESPACE = {
   subgroupCount: 0,
 };
 
+// ─── Namespaces page – disk usage ───────────────────────────────────────────
+
+/**
+ * `GET /admin-api/usage` is served BARE — no `data` envelope — unlike the
+ * listing above, which is exactly the kind of difference a mock that copied
+ * its neighbour would hide. Ids are upper-cased here to pin the
+ * case-insensitive join; `c…` is deliberately absent, to pin that a namespace
+ * the node reports nothing for shows no figure rather than "0 B".
+ */
+const USAGE_BODY = {
+  namespaces: [
+    {
+      namespaceId: "A".repeat(64),
+      contextCount: 1,
+      memberCount: 2,
+      subgroupCount: 0,
+      bytes: { state: 1_000_000, privateState: 0, delta: 200_000, governance: 34_000, total: 1_234_000 },
+    },
+    {
+      namespaceId: "b".repeat(64),
+      contextCount: 0,
+      memberCount: 1,
+      subgroupCount: 0,
+      bytes: { state: 0, privateState: 0, delta: 0, governance: 766_000, total: 766_000 },
+    },
+  ],
+};
+
+test.describe("Namespaces – disk usage", () => {
+  test("shows the node total, each application's share, and each namespace's size", async ({
+    page,
+  }) => {
+    // Registered before navigation: the first read happens on mount.
+    await page.route("**/admin-api/usage", (route) =>
+      route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(USAGE_BODY) }),
+    );
+    await setupGroupedNamespaces(page);
+
+    await expect(page.getByTestId("ns-disk-total")).toContainText("2 MB on disk across 3 namespaces");
+    await expect(
+      page.locator('.ns-app-card[data-application-id="installed-app-1"] [data-testid="ns-app-card-disk"]'),
+    ).toHaveText("2 MB");
+    // Nothing reported for its only namespace: no figure, not "0 B".
+    await expect(
+      page.locator('.ns-app-card[data-application-id="installed-app-2"] [data-testid="ns-app-card-disk"]'),
+    ).toHaveCount(0);
+
+    await page.locator('.ns-app-card[data-application-id="installed-app-1"]').click();
+    const sizes = page.getByTestId("ns-card-disk");
+    await expect(sizes).toHaveCount(2);
+    await expect(sizes).toHaveText(["1.23 MB", "766 KB"]);
+    await expect(sizes.first()).toHaveAttribute("title", /History 200 KB/);
+  });
+
+  test("a node that cannot answer /usage shows no sizes at all", async ({ page }) => {
+    // The fixture's catch-all refuses the route, as an older merod would.
+    await setupGroupedNamespaces(page);
+    await expect(page.getByTestId("ns-app-card")).toHaveCount(2);
+    await expect(page.getByTestId("ns-disk-total")).toHaveCount(0);
+    await expect(page.getByTestId("ns-app-card-disk")).toHaveCount(0);
+  });
+});
+
 test.describe("Namespaces – installing a missing application", () => {
   test.beforeEach(async ({ page }) => {
     await setupDeveloperPage(page);

@@ -1,9 +1,13 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // vi.mock is hoisted — use vi.hoisted() so the mock vars are available when
 // the factory runs.
 const {
   mockDownloadAndInstall,
+  mockDownload,
+  mockInstall,
+  mockClose,
+  mockInvoke,
   mockRelaunch,
   mockCheck,
   mockGetVersion,
@@ -11,6 +15,10 @@ const {
   mockDownloadAndReplace,
 } = vi.hoisted(() => ({
   mockDownloadAndInstall: vi.fn().mockResolvedValue(undefined),
+  mockDownload: vi.fn().mockResolvedValue(undefined),
+  mockInstall: vi.fn().mockResolvedValue(undefined),
+  mockClose: vi.fn().mockResolvedValue(undefined),
+  mockInvoke: vi.fn().mockResolvedValue(undefined),
   mockRelaunch: vi.fn().mockResolvedValue(undefined),
   // Tauri v2 plugin-updater: check() resolves to an Update handle or null.
   mockCheck: vi.fn(),
@@ -24,8 +32,8 @@ const {
   }),
 }));
 
-// A fake v2 Update handle. downloadAndInstall is delegated to the shared mock
-// so tests can assert on / reorder it.
+// A fake v2 Update handle. Its methods are delegated to the shared mocks so
+// tests can assert on / reorder them.
 const makeUpdate = (over: Record<string, unknown> = {}) => ({
   version: '0.0.40',
   currentVersion: '0.0.39',
@@ -33,12 +41,16 @@ const makeUpdate = (over: Record<string, unknown> = {}) => ({
   body: 'bug fixes',
   rawJson: {},
   downloadAndInstall: mockDownloadAndInstall,
+  download: mockDownload,
+  install: mockInstall,
+  close: mockClose,
   ...over,
 });
 
 vi.mock('@tauri-apps/plugin-updater', () => ({ check: mockCheck }));
 vi.mock('@tauri-apps/plugin-process', () => ({ relaunch: mockRelaunch }));
 vi.mock('@tauri-apps/api/app', () => ({ getVersion: mockGetVersion }));
+vi.mock('@tauri-apps/api/core', () => ({ invoke: mockInvoke }));
 vi.mock('./merod', () => ({
   stopMerod: mockStopMerod,
   downloadAndReplaceMerod: mockDownloadAndReplace,
@@ -49,11 +61,24 @@ vi.mock('./merod', () => ({
 // injects __TAURI_INTERNALS__ regardless of withGlobalTauri.
 (globalThis as any).window = { __TAURI_INTERNALS__: {} };
 
-import { installUpdate, checkForUpdates, getCurrentVersion } from './updater';
+import {
+  installUpdate,
+  checkForUpdates,
+  getCurrentVersion,
+  startUpdateChecks,
+  reflectUpdateInTray,
+  downloadProgressReporter,
+  CHECK_INTERVAL_MS,
+  STARTUP_CHECK_DELAY_MS,
+} from './updater';
 
 beforeEach(() => {
   vi.clearAllMocks();
   mockDownloadAndInstall.mockResolvedValue(undefined);
+  mockDownload.mockResolvedValue(undefined);
+  mockInstall.mockResolvedValue(undefined);
+  mockClose.mockResolvedValue(undefined);
+  mockInvoke.mockResolvedValue(undefined);
   mockRelaunch.mockResolvedValue(undefined);
   // Default: an update is available (installUpdate tests rely on this).
   mockCheck.mockResolvedValue(makeUpdate());
@@ -68,19 +93,44 @@ beforeEach(() => {
 });
 
 describe('installUpdate', () => {
-  it('runs the full sequence in order: stop → download merod → install app → relaunch', async () => {
+  it('runs the full sequence in order: download app → stop → download merod → install app → relaunch', async () => {
     const callOrder: string[] = [];
+    mockDownload.mockImplementation(async () => { callOrder.push('download'); });
     mockStopMerod.mockImplementation(async () => { callOrder.push('stopMerod'); });
     mockDownloadAndReplace.mockImplementation(async () => {
       callOrder.push('downloadAndReplace');
       return { replaced: true, expected_version: '0.10.1-rc.43', current_version: 'merod 0.10.1-rc.43', message: '' };
     });
-    mockDownloadAndInstall.mockImplementation(async () => { callOrder.push('downloadAndInstall'); });
+    mockInstall.mockImplementation(async () => { callOrder.push('install'); });
     mockRelaunch.mockImplementation(async () => { callOrder.push('relaunch'); });
 
     await installUpdate();
 
-    expect(callOrder).toEqual(['stopMerod', 'downloadAndReplace', 'downloadAndInstall', 'relaunch']);
+    expect(callOrder).toEqual(['download', 'stopMerod', 'downloadAndReplace', 'install', 'relaunch']);
+  });
+
+  // Regression: the node was stopped before the app update was even fetched,
+  // so an offline or failed download left the user with a dead node.
+  it('leaves the node running when the app update fails to download', async () => {
+    mockDownload.mockRejectedValue('error sending request for url');
+    await expect(installUpdate()).rejects.toBe('error sending request for url');
+    expect(mockStopMerod).not.toHaveBeenCalled();
+    expect(mockDownloadAndReplace).not.toHaveBeenCalled();
+    expect(mockInstall).not.toHaveBeenCalled();
+    expect(mockRelaunch).not.toHaveBeenCalled();
+  });
+
+  it('reports download progress as a percentage', async () => {
+    mockDownload.mockImplementation(async (onEvent: (e: unknown) => void) => {
+      onEvent({ event: 'Started', data: { contentLength: 200 } });
+      onEvent({ event: 'Progress', data: { chunkLength: 100 } });
+      onEvent({ event: 'Progress', data: { chunkLength: 100 } });
+      onEvent({ event: 'Finished' });
+    });
+    const statuses: string[] = [];
+    await installUpdate((s) => statuses.push(s));
+    expect(statuses).toContain('Downloading update... 50%');
+    expect(statuses).toContain('Downloading update... 100%');
   });
 
   it('stops only the app\'s own tracked node(s), never every merod on the machine', async () => {
@@ -95,6 +145,7 @@ describe('installUpdate', () => {
     const statuses: string[] = [];
     await installUpdate((s) => statuses.push(s));
 
+    expect(statuses).toContain('Downloading update...');
     expect(statuses).toContain('Stopping nodes...');
     expect(statuses).toContain('Downloading merod binary...');
     expect(statuses).toContain('Installing app update...');
@@ -113,7 +164,7 @@ describe('installUpdate', () => {
       new Error("Version mismatch after replace: expected '0.10.1-rc.43', binary reports 'merod 0.10.1-rc.42'"),
     );
     await expect(installUpdate()).rejects.toThrow('Version mismatch');
-    expect(mockDownloadAndInstall).not.toHaveBeenCalled();
+    expect(mockInstall).not.toHaveBeenCalled();
     expect(mockRelaunch).not.toHaveBeenCalled();
   });
 
@@ -124,7 +175,7 @@ describe('installUpdate', () => {
       code: 'InternalError',
     });
     await expect(installUpdate()).rejects.toMatchObject({ message: expect.stringContaining('Version mismatch') });
-    expect(mockDownloadAndInstall).not.toHaveBeenCalled();
+    expect(mockInstall).not.toHaveBeenCalled();
     expect(mockRelaunch).not.toHaveBeenCalled();
   });
 
@@ -140,8 +191,8 @@ describe('installUpdate', () => {
     expect(mockRelaunch).toHaveBeenCalledOnce();
   });
 
-  it('throws and does NOT relaunch when downloadAndInstall fails', async () => {
-    mockDownloadAndInstall.mockRejectedValue(new Error('no update package'));
+  it('throws and does NOT relaunch when install fails', async () => {
+    mockInstall.mockRejectedValue(new Error('no update package'));
     await expect(installUpdate()).rejects.toThrow('no update package');
     expect(mockRelaunch).not.toHaveBeenCalled();
   });
@@ -174,6 +225,158 @@ describe('checkForUpdates', () => {
     const result = await checkForUpdates();
     expect(result.available).toBe(true);
     expect(result.info?.version).toBe('0.0.40');
+  });
+});
+
+describe('checkForUpdates errors and sharing', () => {
+  // The plugin rejects with a bare string. Dropping it to "Unknown error" hid
+  // the only clue to why a check failed (offline, 404, bad signature, ...).
+  it('keeps the text of a string rejection', async () => {
+    mockCheck.mockRejectedValue('Could not fetch a valid release JSON from the remote');
+    const result = await checkForUpdates();
+    expect(result.available).toBe(false);
+    expect(result.error).toBe('Could not fetch a valid release JSON from the remote');
+  });
+
+  it('keeps the message of a serialized error object', async () => {
+    mockCheck.mockRejectedValue({ message: 'signature verification failed' });
+    expect((await checkForUpdates()).error).toBe('signature verification failed');
+  });
+
+  it('shares one request between concurrent callers', async () => {
+    let resolve!: (u: unknown) => void;
+    mockCheck.mockReturnValue(new Promise((r) => { resolve = r; }));
+    const a = checkForUpdates();
+    const b = checkForUpdates();
+    resolve(makeUpdate());
+    const [ra, rb] = await Promise.all([a, b]);
+    expect(mockCheck).toHaveBeenCalledOnce();
+    expect(ra).toEqual(rb);
+  });
+
+  it('releases the previous update handle when a newer check replaces it', async () => {
+    const first = makeUpdate({ close: vi.fn().mockResolvedValue(undefined) });
+    mockCheck.mockResolvedValueOnce(first).mockResolvedValueOnce(makeUpdate());
+    await checkForUpdates();
+    await checkForUpdates();
+    expect(first.close).toHaveBeenCalledOnce();
+  });
+});
+
+describe('startUpdateChecks', () => {
+  // A check resolves over several ticks (dynamic import, then check()); wait for
+  // its result rather than guessing a tick count, so none leaks into the next test.
+  const until = (assertion: () => void) => vi.waitFor(assertion);
+
+  const fakeFocusTarget = () => {
+    const listeners = new Set<() => void>();
+    return {
+      addEventListener: (_: string, fn: () => void) => { listeners.add(fn); },
+      removeEventListener: (_: string, fn: () => void) => { listeners.delete(fn); },
+      fire: () => listeners.forEach((fn) => fn()),
+      size: () => listeners.size,
+    };
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'setInterval', 'clearTimeout', 'clearInterval'] });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('checks shortly after startup, then on every interval', async () => {
+    const results: string[] = [];
+    const stop = startUpdateChecks((_, trigger) => results.push(trigger), { focusTarget: null });
+
+    expect(mockCheck).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(STARTUP_CHECK_DELAY_MS);
+    await until(() => expect(results).toEqual(['startup']));
+
+    await vi.advanceTimersByTimeAsync(CHECK_INTERVAL_MS);
+    await until(() => expect(results).toEqual(['startup', 'interval']));
+    stop();
+  });
+
+  it('re-checks on focus only once the last check has gone stale', async () => {
+    let now = 1_000_000;
+    const target = fakeFocusTarget();
+    const results: string[] = [];
+    const stop = startUpdateChecks((_, trigger) => results.push(trigger), {
+      focusTarget: target,
+      now: () => now,
+    });
+    await vi.advanceTimersByTimeAsync(STARTUP_CHECK_DELAY_MS);
+    await until(() => expect(results).toEqual(['startup']));
+
+    // Fresh: focusing again must not fire another request.
+    target.fire();
+    expect(mockCheck).toHaveBeenCalledTimes(1);
+
+    // The window sat hidden and the interval timer was throttled.
+    now += CHECK_INTERVAL_MS;
+    target.fire();
+    await until(() => expect(results).toEqual(['startup', 'focus']));
+    expect(mockCheck).toHaveBeenCalledTimes(2);
+    stop();
+  });
+
+  it('stops every timer and listener', async () => {
+    const target = fakeFocusTarget();
+    const onResult = vi.fn();
+    const stop = startUpdateChecks(onResult, { focusTarget: target });
+    stop();
+    expect(target.size()).toBe(0);
+    await vi.advanceTimersByTimeAsync(CHECK_INTERVAL_MS * 3);
+    expect(mockCheck).not.toHaveBeenCalled();
+    expect(onResult).not.toHaveBeenCalled();
+  });
+});
+
+describe('reflectUpdateInTray', () => {
+  it('offers the found version', async () => {
+    await reflectUpdateInTray({ available: true, info: { version: '0.0.105', date: '', body: '' } });
+    expect(mockInvoke).toHaveBeenCalledWith('set_update_menu_state', { state: 'available', version: '0.0.105' });
+  });
+
+  it('surfaces a failed check', async () => {
+    await reflectUpdateInTray({ available: false, error: 'offline' });
+    expect(mockInvoke).toHaveBeenCalledWith('set_update_menu_state', { state: 'failed', version: null });
+  });
+
+  it('marks an up-to-date result as current', async () => {
+    await reflectUpdateInTray({ available: false });
+    expect(mockInvoke).toHaveBeenCalledWith('set_update_menu_state', { state: 'current', version: null });
+  });
+
+  it('never throws when the tray cannot be updated', async () => {
+    mockInvoke.mockRejectedValue(new Error('tray not ready'));
+    await expect(reflectUpdateInTray({ available: false })).resolves.toBeUndefined();
+  });
+
+  it('does nothing outside Tauri', async () => {
+    await reflectUpdateInTray({ available: false, unsupported: true });
+    expect(mockInvoke).not.toHaveBeenCalled();
+  });
+});
+
+describe('downloadProgressReporter', () => {
+  it('reports each whole percent once', () => {
+    const statuses: string[] = [];
+    const report = downloadProgressReporter((s) => statuses.push(s));
+    report({ event: 'Started', data: { contentLength: 1000 } });
+    report({ event: 'Progress', data: { chunkLength: 1 } });
+    report({ event: 'Progress', data: { chunkLength: 1 } });
+    report({ event: 'Progress', data: { chunkLength: 998 } });
+    expect(statuses).toEqual(['Downloading update...', 'Downloading update... 0%', 'Downloading update... 100%']);
+  });
+
+  it('stays on the plain label when the size is unknown', () => {
+    const statuses: string[] = [];
+    const report = downloadProgressReporter((s) => statuses.push(s));
+    report({ event: 'Started', data: {} });
+    report({ event: 'Progress', data: { chunkLength: 500 } });
+    expect(statuses).toEqual(['Downloading update...']);
   });
 });
 

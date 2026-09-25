@@ -112,6 +112,26 @@ jobs:
           --bundles ${{ matrix.platform == 'chromebook' && 'appimage,deb' || 'appimage,deb,rpm' }}
           --config '${{ steps.build-mode.outputs.config }}'
 
+      # The bundler signs only the AppImage tarball, but an app installed from a
+      # .deb/.rpm updates from a .deb/.rpm (the updater picks by install type), so
+      # those need signatures of their own for latest.json.
+      - name: Sign deb/rpm for the updater
+        if: steps.build-mode.outputs.mode == 'release'
+        working-directory: apps/desktop
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+        run: |
+          shopt -s nullglob
+          for pkg in src-tauri/target/release/bundle/deb/*.deb src-tauri/target/release/bundle/rpm/*.rpm; do
+            if [ -f "$pkg.sig" ]; then
+              echo "Already signed: $pkg"
+            else
+              echo "Signing: $pkg"
+              pnpm exec tauri signer sign "$pkg"
+            fi
+          done
+
       - name: Collect and normalize assets
         if: steps.build-mode.outputs.mode == 'release'
         run: |

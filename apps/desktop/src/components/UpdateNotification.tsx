@@ -1,9 +1,14 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import {
   checkForUpdates,
   installUpdate,
   getCurrentVersion,
+  isTauri,
+  reflectUpdateInTray,
+  startUpdateChecks,
+  TRAY_CHECK_EVENT,
   type UpdateInfo,
+  type UpdateStatus,
 } from "../utils/updater";
 import { parseTauriError } from "../utils/appUtils";
 import "./UpdateNotification.css";
@@ -11,7 +16,24 @@ import "./UpdateNotification.css";
 // Stores the version the user last deferred, not a boolean — otherwise "Later"
 // either resets on every relaunch or silently swallows every future release.
 const DISMISSED_KEY = "calimero-update-dismissed-version";
-const CHECK_INTERVAL_MS = 60 * 60 * 1000;
+// How long the "you're up to date" answer to a manual check stays on screen.
+const UP_TO_DATE_NOTICE_MS = 5000;
+
+// The outcome of a check the user asked for (tray menu). Background checks
+// never produce one: an offline laptop must not grow an error card every hour,
+// but a question the user asked always gets an answer.
+type ManualNotice =
+  | { kind: "checking" }
+  | { kind: "current" }
+  | { kind: "failed"; message: string };
+
+function readDismissed(): string | null {
+  try {
+    return localStorage.getItem(DISMISSED_KEY);
+  } catch {
+    return null;
+  }
+}
 
 export default function UpdateNotification() {
   const [updateAvailable, setUpdateAvailable] = useState(false);
@@ -22,28 +44,70 @@ export default function UpdateNotification() {
   const [error, setError] = useState<string | null>(null);
   const [dismissed, setDismissed] = useState(false);
   const [mandatory, setMandatory] = useState(false);
+  const [notice, setNotice] = useState<ManualNotice | null>(null);
 
-  useEffect(() => {
-    getCurrentVersion().then(setCurrentVersion);
-    performUpdateCheck();
-    const interval = setInterval(performUpdateCheck, CHECK_INTERVAL_MS);
-    return () => clearInterval(interval);
-  }, []);
-
-  const performUpdateCheck = async () => {
-    const status = await checkForUpdates();
+  const applyStatus = useCallback((status: UpdateStatus, manual: boolean) => {
+    if (status.unsupported) return;
+    reflectUpdateInTray(status);
     if (status.available && status.info) {
       setUpdateAvailable(true);
       setUpdateInfo(status.info);
       setMandatory(!!status.mandatory);
+      // A manual check is the user asking to see it, so it overrides "Later".
       setDismissed(
-        !status.mandatory &&
-          localStorage.getItem(DISMISSED_KEY) === status.info.version,
+        !manual &&
+          !status.mandatory &&
+          readDismissed() === status.info.version,
       );
-    } else if (status.error) {
-      console.warn("Update check failed:", status.error);
+      setNotice(null);
+      return;
     }
-  };
+    if (status.error) {
+      console.error("Update check failed:", status.error);
+      if (manual) setNotice({ kind: "failed", message: status.error });
+      return;
+    }
+    // Up to date. Clear a banner a newer check has superseded.
+    setUpdateAvailable(false);
+    setUpdateInfo(null);
+    setMandatory(false);
+    if (manual) setNotice({ kind: "current" });
+  }, []);
+
+  const checkNow = useCallback(async () => {
+    setNotice({ kind: "checking" });
+    applyStatus(await checkForUpdates(), true);
+  }, [applyStatus]);
+
+  useEffect(() => {
+    getCurrentVersion().then(setCurrentVersion);
+    return startUpdateChecks((status) => applyStatus(status, false));
+  }, [applyStatus]);
+
+  // "Check for Updates…" in the tray menu. The Rust side has already shown the
+  // main window, so the answer lands where the user is looking.
+  useEffect(() => {
+    if (!isTauri()) return;
+    let off: (() => void) | undefined;
+    let cancelled = false;
+    import("@tauri-apps/api/event")
+      .then(({ listen }) => listen(TRAY_CHECK_EVENT, () => { checkNow(); }))
+      .then((unlisten) => {
+        if (cancelled) unlisten();
+        else off = unlisten;
+      })
+      .catch((e) => console.warn("[updater] tray listener failed:", e));
+    return () => {
+      cancelled = true;
+      off?.();
+    };
+  }, [checkNow]);
+
+  useEffect(() => {
+    if (notice?.kind !== "current") return;
+    const t = setTimeout(() => setNotice(null), UP_TO_DATE_NOTICE_MS);
+    return () => clearTimeout(t);
+  }, [notice]);
 
   const handleInstall = async () => {
     setInstalling(true);
@@ -60,14 +124,56 @@ export default function UpdateNotification() {
 
   const handleDismiss = () => {
     if (updateInfo) {
-      localStorage.setItem(DISMISSED_KEY, updateInfo.version);
+      try {
+        localStorage.setItem(DISMISSED_KEY, updateInfo.version);
+      } catch {
+        // Storage unavailable: "Later" still hides it for this session.
+      }
     }
     setDismissed(true);
   };
 
-  // Don't render if no update or dismissed
   if (!updateAvailable || dismissed || !updateInfo) {
-    return null;
+    if (!notice) return null;
+    return (
+      <div className="update-notification" role="status" aria-live="polite">
+        <div className="update-notification-content">
+          <div className="update-notification-text">
+            <h4>
+              {notice.kind === "checking"
+                ? "Checking for updates…"
+                : notice.kind === "current"
+                  ? "You're up to date"
+                  : "Update check failed"}
+            </h4>
+            {notice.kind === "current" && currentVersion && (
+              <p>Calimero Desktop {currentVersion} is the latest version.</p>
+            )}
+            {notice.kind === "failed" && (
+              <p className="update-error-detail">{notice.message}</p>
+            )}
+          </div>
+          {notice.kind !== "checking" && (
+            <div className="update-notification-actions">
+              {notice.kind === "failed" && (
+                <button
+                  className="update-button update-button-primary"
+                  onClick={checkNow}
+                >
+                  Retry
+                </button>
+              )}
+              <button
+                className="update-button update-button-secondary"
+                onClick={() => setNotice(null)}
+              >
+                Close
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    );
   }
 
   return (

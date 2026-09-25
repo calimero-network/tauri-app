@@ -157,3 +157,8 @@
     justify-content: flex-end;
   }
 }
+
+.update-notification-text .update-error-detail {
+  color: var(--error);
+  word-break: break-word;
+}

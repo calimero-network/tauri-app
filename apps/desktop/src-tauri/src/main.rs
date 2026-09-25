@@ -3583,6 +3583,44 @@ async fn set_tray_icon_connected(
         .map_err(|e| TauriError::new(TauriErrorCode::WindowOperationFailed, e.to_string()))
 }
 
+/// Tray menu id of the "Check for Updates…" item.
+const TRAY_CHECK_UPDATES_ID: &str = "check-updates";
+/// Event that item emits to the main window, which runs the check.
+/// Must match `TRAY_CHECK_EVENT` in src/utils/updater.ts.
+const TRAY_CHECK_UPDATES_EVENT: &str = "tray-check-for-updates";
+
+/// The tray's update item, kept so a check's outcome can relabel it. While the
+/// main window is hidden the tray is the only place an update can be noticed.
+struct UpdateMenuItem(MenuItem<tauri::Wry>);
+
+/// Label of the tray's update item for the outcome of the latest check.
+fn update_menu_label(state: &str, version: Option<&str>) -> String {
+    match (state, version) {
+        ("available", Some(v)) if !v.is_empty() => {
+            format!("Install Update v{}…", v.trim_start_matches('v'))
+        }
+        ("available", _) => "Install Update…".to_string(),
+        ("failed", _) => "Check for Updates… (last check failed)".to_string(),
+        _ => "Check for Updates…".to_string(),
+    }
+}
+
+/// Relabels the tray's update item after a check: `state` is `available`,
+/// `current` or `failed`, and `version` the offered version when available.
+#[tauri::command]
+async fn set_update_menu_state(
+    state: String,
+    version: Option<String>,
+    app_handle: tauri::AppHandle,
+) -> Result<(), TauriError> {
+    let item = app_handle
+        .try_state::<UpdateMenuItem>()
+        .ok_or_else(|| TauriError::new(TauriErrorCode::WindowOperationFailed, "tray not ready"))?;
+    item.0
+        .set_text(update_menu_label(&state, version.as_deref()))
+        .map_err(|e| TauriError::new(TauriErrorCode::WindowOperationFailed, e.to_string()))
+}
+
 #[tauri::command]
 async fn pick_directory(
     app_handle: tauri::AppHandle,
@@ -4212,8 +4250,16 @@ fn main() {
 
             // System tray with context menu
             let show_i = MenuItem::with_id(app, "show", "Show Calimero", true, None::<&str>)?;
+            let updates_i = MenuItem::with_id(
+                app,
+                TRAY_CHECK_UPDATES_ID,
+                update_menu_label("idle", None),
+                true,
+                None::<&str>,
+            )?;
             let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let tray_menu = Menu::with_items(app, &[&show_i, &quit_i])?;
+            let tray_menu = Menu::with_items(app, &[&show_i, &updates_i, &quit_i])?;
+            app.manage(UpdateMenuItem(updates_i));
             let tray_icon =
                 tauri::image::Image::from_bytes(include_bytes!("../icons/tray-icon.png"))?;
             let _tray = TrayIconBuilder::with_id("main-tray")
@@ -4225,6 +4271,17 @@ fn main() {
                         if let Some(window) = app.get_webview_window("main") {
                             let _ = window.show();
                             let _ = window.set_focus();
+                        }
+                    }
+                    TRAY_CHECK_UPDATES_ID => {
+                        // The check (and its answer) lives in the main window's
+                        // UpdateNotification; show it so the answer is seen.
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                        if let Err(e) = app.emit_to("main", TRAY_CHECK_UPDATES_EVENT, ()) {
+                            log::warn!("tray: could not request an update check: {e}");
                         }
                     }
                     "quit" => {
@@ -4403,6 +4460,7 @@ fn main() {
             remove_merod_version,
             repoint_local_build,
             set_tray_icon_connected,
+            set_update_menu_state,
             delete_calimero_data_dir,
             clear_app_sessions,
             remove_app_launchers,
@@ -4438,9 +4496,33 @@ fn main() {
 mod tests {
     use super::{
         launcher_bundle_is_removable, merod_target_triple, parse_app_deep_link, parse_node_ports,
-        replace_multiaddr_port, score_merod_asset, DEFAULT_NODE_PORTS,
+        replace_multiaddr_port, score_merod_asset, update_menu_label, DEFAULT_NODE_PORTS,
     };
     use std::path::Path;
+
+    #[test]
+    fn update_menu_label_offers_the_found_version() {
+        assert_eq!(
+            update_menu_label("available", Some("0.0.105")),
+            "Install Update v0.0.105…"
+        );
+        // latest.json spells the version with a leading v; never print "vv".
+        assert_eq!(
+            update_menu_label("available", Some("v0.0.105")),
+            "Install Update v0.0.105…"
+        );
+        assert_eq!(update_menu_label("available", None), "Install Update…");
+    }
+
+    #[test]
+    fn update_menu_label_surfaces_a_failed_check() {
+        assert_eq!(
+            update_menu_label("failed", None),
+            "Check for Updates… (last check failed)"
+        );
+        assert_eq!(update_menu_label("current", None), "Check for Updates…");
+        assert_eq!(update_menu_label("idle", None), "Check for Updates…");
+    }
 
     /// Two node homes that differ, for the tests that match tracked state on one.
     const HOME_A: &str = "/tmp/calimero-test-home-a";

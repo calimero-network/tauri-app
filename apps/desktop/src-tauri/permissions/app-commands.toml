@@ -52,6 +52,7 @@ commands.allow = [
   "remove_merod_version",
   "repoint_local_build",
   "set_tray_icon_connected",
+  "set_update_menu_state",
   "delete_calimero_data_dir",
   "clear_app_sessions",
   "remove_app_launchers",

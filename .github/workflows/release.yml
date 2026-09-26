@@ -181,8 +181,12 @@ jobs:
             # that URL with a 404 — every client checking in that window saw a
             # failed update check. It goes public once every asset is in place.
             echo "Creating draft release v$VERSION"
+            # --target: a dispatched release has no tag yet, and without it
+            # the tag lands on master's head when this job runs, which may be
+            # past the commit the platform jobs built. GITHUB_SHA is that commit.
             gh release create "v$VERSION" \
               --repo "${{ github.repository }}" \
+              --target "$GITHUB_SHA" \
               --title "v$VERSION" \
               --notes-file release-notes.md \
               --draft

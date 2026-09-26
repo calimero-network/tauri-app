@@ -1,0 +1,87 @@
+name: Release on version bump
+
+# Cuts the release for a version bump that lands on master, so a merged bump
+# PR (core's fleet-bump opens one per merod release) ships without anyone
+# pushing the tag by hand -- which is the step that kept being missed: 0.0.106
+# and 0.0.107 both sat on master unreleased until someone noticed.
+#
+# It dispatches release.yml rather than pushing the tag. A tag pushed with the
+# workflow's GITHUB_TOKEN does not start other workflows, so the tag-triggered
+# release would never run; workflow_dispatch is the one event that token may
+# start. release.yml then creates the v<version> tag and release itself, as it
+# does for a manual dispatch.
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - apps/desktop/src-tauri/tauri.conf.json
+
+concurrency:
+  group: release-on-version-bump
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  dispatch:
+    name: Dispatch release for a new version
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Read the version
+        id: version
+        run: |
+          set -euo pipefail
+          VERSION="$(jq -r '.version' apps/desktop/src-tauri/tauri.conf.json)"
+          PKG_VERSION="$(jq -r '.version' apps/desktop/package.json)"
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+            echo "::error::tauri.conf.json version '$VERSION' is not a release version"
+            exit 1
+          fi
+          # The app reports tauri.conf.json's version and the updater compares
+          # against it; a package.json that disagrees means a half-applied bump.
+          if [ "$VERSION" != "$PKG_VERSION" ]; then
+            echo "::error::tauri.conf.json is $VERSION but apps/desktop/package.json is $PKG_VERSION; not releasing a half-applied bump"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Skip a version that is already released
+        id: existing
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          # The tag covers a published release and a hand-pushed tag. A release
+          # still uploading is a draft with no tag yet, so check releases too:
+          # otherwise a second push during that window dispatches it twice.
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/v${VERSION}" > /dev/null 2>&1 \
+            || gh release view "v${VERSION}" --repo "${GITHUB_REPOSITORY}" > /dev/null 2>&1; then
+            echo "v${VERSION} already exists; nothing to release"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Dispatch release.yml
+        if: steps.existing.outputs.skip == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          gh workflow run release.yml --repo "${GITHUB_REPOSITORY}" --ref master -f version="${VERSION}"
+          {
+            echo "## Release v${VERSION} dispatched"
+            echo ""
+            echo "The version on master changed to ${VERSION} and no v${VERSION} tag or release existed."
+            echo "Follow it under Actions → Release."
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -57,7 +57,7 @@ The desktop app automatically checks for updates on startup and periodically. Wh
 
 ## Releases
 
-Releases are **tag-based**. Pushing a `vX.Y.Z` tag triggers the release workflow, which builds desktop bundles for macOS, Windows, and Linux in parallel and creates a GitHub Release.
+Releases are **tag-based**. Merging a version bump to `master` releases it automatically (it dispatches the release workflow, which tags `vX.Y.Z`); pushing a `vX.Y.Z` tag by hand still works for anything else. The release workflow builds desktop bundles for macOS, Windows, and Linux in parallel and creates a GitHub Release.
 
 See [RELEASES.md](./RELEASES.md) for detailed release process documentation.
 

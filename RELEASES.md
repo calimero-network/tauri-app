@@ -41,7 +41,24 @@ Calimero Desktop uses a fully automated, multi-platform release pipeline:
 
 ## Creating a Release
 
-### Using Git Tags (Recommended)
+### Bumping the version (automatic)
+
+A push to `master` that changes the version in `apps/desktop/src-tauri/tauri.conf.json`
+releases it: `.github/workflows/release-on-version-bump.yml` dispatches
+`release.yml` with that version, which builds, tags `v<version>` at the pushed commit,
+and publishes. So merging a version bump is the whole release, including the
+`chore: bundle merod … and cut a new desktop version` PRs core's fleet-bump opens.
+
+- It does nothing if `v<version>` already exists as a tag or a (draft) release.
+- It refuses to release if `apps/desktop/package.json` has a different version.
+- Do **not** also push the tag by hand for a bumped version. The tag-triggered and
+  dispatched runs are separate and would race to create the same release.
+
+It dispatches instead of pushing the tag because a tag pushed with the workflow's
+`GITHUB_TOKEN` does not start other workflows, so the tag-triggered release would
+never run.
+
+### Using Git Tags
 
 ```bash
 # Ensure local master is up to date

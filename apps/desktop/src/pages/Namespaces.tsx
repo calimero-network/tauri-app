@@ -22,6 +22,12 @@ import {
   enableHaForNamespace,
   disableHaNamespace,
   getCloudNamespaces,
+  getCloudMachines,
+  getFleetMeasurements,
+  releaseStanding,
+  type CloudMachine,
+  type MeasurementMatch,
+  type ReleaseStanding,
   ensureTeeAdmissionPolicy,
   CloudSessionExpiredError,
 } from "../utils/cloudApi";
@@ -84,6 +90,42 @@ const DEFAULT_NAMESPACE_CAPABILITIES = 1 | 2 | 8;
 // Bounded self-heal for the reconcile (see the reconcile effect): retry a
 // namespace whose cleanup left work undone up to this many times, spaced by
 // this interval, before surfacing the "couldn't finish" toast.
+// Wording for what a fleet machine proved. The verdicts come from the cloud;
+// only the phrasing is here, so what a user reads cannot drift from what
+// admission actually decided.
+const MEASUREMENT_MATCH_LABEL: Record<MeasurementMatch, string> = {
+  match: 'Admitted',
+  mismatch: 'Not admitted',
+  unverified: 'Unverified',
+  not_enforced: 'Unchecked',
+};
+
+const MEASUREMENT_MATCH_HELP: Record<MeasurementMatch, string> = {
+  match:
+    "This machine's attested measurements are all in the list this namespace admits.",
+  mismatch:
+    'This machine is running an image this namespace does not admit, so it cannot ' +
+    'replicate here. Recreating it on the current release is the fix.',
+  unverified:
+    'This machine never registered an attestation, so it has proved nothing.',
+  not_enforced:
+    'This namespace carries no measurement allowlist, so admission checked nothing.',
+};
+
+const RELEASE_STANDING_LABEL: Record<ReleaseStanding, string> = {
+  current: 'Current image',
+  behind: 'Older image',
+  unknown: 'Image unknown',
+};
+
+const RELEASE_STANDING_HELP: Record<ReleaseStanding, string> = {
+  current: 'Running the image the fleet publishes today.',
+  behind:
+    'Running a published image, but not the current one. A machine cannot be ' +
+    'upgraded in place — it has to be recreated.',
+  unknown: 'Nothing to compare: this machine has no attested RTMR3 on record.',
+};
+
 const RECONCILE_MAX_RETRIES = 5;
 const RECONCILE_RETRY_MS = 30_000;
 
@@ -995,6 +1037,40 @@ function Namespaces() {
       .catch(() => {});
     return () => { cancelled = true; };
   }, []);
+
+  // ── What is actually serving this namespace, and on which image ──
+  //
+  // `attestation` is what each machine PROVED — measurements read out of a
+  // verified quote at registration, not values it reported — and
+  // `measurement_match` is that machine against what THIS namespace admits.
+  // Both come from the cloud already; nothing here re-derives them.
+  //
+  // Worth showing because the failure it makes visible is otherwise silent:
+  // admission happens on this node, over p2p, so a machine running an image
+  // the namespace does not admit is refused with nothing said anywhere. It
+  // stays `assigned`, its heartbeat keeps arriving, and the namespace simply
+  // never gains a replica.
+  const [nsMachines, setNsMachines] = useState<CloudMachine[]>([]);
+  const [fleetRtmr3, setFleetRtmr3] = useState<string[] | null>(null);
+
+  useEffect(() => {
+    const token = getCloudIdToken();
+    if (!token) return;
+    let cancelled = false;
+    // Both are decoration: a failure leaves the section out rather than
+    // breaking the page, which is why neither rejects into a toast.
+    void Promise.all([
+      getCloudMachines(token),
+      getFleetMeasurements(token).catch(() => null),
+    ]).then(([machines, measurements]) => {
+      if (cancelled) return;
+      setNsMachines(machines);
+      setFleetRtmr3(measurements?.allowed_rtmr3 ?? null);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [haEnabled]);
 
   // ── Reconcile: self-heal stranded TEE members ──
   // The post-toggle eviction (in `toggleHa`) is the fast path, but it can
@@ -2170,6 +2246,59 @@ function Namespaces() {
                     {nsHaEnabling ? 'Working...' : nsHaEnabled ? 'Disable HA' : 'Enable High Availability'}
                   </button>
                 </div>
+                {nsHaEnabled && (() => {
+                  const serving = nsMachines
+                    .map((m) => ({
+                      machine: m,
+                      entry: m.namespaces.find(
+                        (n) => n.namespace_id === ns.namespaceId,
+                      ),
+                    }))
+                    .filter((row) => row.entry);
+                  if (!serving.length) {
+                    return (
+                      <p className="empty-hint ha-machines-empty">
+                        No fleet machine is serving this namespace yet.
+                      </p>
+                    );
+                  }
+                  return (
+                    <div className="ha-machines">
+                      <h3 className="ha-machines-title">
+                        Fleet machines ({serving.length})
+                      </h3>
+                      {serving.map(({ machine, entry }) => {
+                        const standing = releaseStanding(
+                          machine.attestation,
+                          fleetRtmr3 ? { allowed_rtmr3: fleetRtmr3 } : null,
+                        );
+                        const verdict = entry!.measurement_match;
+                        return (
+                          <div key={machine.peer_id} className="ha-machine-row">
+                            <code className="ha-machine-peer" title={machine.peer_id}>
+                              {machine.peer_id.slice(0, 12)}…
+                            </code>
+                            <span
+                              className={`ha-machine-badge ha-machine-${verdict}`}
+                              title={MEASUREMENT_MATCH_HELP[verdict]}
+                            >
+                              {MEASUREMENT_MATCH_LABEL[verdict]}
+                            </span>
+                            <span
+                              className={`ha-machine-release ha-machine-release-${standing}`}
+                              title={RELEASE_STANDING_HELP[standing]}
+                            >
+                              {RELEASE_STANDING_LABEL[standing]}
+                            </span>
+                            <span className="ha-machine-seen">
+                              {entry!.fresh ? 'live' : 'stale'}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
               </div>
             );
           })()}

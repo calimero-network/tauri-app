@@ -286,9 +286,58 @@ export function setTeeAdmissionPolicy(
   );
 }
 
+/**
+ * The first node image that names its mero-tee release when it asks to be
+ * admitted. Under a signed-release policy an admitter refuses a TEE that names
+ * none, so the policy is only safe once the fleet serves this or later.
+ */
+export const SIGNED_RELEASE_FIRST_IMAGE = '2.3.74';
+
+/** Image profiles a signed-release policy admits: only the locked image. */
+export const SIGNED_RELEASE_PROFILES = ['locked-read-only'];
+
+/**
+ * Whether the fleet the cloud serves runs an image recent enough for a
+ * signed-release policy. `release_tag` is the release the fleet's measurements
+ * come from (`mero-kms-v2.3.74`; KMS and node releases share a version). An
+ * unreadable tag answers no, so the caller keeps the measurement lists.
+ */
+export function fleetNamesItsRelease(releaseTag: string): boolean {
+  const version = /(\d+)\.(\d+)\.(\d+)/.exec(releaseTag);
+  if (!version) return false;
+  const have = version.slice(1).map(Number);
+  const want = SIGNED_RELEASE_FIRST_IMAGE.split('.').map(Number);
+  for (let i = 0; i < 3; i++) {
+    if (have[i] !== want[i]) return have[i] > want[i];
+  }
+  return true;
+}
+
+/**
+ * Set a signed-release TEE admission policy: admit a TEE on any mero-tee node
+ * release the release workflow signed, if its quote matches one of
+ * `SIGNED_RELEASE_PROFILES`. Unlike the lists, it needs no update when the
+ * fleet moves to a new release.
+ */
+export function setSignedReleaseTeeAdmissionPolicy(groupId: string): Promise<void> {
+  return named(
+    'Failed to set TEE admission policy',
+    admin().setTeeAdmissionPolicy(groupId, {
+      signedRelease: { allowedProfiles: SIGNED_RELEASE_PROFILES },
+      allowedTcbStatuses: [],
+      acceptMock: false,
+    }),
+  );
+}
+
 /** The subset of the merod GET tee-admission-policy response we act on. */
 export interface TeeAdmissionPolicyState {
   enabled: boolean;
+  /**
+   * The policy admits by signed release. Its measurement lists are then empty
+   * by design, so comparing them with the fleet's would read it as stale.
+   */
+  signedRelease: boolean;
   allowedMrtd: string[];
   /**
    * Every register is read back, for the same reason every one is written: a
@@ -327,6 +376,7 @@ export async function getTeeAdmissionPolicy(
     | null;
   return {
     enabled: policy?.enabled === true,
+    signedRelease: policy?.signedRelease != null,
     allowedMrtd: hexList(policy?.allowedMrtd),
     allowedRtmr0: hexList(policy?.allowedRtmr0),
     allowedRtmr1: hexList(policy?.allowedRtmr1),
@@ -379,6 +429,9 @@ export async function ensureTeeAdmissionPolicy(
   }
 
   const current = await getTeeAdmissionPolicy(namespaceId);
+  // A signed-release policy is never replaced with lists: it does not go stale
+  // when the fleet rolls forward, which is the point of it.
+  if (current.enabled && current.signedRelease) return 'ok';
   const sameSet = (want: string[], have: string[]) =>
     new Set(have).size === new Set(want).size && want.every((m) => have.includes(m));
   // Register by register, because the policy is written register by register: a
@@ -784,15 +837,23 @@ export async function enableHaForNamespace(
 
   // ── Step 2–4: measurements → tee-policy → register ──
   const measurements = await getFleetMeasurements(idToken);
-  if (!measurements.allowed_mrtd.length || !measurements.allowed_rtmr3.length) {
-    throw new Error(
-      'Incomplete fleet measurements — cannot set admission policy. Core requires at least one MRTD and at least one RTMR3.',
-    );
-  }
 
   // The namespace root's group_id equals the namespaceId. Set the policy
   // there and only there — subgroups inherit it via resolve-to-root.
-  await setTeeAdmissionPolicy(namespaceId, measurements);
+  //
+  // A fleet on an image that names its release gets the signed-release
+  // policy, which never needs re-authoring. An older fleet keeps the lists:
+  // its nodes name no release, and a signed-release policy would refuse them.
+  if (fleetNamesItsRelease(measurements.release_tag)) {
+    await setSignedReleaseTeeAdmissionPolicy(namespaceId);
+  } else {
+    if (!measurements.allowed_mrtd.length || !measurements.allowed_rtmr3.length) {
+      throw new Error(
+        'Incomplete fleet measurements — cannot set admission policy. Core requires at least one MRTD and at least one RTMR3.',
+      );
+    }
+    await setTeeAdmissionPolicy(namespaceId, measurements);
+  }
 
   // Namespace path: send an empty group list plus exactly ONE
   // namespace-scoped ownership proof. merod gates proof

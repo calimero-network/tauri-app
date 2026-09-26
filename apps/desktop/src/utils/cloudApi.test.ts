@@ -31,6 +31,7 @@ import {
   enableHaForNamespace,
   getCloudNamespaces,
   ensureTeeAdmissionPolicy,
+  fleetNamesItsRelease,
   CLOUD_BASE_URL,
 } from './cloudApi';
 
@@ -492,6 +493,59 @@ describe('enableHaForNamespace', () => {
     });
   });
 
+  // Every enable-HA mock is the same but for the release the fleet serves.
+  const enableHaRoutes = (releaseTag: string, onPolicy: (body: any) => void) =>
+    (url: string, init?: RequestInit) =>
+      route(url, init, {
+        '/admin-api/groups/ns-root/members': () =>
+          jsonResponse({ members: [{ identity: 'me', role: 'Admin' }] }),
+        '/admin-api/groups/ns-root/issue-namespace-ownership-proof': () =>
+          jsonResponse({ signerPublicKey: 'pk', signedPayload: 'sp', signature: 'sig' }),
+        '/api/cloud/fleet/measurements': () =>
+          jsonResponse({
+            release_tag: releaseTag,
+            allowed_mrtd: ['mrtd-1'],
+            allowed_rtmr0: ['rtmr0-1'],
+            allowed_rtmr1: ['rtmr1-1'],
+            allowed_rtmr2: ['rtmr2-1'],
+            allowed_rtmr3: ['rtmr3-1'],
+          }),
+        '/admin-api/groups/ns-root/settings/tee-admission-policy': () => {
+          onPolicy(JSON.parse(String(init?.body)));
+          return new Response('{}', { status: 200 });
+        },
+        '/api/cloud/me/namespaces/ns-root/enable-ha': () =>
+          jsonResponse({ status: 'enabling', namespace_id: 'ns-root', groups: [] }),
+      });
+
+  it('sets a signed-release policy when the fleet serves an image that names its release', async () => {
+    let policy: any;
+    const { restore: r } = installFetch(
+      enableHaRoutes('mero-kms-v2.3.74', (body) => (policy = body)),
+    );
+    restore = r;
+    await enableHaForNamespace(makeJwt({ iss: 'mdma', email: 'u@e' }), 'ns-root', []);
+    // No measurement lists: they would be stale at the next release.
+    expect(policy).toEqual({
+      signedRelease: { allowedProfiles: ['locked-read-only'] },
+      allowedTcbStatuses: [],
+      acceptMock: false,
+    });
+  });
+
+  it('keeps the measurement lists for a fleet whose nodes name no release', async () => {
+    // A signed-release policy refuses a TEE that names no release, so on a
+    // 2.3.73 fleet it would admit nobody.
+    let policy: any;
+    const { restore: r } = installFetch(
+      enableHaRoutes('mero-kms-v2.3.73', (body) => (policy = body)),
+    );
+    restore = r;
+    await enableHaForNamespace(makeJwt({ iss: 'mdma', email: 'u@e' }), 'ns-root', []);
+    expect(policy.signedRelease).toBeUndefined();
+    expect(policy.allowedRtmr3).toEqual(['rtmr3-1']);
+  });
+
   it('throws a clear error when the MDMA session JWT lacks an identifier', async () => {
     const { restore: r } = installFetch(() => jsonResponse({}));
     restore = r;
@@ -728,6 +782,35 @@ describe('ensureTeeAdmissionPolicy', () => {
     expect(putBody?.allowedMrtd).toEqual(['mrtd-1']);
   });
 
+  it("leaves a signed-release policy alone ('ok', no PUT), though its lists are empty", async () => {
+    const { calls, restore: r } = installFetch((url, init) =>
+      route(url, init, {
+        '/members': membersAdmin,
+        '/fleet/measurements': () => measurements(['mrtd-1']),
+        '/tee-admission-policy': () =>
+          jsonResponse({
+            enabled: true,
+            allowedMrtd: [],
+            allowedRtmr0: [],
+            allowedRtmr1: [],
+            allowedRtmr2: [],
+            allowedRtmr3: [],
+            signedRelease: { allowedProfiles: ['locked-read-only'] },
+          }),
+      }),
+    );
+    restore = r;
+    await expect(
+      ensureTeeAdmissionPolicy(idToken(), 'ns-root'),
+    ).resolves.toBe('ok');
+    expect(
+      calls.some(
+        (c) =>
+          c.init?.method === 'PUT' && c.url.includes('/tee-admission-policy'),
+      ),
+    ).toBe(false);
+  });
+
   it('re-authors when the policy is stale (MRTD rotated — different set)', async () => {
     let putBody: { allowedMrtd?: unknown } | undefined;
     const { restore: r } = installFetch((url, init) =>
@@ -748,5 +831,21 @@ describe('ensureTeeAdmissionPolicy', () => {
       ensureTeeAdmissionPolicy(idToken(), 'ns-root'),
     ).resolves.toBe('reasserted');
     expect(putBody?.allowedMrtd).toEqual(['mrtd-NEW']);
+  });
+});
+
+describe('fleetNamesItsRelease', () => {
+  it('is true from the first image that names its release, whatever the tag prefix', () => {
+    expect(fleetNamesItsRelease('mero-kms-v2.3.74')).toBe(true);
+    expect(fleetNamesItsRelease('2.3.80')).toBe(true);
+    expect(fleetNamesItsRelease('v2.4.0')).toBe(true);
+    expect(fleetNamesItsRelease('mero-kms-v3.0.0')).toBe(true);
+  });
+
+  it('is false before it, and for a tag it cannot read', () => {
+    expect(fleetNamesItsRelease('mero-kms-v2.3.73')).toBe(false);
+    expect(fleetNamesItsRelease('mero-kms-v2.2.99')).toBe(false);
+    expect(fleetNamesItsRelease('v1')).toBe(false);
+    expect(fleetNamesItsRelease('')).toBe(false);
   });
 });

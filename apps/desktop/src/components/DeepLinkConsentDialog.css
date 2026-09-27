@@ -1,0 +1,43 @@
+.deep-link-consent p {
+  margin: 0 0 12px;
+  color: var(--text-primary);
+}
+
+.deep-link-consent-facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px 12px;
+  margin: 0 0 12px;
+  font-size: 13px;
+}
+
+.deep-link-consent-facts dt {
+  color: var(--text-secondary);
+}
+
+.deep-link-consent-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.deep-link-consent-warning {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  border: 1px solid var(--error-border);
+  background: var(--error-bg);
+}
+
+.deep-link-consent-warning svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--error);
+}
+
+.deep-link-consent-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}

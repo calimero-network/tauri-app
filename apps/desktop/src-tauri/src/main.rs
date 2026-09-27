@@ -932,6 +932,10 @@ async fn open_app_launcher(
     icon: Option<String>,
     node_url: String,
 ) -> Result<String, TauriError> {
+    // The launcher's shell hands this URL the node session, so check it here,
+    // before a bundle pointing at it is ever written.
+    calimero_tauri_app::webview::validate_app_frontend_url(&frontend_url)
+        .map_err(|e| TauriError::new(TauriErrorCode::InvalidUrl, e))?;
     tokio::task::spawn_blocking(move || {
         open_app_launcher_blocking(app_handle, app_name, frontend_url, app_id, icon, node_url)
     })
@@ -1230,14 +1234,9 @@ async fn create_app_window(
     node_url: Option<String>,
     isolation_key: Option<String>,
 ) -> Result<(), TauriError> {
-    // Parse URL up front to fail fast on invalid input.
-    let _parsed_url = url.parse::<url::Url>().map_err(|e| {
-        TauriError::with_details(
-            TauriErrorCode::InvalidUrl,
-            format!("Invalid URL '{}'", url),
-            e.to_string(),
-        )
-    })?;
+    // Fail before any window exists: the page would receive the node session.
+    let parsed_url = calimero_tauri_app::webview::validate_app_frontend_url(&url)
+        .map_err(|e| TauriError::new(TauriErrorCode::InvalidUrl, e))?;
 
     // Inject fetch interceptor to proxy node requests through Tauri
     // Since calimero-client-js now uses fetch instead of Axios, we only need fetch interception
@@ -1255,13 +1254,7 @@ async fn create_app_window(
     let mut builder = WebviewWindowBuilder::new(
         &app_handle,
         &window_label,
-        WebviewUrl::External(url.parse::<url::Url>().map_err(|e| {
-            TauriError::with_details(
-                TauriErrorCode::InvalidUrl,
-                format!("Invalid URL '{}'", url),
-                e.to_string(),
-            )
-        })?),
+        WebviewUrl::External(parsed_url),
     )
     .title(&title)
     .inner_size(1200.0, 800.0)

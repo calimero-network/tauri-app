@@ -23,11 +23,20 @@ vi.mock("../utils/appUtils", () => ({
   appendParamsToUrl: (url: string, params: string) => (params ? `${url}?${params}` : url),
   decodeMetadata: (m: unknown) => m,
   sleep: () => Promise.resolve(),
+  isAllowedAppFrontendUrl: (url: string) => url.startsWith("https://"),
 }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
-import { resolveAndOpen, supersede, type Reporter } from "./useAppDeepLink";
+import {
+  resolveAndOpen,
+  supersede,
+  type DeepLinkConsentRequest,
+  type Reporter,
+} from "./useAppDeepLink";
+
+/** The user agreeing to whatever they are asked; each question is recorded. */
+const agree = vi.fn(async (_req: DeepLinkConsentRequest) => true);
 
 /** A Reporter that records what the user would have been shown. */
 function recorder() {
@@ -57,6 +66,7 @@ const INSTALLED = {
 beforeEach(() => {
   vi.clearAllMocks();
   openAppFrontend.mockResolvedValue(undefined);
+  agree.mockImplementation(async () => true);
 });
 
 describe("a deep link always tells the user what happened", () => {
@@ -64,7 +74,7 @@ describe("a deep link always tells the user what happened", () => {
     listInstalledApps.mockResolvedValue({ data: [INSTALLED] });
     const r = recorder();
 
-    expect(await resolveAndOpen(LINK, r.report)).toBe("opened");
+    expect(await resolveAndOpen(LINK, r.report, agree)).toBe("opened");
 
     // The action is named, because "Opening…" alone does not tell the user
     // their invite was understood.
@@ -88,7 +98,7 @@ describe("a deep link always tells the user what happened", () => {
     installApplication.mockResolvedValue({ data: { applicationId: "app-1" } });
     const r = recorder();
 
-    expect(await resolveAndOpen(LINK, r.report)).toBe("opened");
+    expect(await resolveAndOpen(LINK, r.report, agree)).toBe("opened");
 
     expect(r.shown.some((m) => m.includes("Installing") && m.includes("1.2.3"))).toBe(true);
     expect(r.done.some((m) => m.includes("Installed"))).toBe(true);
@@ -103,7 +113,7 @@ describe("a deep link always tells the user what happened", () => {
     fetchAppsFromRegistry.mockResolvedValue([]);
     const r = recorder();
 
-    expect(await resolveAndOpen(LINK, r.report)).toBe("forget");
+    expect(await resolveAndOpen(LINK, r.report, agree)).toBe("forget");
     expect(r.failures).toHaveLength(1);
     expect(r.failures[0]).toContain("not published");
     expect(r.cleared).toEqual(r.shown);
@@ -115,7 +125,7 @@ describe("a deep link always tells the user what happened", () => {
     installApplication.mockResolvedValue({ error: { message: "bundle rejected: minRuntimeVersion" } });
     const r = recorder();
 
-    expect(await resolveAndOpen(LINK, r.report)).toBe("forget");
+    expect(await resolveAndOpen(LINK, r.report, agree)).toBe("forget");
     expect(r.failures[0]).toContain("bundle rejected: minRuntimeVersion");
   });
 
@@ -125,7 +135,7 @@ describe("a deep link always tells the user what happened", () => {
     });
     const r = recorder();
 
-    expect(await resolveAndOpen(LINK, r.report)).toBe("forget");
+    expect(await resolveAndOpen(LINK, r.report, agree)).toBe("forget");
     expect(r.failures[0]).toContain("no frontend");
   });
 
@@ -135,7 +145,7 @@ describe("a deep link always tells the user what happened", () => {
     listInstalledApps.mockResolvedValue({ error: { message: "node not ready" } });
     const r = recorder();
 
-    expect(await resolveAndOpen(LINK, r.report)).toBe("retry");
+    expect(await resolveAndOpen(LINK, r.report, agree)).toBe("retry");
     expect(r.failures).toEqual([]);
     expect(r.shown).toEqual([]);
   });
@@ -159,7 +169,7 @@ describe("a deep link always tells the user what happened", () => {
     };
     const drainReport = supersede(stop, r.report);
 
-    expect(await resolveAndOpen(LINK, drainReport)).toBe("retry");
+    expect(await resolveAndOpen(LINK, drainReport, agree)).toBe("retry");
     // Nothing was said, so the drain puts the waiting message up.
     waiting = true;
 
@@ -175,10 +185,135 @@ describe("a deep link always tells the user what happened", () => {
       failed: (m) => drainReport.failed(m),
       done: (m) => drainReport.done(m),
     };
-    expect(await resolveAndOpen(LINK, watched)).toBe("opened");
+    expect(await resolveAndOpen(LINK, watched, agree)).toBe("opened");
 
     expect(r.shown.some((m) => m.includes("Installing"))).toBe(true);
     expect(seenWhileWaiting).toEqual([]);
     expect(waiting).toBe(false);
+  });
+});
+
+// A deep-link is attacker input: any web page can send the user to
+// calimero://<package>/<action>, and any app window can emit `app-deep-link`.
+describe("a deep link never acts without the user's consent", () => {
+  const PUBLISHED = {
+    id: "com.calimero.drive",
+    name: "Mero Drive",
+    latest_version: "1.2.3",
+    verified: true,
+    publisherVerified: true,
+    links: { frontend: "https://drive.example/app" },
+  };
+
+  it("asks before installing, and installs nothing when the user declines", async () => {
+    listInstalledApps.mockResolvedValue({ data: [] });
+    fetchAppsFromRegistry.mockResolvedValue([PUBLISHED]);
+    const decline = vi.fn(async () => false);
+    const r = recorder();
+
+    expect(await resolveAndOpen(LINK, r.report, decline)).toBe("forget");
+
+    expect(decline).toHaveBeenCalledTimes(1);
+    expect(decline).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "install",
+        pkg: "com.calimero.drive",
+        version: "1.2.3",
+        frontendOrigin: "https://drive.example",
+        params: "invitation=abc",
+        verified: true,
+      }),
+    );
+    expect(installApplication).not.toHaveBeenCalled();
+    expect(openAppFrontend).not.toHaveBeenCalled();
+    // Declining is the user's own answer, not a failure to report.
+    expect(r.failures).toEqual([]);
+    expect(r.cleared).toEqual(r.shown);
+  });
+
+  it("tells the user when the package is unverified", async () => {
+    listInstalledApps.mockResolvedValue({ data: [] });
+    fetchAppsFromRegistry.mockResolvedValue([
+      { ...PUBLISHED, verified: false, publisherVerified: false },
+    ]);
+    const decline = vi.fn(async () => false);
+
+    await resolveAndOpen(LINK, recorder().report, decline);
+
+    expect(decline).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "install", verified: false, publisherVerified: false }),
+    );
+  });
+
+  it("installs exactly the package the link names, never another registry hit", async () => {
+    listInstalledApps.mockResolvedValue({ data: [] });
+    fetchAppsFromRegistry.mockResolvedValue([{ ...PUBLISHED, id: "com.evil.lookalike" }]);
+    const r = recorder();
+
+    expect(await resolveAndOpen(LINK, r.report, agree)).toBe("forget");
+    expect(agree).not.toHaveBeenCalled();
+    expect(installApplication).not.toHaveBeenCalled();
+    expect(r.failures[0]).toContain("not published");
+  });
+
+  it("asks once for an install whose frontend matches what the user saw", async () => {
+    listInstalledApps
+      .mockResolvedValueOnce({ data: [] })
+      .mockResolvedValueOnce({
+        data: [{ ...INSTALLED, metadata: { name: "Mero Drive", links: { frontend: "https://drive.example/app" } } }],
+      });
+    fetchAppsFromRegistry.mockResolvedValue([PUBLISHED]);
+    installApplication.mockResolvedValue({ data: { applicationId: "app-1" } });
+
+    expect(await resolveAndOpen(LINK, recorder().report, agree)).toBe("opened");
+    expect(agree).toHaveBeenCalledTimes(1);
+    expect(openAppFrontend).toHaveBeenCalled();
+  });
+
+  it("asks again when the installed bundle opens somewhere other than the registry said", async () => {
+    listInstalledApps
+      .mockResolvedValueOnce({ data: [] })
+      .mockResolvedValueOnce({
+        data: [{ ...INSTALLED, metadata: { name: "Mero Drive", links: { frontend: "https://elsewhere.example" } } }],
+      });
+    fetchAppsFromRegistry.mockResolvedValue([PUBLISHED]);
+    installApplication.mockResolvedValue({ data: { applicationId: "app-1" } });
+    const consent = vi
+      .fn(async (_req: DeepLinkConsentRequest) => false)
+      .mockResolvedValueOnce(true);
+
+    expect(await resolveAndOpen(LINK, recorder().report, consent)).toBe("forget");
+    expect(consent).toHaveBeenLastCalledWith(
+      expect.objectContaining({ kind: "open", frontendOrigin: "https://elsewhere.example" }),
+    );
+    expect(openAppFrontend).not.toHaveBeenCalled();
+  });
+
+  it("asks before opening an installed app with the link's parameters", async () => {
+    listInstalledApps.mockResolvedValue({ data: [INSTALLED] });
+    const decline = vi.fn(async () => false);
+
+    expect(await resolveAndOpen(LINK, recorder().report, decline)).toBe("forget");
+    expect(decline).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "open",
+        appName: "Mero Drive",
+        frontendOrigin: "https://drive.example",
+        params: "invitation=abc",
+      }),
+    );
+    expect(openAppFrontend).not.toHaveBeenCalled();
+  });
+
+  it("refuses a frontend that is not HTTPS without asking", async () => {
+    listInstalledApps.mockResolvedValue({
+      data: [{ ...INSTALLED, metadata: { name: "Mero Drive", links: { frontend: "http://evil.example" } } }],
+    });
+    const r = recorder();
+
+    expect(await resolveAndOpen(LINK, r.report, agree)).toBe("forget");
+    expect(agree).not.toHaveBeenCalled();
+    expect(openAppFrontend).not.toHaveBeenCalled();
+    expect(r.failures[0]).toContain("HTTPS");
   });
 });

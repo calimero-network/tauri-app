@@ -20,8 +20,8 @@ importers:
   apps/desktop:
     dependencies:
       '@calimero-network/mero-js':
-        specifier: ^19.24.0
-        version: 19.24.0
+        specifier: ^19.26.0
+        version: 19.26.0
       '@calimero-network/mero-react':
         specifier: ^8.0.0
         version: 8.0.0(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
@@ -160,8 +160,8 @@ packages:
     resolution: {integrity: sha512-qQ5m48eI/MFLQ5PxQj4PFaprjyCTLI37ElWMmNs0K8Lk3dVeOdNpB3ks8jc7yM5CDmVC73eMVk/trk3fgmrUpA==}
     engines: {node: '>=6.9.0'}
 
-  '@calimero-network/mero-js@19.24.0':
-    resolution: {integrity: sha512-BBPXeBtYQXVJpOPu7jDFt6Vo5BwBFAvkdt0wZwSGG/D9Ei3nY1UqbFqzz60Zw9yUypMeFP7OB/4mCGUrN4uU6Q==}
+  '@calimero-network/mero-js@19.26.0':
+    resolution: {integrity: sha512-UfvFdwK4CrkonuVGO1+S21bJoTJPx7TfaLh+LlM3aYxxQnBu71zizP9i1hUvR9S2v2rdGYWkEi2FhbjHqduOEw==}
     engines: {node: '>=18.0.0'}
 
   '@calimero-network/mero-react@8.0.0':
@@ -1082,11 +1082,11 @@ snapshots:
       '@babel/helper-string-parser': 7.27.1
       '@babel/helper-validator-identifier': 7.28.5
 
-  '@calimero-network/mero-js@19.24.0': {}
+  '@calimero-network/mero-js@19.26.0': {}
 
   '@calimero-network/mero-react@8.0.0(react-dom@19.2.3(react@19.2.3))(react@19.2.3)':
     dependencies:
-      '@calimero-network/mero-js': 19.24.0
+      '@calimero-network/mero-js': 19.26.0
       react: 19.2.3
       react-dom: 19.2.3(react@19.2.3)
 

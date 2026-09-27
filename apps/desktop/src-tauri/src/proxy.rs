@@ -186,12 +186,22 @@ pub fn validate_allowed_url(url: &str, configured_node_url: Option<&str>) -> Res
     }
 }
 
+/// The node an app window may proxy to: the one it was opened for, and only
+/// while it still shows the app's own page. A caller-supplied node URL is never
+/// trusted, or any page could aim the proxy at any host.
+pub fn node_url_for<R: tauri::Runtime>(webview: &tauri::Webview<R>) -> Result<String, TauriError> {
+    crate::app_window::authorize_webview(webview)
+        .map(|binding| binding.node_url)
+        .map_err(|reason| TauriError::new(TauriErrorCode::UrlNotAllowed, reason))
+}
+
 #[tauri::command]
 pub async fn proxy_http_request(
+    webview: tauri::Webview,
     request: HttpRequest,
-    configured_node_url: Option<String>,
 ) -> Result<HttpResponse, TauriError> {
-    proxy_http_request_inner(request, configured_node_url).await
+    let node_url = node_url_for(&webview)?;
+    proxy_http_request_inner(request, Some(node_url)).await
 }
 
 pub async fn proxy_http_request_inner(
@@ -383,6 +393,7 @@ pub type SseCancelRegistry = std::sync::Arc<
 #[tauri::command]
 pub async fn proxy_sse_stream(
     window: tauri::Window,
+    webview: tauri::Webview,
     url: String,
     auth_header: String,
     stream_id: String,
@@ -399,7 +410,10 @@ pub async fn proxy_sse_stream(
     let chunk_event = format!("sse-chunk-{}", stream_id);
     let end_event = format!("sse-end-{}", stream_id);
 
-    if let Err(reason) = validate_allowed_url(&url, None) {
+    let allowed = node_url_for(&webview)
+        .map_err(|e| e.message)
+        .and_then(|node_url| validate_allowed_url(&url, Some(&node_url)));
+    if let Err(reason) = allowed {
         cancel_registry
             .lock_unpoisoned()
             .remove(&stream_id);

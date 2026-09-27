@@ -1,6 +1,6 @@
 {
   "identifier": "shell-app-window",
-  "description": "IPC access for the shell's external app webview (label 'app'). Grants the injected proxy script + the app page access to the shell's proxy/broker/badge/notify commands. Remote URLs cover any HTTPS-hosted app plus HTTP localhost for the node's own pages, matching the host's app-window capability.",
+  "description": "IPC access for the shell's external app webview (label 'app'). Grants the injected proxy script + the app page access to the shell's proxy/broker/badge/notify commands. Remote URLs cover any HTTPS-hosted app plus HTTP localhost for the node's own pages, matching the host's app-window capability. As there, the proxy and broker commands serve the window only while it shows the app's own origin, and proxy only to the app's node (src/app_window.rs).",
   "windows": [
     "app"
   ],

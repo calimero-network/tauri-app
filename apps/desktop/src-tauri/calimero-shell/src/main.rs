@@ -8,8 +8,8 @@
 #[cfg(target_os = "macos")]
 mod shell {
     use calimero_tauri_app::{
-        ensure_host_running, host_socket_path, proxy, shell_config, shell_instance_socket_path,
-        token_broker_ipc, webview,
+        app_window, ensure_host_running, host_socket_path, proxy, shell_config,
+        shell_instance_socket_path, token_broker_ipc, webview,
     };
     use tauri::Manager;
 
@@ -97,7 +97,12 @@ mod shell {
     /// is running, then relays a refresh over the Unix socket. Returns a fresh
     /// access token only — never a refresh token.
     #[tauri::command]
-    async fn broker_token_refresh(app_handle: tauri::AppHandle) -> Result<String, String> {
+    async fn broker_token_refresh(
+        app_handle: tauri::AppHandle,
+        webview: tauri::Webview,
+    ) -> Result<String, String> {
+        // Only the app this shell was launched for, not a page it navigated to.
+        app_window::authorize_webview(&webview)?;
         let cfg = app_handle.state::<shell_config::ShellConfig>();
         let sock = host_socket_path();
         ensure_host_running(&sock);
@@ -222,6 +227,7 @@ mod shell {
             .manage(proxy::SseCancelRegistry::new(std::sync::Mutex::new(
                 std::collections::HashMap::new(),
             )))
+            .manage(app_window::AppWindowBindings::default())
             .setup(move |app| {
                 // A relaunch of this app connects here; show the existing window.
                 let handle = app.handle().clone();
@@ -235,6 +241,15 @@ mod shell {
                 });
 
                 ensure_host_running(&host_socket_path());
+                // Bind the window to the app's origin and node before its page
+                // exists, so only that page can reach the proxy and broker.
+                let frontend = webview::validate_app_frontend_url(&cfg_for_setup.url)
+                    .map_err(std::io::Error::other)?;
+                app.state::<app_window::AppWindowBindings>().bind(
+                    "app",
+                    &frontend,
+                    &cfg_for_setup.node_url,
+                );
                 // Inject SSO (node_url + brokered token) like the desktop's "Open".
                 let url = build_app_url(&cfg_for_setup);
                 webview::open_app_webview(

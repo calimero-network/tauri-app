@@ -262,11 +262,12 @@ fn validate_node_name(node_name: &str) -> Result<(), String> {
 /// before it stops merod. The shell registers `proxy::proxy_http_request` as-is.
 #[tauri::command]
 async fn proxy_http_request(
+    webview: tauri::Webview,
     request: proxy::HttpRequest,
-    configured_node_url: Option<String>,
 ) -> Result<proxy::HttpResponse, TauriError> {
+    let node_url = proxy::node_url_for(&webview)?;
     let _guard = InFlightGuard::new();
-    proxy::proxy_http_request_inner(request, configured_node_url).await
+    proxy::proxy_http_request_inner(request, Some(node_url)).await
 }
 
 // Refresh tokens are single-use and re-presenting a consumed one revokes the
@@ -354,6 +355,9 @@ async fn broker_token_refresh(
             "Token brokering is not available to a window targeting another node",
         ));
     }
+    // Only the app the window was opened for, not whatever page it shows now.
+    calimero_tauri_app::app_window::authorize_webview(window.as_ref())
+        .map_err(|reason| TauriError::new(TauriErrorCode::PathNotAllowed, reason))?;
     rotate_access_token(&app_handle, &registry)
         .await
         .map_err(|reason| TauriError::new(TauriErrorCode::InternalError, reason))
@@ -1238,6 +1242,16 @@ async fn create_app_window(
     let parsed_url = calimero_tauri_app::webview::validate_app_frontend_url(&url)
         .map_err(|e| TauriError::new(TauriErrorCode::InvalidUrl, e))?;
 
+    // A live window already owns this label and its bindings. Building would
+    // fail on the duplicate label anyway, and the failure path below would then
+    // drop the live window's isolation mark and origin binding.
+    if app_handle.get_webview_window(&window_label).is_some() {
+        return Err(TauriError::new(
+            TauriErrorCode::WindowCreationFailed,
+            format!("A window labelled '{}' is already open", window_label),
+        ));
+    }
+
     // Inject fetch interceptor to proxy node requests through Tauri
     // Since calimero-client-js now uses fetch instead of Axios, we only need fetch interception
     // CRITICAL: Intercept IMMEDIATELY before React makes any fetch calls
@@ -1254,7 +1268,7 @@ async fn create_app_window(
     let mut builder = WebviewWindowBuilder::new(
         &app_handle,
         &window_label,
-        WebviewUrl::External(parsed_url),
+        WebviewUrl::External(parsed_url.clone()),
     )
     .title(&title)
     .inner_size(1200.0, 800.0)
@@ -1308,9 +1322,15 @@ async fn create_app_window(
         webview_isolation::remember(&app_handle, &window_label);
     }
 
+    // Bound before build() for the same reason: the page must never reach the
+    // proxy or broker unbound. Everything the page may use is keyed off this.
+    let bindings = app_handle.state::<calimero_tauri_app::app_window::AppWindowBindings>();
+    let generation = bindings.bind(&window_label, &parsed_url, node_url_to_use);
+
     let window = builder.build().map_err(|e| {
         // The registration has to precede build() so a page cannot reach the
         // broker before it lands; drop it again if no window ever existed.
+        bindings.unbind(&window_label, generation);
         if isolation_key.is_some() {
             webview_isolation::forget(&app_handle, &window_label);
         }
@@ -1323,12 +1343,18 @@ async fn create_app_window(
 
     // Stop tracking a label once its window is gone, so the set does not grow
     // for the life of the process.
-    if isolation_key.is_some() {
+    {
         let handle = app_handle.clone();
         let label = window_label.clone();
+        let isolated = isolation_key.is_some();
         window.on_window_event(move |event| {
             if matches!(event, tauri::WindowEvent::Destroyed) {
-                webview_isolation::forget(&handle, &label);
+                handle
+                    .state::<calimero_tauri_app::app_window::AppWindowBindings>()
+                    .unbind(&label, generation);
+                if isolated {
+                    webview_isolation::forget(&handle, &label);
+                }
             }
         });
     }
@@ -4417,6 +4443,7 @@ fn main() {
         .manage(MerodState::default())
         .manage(MerodLogWriters::default())
         .manage(proxy::SseCancelRegistry::new(std::sync::Mutex::new(std::collections::HashMap::new())))
+        .manage(calimero_tauri_app::app_window::AppWindowBindings::default())
         .manage(TokenBrokerRegistry::new(std::sync::Mutex::new(std::collections::HashMap::new())))
         .manage(IsolatedWindows::new(std::sync::Mutex::new(std::collections::HashSet::new())))
         .invoke_handler(tauri::generate_handler![

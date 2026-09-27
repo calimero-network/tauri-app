@@ -23,6 +23,7 @@ impl<T> LockUnpoisoned<T> for std::sync::Mutex<T> {
     }
 }
 
+pub mod app_window;
 pub mod errors;
 pub mod node_discovery;
 pub mod proxy;

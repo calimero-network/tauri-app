@@ -20,6 +20,7 @@ import { useToast } from "./contexts/ToastContext";
 import { checkOnboardingState } from "./utils/onboarding";
 import { openAppFrontend, parseTauriError } from "./utils/appUtils";
 import { useAppDeepLink } from "./hooks/useAppDeepLink";
+import { useDeepLinkConsent } from "./components/DeepLinkConsentDialog";
 import Sidebar from "./components/Sidebar";
 import { NodeStatusIndicator } from "./components/NodeStatusIndicator";
 import ToastContainer from "./components/ToastContainer";
@@ -467,7 +468,9 @@ function App() {
   // Route incoming app deep-links (calimero://<slug>/<action>?<params> and the
   // https://links.calimero.network/... Universal Link) to the target app.
   // Gated on clientReady since resolution lists installed apps via the client.
-  useAppDeepLink(clientReady);
+  // A link may install and open an app only once the user agrees in this dialog.
+  const { consent: deepLinkConsent, dialog: deepLinkConsentDialog } = useDeepLinkConsent();
+  useAppDeepLink(clientReady, deepLinkConsent);
 
   // Serve token refreshes for app windows. Refresh tokens are single-use
   // (calimero-network/core#3083), so the desktop keeps the only copy and is the
@@ -659,6 +662,7 @@ function App() {
   return (
     <div className="app">
       <ToastContainer />
+      {deepLinkConsentDialog}
 
       <div className="app-layout">
         <Sidebar

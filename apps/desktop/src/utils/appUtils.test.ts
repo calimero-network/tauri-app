@@ -27,7 +27,7 @@ vi.mock('../lib/token-storage', () => ({
   getTokenExpiresAt: () => 1_700_000_000_000,
 }));
 
-import { appInstalled, openAppFrontend, normalizeNodeUrl } from './appUtils';
+import { appInstalled, isAllowedAppFrontendUrl, openAppFrontend, normalizeNodeUrl } from './appUtils';
 import { BROKERED_REFRESH_TOKEN } from '../lib/token-broker';
 
 /** Args of the `create_app_window` invoke (may not be the first call — the app
@@ -327,5 +327,43 @@ describe('appInstalled', () => {
     expect(appInstalled({ blob: { bytecode: '' } })).toBe(false);
     expect(appInstalled({})).toBe(false);
     expect(appInstalled(undefined)).toBe(false);
+  });
+});
+
+describe('app frontends that may receive the node session', () => {
+  it('allows HTTPS and loopback HTTP', () => {
+    for (const url of [
+      'https://drive.calimero.network/',
+      'https://my-app.vercel.app/?invitation=x',
+      'http://localhost:5173/',
+      'http://127.0.0.1:3000/',
+      'http://[::1]:3000/',
+    ]) {
+      expect(isAllowedAppFrontendUrl(url), url).toBe(true);
+    }
+  });
+
+  it('refuses everything else', () => {
+    for (const url of [
+      'http://evil.example/',
+      'http://192.168.1.10:3000/',
+      'http://localhost.evil.example/',
+      'file:///Applications/Calculator.app',
+      'javascript:alert(1)',
+      'data:text/html,<script>alert(1)</script>',
+      'calimero://com.evil.app/join',
+      'not a url',
+    ]) {
+      expect(isAllowedAppFrontendUrl(url), url).toBe(false);
+    }
+  });
+
+  it('sends no token and opens no window for a refused frontend', async () => {
+    const onError = vi.fn();
+    await openAppFrontend('http://evil.example/', 'Evil', onError, { applicationId: 'app-1' });
+
+    expect(onError).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringContaining('HTTPS') }));
+    expect(invoke.mock.calls.map((c) => c[0])).not.toContain('create_app_window');
+    expect(invoke.mock.calls.map((c) => c[0])).not.toContain('open_app_launcher');
   });
 });

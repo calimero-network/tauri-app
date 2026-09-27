@@ -98,6 +98,29 @@ export function appendParamsToUrl(baseUrl: string, params: string): string {
 }
 
 /**
+ * Whether `url` may be opened as an app frontend.
+ *
+ * Every app window gets the node's access token in its URL fragment, so the
+ * frontend must be a web origin that can hold a session: HTTPS, or plain HTTP
+ * on this machine's loopback (a locally served dev frontend). Plain HTTP to
+ * anywhere else would put the token on the network in the clear, and `file:`,
+ * `data:`, `javascript:` or a custom scheme is never an app frontend. The Rust
+ * side enforces the same rule (`validate_app_frontend_url`).
+ */
+export function isAllowedAppFrontendUrl(url: string): boolean {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return false;
+  }
+  if (u.protocol === 'https:') return u.hostname !== '';
+  const loopback =
+    u.hostname === 'localhost' || u.hostname === '127.0.0.1' || u.hostname === '[::1]';
+  return u.protocol === 'http:' && loopback;
+}
+
+/**
  * Opens an app frontend in a new Tauri window
  * @param frontendUrl - The URL of the frontend to open
  * @param appName - Optional name of the app for the window title
@@ -154,6 +177,13 @@ export async function openAppFrontend(
   context?: OpenAppFrontendContext,
 ): Promise<string | void> {
   try {
+    // Checked before either path below, both of which hand the page a session.
+    if (!isAllowedAppFrontendUrl(frontendUrl)) {
+      throw new Error(
+        `Refusing to open ${frontendUrl}: app frontends must be served over HTTPS (or HTTP on localhost).`,
+      );
+    }
+
     // Prefer opening the app as a first-class process via its per-app
     // shell/launcher (own dock icon + Cmd-Tab + native summon; the shell injects
     // SSO itself). `open_app_launcher` errors on non-macOS (or if the launcher

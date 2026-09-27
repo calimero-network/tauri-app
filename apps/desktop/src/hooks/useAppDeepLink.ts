@@ -1,15 +1,16 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { apiClient } from '../lib/mero-client';
 import {
   appendParamsToUrl,
   decodeMetadata,
+  isAllowedAppFrontendUrl,
   openAppFrontend,
   sleep,
 } from '../utils/appUtils';
 import { listInstalledApps, invalidateInstalledApps } from '../utils/installedAppsCache';
-import { fetchAppsFromRegistry } from '../utils/registry';
+import { fetchAppsFromRegistry, type AppSummary } from '../utils/registry';
 import { useToast } from '../contexts/ToastContext';
 
 const DEEP_LINK_REGISTRY = 'https://apps.calimero.network';
@@ -33,6 +34,47 @@ export interface Reporter {
   progress: (message: string) => () => void;
   failed: (message: string) => void;
   done: (message: string) => void;
+}
+
+/**
+ * What a deep-link is about to do, put to the user before it does it.
+ *
+ * A deep-link is attacker-reachable input: any web page can send the user to
+ * `calimero://<package>/<action>?<params>`, and any app window can emit the
+ * `app-deep-link` event itself. Following one opens an app window that holds
+ * the node's session, and for a package that is not installed it first installs
+ * that package on the node. Neither may happen without the user agreeing to
+ * this exact app, origin and parameters.
+ */
+export interface DeepLinkConsentRequest {
+  /** `install`: the package is not on this node and will be installed first. */
+  kind: 'install' | 'open';
+  appName: string;
+  /** The registry package the link names. */
+  pkg: string;
+  action: string;
+  /** Raw query string the app will receive, e.g. `invitation=X`. */
+  params: string;
+  /** Where the app window will load, and so who receives the session. */
+  frontendOrigin: string | null;
+  /** `install` only. */
+  version?: string;
+  /** `install` only: an admin approved this package in the registry. */
+  verified?: boolean;
+  /** `install` only: the publishing account is verified. */
+  publisherVerified?: boolean;
+}
+
+/** Resolves `true` only when the user explicitly agreed. */
+export type Consent = (request: DeepLinkConsentRequest) => Promise<boolean>;
+
+function originOf(url: string | undefined): string | null {
+  if (!url) return null;
+  try {
+    return new URL(url).origin;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -77,40 +119,50 @@ export function supersede(stop: () => void, inner: Reporter): Reporter {
 }
 
 /**
- * Install-on-demand: fetch the latest published bundle for `pkg` (the deep-link
- * slug is the registry package) and install it on the node. Returns the new
- * applicationId, or null on failure. Empty metadata — the node reads the
- * bundle manifest's own metadata (name, links.frontend, package, etc.).
+ * Look up the latest published bundle for `pkg` (the deep-link slug is the
+ * registry package). Returns null — having told the user why — when there is
+ * nothing to install.
  */
-async function installFromRegistry(pkg: string, report: Reporter): Promise<string | null> {
+async function lookupRegistryBundle(pkg: string, report: Reporter): Promise<AppSummary | null> {
   const clear = once(report.progress(`Looking up ${pkg} in the registry\u2026`));
   try {
     const bundles = await fetchAppsFromRegistry(DEEP_LINK_REGISTRY, { name: pkg });
-    const version = bundles.find((b) => b.id === pkg)?.latest_version
-      ?? bundles[0]?.latest_version;
-    if (!version) {
+    const bundle = bundles.find((b) => b.id === pkg);
+    if (!bundle?.latest_version) {
       console.warn(`[deep-link] no published version for package "${pkg}"`);
       report.failed(`\u201c${pkg}\u201d is not published in the registry, so this link cannot be opened.`);
       return null;
     }
-    console.log(`[deep-link] installing ${pkg}@${version}`);
-    // Downloading and installing a bundle is the slowest step in the whole
-    // path, and until now the only step with no window open to show for it.
+    return bundle;
+  } catch (e) {
+    console.warn(`[deep-link] registry lookup error for ${pkg}:`, e);
+    report.failed(`Could not look up ${pkg}: ${e instanceof Error ? e.message : String(e)}`);
+    return null;
+  } finally {
     clear();
-    const clearInstall = once(report.progress(`Installing ${pkg} ${version}\u2026 this can take a moment.`));
-    try {
-      const res = await apiClient.node.installApplication({ package: pkg, version });
-      if (res.error || !res.data?.applicationId) {
-        const why = res.error?.message ?? 'the node returned no applicationId';
-        console.warn(`[deep-link] install failed for ${pkg}:`, why);
-        report.failed(`Could not install ${pkg}: ${why}`);
-        return null;
-      }
-      invalidateInstalledApps();
-      return res.data.applicationId;
-    } finally {
-      clearInstall();
+  }
+}
+
+/**
+ * Install `pkg@version` on the node. Returns the new applicationId, or null on
+ * failure. Empty metadata — the node reads the bundle manifest's own metadata
+ * (name, links.frontend, package, etc.).
+ */
+async function installBundle(pkg: string, version: string, report: Reporter): Promise<string | null> {
+  console.log(`[deep-link] installing ${pkg}@${version}`);
+  // Downloading and installing a bundle is the slowest step in the whole
+  // path, and the only step with no window open to show for it.
+  const clear = once(report.progress(`Installing ${pkg} ${version}\u2026 this can take a moment.`));
+  try {
+    const res = await apiClient.node.installApplication({ package: pkg, version });
+    if (res.error || !res.data?.applicationId) {
+      const why = res.error?.message ?? 'the node returned no applicationId';
+      console.warn(`[deep-link] install failed for ${pkg}:`, why);
+      report.failed(`Could not install ${pkg}: ${why}`);
+      return null;
     }
+    invalidateInstalledApps();
+    return res.data.applicationId;
   } catch (e) {
     console.warn(`[deep-link] install-on-demand error for ${pkg}:`, e);
     report.failed(
@@ -155,7 +207,11 @@ export type OpenOutcome = 'opened' | 'retry' | 'forget';
  * returns it as `Application.package` for bundle/registry installs, and every
  * app's invite builder emits it (`calimero://<package>/join?…`).
  */
-export async function resolveAndOpen(dl: AppDeepLink, report: Reporter): Promise<OpenOutcome> {
+export async function resolveAndOpen(
+  dl: AppDeepLink,
+  report: Reporter,
+  consent: Consent,
+): Promise<OpenOutcome> {
   const response = await listInstalledApps();
   if (response.error || !Array.isArray(response.data)) {
     // Node isn't ready to list apps yet (cold boot) — transient, retry.
@@ -166,14 +222,35 @@ export async function resolveAndOpen(dl: AppDeepLink, report: Reporter): Promise
     apps.find((app: any) => !!app.package && app.package === dl.slug);
 
   let match = byPackage(response.data);
+  // The origin the user already agreed to load, if they were asked to install.
+  let consentedOrigin: string | null = null;
 
-  // Install-on-demand: the app for this package isn't installed — fetch it from
-  // the registry (the slug IS the package), install, then open.
+  // Install-on-demand: the app for this package isn't installed — look it up in
+  // the registry (the slug IS the package), ask the user, install, then open.
   if (!match) {
-    console.log(`[deep-link] "${dl.slug}" not installed — installing from registry…`);
-    const installedId = await installFromRegistry(dl.slug, report);
+    console.log(`[deep-link] "${dl.slug}" not installed — looking it up in the registry…`);
+    const bundle = await lookupRegistryBundle(dl.slug, report);
+    if (!bundle) return 'forget';
+    const bundleOrigin = originOf(bundle.links?.frontend);
+    const agreed = await consent({
+      kind: 'install',
+      appName: bundle.name || dl.slug,
+      pkg: dl.slug,
+      action: dl.action,
+      params: dl.params,
+      frontendOrigin: bundleOrigin,
+      version: bundle.latest_version,
+      verified: bundle.verified === true,
+      publisherVerified: bundle.publisherVerified === true,
+    });
+    if (!agreed) {
+      console.log(`[deep-link] install of "${dl.slug}" declined`);
+      return 'forget';
+    }
+    consentedOrigin = bundleOrigin;
+    const installedId = await installBundle(dl.slug, bundle.latest_version, report);
     if (!installedId) {
-      // installFromRegistry has already said why.
+      // installBundle has already said why.
       console.warn(`[deep-link] could not install "${dl.slug}" — forgetting link`);
       return 'forget';
     }
@@ -195,6 +272,32 @@ export async function resolveAndOpen(dl: AppDeepLink, report: Reporter): Promise
     console.warn(`[deep-link] app "${appName}" has no frontend URL; cannot open`);
     report.failed(`${appName} has no frontend to open. Its bundle declares no \u201clinks.frontend\u201d.`);
     return 'forget';
+  }
+
+  if (!isAllowedAppFrontendUrl(frontendUrl)) {
+    console.warn(`[deep-link] app "${appName}" has a frontend that cannot be opened: ${frontendUrl}`);
+    report.failed(`${appName} cannot be opened: its frontend is not served over HTTPS.`);
+    return 'forget';
+  }
+
+  // An installed app is still opened only on the user's say-so: the link picks
+  // the parameters, and an app window can fake the event. After an install the
+  // user has already agreed — unless the installed bundle points somewhere other
+  // than what they were shown.
+  const origin = originOf(frontendUrl);
+  if (consentedOrigin === null || consentedOrigin !== origin) {
+    const agreed = await consent({
+      kind: 'open',
+      appName,
+      pkg: dl.slug,
+      action: dl.action,
+      params: dl.params,
+      frontendOrigin: origin,
+    });
+    if (!agreed) {
+      console.log(`[deep-link] opening "${appName}" declined`);
+      return 'forget';
+    }
   }
 
   // Append the deep-link params to the frontend URL so the app reads them on
@@ -243,8 +346,12 @@ export async function resolveAndOpen(dl: AppDeepLink, report: Reporter): Promise
  * `enabled` gates activation until the app is past onboarding and the mero
  * client is ready — resolving requires listing installed apps.
  */
-export function useAppDeepLink(enabled: boolean): void {
+export function useAppDeepLink(enabled: boolean, consent: Consent): void {
   const toast = useToast();
+  // Read through a ref so a new `consent` identity does not re-run the effect,
+  // which would re-arm the cold-launch drain.
+  const consentRef = useRef(consent);
+  consentRef.current = consent;
 
   useEffect(() => {
     if (!enabled) return;
@@ -277,7 +384,7 @@ export function useAppDeepLink(enabled: boolean): void {
       const key = keyOf(dl);
       if (handled.has(key)) return 'opened'; // another path already took it
       handled.add(key);
-      const outcome = await resolveAndOpen(dl, using);
+      const outcome = await resolveAndOpen(dl, using, (req) => consentRef.current(req));
       if (outcome === 'retry') handled.delete(key); // allow a later attempt
       return outcome;
     };

@@ -24,6 +24,11 @@ import "./VersionSelect.css";
  * block for fixed descendants AND clips them — the same trap the installed-app
  * card's dropdown hit. Measuring and rendering at the top level is what keeps
  * the list visible.
+ *
+ * Each option also names the core release it was built against (`node
+ * 0.11.0-rc.54`), as the registry's and dashboard's version lists do: two
+ * releases of the same app can target different nodes, and this is where the
+ * choice is made. Omitted, not placeholdered, when the bundle does not say.
  */
 export default function VersionSelect({
   versions,
@@ -120,6 +125,7 @@ export default function VersionSelect({
 
   const selectedIndex = versions.findIndex((v) => v.semver === value);
   const label = value || versions[0]?.semver || "—";
+  const selectedNodeBuild = versions[selectedIndex < 0 ? 0 : selectedIndex]?.nodeBuild ?? null;
 
   return (
     <div className="version-select">
@@ -131,11 +137,12 @@ export default function VersionSelect({
         disabled={disabled}
         aria-haspopup="listbox"
         aria-expanded={open}
-        aria-label={`Version, ${label} selected`}
+        aria-label={`Version, ${label} selected${selectedNodeBuild ? `, built with node ${selectedNodeBuild}` : ""}`}
         onClick={() => (open ? setOpen(false) : openAt())}
         onKeyDown={onKeyDown}
       >
         <span className="version-select-value">{label}</span>
+        {selectedNodeBuild && <NodeBuild value={selectedNodeBuild} />}
         {selectedIndex === 0 && <span className="version-select-latest">latest</span>}
         <ChevronDown size={14} className="version-select-chevron" aria-hidden="true" />
       </button>
@@ -163,11 +170,24 @@ export default function VersionSelect({
                 {v.semver === value && <Check size={13} aria-hidden="true" />}
               </span>
               <span className="version-select-semver">{v.semver}</span>
+              {v.nodeBuild && <NodeBuild value={v.nodeBuild} />}
               {i === 0 && <span className="version-select-latest">latest</span>}
             </li>
           ))}
         </ul>
       )}
     </div>
+  );
+}
+
+function NodeBuild({ value }: { value: string }) {
+  return (
+    <span
+      className="version-select-node"
+      data-testid="version-node-build"
+      title={`Built with Calimero node ${value}`}
+    >
+      node {value}
+    </span>
   );
 }

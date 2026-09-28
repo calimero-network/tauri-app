@@ -247,6 +247,11 @@ test.describe("Marketplace – install flow", () => {
     await expect(page.getByRole("listbox")).toBeVisible();
     await expect(page.getByRole("option")).toHaveCount(1);
     await expect(page.getByRole("option").first()).toHaveAttribute("aria-selected", "true");
+    // Each option names the core release it was built against, read from the
+    // bundle's `buildInfo` — the same label the registry's version history shows.
+    await expect(page.getByRole("option").first().getByTestId("version-node-build")).toHaveText(
+      "node 0.11.0-rc.54",
+    );
 
     // Escape dismisses without changing the value.
     await page.keyboard.press("Escape");
@@ -259,6 +264,23 @@ test.describe("Marketplace – install flow", () => {
     await page.keyboard.press("Enter");
     await expect(page.getByRole("listbox")).toHaveCount(0);
     await expect(trigger).toContainText("0.3.0");
+    await expect(trigger.getByTestId("version-node-build")).toHaveText("node 0.11.0-rc.54");
+  });
+
+  test("a version with no build stamp shows no node release, not a placeholder", async ({ page }) => {
+    // Every bundle published before cargo-mero stamped `buildInfo` has none;
+    // `minRuntimeVersion` (here "1.0.0") is a hand-declared floor and must not
+    // stand in for it.
+    await mockRegistryAPIs(page);
+    await setupAuthenticatedPage(page);
+    await navigateVia(page, "Marketplace");
+    await page.locator("[data-testid='app-card']", { hasText: "Blockchain Demo" }).click();
+
+    const trigger = page.getByTestId("version-picker");
+    await expect(trigger).toContainText("1.0.0");
+    await trigger.click();
+    await expect(page.getByRole("option")).toHaveCount(1);
+    await expect(page.getByTestId("version-node-build")).toHaveCount(0);
   });
 
   test("preview images load from the registry, not from the app origin", async ({ page }) => {

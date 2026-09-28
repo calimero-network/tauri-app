@@ -5,7 +5,7 @@
 
 import type { Update, DownloadEvent } from '@tauri-apps/plugin-updater';
 import { invoke } from '@tauri-apps/api/core';
-import { stopMerod, downloadAndReplaceMerod } from './merod';
+import { stopMerod } from './merod';
 import { compareSemverDesc } from './registry';
 
 /** How often a running app re-checks latest.json. */
@@ -218,10 +218,10 @@ export function downloadProgressReporter(onStatus: (status: string) => void): (e
  *      so a failed or offline download leaves the running node alone.
  *   2. Stop this app's own tracked node(s) - never a machine-wide kill, which
  *      would also tear down an unrelated node someone else is running.
- *   3. Download the correct merod binary from GitHub and replace the bundled one
- *   4. Verify the binary version matches the build-time config
- *   5. Install the downloaded app update (new frontend + Rust shell)
- *   6. Relaunch
+ *   3. Install the downloaded app update (new frontend + Rust shell). The signed
+ *      bundle already ships the correct merod for this release, so there is no
+ *      separate binary download to verify.
+ *   4. Relaunch
  *
  * @param onStatus  Optional callback receiving a human-readable status string at each step.
  */
@@ -249,35 +249,15 @@ export async function installUpdate(onStatus: (status: string) => void = () => {
   onStatus('Stopping nodes...');
   try { await stopMerod(); } catch (e) { console.warn('[updater] stopMerod failed (node may not be running):', e); }
 
-  // 3. Download + replace merod binary
-  onStatus('Downloading merod binary...');
-  try {
-    const merodResult = await downloadAndReplaceMerod();
-    if (merodResult.replaced) {
-      console.info('[updater] merod binary updated to', merodResult.current_version);
-    } else {
-      console.info('[updater] merod binary already at correct version:', merodResult.current_version);
-    }
-  } catch (e) {
-    // Tauri invoke() rejects with a serialized error object {message, code}, not a JS Error instance.
-    const msg = e instanceof Error
-      ? e.message
-      : (e && typeof e === 'object' && typeof (e as any).message === 'string'
-          ? (e as any).message
-          : String(e));
-    if (msg.includes('Version mismatch after replace')) {
-      throw e;
-    }
-    console.warn('[updater] merod download/replace failed (proceeding with app update):', msg);
-  }
-
-  // 4. Install the already-downloaded app update (new shell / frontend bundle).
+  // 3. Install the already-downloaded app update (new shell / frontend bundle).
+  //    The signed bundle carries the matching merod binary for this release, so
+  //    there is nothing extra to fetch or verify here.
   onStatus('Installing app update...');
   const { relaunch } = await import('@tauri-apps/plugin-process');
   await update.install();
   pendingUpdate = null;
 
-  // 5. Relaunch — app closes and reopens with the new binary
+  // 4. Relaunch — app closes and reopens with the new binary
   onStatus('Restarting...');
   await relaunch();
 }

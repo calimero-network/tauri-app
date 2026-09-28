@@ -12,7 +12,6 @@ const {
   mockCheck,
   mockGetVersion,
   mockStopMerod,
-  mockDownloadAndReplace,
 } = vi.hoisted(() => ({
   mockDownloadAndInstall: vi.fn().mockResolvedValue(undefined),
   mockDownload: vi.fn().mockResolvedValue(undefined),
@@ -24,12 +23,6 @@ const {
   mockCheck: vi.fn(),
   mockGetVersion: vi.fn().mockResolvedValue('0.0.39'),
   mockStopMerod: vi.fn().mockResolvedValue('stopped'),
-  mockDownloadAndReplace: vi.fn().mockResolvedValue({
-    replaced: true,
-    expected_version: '0.10.1-rc.43',
-    current_version: 'merod 0.10.1-rc.43',
-    message: 'merod updated',
-  }),
 }));
 
 // A fake v2 Update handle. Its methods are delegated to the shared mocks so
@@ -53,7 +46,6 @@ vi.mock('@tauri-apps/api/app', () => ({ getVersion: mockGetVersion }));
 vi.mock('@tauri-apps/api/core', () => ({ invoke: mockInvoke }));
 vi.mock('./merod', () => ({
   stopMerod: mockStopMerod,
-  downloadAndReplaceMerod: mockDownloadAndReplace,
 }));
 
 // Fake Tauri environment — vitest runs in node where `window` doesn't exist,
@@ -84,29 +76,19 @@ beforeEach(() => {
   mockCheck.mockResolvedValue(makeUpdate());
   mockGetVersion.mockResolvedValue('0.0.39');
   mockStopMerod.mockResolvedValue('stopped');
-  mockDownloadAndReplace.mockResolvedValue({
-    replaced: true,
-    expected_version: '0.10.1-rc.43',
-    current_version: 'merod 0.10.1-rc.43',
-    message: 'merod updated',
-  });
 });
 
 describe('installUpdate', () => {
-  it('runs the full sequence in order: download app → stop → download merod → install app → relaunch', async () => {
+  it('runs the full sequence in order: download app → stop → install app → relaunch', async () => {
     const callOrder: string[] = [];
     mockDownload.mockImplementation(async () => { callOrder.push('download'); });
     mockStopMerod.mockImplementation(async () => { callOrder.push('stopMerod'); });
-    mockDownloadAndReplace.mockImplementation(async () => {
-      callOrder.push('downloadAndReplace');
-      return { replaced: true, expected_version: '0.10.1-rc.43', current_version: 'merod 0.10.1-rc.43', message: '' };
-    });
     mockInstall.mockImplementation(async () => { callOrder.push('install'); });
     mockRelaunch.mockImplementation(async () => { callOrder.push('relaunch'); });
 
     await installUpdate();
 
-    expect(callOrder).toEqual(['download', 'stopMerod', 'downloadAndReplace', 'install', 'relaunch']);
+    expect(callOrder).toEqual(['download', 'stopMerod', 'install', 'relaunch']);
   });
 
   // Regression: the node was stopped before the app update was even fetched,
@@ -115,7 +97,6 @@ describe('installUpdate', () => {
     mockDownload.mockRejectedValue('error sending request for url');
     await expect(installUpdate()).rejects.toBe('error sending request for url');
     expect(mockStopMerod).not.toHaveBeenCalled();
-    expect(mockDownloadAndReplace).not.toHaveBeenCalled();
     expect(mockInstall).not.toHaveBeenCalled();
     expect(mockRelaunch).not.toHaveBeenCalled();
   });
@@ -147,47 +128,21 @@ describe('installUpdate', () => {
 
     expect(statuses).toContain('Downloading update...');
     expect(statuses).toContain('Stopping nodes...');
-    expect(statuses).toContain('Downloading merod binary...');
     expect(statuses).toContain('Installing app update...');
     expect(statuses).toContain('Restarting...');
+  });
+
+  // The signed bundle carries the matching merod binary, so the update flow no
+  // longer fetches or replaces it separately.
+  it('never fetches a merod binary during install', async () => {
+    await installUpdate();
+    expect(mockInvoke).not.toHaveBeenCalledWith('download_and_replace_merod');
   });
 
   it('proceeds even when stopMerod throws (node not running)', async () => {
     mockStopMerod.mockRejectedValue(new Error('not running'));
     await expect(installUpdate()).resolves.toBeUndefined();
-    expect(mockDownloadAndReplace).toHaveBeenCalledOnce();
-    expect(mockRelaunch).toHaveBeenCalledOnce();
-  });
-
-  it('throws and does NOT relaunch when merod download fails (version mismatch)', async () => {
-    mockDownloadAndReplace.mockRejectedValue(
-      new Error("Version mismatch after replace: expected '0.10.1-rc.43', binary reports 'merod 0.10.1-rc.42'"),
-    );
-    await expect(installUpdate()).rejects.toThrow('Version mismatch');
-    expect(mockInstall).not.toHaveBeenCalled();
-    expect(mockRelaunch).not.toHaveBeenCalled();
-  });
-
-  it('throws and does NOT relaunch when Tauri returns a serialized error object with version mismatch', async () => {
-    // Tauri invoke() rejects with a plain object {message, code}, not a JS Error instance
-    mockDownloadAndReplace.mockRejectedValue({
-      message: "Version mismatch after replace: expected '0.10.1-rc.43', binary reports 'merod 0.10.1-rc.42'",
-      code: 'InternalError',
-    });
-    await expect(installUpdate()).rejects.toMatchObject({ message: expect.stringContaining('Version mismatch') });
-    expect(mockInstall).not.toHaveBeenCalled();
-    expect(mockRelaunch).not.toHaveBeenCalled();
-  });
-
-  it('warns and continues when merod download fails with a non-mismatch Tauri error object', async () => {
-    mockDownloadAndReplace.mockRejectedValue({ message: 'network timeout', code: 'InternalError' });
-    await expect(installUpdate()).resolves.toBeUndefined();
-    expect(mockRelaunch).toHaveBeenCalledOnce();
-  });
-
-  it('warns and continues when merod download fails with a non-object rejection (falls through to String(e))', async () => {
-    mockDownloadAndReplace.mockRejectedValue(42);
-    await expect(installUpdate()).resolves.toBeUndefined();
+    expect(mockInstall).toHaveBeenCalledOnce();
     expect(mockRelaunch).toHaveBeenCalledOnce();
   });
 
@@ -195,18 +150,6 @@ describe('installUpdate', () => {
     mockInstall.mockRejectedValue(new Error('no update package'));
     await expect(installUpdate()).rejects.toThrow('no update package');
     expect(mockRelaunch).not.toHaveBeenCalled();
-  });
-
-  it('still relaunches when binary was already at the correct version (replaced=false)', async () => {
-    mockDownloadAndReplace.mockResolvedValue({
-      replaced: false,
-      expected_version: '0.10.1-rc.43',
-      current_version: 'merod 0.10.1-rc.43',
-      message: 'Binary is already at the expected version',
-    });
-    const statuses: string[] = [];
-    await installUpdate((s) => statuses.push(s));
-    expect(mockRelaunch).toHaveBeenCalledOnce();
   });
 });
 

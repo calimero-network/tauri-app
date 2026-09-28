@@ -4401,14 +4401,24 @@ fn main() {
                             continue;
                         }
 
-                        // OAuth callback path (calimero://cloud-callback…) —
-                        // unchanged.
+                        // OAuth callback path (calimero://cloud-callback…).
+                        // The callback URL carries the Google ID token / MDMA
+                        // session JWT in its fragment. `emit` broadcasts to
+                        // every webview (and even `emit_to("main", …)` reaches
+                        // any listener whose target is `Any`, which is the JS
+                        // `listen()` default), so an `app-*` window could
+                        // capture the token off the event payload. We therefore
+                        // stash the URL only in PendingCloudAuth — readable
+                        // solely by the main window via the
+                        // `get_pending_cloud_auth` command (allow-app-commands)
+                        // — and emit a payload-less wake-up ping. The frontend
+                        // pulls the URL from the store on the ping.
                         if let Some(state) = deep_link_handle.try_state::<PendingCloudAuth>() {
                             if let Ok(mut g) = state.0.lock() {
                                 *g = Some(request.clone());
                             }
                         }
-                        let _ = deep_link_handle.emit("cloud-auth-callback", &request);
+                        let _ = deep_link_handle.emit("cloud-auth-callback", ());
                         if let Some(window) = deep_link_handle.get_webview_window("main") {
                             let _ = window.show();
                             let _ = window.set_focus();

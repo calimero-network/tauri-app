@@ -261,13 +261,23 @@ export async function startCloudLogin(): Promise<CloudUserInfo | null> {
 /**
  * Wait for the deep-link callback via two channels:
  *   - `cloud-auth-callback` Tauri event (hot-launch case: app already running,
- *     the deep-link plugin forwards the URL from the OS handler)
+ *     the deep-link plugin forwards the URL from the OS handler). This event is
+ *     a payload-less wake-up ping — the callback URL (which carries the token)
+ *     is deliberately NOT in the payload, because Tauri `emit` broadcasts to
+ *     every webview. On the ping we pull the URL from the main-window-only
+ *     PendingCloudAuth store, exactly like the poll does.
  *   - Polling `get_pending_cloud_auth` (cold-launch case: OS launched the
  *     app with the URL in argv before any listener was set up)
+ *
+ * Both channels funnel through `drainPending`, the single place that consumes a
+ * pending callback URL. `consumePendingState` (read-and-delete of the OAuth
+ * nonce) therefore only ever runs for a URL actually returned by the backend,
+ * so a bare or forged event can no longer burn the nonce.
  */
 async function pollForCloudAuth(): Promise<string | null> {
   return new Promise<string | null>(async (resolve) => {
     let resolved = false;
+    let draining = false;
     const finish = (token: string | null) => {
       if (resolved) return;
       resolved = true;
@@ -277,12 +287,12 @@ async function pollForCloudAuth(): Promise<string | null> {
       resolve(token);
     };
 
-    const unlisten = await listen<string>('cloud-auth-callback', (event) => {
-      const token = extractTokenFromCallbackUrl(event.payload);
-      if (token) finish(token);
-    }).catch(() => null);
-
-    const pollTimer = setInterval(async () => {
+    // Single source of truth for consuming a pending callback URL. The
+    // `draining` guard serialises the event- and interval-triggered calls so
+    // two overlapping drains can't both pull-and-clear the same URL.
+    const drainPending = async () => {
+      if (resolved || draining) return;
+      draining = true;
       try {
         const url = await invoke<string | null>('get_pending_cloud_auth');
         if (url) {
@@ -292,7 +302,19 @@ async function pollForCloudAuth(): Promise<string | null> {
         }
       } catch {
         // Command not available yet or error — keep polling
+      } finally {
+        draining = false;
       }
+    };
+
+    // Payload-less wake-up ping (see doc comment above): ignore any payload and
+    // pull the URL from PendingCloudAuth instead of reading it off the event.
+    const unlisten = await listen('cloud-auth-callback', () => {
+      void drainPending();
+    }).catch(() => null);
+
+    const pollTimer = setInterval(() => {
+      void drainPending();
     }, LOGIN_POLL_INTERVAL_MS);
 
     const timeoutTimer = setTimeout(() => finish(null), LOGIN_TIMEOUT_MS);

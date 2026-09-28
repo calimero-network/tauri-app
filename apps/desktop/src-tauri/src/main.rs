@@ -1022,6 +1022,52 @@ fn open_app_launcher_blocking(
     }
 }
 
+/// True when `s` holds any ASCII/Unicode control character (C0 controls, DEL,
+/// C1). These are the injection primitive for launcher files: a `\n` in
+/// `app_name` or `frontend_url` would open a second `Exec=` line in a Linux
+/// `.desktop` launcher (arbitrary command execution), and controls smuggled into
+/// the Windows PowerShell args or the macOS bundle are equally unsafe.
+fn contains_control_chars(s: &str) -> bool {
+    s.chars().any(char::is_control)
+}
+
+/// Guards `create_desktop_shortcut` against launcher/shortcut injection. Runs on
+/// every platform before any file is written:
+///  - `frontend_url` must pass `validate_app_frontend_url` (https, or http on
+///    loopback) — the same gate `open_app_launcher` applies.
+///  - none of the attacker-derived strings interpolated into the launcher body /
+///    shortcut command line (`app_name`, `app_id`, `node_url`, `icon`) may carry
+///    control characters. Reject rather than strip, so behaviour is predictable.
+fn validate_shortcut_inputs(
+    app_name: &str,
+    frontend_url: &str,
+    app_id: Option<&str>,
+    node_url: &str,
+    icon: Option<&str>,
+) -> Result<(), TauriError> {
+    calimero_tauri_app::webview::validate_app_frontend_url(frontend_url)
+        .map_err(|e| TauriError::new(TauriErrorCode::InvalidUrl, e))?;
+    for (field, value) in [
+        ("app name", Some(app_name)),
+        ("app id", app_id),
+        ("node URL", Some(node_url)),
+        ("icon", icon),
+    ] {
+        if let Some(value) = value {
+            if contains_control_chars(value) {
+                return Err(TauriError::new(
+                    TauriErrorCode::InvalidInput,
+                    format!(
+                        "Refusing to create launcher: {} contains control characters",
+                        field
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Shares `ensure_app_launcher` with `open_app_launcher`, so it blocks for just as
 /// long and takes the same blocking thread.
 #[tauri::command]
@@ -1055,6 +1101,16 @@ fn create_desktop_shortcut_blocking(
     icon: Option<String>,
     node_url: String,
 ) -> Result<String, TauriError> {
+    // Reject launcher/shortcut injection before writing anything: a control
+    // character in `app_name`/`frontend_url` can inject an `Exec=` line into a
+    // Linux `.desktop` launcher, and `frontend_url` must be a real app frontend.
+    validate_shortcut_inputs(
+        &app_name,
+        &frontend_url,
+        app_id.as_deref(),
+        &node_url,
+        icon.as_deref(),
+    )?;
     let exe = std::env::current_exe().map_err(|e| {
         TauriError::with_details(
             TauriErrorCode::ShortcutCreationFailed,
@@ -3751,9 +3807,28 @@ async fn autostart_is_enabled(_app: tauri::AppHandle) -> Result<bool, TauriError
     Ok(false)
 }
 
+/// Whether `url` is safe to hand to the OS URL handler from
+/// `open_url_in_browser`. Callers pass registry/app-manifest-controlled URLs, so
+/// restrict to schemes that can only open a web browser: `https` (with a host)
+/// anywhere, `http` only to loopback. This rejects `file:`, `smb:`,
+/// `javascript:`, `vscode:` and other custom schemes that would reach a native
+/// handler. Shares the exact allow-list with `validate_app_frontend_url`.
+fn is_browser_openable_url(url: &str) -> bool {
+    calimero_tauri_app::webview::validate_app_frontend_url(url).is_ok()
+}
+
 #[tauri::command]
 async fn open_url_in_browser(url: String, app_handle: tauri::AppHandle) -> Result<(), TauriError> {
     use tauri_plugin_shell::ShellExt;
+    if !is_browser_openable_url(&url) {
+        return Err(TauriError::new(
+            TauriErrorCode::UrlNotAllowed,
+            format!(
+                "Refusing to open '{}': only https (or http on localhost) links may be opened in the browser",
+                url
+            ),
+        ));
+    }
     app_handle
         .shell()
         .open(url, None)
@@ -4532,10 +4607,101 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        launcher_bundle_is_removable, merod_target_triple, parse_app_deep_link, parse_node_ports,
-        replace_multiaddr_port, score_merod_asset, update_menu_label, DEFAULT_NODE_PORTS,
+        is_browser_openable_url, launcher_bundle_is_removable, merod_target_triple,
+        parse_app_deep_link, parse_node_ports, replace_multiaddr_port, score_merod_asset,
+        update_menu_label, validate_shortcut_inputs, DEFAULT_NODE_PORTS,
     };
     use std::path::Path;
+
+    #[test]
+    fn shortcut_inputs_reject_newline_in_name() {
+        // F4: a newline in `app_name` is the `.desktop` `Exec=` injection primitive.
+        let err = validate_shortcut_inputs(
+            "Evil\nExec=/bin/sh -c calc",
+            "https://apps.calimero.network/app",
+            None,
+            "http://localhost:2528",
+            None,
+        )
+        .expect_err("newline in app name must be rejected");
+        assert_eq!(err.code, super::TauriErrorCode::InvalidInput);
+    }
+
+    #[test]
+    fn shortcut_inputs_reject_control_chars_in_other_fields() {
+        // Any attacker-derived interpolated string is covered, not just the name.
+        assert!(validate_shortcut_inputs(
+            "Nice App",
+            "https://apps.calimero.network/app",
+            Some("id\r\nExec=evil"),
+            "http://localhost:2528",
+            None,
+        )
+        .is_err());
+        assert!(validate_shortcut_inputs(
+            "Nice App",
+            "https://apps.calimero.network/app",
+            None,
+            "http://localhost:2528",
+            Some("icon\u{0007}"),
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn shortcut_inputs_reject_non_https_frontend_url() {
+        // F4: `frontend_url` must be a real app frontend (https, or http loopback).
+        for bad in ["file:///etc/passwd", "http://evil.example/app", "ftp://x/y"] {
+            let err = validate_shortcut_inputs("Nice App", bad, None, "http://localhost:2528", None)
+                .expect_err("non-https/non-loopback frontend_url must be rejected");
+            assert_eq!(err.code, super::TauriErrorCode::InvalidUrl);
+        }
+    }
+
+    #[test]
+    fn shortcut_inputs_accept_clean_values() {
+        assert!(validate_shortcut_inputs(
+            "My Registry App",
+            "https://apps.calimero.network/app/xyz",
+            Some("app-xyz"),
+            "http://localhost:2528",
+            Some("https://apps.calimero.network/icon.png"),
+        )
+        .is_ok());
+        // http on loopback is a valid frontend (dev registries / local nodes).
+        assert!(validate_shortcut_inputs(
+            "Local App",
+            "http://127.0.0.1:3000/",
+            None,
+            "http://localhost:2528",
+            None,
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn browser_open_allows_https_and_loopback_http_only() {
+        // F5: registry/manifest links may only open a web browser.
+        assert!(is_browser_openable_url("https://cloud.calimero.network"));
+        assert!(is_browser_openable_url(
+            "https://apps.calimero.network/orgs/foo"
+        ));
+        assert!(is_browser_openable_url("http://localhost:8080/docs"));
+        assert!(is_browser_openable_url("http://127.0.0.1:3000"));
+    }
+
+    #[test]
+    fn browser_open_rejects_native_and_custom_schemes() {
+        // F5: everything that could reach a native handler is refused.
+        assert!(!is_browser_openable_url("file:///etc/passwd"));
+        assert!(!is_browser_openable_url("smb://server/share"));
+        assert!(!is_browser_openable_url("javascript:alert(1)"));
+        assert!(!is_browser_openable_url("vscode://file/etc/passwd"));
+        assert!(!is_browser_openable_url("mailto:a@b.com"));
+        // Non-loopback http is not a browser link either.
+        assert!(!is_browser_openable_url("http://evil.example/x"));
+        assert!(!is_browser_openable_url("not a url"));
+    }
 
     #[test]
     fn update_menu_label_offers_the_found_version() {

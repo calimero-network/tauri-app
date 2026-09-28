@@ -432,8 +432,6 @@
                     effectiveBody != null ? await encodeBody(effectiveBody) : { body: null, bodyBase64: null };
 
                 console.log('[Tauri Proxy] Intercepting fetch:', urlStr, 'method:', init?.method || 'GET');
-                console.log('[Tauri Proxy] Headers being sent:', JSON.stringify(headers, null, 2));
-                console.log('[Tauri Proxy] Has Authorization header?', 'Authorization' in headers || 'authorization' in headers);
 
                 const requestPromise = proxyRequest(urlStr, effectiveMethod, headers, reqBody, reqBodyBase64);
 

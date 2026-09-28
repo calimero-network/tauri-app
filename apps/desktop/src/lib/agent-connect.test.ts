@@ -492,6 +492,8 @@ describe('agentSetupPrompt', () => {
 
     expect(prompt).toContain('/home/x/.config/calimero/mcp/agent.json');
     expect(prompt).toContain('http://localhost:2528');
+    expect(prompt).toContain('named "mero-mcp"');
+    expect(prompt).toContain('claude mcp add -s local mero-mcp --');
     expect(prompt).toContain('node_status');
     expect(prompt).toContain('list_applications');
     expect(prompt).toContain('list_contexts');
@@ -506,7 +508,7 @@ describe('MCP_CONFIG_SNIPPET', () => {
   it('is harness-generic: an mcpServers entry, no client-specific command', () => {
     expect(JSON.parse(agentConnect.MCP_CONFIG_SNIPPET)).toEqual({
       mcpServers: {
-        calimero: { command: 'npx', args: ['-y', '@calimero-network/mero-mcp'] },
+        'mero-mcp': { command: 'npx', args: ['-y', '@calimero-network/mero-mcp'] },
       },
     });
   });

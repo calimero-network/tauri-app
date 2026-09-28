@@ -1,6 +1,6 @@
 {
   "name": "desktop",
-  "version": "0.0.114",
+  "version": "0.0.115",
   "description": "Calimero Desktop Application",
   "type": "module",
   "scripts": {

@@ -46,7 +46,6 @@ commands.allow = [
   "clear_merod_logs",
   "export_merod_logs",
   "get_merod_binary_version",
-  "download_and_replace_merod",
   "list_merod_releases",
   "list_installed_merod_versions",
   "remove_merod_version",

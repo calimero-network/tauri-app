@@ -1,5 +1,6 @@
 import { test, expect } from "./fixtures/test";
 import { setupAuthenticatedPage, setupDeveloperPage } from "./fixtures/helpers";
+import { API_ROUTES, listApplicationsWireBody } from "./fixtures/mock-data";
 
 test.describe("Sidebar navigation", () => {
   test.beforeEach(async ({ page }) => {
@@ -38,6 +39,15 @@ test.describe("Sidebar navigation", () => {
     await expect(page.locator('button[title="Applications"]')).toHaveClass(
       /active/
     );
+  });
+
+  test("empty Applications page links to the marketplace", async ({ page }) => {
+    await page.route(API_ROUTES.listApplications, (route) =>
+      route.fulfill({ status: 200, contentType: "application/json", body: listApplicationsWireBody([]) }),
+    );
+    await page.click('button[title="Applications"]');
+    await page.getByRole("link", { name: "Marketplace" }).click();
+    await expect(page.getByTestId("shell-page-title")).toHaveText("Marketplace");
   });
 
   test("clicking Home returns to home page", async ({ page }) => {

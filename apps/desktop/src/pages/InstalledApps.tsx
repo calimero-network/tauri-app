@@ -33,11 +33,12 @@ export interface InstalledAppsProps {
   onAuthRequired?: () => void;
   onConfirmUninstall?: (appId: string, appName: string, onConfirm: () => Promise<void>) => void;
   clientReady?: boolean;
+  onNavigate?: (page: 'marketplace') => void;
 }
 
 const SKELETON_MIN_MS = 1000;
 
-const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirmUninstall, clientReady = true }) => {
+const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirmUninstall, clientReady = true, onNavigate }) => {
   const toast = useToast();
   const [apps, setApps] = useState<InstalledApplication[]>([]);
   const [loading, setLoading] = useState(true);
@@ -277,7 +278,7 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
         ) : apps.length === 0 ? (
           <div className="empty-state">
             <p>No applications installed.</p>
-            <p>Visit the <a href="#marketplace">Marketplace</a> to install applications.</p>
+            <p>Visit the <a href="#marketplace" onClick={(e) => { e.preventDefault(); onNavigate?.('marketplace'); }}>Marketplace</a> to install applications.</p>
           </div>
         ) : (
           <div className="installed-apps-grid" data-testid="installed-apps-grid">

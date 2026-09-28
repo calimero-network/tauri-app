@@ -67,7 +67,7 @@ async function revokeClientKey(clientId: string): Promise<boolean> {
  * only the file it lives in (and, for Codex, the syntax) differs.
  */
 export const MCP_CONFIG_SNIPPET = JSON.stringify(
-  { mcpServers: { calimero: { command: 'npx', args: ['-y', '@calimero-network/mero-mcp'] } } },
+  { mcpServers: { 'mero-mcp': { command: 'npx', args: ['-y', '@calimero-network/mero-mcp'] } } },
   null,
   2,
 );
@@ -89,9 +89,9 @@ export function agentSetupPrompt(credentialPath: string, nodeUrl: string): strin
   const hints = MCP_CLIENT_LOCATIONS.map(({ client, location }) => `- ${client}: ${location}`).join('\n');
   return `Set yourself up to use the Calimero MCP server for this node (${nodeUrl}).
 
-1. Add an MCP server entry named "calimero" that runs \`npx -y @calimero-network/mero-mcp\`.
+1. Add an MCP server entry named "mero-mcp" that runs \`npx -y @calimero-network/mero-mcp\`.
    In Claude Code that is one command:
-     claude mcp add -s local calimero -- npx -y @calimero-network/mero-mcp
+     claude mcp add -s local mero-mcp -- npx -y @calimero-network/mero-mcp
    Otherwise work out where your own harness keeps its MCP config - common locations:
 ${hints}
 2. No environment variables are needed: the server reads its credential straight

@@ -638,6 +638,7 @@ function App() {
           clientReady={clientReady}
           onAuthRequired={handleAuthRequired}
           onConfirmUninstall={handleConfirmUninstall}
+          onNavigate={setCurrentPage}
         />
       ),
     },

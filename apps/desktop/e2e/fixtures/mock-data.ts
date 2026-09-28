@@ -123,6 +123,9 @@ export const MOCK_REGISTRY_V2_BUNDLES = [
     package: "only-peers-chat",
     appVersion: "0.3.0",
     minRuntimeVersion: "1.0.0",
+    // What `cargo mero bundle` stamps: the core release the WASM was built
+    // against. `blockchain-demo` has none, like every pre-stamp bundle.
+    buildInfo: { sdkSource: "git", sdkVersion: "0.11.0-rc.54", sdkRev: "90ea153bf0e6c647e47be1ad2b2142ecb571cc63" },
     version: "2.0",
     wasm: { hash: "deadbeefcafedeadbeefcafedeadbeefcafedeadbeefcafedeadbeefcafedead", path: "", size: 12345 },
     metadata: {

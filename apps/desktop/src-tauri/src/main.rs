@@ -1261,7 +1261,14 @@ async fn create_app_window(
     .min_inner_size(600.0, 400.0)
     .resizable(true)
     .center()
-    .initialization_script(&proxy_script); // Inject script with configured node URL
+    .initialization_script(&proxy_script) // Inject script with configured node URL
+    // Hand OS file drops to the page. Tauri's own drop handler returns `true`
+    // for every drop, and wry then never forwards it to the webview (macOS
+    // skips WKWebView's performDragOperation), so the app never sees
+    // dragenter/dragover/drop and HTML5 drag-and-drop is dead — e.g. dropping
+    // a file onto mero-chat's composer. Nothing listens for Tauri's
+    // DragDropEvent on app windows, so nothing is lost.
+    .disable_drag_drop_handler();
 
     // A stable per-(app, node) bucket so the window keeps its own session across
     // opens. macOS has no per-webview data directory, hence the identifier.

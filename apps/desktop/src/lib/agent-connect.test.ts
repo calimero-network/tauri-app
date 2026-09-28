@@ -506,7 +506,7 @@ describe('MCP_CONFIG_SNIPPET', () => {
   it('is harness-generic: an mcpServers entry, no client-specific command', () => {
     expect(JSON.parse(agentConnect.MCP_CONFIG_SNIPPET)).toEqual({
       mcpServers: {
-        calimero: { command: 'npx', args: ['-y', '@calimero-network/mero-mcp'] },
+        'mero-mcp': { command: 'npx', args: ['-y', '@calimero-network/mero-mcp'] },
       },
     });
   });

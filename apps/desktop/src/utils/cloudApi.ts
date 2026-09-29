@@ -1,5 +1,9 @@
-import { hexEncodeUtf8 } from '@calimero-network/mero-js';
-import type { GetTeeAdmissionPolicyResponseData } from '@calimero-network/mero-js';
+import { hexEncodeUtf8, HTTPError } from '@calimero-network/mero-js';
+import type {
+  GetTeeAdmissionPolicyResponseData,
+  SetTeeAdmissionPolicyRequest,
+  SignedReleaseTeePolicy,
+} from '@calimero-network/mero-js';
 import { apiClient, nodeErrorMessage } from '../lib/mero-client';
 import { getSettings, saveSettings } from './settings';
 import { isMdmaSessionToken, isTokenExpired, parseJwtPayload } from './jwt';
@@ -249,8 +253,74 @@ async function named<T>(action: string, call: Promise<T>): Promise<T> {
 }
 
 /**
+ * How a policy admits a TEE: `replica` as a `ReadOnlyTee`, which replicates
+ * but refuses to relay members' writes, or `relay` as a `RelayTee`, which also
+ * relays them. A node reports a policy without `mode` as `replica`.
+ */
+type TeeAdmissionMode = 'replica' | 'relay';
+
+/**
+ * Whether the node took a policy in relay mode. `relay-unsupported` means it
+ * runs a core older than 0.11.0-rc.61, which refuses `mode` outright: its TEEs
+ * are admitted as replicas whatever the client asks for.
+ */
+export type TeeRelaySupport = 'relay' | 'relay-unsupported';
+
+/** What the user reads when their node cannot admit cloud nodes as relays. */
+export const RELAY_UNSUPPORTED_WARNING =
+  'Your node runs a Calimero core older than 0.11.0-rc.61, so cloud HA nodes ' +
+  'join as read-only replicas and cannot relay writes. Upgrade the node to let ' +
+  'cloud nodes relay writes.';
+
+/**
+ * Did the node refuse the body because it does not know `mode`? Core's policy
+ * body denies unknown fields, so a pre-rc.61 node answers 400 naming the field.
+ */
+function rejectsMode(error: unknown): boolean {
+  return (
+    error instanceof HTTPError &&
+    error.status === 400 &&
+    /unknown field|\bmode\b/i.test(nodeErrorMessage(error))
+  );
+}
+
+/**
+ * PUT a TEE admission policy in relay mode: cloud HA always admits its TEEs as
+ * `RelayTee`, so they can relay members' writes, and the PUT converts the TEEs
+ * the namespace already admitted.
+ *
+ * A node too old to know `mode` refuses the body, so the policy is sent once
+ * more without it - unless `retryWithoutMode` is false, which the caller passes
+ * when the node already holds exactly that policy and the retry would change
+ * nothing. Every other failure is thrown.
+ */
+async function putRelayTeeAdmissionPolicy(
+  groupId: string,
+  policy: SetTeeAdmissionPolicyRequest,
+  retryWithoutMode: boolean,
+): Promise<TeeRelaySupport> {
+  const action = 'Failed to set TEE admission policy';
+  // The SDK does not type `mode`; core takes it from 0.11.0-rc.61.
+  const relay: SetTeeAdmissionPolicyRequest & { mode: TeeAdmissionMode } = {
+    ...policy,
+    mode: 'relay',
+  };
+  try {
+    await admin().setTeeAdmissionPolicy(groupId, relay);
+    return 'relay';
+  } catch (error) {
+    if (!rejectsMode(error)) throw new Error(nodeErrorMessage(error, action));
+  }
+  if (retryWithoutMode) {
+    await named(action, admin().setTeeAdmissionPolicy(groupId, policy));
+  }
+  return 'relay-unsupported';
+}
+
+/**
  * Set the TEE admission policy on a group. Called after enabling HA so fleet
- * TEE nodes can be admitted into the group's governance DAG.
+ * TEE nodes can be admitted into the group's governance DAG, as relays (see
+ * `putRelayTeeAdmissionPolicy`).
  *
  * `acceptMock` is always false - only real TDX attestations are accepted.
  *
@@ -271,10 +341,11 @@ async function named<T>(action: string, call: Promise<T>): Promise<T> {
 export function setTeeAdmissionPolicy(
   groupId: string,
   measurements: FleetMeasurements,
-): Promise<void> {
-  return named(
-    'Failed to set TEE admission policy',
-    admin().setTeeAdmissionPolicy(groupId, {
+  retryWithoutMode = true,
+): Promise<TeeRelaySupport> {
+  return putRelayTeeAdmissionPolicy(
+    groupId,
+    {
       allowedMrtd: measurements.allowed_mrtd,
       allowedRtmr0: measurements.allowed_rtmr0,
       allowedRtmr1: measurements.allowed_rtmr1,
@@ -282,7 +353,8 @@ export function setTeeAdmissionPolicy(
       allowedRtmr3: measurements.allowed_rtmr3,
       allowedTcbStatuses: [],
       acceptMock: false,
-    }),
+    },
+    retryWithoutMode,
   );
 }
 
@@ -318,26 +390,33 @@ export function fleetNamesItsRelease(releaseTag: string): boolean {
  * release the release workflow signed, if its quote matches one of
  * `SIGNED_RELEASE_PROFILES`. Unlike the lists, it needs no update when the
  * fleet moves to a new release.
+ *
+ * `signedRelease` defaults to what enable-HA authors; re-asserting a policy
+ * already on the node passes that one, so relay mode is all that changes.
  */
-export function setSignedReleaseTeeAdmissionPolicy(groupId: string): Promise<void> {
-  return named(
-    'Failed to set TEE admission policy',
-    admin().setTeeAdmissionPolicy(groupId, {
-      signedRelease: { allowedProfiles: SIGNED_RELEASE_PROFILES },
-      allowedTcbStatuses: [],
-      acceptMock: false,
-    }),
+export function setSignedReleaseTeeAdmissionPolicy(
+  groupId: string,
+  signedRelease: SignedReleaseTeePolicy = { allowedProfiles: SIGNED_RELEASE_PROFILES },
+  retryWithoutMode = true,
+): Promise<TeeRelaySupport> {
+  return putRelayTeeAdmissionPolicy(
+    groupId,
+    { signedRelease, allowedTcbStatuses: [], acceptMock: false },
+    retryWithoutMode,
   );
 }
 
 /** The subset of the merod GET tee-admission-policy response we act on. */
 export interface TeeAdmissionPolicyState {
   enabled: boolean;
+  /** How the policy admits a TEE. A node older than rc.61 omits it: `replica`. */
+  mode: TeeAdmissionMode;
   /**
-   * The policy admits by signed release. Its measurement lists are then empty
-   * by design, so comparing them with the fleet's would read it as stale.
+   * Set when the policy admits by signed release. Its measurement lists are
+   * then empty by design, so comparing them with the fleet's would read it as
+   * stale.
    */
-  signedRelease: boolean;
+  signedRelease: SignedReleaseTeePolicy | null;
   allowedMrtd: string[];
   /**
    * Every register is read back, for the same reason every one is written: a
@@ -367,16 +446,18 @@ function hexList(raw: unknown): string[] {
 export async function getTeeAdmissionPolicy(
   groupId: string,
 ): Promise<TeeAdmissionPolicyState> {
-  // `enabled` rides on the wire but is missing from the SDK's response type.
+  // `enabled` and `mode` ride on the wire but are missing from the SDK's
+  // response type.
   const policy = (await named(
     'Failed to read TEE admission policy',
     admin().getTeeAdmissionPolicy(groupId),
   )) as
-    | (GetTeeAdmissionPolicyResponseData & { enabled?: unknown })
+    | (GetTeeAdmissionPolicyResponseData & { enabled?: unknown; mode?: unknown })
     | null;
   return {
     enabled: policy?.enabled === true,
-    signedRelease: policy?.signedRelease != null,
+    mode: policy?.mode === 'relay' ? 'relay' : 'replica',
+    signedRelease: policy?.signedRelease ?? null,
     allowedMrtd: hexList(policy?.allowedMrtd),
     allowedRtmr0: hexList(policy?.allowedRtmr0),
     allowedRtmr1: hexList(policy?.allowedRtmr1),
@@ -400,16 +481,21 @@ export async function getTeeAdmissionPolicy(
  * `getSelfRoleInGroup` throws when this node isn't a member of the root —
  * that, and any non-Admin role, is a clean skip, not an error.
  *
- * Idempotent: re-authors only when the on-node policy is absent/disabled or
- * its MRTD set differs from the current fleet measurements — a correct
- * policy is a read-only no-op (`'ok'`). Mirrors enable-HA's exact-set
- * semantics (re-author to the desired set), so a rotated-out MRTD is
- * dropped, not merely supplemented.
+ * Idempotent: re-authors only when the on-node policy is absent/disabled,
+ * its measurement sets differ from the current fleet measurements, or it is
+ * not in relay mode — a correct policy is a read-only no-op (`'ok'`). Mirrors
+ * enable-HA's exact-set semantics (re-author to the desired set), so a
+ * rotated-out MRTD is dropped, not merely supplemented. A policy authored
+ * before relay mode existed is re-PUT as it is plus `mode: 'relay'`, which
+ * converts the TEEs it already admitted into relays.
+ *
+ * `'relay-unsupported'`: the node is too old to admit relays. Any stale
+ * measurements were still re-authored without `mode`; the caller warns.
  */
 export async function ensureTeeAdmissionPolicy(
   idToken: string,
   namespaceId: string,
-): Promise<'ok' | 'reasserted' | 'skipped'> {
+): Promise<'ok' | 'reasserted' | 'skipped' | 'relay-unsupported'> {
   let role: string | null;
   try {
     role = await getSelfRoleInGroup(namespaceId);
@@ -429,9 +515,18 @@ export async function ensureTeeAdmissionPolicy(
   }
 
   const current = await getTeeAdmissionPolicy(namespaceId);
+  const relaying = current.mode === 'relay';
+  const reasserted = (support: TeeRelaySupport) =>
+    support === 'relay' ? 'reasserted' : 'relay-unsupported';
   // A signed-release policy is never replaced with lists: it does not go stale
-  // when the fleet rolls forward, which is the point of it.
-  if (current.enabled && current.signedRelease) return 'ok';
+  // when the fleet rolls forward, which is the point of it. It is re-PUT as it
+  // stands when it is not yet in relay mode.
+  if (current.enabled && current.signedRelease) {
+    if (relaying) return 'ok';
+    return reasserted(
+      await setSignedReleaseTeeAdmissionPolicy(namespaceId, current.signedRelease, false),
+    );
+  }
   const sameSet = (want: string[], have: string[]) =>
     new Set(have).size === new Set(want).size && want.every((m) => have.includes(m));
   // Register by register, because the policy is written register by register: a
@@ -444,10 +539,11 @@ export async function ensureTeeAdmissionPolicy(
     sameSet(desired.allowed_rtmr1, current.allowedRtmr1) &&
     sameSet(desired.allowed_rtmr2, current.allowedRtmr2) &&
     sameSet(desired.allowed_rtmr3, current.allowedRtmr3);
-  if (matches) return 'ok';
+  if (matches && relaying) return 'ok';
 
-  await setTeeAdmissionPolicy(namespaceId, desired);
-  return 'reasserted';
+  // A node too old for relay mode is retried without it only when its lists are
+  // stale: when they match, the retry would re-PUT the very policy it holds.
+  return reasserted(await setTeeAdmissionPolicy(namespaceId, desired, !matches));
 }
 
 // ── Ownership proofs (namespace HA gate) ──
@@ -747,7 +843,9 @@ export async function linkAccountToCloud(
  *    policies are ignored by core (namespace-scoped since rc.29 /
  *    calimero-network/core#2188) — applying them would error. Auto-follow
  *    propagates fleet-node membership into subgroups without a second
- *    admission check.
+ *    admission check. The policy is always in relay mode, so fleet nodes
+ *    can relay members' writes; `relay` in the result says whether the
+ *    node took it (`relay-unsupported`: too old, the caller warns).
  * 5. Register the namespace with cloud: `groups` is `[]` plus a single
  *    namespace-scoped ownership proof — the authoritative server-verified
  *    namespace gate.
@@ -756,7 +854,7 @@ export async function enableHaForNamespace(
   idToken: string,
   namespaceId: string,
   groups: NamespaceHaGroup[],
-): Promise<EnableHaNamespaceResponse> {
+): Promise<EnableHaNamespaceResponse & { relay: TeeRelaySupport }> {
   // HA is namespace-scoped: the only supported path is the namespace
   // ownership proof + an empty group list (the authoritative
   // server-verified gate). The "real-context" path — passing a non-empty
@@ -817,7 +915,7 @@ export async function enableHaForNamespace(
   // the proof (no-context path) or the namespace registration. This is a
   // UX fail-fast; the authoritative gate is server-side.
   // Wire format is locked: GroupMemberRole in core serialises as
-  // {Admin, Member, ReadOnly, ReadOnlyTee}. We require Admin only.
+  // {Admin, Member, ReadOnly, ReadOnlyTee, RelayTee}. We require Admin only.
   const role = await getSelfRoleInGroup(namespaceId);
   if (role === null) {
     // Well-formed response but our identity isn't among the members —
@@ -844,15 +942,16 @@ export async function enableHaForNamespace(
   // A fleet on an image that names its release gets the signed-release
   // policy, which never needs re-authoring. An older fleet keeps the lists:
   // its nodes name no release, and a signed-release policy would refuse them.
+  let relay: TeeRelaySupport;
   if (fleetNamesItsRelease(measurements.release_tag)) {
-    await setSignedReleaseTeeAdmissionPolicy(namespaceId);
+    relay = await setSignedReleaseTeeAdmissionPolicy(namespaceId);
   } else {
     if (!measurements.allowed_mrtd.length || !measurements.allowed_rtmr3.length) {
       throw new Error(
         'Incomplete fleet measurements — cannot set admission policy. Core requires at least one MRTD and at least one RTMR3.',
       );
     }
-    await setTeeAdmissionPolicy(namespaceId, measurements);
+    relay = await setTeeAdmissionPolicy(namespaceId, measurements);
   }
 
   // Namespace path: send an empty group list plus exactly ONE
@@ -861,10 +960,11 @@ export async function enableHaForNamespace(
   // root signing key; the cloud re-verifies the proof (signature,
   // subject == authenticated email, audience, group_id == path namespace)
   // before any write — this server-side check is the authoritative
-  // namespace-ownership gate. Core admits a ReadOnlyTee fleet member at
-  // the root and auto-follows contexts created later.
+  // namespace-ownership gate. Core admits a RelayTee fleet member at the
+  // root (a ReadOnlyTee on a node too old for relay mode) and auto-follows
+  // contexts created later.
   const proof = await requestNamespaceOwnershipProof(namespaceId, { subject });
-  return enableHaNamespace(idToken, namespaceId, [], proof);
+  return { ...(await enableHaNamespace(idToken, namespaceId, [], proof)), relay };
 }
 
 export { CloudSessionExpiredError };

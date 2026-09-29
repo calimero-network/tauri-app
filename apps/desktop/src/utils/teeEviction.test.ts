@@ -45,16 +45,17 @@ function makeModel(spec: {
 }
 
 describe('teeIdentitiesFromMembers', () => {
-  it('keeps only ReadOnlyTee identities', () => {
+  it('keeps only TEE identities, replicas and relays alike', () => {
     const raw = [
       { identity: 'admin1', role: 'Admin' },
       { identity: 'tee1', role: 'ReadOnlyTee' },
       { identity: 'ro1', role: 'ReadOnly' },
       { identity: 'tee2', role: 'ReadOnlyTee' },
+      { identity: 'relay1', role: 'RelayTee' },
       { role: 'ReadOnlyTee' }, // missing identity → dropped
       { identity: 42, role: 'ReadOnlyTee' }, // non-string identity → dropped
     ];
-    expect(teeIdentitiesFromMembers(raw)).toEqual(['tee1', 'tee2']);
+    expect(teeIdentitiesFromMembers(raw)).toEqual(['tee1', 'tee2', 'relay1']);
   });
 });
 
@@ -125,6 +126,23 @@ describe('evictTeeMembersFromTree', () => {
     const byGroup = removed.map((r) => r.groupId).sort();
     expect(byGroup).toEqual(['ns', 'private', 'private-nested']);
     for (const r of removed) expect(r.identities).toEqual(['fleet']);
+  });
+
+  it('removes a RelayTee the same way (a relay-mode namespace)', async () => {
+    const { deps, removed } = makeModel({
+      tree: { ns: ['private'], private: [] },
+      members: {
+        ns: [
+          { identity: 'owner', role: 'Admin' },
+          { identity: 'relay', role: 'RelayTee' },
+        ],
+        private: [{ identity: 'relay', role: 'RelayTee' }],
+      },
+    });
+    const result = await evictTeeMembersFromTree(deps, 'ns');
+    expect(result.evicted).toBe(2);
+    expect(removed.map((r) => r.groupId).sort()).toEqual(['ns', 'private']);
+    for (const r of removed) expect(r.identities).toEqual(['relay']);
   });
 
   it('is idempotent — a clean tree is a no-op', async () => {

@@ -6,6 +6,7 @@ import {
   isPermissionError,
   isReasonlessRefusal,
   resolveGroupAction,
+  roleLabel,
   roleOf,
 } from './groupRoles';
 
@@ -53,8 +54,21 @@ describe('isAdminRole', () => {
   });
 
   it('rejects every other role core can send', () => {
-    for (const role of ['Member', 'Observer', 'ReadOnlyTee', '', undefined]) {
+    for (const role of ['Member', 'Observer', 'ReadOnlyTee', 'RelayTee', '', undefined]) {
       expect(isAdminRole(role)).toBe(false);
+    }
+  });
+});
+
+describe('roleLabel', () => {
+  it('tells a TEE relay from a TEE replica', () => {
+    expect(roleLabel('RelayTee')).toBe('TEE relay');
+    expect(roleLabel('ReadOnlyTee')).toBe('TEE replica');
+  });
+
+  it('shows every other role as core names it', () => {
+    for (const role of ['Admin', 'Member', 'ReadOnly']) {
+      expect(roleLabel(role)).toBe(role);
     }
   });
 });
@@ -64,6 +78,7 @@ describe('resolveGroupAction', () => {
     expect(resolveGroupAction({ accountId: ME, role: 'Member' })).toBe('leave');
     expect(resolveGroupAction({ accountId: ME, role: 'Observer' })).toBe('leave');
     expect(resolveGroupAction({ accountId: ME, role: 'ReadOnlyTee' })).toBe('leave');
+    expect(resolveGroupAction({ accountId: ME, role: 'RelayTee' })).toBe('leave');
   });
 
   it('offers Delete to an admin', () => {

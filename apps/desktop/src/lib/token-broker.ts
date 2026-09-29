@@ -53,6 +53,10 @@ import {
   setRefreshToken,
   setTokenExpiresAt,
 } from './token-storage';
+// Cycle by design: app-tokens needs `unpatchedFetch` / `brokerAccessToken` from
+// here, and the listener below needs `appAccessToken`. Both sides only touch the
+// other inside function bodies, so ESM live bindings resolve it.
+import { appAccessToken } from './app-tokens';
 
 /**
  * Sentinel handed to app windows in place of the real refresh token.
@@ -86,6 +90,15 @@ let inflight: Promise<TokenPair> | null = null;
 
 /** `fetch` as it was before we patched it; the rotation must not re-enter us. */
 let originalFetch: typeof fetch | null = null;
+
+/**
+ * `fetch` without the refresh single-flight patch. Anything that rotates a pair
+ * that is NOT the desktop's (app-tokens.ts) must use this: through the patch,
+ * its `/auth/refresh` would be answered with the desktop's own rotated tokens.
+ */
+export function unpatchedFetch(): typeof fetch {
+  return originalFetch ?? fetch.bind(globalThis);
+}
 
 /** `true` when the stored access token is still usable as-is. */
 function accessTokenIsFresh(): boolean {
@@ -225,14 +238,21 @@ export async function brokerAccessToken(): Promise<string> {
 /**
  * Serve `broker_token_refresh` requests relayed from app windows by Rust.
  * Returns an unlisten function.
+ *
+ * ⚠️ Each request names its `slot` (the app window's label, or
+ * `launcher-<appId>` for a per-app launcher) and is answered with THAT app's
+ * scoped token (app-tokens.ts) — never the desktop's own, which is a root key.
+ * A request without a slot is refused rather than answered with ours.
  */
 export async function startTokenBroker(): Promise<() => void> {
-  return listen<{ requestId: string }>('calimero:token-request', async (event) => {
+  return listen<{ requestId: string; slot?: string }>('calimero:token-request', async (event) => {
     const requestId = event.payload?.requestId;
     if (!requestId) return;
+    const slot = event.payload?.slot;
 
     try {
-      const accessToken = await brokerAccessToken();
+      if (!slot) throw new Error('Token request names no app');
+      const accessToken = await appAccessToken(slot);
       await invoke('resolve_token_request', { requestId, accessToken });
     } catch (error) {
       // Always answer: a dropped reply would leave the app window's fetch

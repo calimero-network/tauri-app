@@ -279,6 +279,11 @@ type TokenBrokerRegistry = std::sync::Arc<
 struct TokenRequestPayload {
     #[serde(rename = "requestId")]
     request_id: String,
+    /// Which app's token to rotate: the requesting window's label, or
+    /// `launcher-<appId>` for a per-app launcher. The desktop answers with that
+    /// app's own scoped client key (src/lib/app-tokens.ts), never its root
+    /// session, and refuses a request that names no slot.
+    slot: String,
 }
 
 /// Ask the desktop rotator window for a fresh access token. Shared by the
@@ -287,6 +292,7 @@ struct TokenRequestPayload {
 async fn rotate_access_token(
     app_handle: &tauri::AppHandle,
     registry: &TokenBrokerRegistry,
+    slot: String,
 ) -> Result<String, String> {
     static NEXT_REQUEST_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let request_id = format!(
@@ -307,6 +313,7 @@ async fn rotate_access_token(
         "calimero:token-request",
         TokenRequestPayload {
             request_id: request_id.clone(),
+            slot,
         },
     ) {
         registry
@@ -349,7 +356,9 @@ async fn broker_token_refresh(
     // Only the app the window was opened for, not whatever page it shows now.
     calimero_tauri_app::app_window::authorize_webview(window.as_ref())
         .map_err(|reason| TauriError::new(TauriErrorCode::PathNotAllowed, reason))?;
-    rotate_access_token(&app_handle, &registry)
+    // The label is Tauri's, not the caller's, so a window can only ever get the
+    // token minted for itself.
+    rotate_access_token(&app_handle, &registry, window.label().to_string())
         .await
         .map_err(|reason| TauriError::new(TauriErrorCode::InternalError, reason))
 }
@@ -395,7 +404,9 @@ async fn run_broker_service(app_handle: tauri::AppHandle) {
                 };
             }
             let registry = app_handle.state::<TokenBrokerRegistry>();
-            match rotate_access_token(&app_handle, &registry).await {
+            // `req.app_id` is vouched for by the cap check above.
+            let slot = format!("launcher-{}", req.app_id);
+            match rotate_access_token(&app_handle, &registry, slot).await {
                 Ok(t) => token_broker_ipc::BrokerResponse {
                     access_token: Some(t),
                     error: None,

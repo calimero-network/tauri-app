@@ -261,20 +261,20 @@ type TeeAdmissionMode = 'replica' | 'relay';
 
 /**
  * Whether the node took a policy in relay mode. `relay-unsupported` means it
- * runs a core older than 0.11.0-rc.61, which refuses `mode` outright: its TEEs
+ * runs a core older than 0.11.0-rc.62, which refuses `mode` outright: its TEEs
  * are admitted as replicas whatever the client asks for.
  */
 export type TeeRelaySupport = 'relay' | 'relay-unsupported';
 
 /** What the user reads when their node cannot admit cloud nodes as relays. */
 export const RELAY_UNSUPPORTED_WARNING =
-  'Your node runs a Calimero core older than 0.11.0-rc.61, so cloud HA nodes ' +
+  'Your node runs a Calimero core older than 0.11.0-rc.62, so cloud HA nodes ' +
   'join as read-only replicas and cannot relay writes. Upgrade the node to let ' +
   'cloud nodes relay writes.';
 
 /**
  * Did the node refuse the body because it does not know `mode`? Core's policy
- * body denies unknown fields, so a pre-rc.61 node answers 400 naming the field.
+ * body denies unknown fields, so a pre-rc.62 node answers 400 naming the field.
  */
 function rejectsMode(error: unknown): boolean {
   return (
@@ -300,7 +300,7 @@ async function putRelayTeeAdmissionPolicy(
   retryWithoutMode: boolean,
 ): Promise<TeeRelaySupport> {
   const action = 'Failed to set TEE admission policy';
-  // The SDK does not type `mode`; core takes it from 0.11.0-rc.61.
+  // The SDK does not type `mode`; core takes it from 0.11.0-rc.62.
   const relay: SetTeeAdmissionPolicyRequest & { mode: TeeAdmissionMode } = {
     ...policy,
     mode: 'relay',
@@ -409,7 +409,7 @@ export function setSignedReleaseTeeAdmissionPolicy(
 /** The subset of the merod GET tee-admission-policy response we act on. */
 export interface TeeAdmissionPolicyState {
   enabled: boolean;
-  /** How the policy admits a TEE. A node older than rc.61 omits it: `replica`. */
+  /** How the policy admits a TEE. A node older than rc.62 omits it: `replica`. */
   mode: TeeAdmissionMode;
   /**
    * Set when the policy admits by signed release. Its measurement lists are

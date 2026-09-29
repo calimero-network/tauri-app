@@ -550,7 +550,7 @@ describe('enableHaForNamespace', () => {
   });
 
   it('retries once without mode on a node too old for it, and reports relay-unsupported', async () => {
-    // A pre-rc.61 node denies unknown fields in the policy body.
+    // A pre-rc.62 node denies unknown fields in the policy body.
     const bodies: any[] = [];
     const { restore: r } = installFetch((url, init) => {
       if (url.includes('/tee-admission-policy')) {

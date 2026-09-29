@@ -24,6 +24,7 @@ import {
   getCloudNamespaces,
   ensureTeeAdmissionPolicy,
   CloudSessionExpiredError,
+  RELAY_UNSUPPORTED_WARNING,
 } from "../utils/cloudApi";
 import { getCloudIdToken } from "../utils/cloudAuth";
 import { apiClient } from "../lib/mero-client";
@@ -33,6 +34,7 @@ import {
   isPermissionError,
   isReasonlessRefusal,
   resolveGroupAction,
+  roleLabel,
   roleOf,
   type GroupAction,
 } from "../utils/groupRoles";
@@ -896,10 +898,10 @@ function Namespaces() {
   };
 
   /**
-   * Evict every `ReadOnlyTee` member from the owner's local merod state
-   * across the namespace's *entire* group tree — root + all subgroups,
-   * recursively. Called after a successful cloud `disable-ha` so the
-   * owner publishes `MemberRemoved` over gossip for each.
+   * Evict every TEE member (`ReadOnlyTee` or `RelayTee`) from the owner's
+   * local merod state across the namespace's *entire* group tree — root +
+   * all subgroups, recursively. Called after a successful cloud
+   * `disable-ha` so the owner publishes `MemberRemoved` over gossip for each.
    *
    * Two distinct effects, both required (tauri-app#106):
    *   • The ROOT removal drives the TEE's own `self_purge` (core: one
@@ -1004,12 +1006,12 @@ function Namespaces() {
   // TEE is stranded in the owner's ledger forever (Bug 1).
   //
   // This reconcile runs whenever the cloud-derived `haEnabled` map changes
-  // (namespace load / HA-status refresh) and re-evicts any `ReadOnlyTee`
-  // member that is still present locally for a namespace the cloud reports
-  // as HA-DISABLED. It walks the whole tree (root + subgroups), so it also
-  // mops up subgroup rows the root-only v1 left behind (Bug 2). Idempotent
-  // and skips namespaces with no local TEE members, so the steady state is
-  // a cheap no-op.
+  // (namespace load / HA-status refresh) and re-evicts any TEE member
+  // (`ReadOnlyTee` or `RelayTee`) that is still present locally for a
+  // namespace the cloud reports as HA-DISABLED. It walks the whole tree
+  // (root + subgroups), so it also mops up subgroup rows the root-only v1
+  // left behind (Bug 2). Idempotent and skips namespaces with no local TEE
+  // members, so the steady state is a cheap no-op.
   // Eviction concurrency guard. This is a *counting* semaphore, NOT a
   // boolean: both the reconcile effect and the `toggleHa` disable fast-path
   // are eviction "owners", and a boolean let an in-flight reconcile's
@@ -1181,12 +1183,16 @@ function Namespaces() {
   // "no TeeAdmissionPolicy set for group"; a namespace whose fleet MRTD
   // later rotated has a STALE one. This self-heals both on load: for each
   // enabled namespace where we are the root Admin, `ensureTeeAdmissionPolicy`
-  // re-asserts the policy from the current fleet measurements. It is
-  // idempotent (a correct policy is a read-only no-op) and owner-gated (a
-  // namespace we merely joined is skipped), so the steady state is cheap and
-  // a member node never tries to author a policy it can't sign. Distinct
-  // from the disable-side eviction reconcile above; deliberately kept
-  // separate from its retry/semaphore machinery.
+  // re-asserts the policy from the current fleet measurements, in relay
+  // mode — which also converts the TEEs a pre-relay policy admitted as
+  // replicas. It is idempotent (a correct policy is a read-only no-op) and
+  // owner-gated (a namespace we merely joined is skipped), so the steady
+  // state is cheap and a member node never tries to author a policy it
+  // can't sign. Distinct from the disable-side eviction reconcile above;
+  // deliberately kept separate from its retry/semaphore machinery.
+  //
+  // A node too old for relay mode is told so once, not on every refresh.
+  const relayWarnedRef = useRef(false);
   useEffect(() => {
     const settings = getSettings();
     if (!settings.nodeUrl) return;
@@ -1200,11 +1206,13 @@ function Namespaces() {
     let cancelled = false;
     void (async () => {
       let reasserted = 0;
+      let relayUnsupported = false;
       for (const nsId of enabledIds) {
         if (cancelled) return;
         try {
           const outcome = await ensureTeeAdmissionPolicy(idToken, nsId);
           if (outcome === "reasserted") reasserted += 1;
+          if (outcome === "relay-unsupported") relayUnsupported = true;
         } catch (e) {
           // Best-effort: one namespace failing (transient merod/cloud error)
           // must not abort the rest. The fleet node keeps retrying admission,
@@ -1218,6 +1226,12 @@ function Namespaces() {
         toast.success(
           `Re-authored TEE admission policy for ${reasserted} HA namespace(s)`,
         );
+      }
+      // Once per visit to this page: every HA-status refresh re-runs this, and
+      // the node stays too old until the user upgrades it.
+      if (!cancelled && relayUnsupported && !relayWarnedRef.current) {
+        relayWarnedRef.current = true;
+        toast.warning(RELAY_UNSUPPORTED_WARNING, 0);
       }
     })();
     return () => {
@@ -1255,7 +1269,7 @@ function Namespaces() {
           // Cloud-side disable is done; now evict any admitted TEE members
           // from this owner's local merod. Without this, `MemberRemoved` is
           // never published, no key rotation fires, and the fleet node
-          // remains a `ReadOnlyTee` member of our local group state
+          // remains a TEE member of our local group state
           // indefinitely (see tauri-app#106 + core ADR 0002).
           const evictResult = await evictTeeMembersAfterDisable(nsId);
           // Refresh the Members list if any remove call ran (success OR
@@ -1321,10 +1335,14 @@ function Namespaces() {
         // owned by user") for any context that actually exists. An empty
         // group list keeps the request on the server-verified
         // namespace-ownership gate (UserNamespace); core admits the
-        // ReadOnlyTee fleet member at the root and auto-follows contexts.
-        await enableHaForNamespace(token, nsId, []);
+        // RelayTee fleet member at the root and auto-follows contexts.
+        const { relay } = await enableHaForNamespace(token, nsId, []);
         setHaEnabled((prev) => ({ ...prev, [nsId]: true }));
         toast.success('HA enabled — TEE fleet nodes will join');
+        if (relay === 'relay-unsupported') {
+          relayWarnedRef.current = true;
+          toast.warning(RELAY_UNSUPPORTED_WARNING, 0);
+        }
       }
     } catch (err: any) {
       if (err instanceof CloudSessionExpiredError) {
@@ -2199,7 +2217,7 @@ function Namespaces() {
                           </div>
                           {hasName && <span className="member-id mono">{truncateId(m.identity)}</span>}
                         </div>
-                        <span className="member-role" style={{ color: roleColor(m.role) }}>{m.role}</span>
+                        <span className="member-role" style={{ color: roleColor(m.role) }}>{roleLabel(m.role)}</span>
                         <button
                           className="ns-danger-icon-btn"
                           title="Remove member"
@@ -2230,7 +2248,7 @@ function Namespaces() {
                           </div>
                           <div className="ns-member-detail-row">
                             <span className="ns-member-detail-label">Role</span>
-                            <span className="ns-member-detail-value" style={{ color: roleColor(m.role) }}>{m.role}</span>
+                            <span className="ns-member-detail-value" style={{ color: roleColor(m.role) }}>{roleLabel(m.role)}</span>
                           </div>
                           {m.name && (
                             <div className="ns-member-detail-row">
@@ -2356,7 +2374,7 @@ function Namespaces() {
                             </div>
                             {hasName && <span className="member-id mono">{truncateId(m.identity)}</span>}
                           </div>
-                          <span className="member-role" style={{ color: roleColor(m.role) }}>{m.role}</span>
+                          <span className="member-role" style={{ color: roleColor(m.role) }}>{roleLabel(m.role)}</span>
                           <button className="copy-btn" onClick={() => copyToClipboard(m.identity)} title="Copy identity">
                             <Copy size={12} />
                           </button>

@@ -60,6 +60,22 @@ export function isAdminRole(role: string | undefined): boolean {
   return (role ?? '').toLowerCase() === 'admin';
 }
 
+/**
+ * How a member's role reads in the UI. Attestation admission mints the two TEE
+ * roles for cloud HA fleet nodes: a relay also relays members' writes, a
+ * replica does not. Any other role reads as core names it.
+ */
+export function roleLabel(role: string): string {
+  switch (role) {
+    case 'RelayTee':
+      return 'TEE relay';
+    case 'ReadOnlyTee':
+      return 'TEE replica';
+    default:
+      return role;
+  }
+}
+
 export type GroupAction = 'delete' | 'leave';
 
 /**

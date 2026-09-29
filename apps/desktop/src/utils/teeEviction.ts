@@ -3,8 +3,8 @@
 // Background: HA is namespace-scoped and the namespace is *client-rooted*
 // — the cloud (mdma) has no namespace identity, so it cannot author
 // governance ops. When HA is disabled cloud-side, the OWNER node must be
-// the one to publish `MemberRemoved` for every admitted `ReadOnlyTee`
-// fleet member. The root `MemberRemoved` is what drives the TEE's own
+// the one to publish `MemberRemoved` for every admitted TEE fleet member
+// (`ReadOnlyTee` or `RelayTee`). The root `MemberRemoved` is what drives the TEE's own
 // `self_purge` (core: one root removal triggers `PurgeAction::Namespace`,
 // tearing down keys + storage for the whole namespace + subgroups). The
 // per-subgroup removals do NOT cascade on the OWNER's side — only the
@@ -24,17 +24,24 @@
 const ADMIN_TIMEOUT_MS = 5000;
 
 /**
- * Filter a raw member array down to the `ReadOnlyTee` identities. The
- * role is serialised by core as the bare string `"ReadOnlyTee"`
- * (GroupMemberRole, #[serde] unit variant). Anything whose `identity`
- * isn't a string or whose `role` isn't exactly `ReadOnlyTee` is dropped.
+ * The roles attestation admission mints: a replica (`ReadOnlyTee`) or a relay
+ * (`RelayTee`), per the namespace policy's mode. Both are fleet TEEs, so HA
+ * disable evicts both.
+ */
+const TEE_ROLES: readonly unknown[] = ['ReadOnlyTee', 'RelayTee'];
+
+/**
+ * Filter a raw member array down to the TEE identities. Core serialises
+ * the role as a bare string (GroupMemberRole, #[serde] unit variant).
+ * Anything whose `identity` isn't a string or whose `role` isn't exactly
+ * one of `TEE_ROLES` is dropped.
  */
 export function teeIdentitiesFromMembers(raw: unknown[]): string[] {
   return raw
     .filter(
       (m: unknown): m is { identity: string; role: string } =>
         typeof (m as { identity?: unknown })?.identity === 'string' &&
-        (m as { role?: unknown })?.role === 'ReadOnlyTee',
+        TEE_ROLES.includes((m as { role?: unknown })?.role),
     )
     .map((m) => m.identity);
 }
@@ -137,8 +144,8 @@ export async function enumerateGroupTree(
 }
 
 /**
- * Evict every `ReadOnlyTee` member from the owner's local merod state
- * across the *entire* namespace tree (root + all subgroups). The root
+ * Evict every TEE member (`ReadOnlyTee` or `RelayTee`) from the owner's
+ * local merod state across the *entire* namespace tree (root + all subgroups). The root
  * removal drives the TEE's self-purge; the per-subgroup removals clear
  * the owner's own ledger so private channels no longer show the fleet
  * node (tauri-app#106).
@@ -239,7 +246,7 @@ export async function evictTeeMembersFromTree(
 
 /**
  * Reconcile: for every namespace that is HA-DISABLED in cloud state but
- * still has at least one local `ReadOnlyTee` member somewhere in its
+ * still has at least one local TEE member somewhere in its
  * tree, run the eviction. This is the self-healing path — a transient
  * failure in the fast post-toggle eviction (expired node token, hung
  * merod, gossip not yet propagated) no longer strands the TEE forever:

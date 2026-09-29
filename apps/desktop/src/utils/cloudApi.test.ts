@@ -530,7 +530,73 @@ describe('enableHaForNamespace', () => {
       signedRelease: { allowedProfiles: ['locked-read-only'] },
       allowedTcbStatuses: [],
       acceptMock: false,
+      mode: 'relay',
     });
+  });
+
+  it('admits the fleet as relays, and says so', async () => {
+    let policy: any;
+    const { restore: r } = installFetch(
+      enableHaRoutes('mero-kms-v2.3.73', (body) => (policy = body)),
+    );
+    restore = r;
+    const res = await enableHaForNamespace(
+      makeJwt({ iss: 'mdma', email: 'u@e' }),
+      'ns-root',
+      [],
+    );
+    expect(policy.mode).toBe('relay');
+    expect(res.relay).toBe('relay');
+  });
+
+  it('retries once without mode on a node too old for it, and reports relay-unsupported', async () => {
+    // A pre-rc.61 node denies unknown fields in the policy body.
+    const bodies: any[] = [];
+    const { restore: r } = installFetch((url, init) => {
+      if (url.includes('/tee-admission-policy')) {
+        const body = JSON.parse(String(init?.body));
+        bodies.push(body);
+        if ('mode' in body) {
+          return new Response(
+            'Failed to deserialize the JSON body into the target type: unknown field `mode`',
+            { status: 400 },
+          );
+        }
+        return new Response('{}', { status: 200 });
+      }
+      return enableHaRoutes('mero-kms-v2.3.74', () => {})(url, init);
+    });
+    restore = r;
+    const res = await enableHaForNamespace(
+      makeJwt({ iss: 'mdma', email: 'u@e' }),
+      'ns-root',
+      [],
+    );
+    expect(res.relay).toBe('relay-unsupported');
+    expect(res.status).toBe('enabling');
+    expect(bodies).toHaveLength(2);
+    expect(bodies[0].mode).toBe('relay');
+    expect(bodies[1]).toEqual({
+      signedRelease: { allowedProfiles: ['locked-read-only'] },
+      allowedTcbStatuses: [],
+      acceptMock: false,
+    });
+  });
+
+  it('does not retry without mode on any other policy refusal', async () => {
+    let puts = 0;
+    const { restore: r } = installFetch((url, init) => {
+      if (url.includes('/tee-admission-policy')) {
+        puts += 1;
+        return new Response('allowedRtmr3 must not be empty', { status: 400 });
+      }
+      return enableHaRoutes('mero-kms-v2.3.73', () => {})(url, init);
+    });
+    restore = r;
+    await expect(
+      enableHaForNamespace(makeJwt({ iss: 'mdma', email: 'u@e' }), 'ns-root', []),
+    ).rejects.toThrow(/Failed to set TEE admission policy: allowedRtmr3 must not be empty/);
+    expect(puts).toBe(1);
   });
 
   it('keeps the measurement lists for a fleet whose nodes name no release', async () => {
@@ -672,6 +738,7 @@ describe('ensureTeeAdmissionPolicy', () => {
   /** What the node reports back when its policy already matches `FLEET`. */
   const onNode = (mrtd: string[]) => ({
     enabled: true,
+    mode: 'relay',
     allowedMrtd: mrtd,
     allowedRtmr0: FLEET.allowed_rtmr0,
     allowedRtmr1: FLEET.allowed_rtmr1,
@@ -790,6 +857,7 @@ describe('ensureTeeAdmissionPolicy', () => {
         '/tee-admission-policy': () =>
           jsonResponse({
             enabled: true,
+            mode: 'relay',
             allowedMrtd: [],
             allowedRtmr0: [],
             allowedRtmr1: [],
@@ -831,6 +899,87 @@ describe('ensureTeeAdmissionPolicy', () => {
       ensureTeeAdmissionPolicy(idToken(), 'ns-root'),
     ).resolves.toBe('reasserted');
     expect(putBody?.allowedMrtd).toEqual(['mrtd-NEW']);
+  });
+
+  /** Every PUT body sent, answering each as `put` says; GETs answer `get`. */
+  const policyRoutes = (
+    get: unknown,
+    put: (body: any) => Response = () => new Response('{}', { status: 200 }),
+  ) => {
+    const puts: any[] = [];
+    const { restore: r } = installFetch((url, init) =>
+      route(url, init, {
+        '/members': membersAdmin,
+        '/fleet/measurements': () => measurements(['mrtd-1']),
+        '/tee-admission-policy': () => {
+          if (init?.method !== 'PUT') return jsonResponse(get);
+          const body = JSON.parse(String(init.body));
+          puts.push(body);
+          return put(body);
+        },
+      }),
+    );
+    restore = r;
+    return puts;
+  };
+  const tooOldForMode = (body: any) =>
+    'mode' in body
+      ? new Response('unknown field `mode`, expected one of `allowedMrtd`', {
+          status: 400,
+        })
+      : new Response('{}', { status: 200 });
+
+  it('converts a matching replica-mode policy to relay mode', async () => {
+    // A node that omits `mode` holds a replica policy: re-PUT it as relay so
+    // the TEEs it admitted become relays.
+    const { mode: _mode, ...replica } = onNode(['mrtd-1']);
+    const puts = policyRoutes(replica);
+    await expect(
+      ensureTeeAdmissionPolicy(idToken(), 'ns-root'),
+    ).resolves.toBe('reasserted');
+    expect(puts).toHaveLength(1);
+    expect(puts[0].mode).toBe('relay');
+    expect(puts[0].allowedMrtd).toEqual(['mrtd-1']);
+  });
+
+  it('re-PUTs a replica-mode signed-release policy as it stands, in relay mode', async () => {
+    const signedRelease = {
+      allowedProfiles: ['locked-read-only'],
+      minReleaseVersion: '2.3.80',
+    };
+    const puts = policyRoutes({
+      enabled: true,
+      mode: 'replica',
+      allowedMrtd: [],
+      signedRelease,
+    });
+    await expect(
+      ensureTeeAdmissionPolicy(idToken(), 'ns-root'),
+    ).resolves.toBe('reasserted');
+    expect(puts).toEqual([
+      { signedRelease, allowedTcbStatuses: [], acceptMock: false, mode: 'relay' },
+    ]);
+  });
+
+  it("answers 'relay-unsupported' without a no-op retry when an old node's policy matches", async () => {
+    const { mode: _mode, ...replica } = onNode(['mrtd-1']);
+    const puts = policyRoutes(replica, tooOldForMode);
+    await expect(
+      ensureTeeAdmissionPolicy(idToken(), 'ns-root'),
+    ).resolves.toBe('relay-unsupported');
+    // The mode-less retry would re-PUT the very policy the node holds.
+    expect(puts).toHaveLength(1);
+  });
+
+  it('still re-authors a stale policy without mode on an old node', async () => {
+    const { mode: _mode, ...replica } = onNode(['mrtd-OLD']);
+    const puts = policyRoutes(replica, tooOldForMode);
+    await expect(
+      ensureTeeAdmissionPolicy(idToken(), 'ns-root'),
+    ).resolves.toBe('relay-unsupported');
+    expect(puts).toHaveLength(2);
+    expect(puts[1].mode).toBeUndefined();
+    expect(puts[1].allowedMrtd).toEqual(['mrtd-1']);
   });
 });
 

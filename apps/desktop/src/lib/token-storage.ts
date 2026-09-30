@@ -41,4 +41,7 @@ export function clearAllTokens(): void {
   clearAccessToken();
   clearRefreshToken();
   localStorage.removeItem(EXPIRES_AT_KEY);
+  // The per-app pairs minted under this session (app-tokens.ts STORAGE_KEY).
+  // Spelled out rather than imported: app-tokens already depends on this file.
+  localStorage.removeItem('calimero_app_token_slots');
 }

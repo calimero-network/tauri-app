@@ -27,6 +27,14 @@ vi.mock('../lib/token-storage', () => ({
   getTokenExpiresAt: () => 1_700_000_000_000,
 }));
 
+// The window must get a token minted for IT, never the desktop's root session.
+const APP_SCOPED_TOKEN = 'app-scoped-access-token';
+const appAccessToken = vi.fn();
+vi.mock('../lib/app-tokens', () => ({
+  appAccessToken: (...a: unknown[]) => appAccessToken(...a),
+  expiresAtFromJwt: () => 1_700_000_000_000,
+}));
+
 import { appInstalled, isAllowedAppFrontendUrl, openAppFrontend, normalizeNodeUrl } from './appUtils';
 import { BROKERED_REFRESH_TOKEN } from '../lib/token-broker';
 
@@ -53,6 +61,7 @@ beforeEach(() => {
   accessToken = 'the-access-token';
   refreshToken = REAL_REFRESH_TOKEN;
   getByLabel.mockResolvedValue(null);
+  appAccessToken.mockResolvedValue(APP_SCOPED_TOKEN);
   // `openAppFrontend` prefers the per-app launcher (`open_app_launcher`) and
   // only falls back to the in-process window when it's unavailable. These tests
   // cover that fallback window path (the token-handoff safety), so make the
@@ -80,13 +89,41 @@ describe('openAppFrontend token handoff', () => {
     expect(openedHash().get('refresh_token')).not.toBe(REAL_REFRESH_TOKEN);
   });
 
-  it('hands the app the access token plus the brokered sentinel', async () => {
+  it('hands the app its own scoped access token plus the brokered sentinel', async () => {
     await openAppFrontend('https://app.example.com/', 'Example');
 
     const hash = openedHash();
-    expect(hash.get('access_token')).toBe('the-access-token');
+    expect(hash.get('access_token')).toBe(APP_SCOPED_TOKEN);
     expect(hash.get('refresh_token')).toBe(BROKERED_REFRESH_TOKEN);
     expect(hash.get('node_url')).toBe('http://localhost:2528');
+  });
+
+  // The regression R2-3 exists to prevent: the desktop's session is a ROOT key,
+  // and every app frontend (a registry publisher's URL) used to receive it.
+  it('never puts the desktop`s own access token in the app window URL', async () => {
+    await openAppFrontend('https://app.example.com/', 'Example', undefined, {
+      applicationId: 'app-1',
+    });
+
+    expect(openedUrl()).not.toContain('the-access-token');
+  });
+
+  it('mints the token for the window`s own slot (its label)', async () => {
+    await openAppFrontend('https://app.example.com/', 'Example', undefined, {
+      applicationId: 'app-1',
+    });
+
+    expect(appAccessToken).toHaveBeenCalledWith('app-app-1');
+  });
+
+  it('fails closed: no token at all when an app token cannot be minted', async () => {
+    appAccessToken.mockRejectedValue(new Error('mint refused'));
+
+    await openAppFrontend('https://app.example.com/', 'Example');
+
+    const hash = openedHash();
+    expect(hash.has('access_token')).toBe(false);
+    expect(openedUrl()).not.toContain('the-access-token');
   });
 
   // Why a sentinel and not simply omitting `refresh_token`.

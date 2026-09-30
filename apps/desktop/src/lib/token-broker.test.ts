@@ -24,6 +24,12 @@ vi.mock('./token-storage', () => ({
   setTokenExpiresAt: (e: number) => { expiresAt = e; },
 }));
 
+// The broker answers app windows with THEIR scoped token (app-tokens.ts).
+const appAccessToken = vi.fn();
+vi.mock('./app-tokens', () => ({
+  appAccessToken: (...a: unknown[]) => appAccessToken(...a),
+}));
+
 // Imported fresh for every test: the module keeps the in-flight rotation and the
 // captured original `fetch` in module scope, and a test must never inherit either.
 type Broker = typeof import('./token-broker');
@@ -244,33 +250,45 @@ describe('brokerAccessToken', () => {
 
 describe('startTokenBroker', () => {
   /** Run the handler registered for `calimero:token-request`. */
-  async function fireRequest(requestId: string | undefined) {
+  async function fireRequest(payload: Record<string, unknown>) {
     await broker.startTokenBroker();
     const [eventName, handler] = listen.mock.calls[0] as [string, (e: unknown) => Promise<void>];
     expect(eventName).toBe('calimero:token-request');
-    await handler({ payload: requestId === undefined ? {} : { requestId } });
+    await handler({ payload });
   }
 
-  it('answers an app window with an access token — and never a refresh token', async () => {
-    await fireRequest('tok-1');
+  it('answers an app window with ITS OWN token — never the desktop`s, never a refresh token', async () => {
+    appAccessToken.mockResolvedValue('app-scoped-1');
 
+    await fireRequest({ requestId: 'tok-1', slot: 'app-mero-drive' });
+
+    expect(appAccessToken).toHaveBeenCalledWith('app-mero-drive');
     expect(invoke).toHaveBeenCalledWith('resolve_token_request', {
       requestId: 'tok-1',
-      accessToken: 'access-1',
+      accessToken: 'app-scoped-1',
     });
 
-    // The refresh token must never leave the desktop.
+    // Neither the desktop's root access token nor any refresh token leaves here.
     const [, payload] = invoke.mock.calls[0] as [string, Record<string, unknown>];
     expect(Object.keys(payload)).not.toContain('refreshToken');
+    expect(JSON.stringify(payload)).not.toContain('access-1');
     expect(JSON.stringify(payload)).not.toContain('refresh-1');
   });
 
-  it('answers with an error instead of leaving the app window hanging', async () => {
-    accessToken = null;
-    storedRefreshToken = null;
-    expiresAt = null;
+  it('refuses a request that names no app instead of answering with our token', async () => {
+    await fireRequest({ requestId: 'tok-3' });
 
-    await fireRequest('tok-2');
+    expect(appAccessToken).not.toHaveBeenCalled();
+    expect(invoke).toHaveBeenCalledWith('resolve_token_request', {
+      requestId: 'tok-3',
+      error: 'Token request names no app',
+    });
+  });
+
+  it('answers with an error instead of leaving the app window hanging', async () => {
+    appAccessToken.mockRejectedValue(new Error('Desktop is not authenticated'));
+
+    await fireRequest({ requestId: 'tok-2', slot: 'app-x' });
 
     expect(invoke).toHaveBeenCalledWith('resolve_token_request', {
       requestId: 'tok-2',
@@ -279,7 +297,7 @@ describe('startTokenBroker', () => {
   });
 
   it('ignores a malformed request with no id', async () => {
-    await fireRequest(undefined);
+    await fireRequest({});
     expect(invoke).not.toHaveBeenCalled();
   });
 });

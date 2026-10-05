@@ -28,6 +28,7 @@ vi.mock('./settings', () => ({
 import {
   linkAccountToCloud,
   requestOwnershipProof,
+  requestNamespaceOwnershipProof,
   enableHaForNamespace,
   getCloudNamespaces,
   ensureTeeAdmissionPolicy,
@@ -100,6 +101,47 @@ function route(
     status: 500,
   });
 }
+
+describe('requestNamespaceOwnershipProof', () => {
+  let restore: () => void;
+  afterEach(() => restore?.());
+
+  it('forwards the founder attachments merod adds to a namespace proof', async () => {
+    // Without them the cloud refuses the proof: "the proof carries no
+    // `founding` and `credential`".
+    const founding = { founderAccountId: 'aa'.repeat(32), salt: 'bb'.repeat(32) };
+    const { calls, restore: r } = installFetch(() =>
+      jsonResponse({
+        signerPublicKey: 'pk',
+        signedPayload: 'sp',
+        signature: 'sig',
+        founding,
+        credential: 'cc'.repeat(40),
+      }),
+    );
+    restore = r;
+
+    const out = await requestNamespaceOwnershipProof('ns-1', { subject: 'user@example.com' });
+
+    expect(calls[0].url).toBe('http://node/admin-api/groups/ns-1/issue-namespace-ownership-proof');
+    expect(out).toEqual({
+      signer_public_key: 'pk',
+      signed_payload: 'sp',
+      signature: 'sig',
+      founding,
+      credential: 'cc'.repeat(40),
+    });
+  });
+
+  it('omits them when the node sends none', async () => {
+    const { restore: r } = installFetch(() =>
+      jsonResponse({ signerPublicKey: 'pk', signedPayload: 'sp', signature: 'sig', founding: null }),
+    );
+    restore = r;
+    const out = await requestNamespaceOwnershipProof('ns-1', { subject: 'u@e' });
+    expect(out).toEqual({ signer_public_key: 'pk', signed_payload: 'sp', signature: 'sig' });
+  });
+});
 
 describe('requestOwnershipProof', () => {
   let restore: () => void;

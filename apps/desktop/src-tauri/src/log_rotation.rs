@@ -9,8 +9,9 @@
 //! Reads use a bounded tail so displaying logs never loads the whole history into
 //! memory, even if a legacy pre-rotation `merod.log` is huge.
 
+use std::collections::VecDeque;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, BufWriter, Read, Seek, SeekFrom, Write};
+use std::io::{self, BufRead, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
@@ -387,6 +388,166 @@ pub fn read_tail(dir: &Path, max_lines: usize) -> io::Result<String> {
     Ok(rev.join("\n"))
 }
 
+/// Lines of a node's history whose timestamp falls in a window, as returned by
+/// [`read_range`].
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogRange {
+    /// Matching lines, oldest -> newest, joined with `\n`.
+    pub content: String,
+    /// Every line in the window, including the ones dropped by `max_lines`.
+    pub matched: usize,
+    /// True when more than `max_lines` lines matched and only the newest were kept.
+    pub truncated: bool,
+}
+
+/// Every line of the retained history (active file + rotated segments) whose
+/// leading timestamp is within `[from_ms, to_ms]` (Unix milliseconds, either
+/// bound optional). Keeps at most `max_lines` - the newest ones - in memory.
+///
+/// A line with no timestamp of its own (a wrapped message, a backtrace frame)
+/// belongs to the line above it, so it inherits that line's time; lines before
+/// the first timestamp in the history have no time and only show when no bound
+/// is set. Segments last written before `from_ms` are skipped without reading.
+pub fn read_range(
+    dir: &Path,
+    from_ms: Option<i64>,
+    to_ms: Option<i64>,
+    max_lines: usize,
+) -> io::Result<LogRange> {
+    let mut out = LogRange { content: String::new(), matched: 0, truncated: false };
+    if max_lines == 0 || !dir.exists() {
+        return Ok(out);
+    }
+    let mut kept: VecDeque<String> = VecDeque::with_capacity(max_lines.min(4096));
+    let mut current: Option<i64> = None;
+
+    for path in ordered_paths_oldest_first(dir)? {
+        let f = match File::open(&path) {
+            Ok(f) => f,
+            // Rotated out from under us between listing and open - skip it.
+            Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(e),
+        };
+        if let Some(from) = from_ms {
+            let modified_ms = f
+                .metadata()
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
+                .map(|d| d.as_millis() as i64);
+            // Nothing in a file can be newer than its last write. The next file
+            // restarts the inherited time, since the skipped one isn't read.
+            if modified_ms.is_some_and(|m| m < from) {
+                current = None;
+                continue;
+            }
+        }
+        let mut reader = BufReader::new(f);
+        let mut buf = Vec::new();
+        loop {
+            buf.clear();
+            if reader.read_until(b'\n', &mut buf)? == 0 {
+                break;
+            }
+            let line = String::from_utf8_lossy(&buf);
+            let line = line.trim_end_matches(['\n', '\r']);
+            if let Some(ts) = parse_leading_timestamp_ms(line) {
+                current = Some(ts);
+            }
+            let in_range = match current {
+                Some(ts) => from_ms.map_or(true, |f| ts >= f) && to_ms.map_or(true, |t| ts <= t),
+                None => from_ms.is_none() && to_ms.is_none(),
+            };
+            if !in_range {
+                continue;
+            }
+            out.matched += 1;
+            if kept.len() == max_lines {
+                kept.pop_front();
+                out.truncated = true;
+            }
+            kept.push_back(line.to_string());
+        }
+    }
+    out.content = Vec::from(kept).join("\n");
+    Ok(out)
+}
+
+/// Unix milliseconds of the RFC 3339 timestamp a log line starts with, e.g.
+/// tracing's `2026-08-11T10:00:00.123456Z  INFO ...`, skipping any ANSI colour
+/// codes before it. `T` or a space may separate date and time; the offset is
+/// `Z`, `±HH:MM` or `±HHMM`. `None` if the line doesn't start with one.
+fn parse_leading_timestamp_ms(line: &str) -> Option<i64> {
+    let b = strip_leading_ansi(line.trim_start()).as_bytes();
+    let num = |r: std::ops::Range<usize>| -> Option<i64> {
+        let s = b.get(r)?;
+        if !s.iter().all(u8::is_ascii_digit) {
+            return None;
+        }
+        std::str::from_utf8(s).ok()?.parse().ok()
+    };
+    let sep = |i: usize, c: &[u8]| b.get(i).is_some_and(|x| c.contains(x));
+    if !(sep(4, b"-") && sep(7, b"-") && sep(10, b"T ") && sep(13, b":") && sep(16, b":")) {
+        return None;
+    }
+    let (year, month, day) = (num(0..4)?, num(5..7)?, num(8..10)?);
+    let (hour, min, sec) = (num(11..13)?, num(14..16)?, num(17..19)?);
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) || hour > 23 || min > 59 || sec > 60 {
+        return None;
+    }
+    let mut i = 19;
+    let mut millis = 0;
+    if b.get(i) == Some(&b'.') {
+        i += 1;
+        let start = i;
+        while b.get(i).is_some_and(u8::is_ascii_digit) {
+            i += 1;
+        }
+        let frac = &b[start..i];
+        if frac.is_empty() {
+            return None;
+        }
+        // First three digits are milliseconds; pad "5" to "500".
+        millis = frac.iter().take(3).fold(0, |acc, d| acc * 10 + i64::from(d - b'0'))
+            * 10_i64.pow(3 - frac.len().min(3) as u32);
+    }
+    let offset_secs = match b.get(i) {
+        Some(b'Z') | Some(b'z') => 0,
+        Some(&s @ (b'+' | b'-')) => {
+            let oh = num(i + 1..i + 3)?;
+            let om = if sep(i + 3, b":") { num(i + 4..i + 6)? } else { num(i + 3..i + 5)? };
+            let secs = oh * 3600 + om * 60;
+            if s == b'-' { -secs } else { secs }
+        }
+        _ => return None,
+    };
+    let days = days_from_civil(year, month, day);
+    Some((days * 86_400 + hour * 3600 + min * 60 + sec - offset_secs) * 1000 + millis)
+}
+
+/// `line` past any ANSI escape sequences (`ESC [ ... <letter>`) at its start.
+fn strip_leading_ansi(mut line: &str) -> &str {
+    while let Some(rest) = line.strip_prefix("\x1b[") {
+        match rest.find(|c: char| c.is_ascii_alphabetic()) {
+            Some(end) => line = &rest[end + 1..],
+            None => return line,
+        }
+    }
+    line
+}
+
+/// Days since 1970-01-01 of a proleptic Gregorian date (Howard Hinnant's algorithm).
+fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
+    let y = if month <= 2 { year - 1 } else { year };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let mp = (month + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
 /// Read at most `max_bytes` from the end of `path`, decoded lossily, dropping a
 /// leading partial line when we started mid-file.
 fn read_tail_bytes(path: &Path, max_bytes: u64) -> io::Result<String> {
@@ -716,5 +877,101 @@ mod tests {
         assert!(!seg_path(&dir, 1).exists(), "must not roll after an external clear");
         assert_eq!(read_tail(&dir, 10).unwrap(), "hello");
         fs::remove_dir_all(&dir).ok();
+    }
+
+    // 2026-08-11T10:00:00Z in Unix milliseconds.
+    const T10: i64 = 1_786_442_400_000;
+
+    #[test]
+    fn parses_tracing_timestamps_with_and_without_offsets() {
+        assert_eq!(parse_leading_timestamp_ms("2026-08-11T10:00:00Z INFO x"), Some(T10));
+        assert_eq!(parse_leading_timestamp_ms("2026-08-11T10:00:00.123456Z  INFO x"), Some(T10 + 123));
+        assert_eq!(parse_leading_timestamp_ms("2026-08-11T10:00:00.5Z x"), Some(T10 + 500));
+        assert_eq!(parse_leading_timestamp_ms("2026-08-11 12:00:00+02:00 x"), Some(T10));
+        assert_eq!(parse_leading_timestamp_ms("2026-08-11T05:30:00-0430 x"), Some(T10));
+        // tracing dims the timestamp with ANSI codes when colour is on.
+        assert_eq!(parse_leading_timestamp_ms("\x1b[2m2026-08-11T10:00:00Z\x1b[0m INFO"), Some(T10));
+        assert_eq!(parse_leading_timestamp_ms("1970-01-01T00:00:00Z"), Some(0));
+        assert_eq!(parse_leading_timestamp_ms("   at src/main.rs:12"), None);
+        assert_eq!(parse_leading_timestamp_ms("2026-08-11T10:00:00 no offset"), None);
+        assert_eq!(parse_leading_timestamp_ms("2026-13-11T10:00:00Z"), None);
+        assert_eq!(parse_leading_timestamp_ms(""), None);
+    }
+
+    #[test]
+    fn range_keeps_only_lines_inside_the_window_across_segments() {
+        let dir = tmp();
+        let mut w = RollingLogWriter::open_with(&dir, 120, 9).unwrap();
+        for m in 0..10 {
+            w.write_line(format!("2026-08-11T10:{:02}:00Z INFO minute {}\n", m, m).as_bytes()).unwrap();
+        }
+        assert!(seg_path(&dir, 1).exists(), "the window must span rotated segments");
+        let got = read_range(&dir, Some(T10 + 2 * 60_000), Some(T10 + 5 * 60_000), 100).unwrap();
+        let minutes: Vec<&str> = got.content.lines().map(|l| l.rsplit(' ').next().unwrap()).collect();
+        assert_eq!(minutes, ["2", "3", "4", "5"]);
+        assert_eq!(got.matched, 4);
+        assert!(!got.truncated);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn range_bounds_are_each_optional() {
+        let dir = tmp();
+        let mut w = RollingLogWriter::open(&dir).unwrap();
+        for m in 0..4 {
+            w.write_line(format!("2026-08-11T10:{:02}:00Z m{}\n", m, m).as_bytes()).unwrap();
+        }
+        assert_eq!(read_range(&dir, Some(T10 + 2 * 60_000), None, 100).unwrap().content, "2026-08-11T10:02:00Z m2\n2026-08-11T10:03:00Z m3");
+        assert_eq!(read_range(&dir, None, Some(T10), 100).unwrap().content, "2026-08-11T10:00:00Z m0");
+        assert_eq!(read_range(&dir, None, None, 100).unwrap().matched, 4);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn range_continuation_lines_follow_their_timestamped_line() {
+        let dir = tmp();
+        let mut w = RollingLogWriter::open(&dir).unwrap();
+        w.write_line(b"preamble with no time\n").unwrap();
+        w.write_line(b"2026-08-11T10:00:00Z ERROR boom\n").unwrap();
+        w.write_line(b"   0: backtrace frame\n").unwrap();
+        w.write_line(b"2026-08-11T11:00:00Z INFO later\n").unwrap();
+        let got = read_range(&dir, Some(T10), Some(T10 + 1000), 100).unwrap();
+        assert_eq!(got.content, "2026-08-11T10:00:00Z ERROR boom\n   0: backtrace frame");
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn range_over_the_line_cap_keeps_the_newest_and_says_so() {
+        let dir = tmp();
+        let mut w = RollingLogWriter::open(&dir).unwrap();
+        for s in 0..10 {
+            w.write_line(format!("2026-08-11T10:00:{:02}Z s{}\n", s, s).as_bytes()).unwrap();
+        }
+        let got = read_range(&dir, Some(T10), None, 3).unwrap();
+        assert_eq!(got.matched, 10);
+        assert!(got.truncated);
+        assert!(got.content.ends_with("s9") && got.content.starts_with("2026-08-11T10:00:07Z"));
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn range_skips_a_segment_last_written_before_the_window() {
+        let dir = tmp();
+        // Lines that claim to be in the window, in files last written (now) before
+        // `from`: neither file is read.
+        fs::write(seg_path(&dir, 1), "2100-01-01T00:00:00Z stale\n").unwrap();
+        fs::write(active_path(&dir), "2100-01-01T00:00:01Z fresh\n").unwrap();
+        let from = 4_102_444_800_000; // 2100-01-01T00:00:00Z
+        let got = read_range(&dir, Some(from), None, 100).unwrap();
+        assert_eq!(got.content, "");
+        // Without a lower bound nothing is skipped.
+        assert_eq!(read_range(&dir, None, None, 100).unwrap().matched, 2);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn range_of_missing_dir_is_empty() {
+        let got = read_range(Path::new("/nonexistent/merod-logs"), Some(0), None, 10).unwrap();
+        assert_eq!(got, LogRange { content: String::new(), matched: 0, truncated: false });
     }
 }

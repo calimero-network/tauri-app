@@ -22,6 +22,7 @@ import {
   enableHaForNamespace,
   disableHaNamespace,
   getCloudNamespaces,
+  getNamespaceFleetStatus,
   ensureTeeAdmissionPolicy,
   CloudSessionExpiredError,
   RELAY_UNSUPPORTED_WARNING,
@@ -39,6 +40,7 @@ import {
   type GroupAction,
 } from "../utils/groupRoles";
 import { parseJwtPayload } from "../utils/jwt";
+import { describeFleetRelay, type FleetRelayStatus } from "../utils/fleetStatus";
 import { useCloudEnabled } from "../hooks/useCloudEnabled";
 import { useVisiblePoll } from "../hooks/useVisiblePoll";
 import { describeBytes, formatBytes, parseUsage, sumUsage, usageFor, type NamespaceBytes } from "../utils/diskUsage";
@@ -922,6 +924,49 @@ function Namespaces() {
   // ── HA state — keyed by namespaceId. `haEnabling` is a per-namespace map so toggling one namespace doesn't lock every other toggle. ──
   const [haEnabling, setHaEnabling] = useState<Record<string, boolean>>({});
   const [haEnabled, setHaEnabled] = useState<Record<string, boolean>>({});
+  // The fleet nodes of the namespace on screen and how each one's join is
+  // going, as the cloud last reported. Only for a namespace with HA on.
+  const [fleetStatus, setFleetStatus] = useState<{ nsId: string; relays: FleetRelayStatus[] } | null>(null);
+  const [readdingIdentity, setReaddingIdentity] = useState<string | null>(null);
+  const fleetNsId = view.type === "namespace" && haEnabled[view.ns.namespaceId] ? view.ns.namespaceId : null;
+  const refreshFleetStatus = useCallback(async () => {
+    const token = getCloudIdToken();
+    if (!fleetNsId || !token) return;
+    try {
+      const relays = await getNamespaceFleetStatus(token, fleetNsId);
+      // Keep the last good answer through a failed read rather than blanking it.
+      if (relays) setFleetStatus({ nsId: fleetNsId, relays });
+    } catch (e) {
+      console.warn(`fleet status: read failed (${(e as Error)?.name ?? "error"})`);
+    }
+  }, [fleetNsId]);
+  useVisiblePoll(() => { void refreshFleetStatus(); }, 15000, !!fleetNsId);
+
+  /**
+   * Re-add a fleet node a past HA disable removed. Core refuses a removed
+   * identity's attestation for good; only an admin `MemberAdded` lifts it.
+   * The identity comes from the node's own refusal report, relayed by the
+   * cloud, so the owner confirms it before this node signs anything.
+   */
+  const readdFleetNode = async (nsId: string, identity: string) => {
+    if (!mero) return;
+    const ok = window.confirm(
+      `Re-add this fleet node to the namespace?\n\n${identity}\n\n` +
+        "It was removed earlier (usually by disabling HA) and cannot rejoin until an admin " +
+        "re-adds it. It joins as read-only and is admitted as a TEE once it attests again.",
+    );
+    if (!ok) return;
+    setReaddingIdentity(identity);
+    try {
+      await mero.admin.addGroupMembers(nsId, { members: [{ identity, role: "ReadOnly" }] });
+      toast.success("Fleet node re-added. It joins on its next attempt.");
+      void refreshFleetStatus();
+    } catch (e: any) {
+      toast.error(`Failed to re-add the fleet node: ${parseApiError(e)}`);
+    } finally {
+      setReaddingIdentity(null);
+    }
+  };
 
   useEffect(() => {
     const token = getCloudIdToken();
@@ -1893,6 +1938,40 @@ function Namespaces() {
                     {nsHaEnabling ? 'Working...' : nsHaEnabled ? 'Disable HA' : 'Enable High Availability'}
                   </button>
                 </div>
+                {nsHaEnabled && fleetStatus?.nsId === ns.namespaceId && (
+                  <div className="ha-fleet-status">
+                    {fleetStatus.relays.length === 0 ? (
+                      <p className="ha-fleet-empty">No fleet node assigned yet.</p>
+                    ) : (
+                      fleetStatus.relays.map((relay) => {
+                        const line = describeFleetRelay(relay);
+                        return (
+                          <div key={relay.peerId} className={`ha-fleet-node ha-fleet-${line.tone}`}>
+                            <div className="ha-fleet-node-row">
+                              <span className="ha-fleet-dot" />
+                              <span className="ha-fleet-peer" title={relay.peerId}>
+                                {relay.peerId.slice(0, 12)}…
+                              </span>
+                              <span className="ha-fleet-text">{line.text}</span>
+                              {line.removedIdentity && (
+                                <button
+                                  className="ha-fleet-readd"
+                                  onClick={() => readdFleetNode(ns.namespaceId, line.removedIdentity as string)}
+                                  disabled={readdingIdentity === line.removedIdentity}
+                                >
+                                  {readdingIdentity === line.removedIdentity ? 'Re-adding…' : 'Re-add node'}
+                                </button>
+                              )}
+                            </div>
+                            {line.details.map((detail, i) => (
+                              <p key={i} className="ha-fleet-detail">{detail}</p>
+                            ))}
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                )}
               </div>
             );
           })()}

@@ -7,6 +7,7 @@ import type {
 import { apiClient, nodeErrorMessage } from '../lib/mero-client';
 import { getSettings, saveSettings } from './settings';
 import { isMdmaSessionToken, isTokenExpired, parseJwtPayload } from './jwt';
+import { parseFleetRelays, type FleetRelayStatus } from './fleetStatus';
 
 // API lives at manager.cloud.calimero.network; cloud.calimero.network is
 // the static portal and does not proxy /api/*. Exported so cloudAuth
@@ -138,6 +139,24 @@ export async function getCloudNamespaces(
   const res = await cloudFetch('/api/cloud/me/namespaces', idToken);
   if (!res.ok) return [];
   return res.json();
+}
+
+/**
+ * The fleet nodes assigned to one owned namespace, with how each one's join is
+ * going (see `utils/fleetStatus.ts`). `null` when the cloud could not be read,
+ * which is not the same as "no nodes": an owned namespace with none assigned
+ * answers an empty list.
+ */
+export async function getNamespaceFleetStatus(
+  idToken: string,
+  namespaceId: string,
+): Promise<FleetRelayStatus[] | null> {
+  const res = await cloudFetch(
+    `/api/cloud/me/namespaces/${encodeURIComponent(namespaceId)}/relays`,
+    idToken,
+  );
+  if (!res.ok) return null;
+  return parseFleetRelays(await res.json());
 }
 
 // ── HA (High Availability) via TEE Fleet Nodes ──

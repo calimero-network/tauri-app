@@ -980,6 +980,76 @@
   border: none;
 }
 
+.ha-fleet-status {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ha-fleet-empty {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.ha-fleet-node {
+  padding: 8px 12px;
+  border: 1px solid var(--border-color);
+  background: rgb(var(--ink-rgb) / 0.03);
+}
+
+.ha-fleet-node-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.ha-fleet-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--text-tertiary);
+}
+
+.ha-fleet-ok .ha-fleet-dot {
+  background: var(--success);
+}
+
+.ha-fleet-error .ha-fleet-dot {
+  background: var(--error);
+}
+
+.ha-fleet-peer {
+  font-family: var(--font-mono, monospace);
+  color: var(--text-tertiary);
+}
+
+.ha-fleet-text {
+  color: var(--text-secondary);
+  flex: 1;
+}
+
+.ha-fleet-error .ha-fleet-text {
+  color: var(--error);
+}
+
+.ha-fleet-readd {
+  font-size: 12px;
+  padding: 3px 10px;
+  cursor: pointer;
+}
+
+.ha-fleet-detail {
+  margin: 6px 0 0 15px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  word-break: break-word;
+  line-height: 1.4;
+}
+
 /* ─── Modal field extras ─── */
 .ns-modal-field-header {
   display: flex;

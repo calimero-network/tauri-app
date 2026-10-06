@@ -565,12 +565,28 @@ export interface OwnershipProof {
   signer_public_key: string;
   signed_payload: string;
   signature: string;
+  /**
+   * Namespace proofs only, attached by merod (core >= 0.11.0-rc.80). The cloud
+   * refuses a namespace proof without both: they are how it checks the signer
+   * is a node of the account that FOUNDED the namespace. Forwarded as merod
+   * spells them — the cloud accepts the camelCase keys.
+   */
+  founding?: NamespaceFounding;
+  credential?: string;
+}
+
+/** What a namespace id was derived from, as merod returns it. */
+interface NamespaceFounding {
+  founderAccountId: string;
+  salt: string;
 }
 
 interface IssueOwnershipProofResponseData {
   signerPublicKey: string;
   signedPayload: string;
   signature: string;
+  founding?: NamespaceFounding | null;
+  credential?: string | null;
 }
 
 /**
@@ -631,11 +647,18 @@ function ownershipProof(data: IssueOwnershipProofResponseData | null): Ownership
   ) {
     throw new Error('Malformed ownership proof response from local node');
   }
-  return {
+  const proof: OwnershipProof = {
     signer_public_key: data.signerPublicKey,
     signed_payload: data.signedPayload,
     signature: data.signature,
   };
+  // Dropping these is what made every namespace HA request fail with "the
+  // proof carries no `founding` and `credential`" — merod attached them, and
+  // this re-keying step threw them away. Only set when present, so a context
+  // proof (which never has them) keeps its exact old shape.
+  if (data.founding) proof.founding = data.founding;
+  if (data.credential) proof.credential = data.credential;
+  return proof;
 }
 
 /**

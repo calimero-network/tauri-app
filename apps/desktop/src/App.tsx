@@ -25,7 +25,8 @@ import Sidebar from "./components/Sidebar";
 import { NodeStatusIndicator } from "./components/NodeStatusIndicator";
 import ToastContainer from "./components/ToastContainer";
 import { Tutorial } from "./components/Tutorial";
-import { isTutorialCompleted, setTutorialCompleted } from "./utils/tutorial";
+import { isTutorialCompleted, setTutorialCompleted, tutorialSteps, type SettingsTab, type TutorialStep } from "./utils/tutorial";
+import { isCloudEnabled } from "./utils/featureFlags";
 import { getCurrentVersion } from "./utils/updater";
 import { invoke } from "@tauri-apps/api/core";
 import { Settings as SettingsIcon } from "lucide-react";
@@ -74,7 +75,11 @@ function App() {
   } | null>(null);
   const [appVersion, setAppVersion] = useState<string>("");
   const [runningNodes, setRunningNodes] = useState<RunningMerodNode[]>([]);
-  const [showTutorial, setShowTutorial] = useState(false);
+  // The guided tour in progress. `forward` is the direction of the last move, so a
+  // step skipped for a missing target keeps going the way the user was going.
+  const [tour, setTour] = useState<{ steps: TutorialStep[]; index: number; forward: boolean } | null>(null);
+  // The Settings tab the tour is showing; undefined leaves Settings on its own tab.
+  const [tourSettingsTab, setTourSettingsTab] = useState<SettingsTab | undefined>();
 
   // Expose the adapter's MeroJs instance to mero-react hooks (useNamespaces, etc.)
   // Include showLogin in deps so the value refreshes after login completes
@@ -518,19 +523,66 @@ function App() {
     };
   }, [checkingOnboarding]);
 
-  // The guided tour runs over the main shell only, the first time it is reached
+  // The guided tour starts from the main shell, the first time it is reached
   // (straight after onboarding and login) and again whenever Settings → Help has
   // cleared tutorialCompleted - leaving Settings re-runs this via showSettings.
+  // Steps for features that are switched off are left out up front.
   const inShell = !checkingOnboarding && !showOnboarding && !showLogin && !showSettings && currentPage !== 'confirm';
   useEffect(() => {
-    if (inShell && !isTutorialCompleted()) setShowTutorial(true);
-  }, [inShell]);
+    if (!inShell || tour || isTutorialCompleted()) return;
+    const steps = tutorialSteps({ developerMode: getSettings().developerMode ?? true, cloud: isCloudEnabled() });
+    setTour({ steps, index: 0, forward: true });
+  }, [inShell, tour]);
 
-  // Closing at any step counts as done: the user asked for it to go away.
+  // Open the page or Settings tab of the current step. Keyed on the step alone:
+  // leaving Settings is async (handleSettingsBack rebuilds the client first), and
+  // re-running while it is in flight would start a second one.
+  const tourStep = tour ? tour.steps[tour.index] : undefined;
+  const showSettingsRef = useRef(showSettings);
+  showSettingsRef.current = showSettings;
+  const handleSettingsBackRef = useRef(handleSettingsBack);
+  handleSettingsBackRef.current = handleSettingsBack;
+  useEffect(() => {
+    if (!tourStep) return;
+    const { at } = tourStep;
+    if (at.view === 'settings') {
+      setTourSettingsTab(at.tab);
+      setShowSettings(true);
+    } else {
+      setCurrentPage(at.page);
+      if (showSettingsRef.current) void handleSettingsBackRef.current();
+    }
+  }, [tourStep]);
+
+  const handleTourIndexChange = useCallback((index: number) => {
+    setTour((t) => (t ? { ...t, index, forward: index > t.index } : t));
+  }, []);
+
+  // Closing at any step counts as done: the user asked for it to go away. A tour
+  // closed inside Settings goes back to the app it started from.
   const handleTutorialClose = useCallback(() => {
     setTutorialCompleted(true);
-    setShowTutorial(false);
+    setTour(null);
+    setTourSettingsTab(undefined);
+    if (showSettingsRef.current) void handleSettingsBackRef.current();
   }, []);
+
+  const handleTourSkip = useCallback(() => {
+    if (!tour) return;
+    const index = tour.forward ? tour.index + 1 : tour.index - 1;
+    if (index >= tour.steps.length) handleTutorialClose();
+    else handleTourIndexChange(Math.max(0, index));
+  }, [tour, handleTutorialClose, handleTourIndexChange]);
+
+  const tutorialOverlay = tour && (
+    <Tutorial
+      steps={tour.steps}
+      index={tour.index}
+      onIndexChange={handleTourIndexChange}
+      onSkip={handleTourSkip}
+      onClose={handleTutorialClose}
+    />
+  );
 
   // Show onboarding if needed
   if (checkingOnboarding) {
@@ -598,7 +650,9 @@ function App() {
         {/* Settings short-circuits the page shell, where the ToastContainer is
             mounted, so it needs its own or its toasts never render. */}
         <ToastContainer />
+        {tutorialOverlay}
         <Settings
+          tab={tourSettingsTab}
           onBack={handleSettingsBack}
           onOpenAccount={async () => {
             await handleSettingsBack();
@@ -681,7 +735,7 @@ function App() {
     <div className="app">
       <ToastContainer />
       {deepLinkConsentDialog}
-      {showTutorial && inShell && <Tutorial onClose={handleTutorialClose} />}
+      {inShell && tutorialOverlay}
 
       <div className="app-layout">
         <Sidebar

@@ -61,7 +61,7 @@ function Home({ connected, error, clientReady, onReconnect, onNavigate, onOpenSe
         </p>
       </div>
 
-      <div className="status-cards-simple">
+      <div className="status-cards-simple" data-tutorial="home-status">
         <div className="status-card-simple">
           <div className="status-header-simple">
             <h3>Node Status</h3>
@@ -124,7 +124,7 @@ function Home({ connected, error, clientReady, onReconnect, onNavigate, onOpenSe
         </div>
       )}
 
-      <div className="quick-actions">
+      <div className="quick-actions" data-tutorial="home-actions">
         <h3>Quick Actions</h3>
         <div className="actions-grid">
           <button onClick={() => onNavigate('marketplace')} className="action-card">

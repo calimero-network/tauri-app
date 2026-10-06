@@ -25,6 +25,8 @@ export interface AppSettings {
   developerMode?: boolean;
   developerModeChosen?: boolean;
   debugLogs?: boolean;
+  debugLogsChosen?: boolean;
+  cloudEnabled?: boolean;
   onboardingCompleted?: boolean;
   tutorialCompleted?: boolean;
 }

@@ -428,7 +428,7 @@ function Marketplace({ clientReady = true }: MarketplaceProps) {
       </header>
 
       <main className="marketplace-main">
-        <div className="marketplace-controls">
+        <div className="marketplace-controls" data-tutorial="marketplace-controls">
           <div className="search-container">
             <Search className="search-icon" size={18} />
           <input

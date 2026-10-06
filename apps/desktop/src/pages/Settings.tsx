@@ -15,7 +15,7 @@ import {
 } from "../lib/agent-connect";
 import { truncateText } from "../utils/string";
 import { checkForUpdates, installUpdate, getCurrentVersion } from "../utils/updater";
-import { isTutorialCompleted, setTutorialCompleted } from "../utils/tutorial";
+import { isTutorialCompleted, setTutorialCompleted, type SettingsTab } from "../utils/tutorial";
 import { useTheme } from "../contexts/ThemeContext";
 import { useToast } from "../contexts/ToastContext";
 import { ArrowLeft, RotateCcw, Trash2, Cloud, Bot, Copy, Check, RefreshCw, Download, MonitorSmartphone } from "lucide-react";
@@ -25,6 +25,8 @@ interface SettingsProps {
   onBack?: () => void;
   /** Leaves Settings for the Account page, where devices are managed. */
   onOpenAccount?: () => void;
+  /** The tab the guided tour is showing; it switches tabs as the tour moves on. */
+  tab?: SettingsTab;
 }
 
 /** What the nuke dialog knows about what it would destroy. Only `ready` may confirm:
@@ -55,18 +57,21 @@ export function canConfirmNuke(
   return confirmed && !nuking && status.kind === 'ready';
 }
 
-function Settings({ onBack, onOpenAccount }: SettingsProps) {
+function Settings({ onBack, onOpenAccount, tab }: SettingsProps) {
   const { theme, toggleTheme } = useTheme();
   const toast = useToast();
   const [registries, setRegistries] = useState<string[]>([]);
   const [newRegistryUrl, setNewRegistryUrl] = useState("");
   
   // Node management state (removed - now in NodeManagement page)
-  const [activeTab, setActiveTab] = useState<'general' | 'registries' | 'agent' | 'account' | 'cloud'>('general');
+  const [activeTab, setActiveTab] = useState<SettingsTab>(tab ?? 'general');
+  useEffect(() => {
+    if (tab) setActiveTab(tab);
+  }, [tab]);
   const [developerMode, setDeveloperMode] = useState(true);
   const [showTutorial, setShowTutorial] = useState(() => !isTutorialCompleted());
-  const [debugLogs, setDebugLogs] = useState(false);
-  const [cloudEnabled, setCloudEnabled] = useState(false);
+  const [debugLogs, setDebugLogs] = useState(true);
+  const [cloudEnabled, setCloudEnabled] = useState(true);
   const [cloudConnected, setCloudConnected] = useState(false);
   const [cloudEmail, setCloudEmail] = useState<string | undefined>();
   const [cloudName, setCloudName] = useState<string | undefined>();
@@ -156,9 +161,8 @@ function Settings({ onBack, onOpenAccount }: SettingsProps) {
     const settings = getSettings();
     setRegistries(settings.registries || []);
     setDeveloperMode(settings.developerMode ?? true);
-    setDebugLogs(settings.debugLogs ?? false);
-    // Effective cloud flag: explicit runtime override if set, else the build-time default.
-    setCloudEnabled(typeof settings.cloudEnabled === 'boolean' ? settings.cloudEnabled : isCloudEnabled());
+    setDebugLogs(settings.debugLogs ?? true);
+    setCloudEnabled(isCloudEnabled());
     setCloudConnected(settings.cloudConnected ?? false);
     setCloudEmail(settings.cloudUserEmail);
     setCloudName(settings.cloudUserName);
@@ -247,6 +251,9 @@ function Settings({ onBack, onOpenAccount }: SettingsProps) {
     saveSettings({
       ...settings,
       debugLogs: newValue,
+      // Marks this as the user's own choice, so an opt-out survives the
+      // on-by-default (see resolveDebugLogs in utils/settings).
+      debugLogsChosen: true,
     });
     toast.success(`Debug logs ${newValue ? 'enabled' : 'disabled'}. Restart the node for changes to take effect.`);
   };
@@ -334,7 +341,7 @@ function Settings({ onBack, onOpenAccount }: SettingsProps) {
       <main className="settings-main">
         <span className="eyebrow">Preferences</span>
         <h1 className="settings-title">Settings</h1>
-        <div className="settings-tabs">
+        <div className="settings-tabs" data-tutorial="settings-tabs">
           <button 
             className={`settings-tab ${activeTab === 'general' ? 'active' : ''}`}
             onClick={() => setActiveTab('general')}
@@ -375,7 +382,7 @@ function Settings({ onBack, onOpenAccount }: SettingsProps) {
 
         {activeTab === 'general' && (
           <div className="settings-content">
-        <div className="settings-card">
+        <div className="settings-card" data-tutorial="settings-startup">
               <h2>Startup</h2>
           <div className="settings-field">
                 <span className="settings-field-label">Start at login</span>
@@ -397,7 +404,7 @@ function Settings({ onBack, onOpenAccount }: SettingsProps) {
                 <p className="field-hint">Launch Calimero when you log in. The node will auto-start if configured.</p>
               </div>
           </div>
-        <div className="settings-card">
+        <div className="settings-card" data-tutorial="settings-appearance">
               <h2>Appearance</h2>
           <div className="settings-field">
                 <span className="settings-field-label">Dark Mode</span>
@@ -418,7 +425,7 @@ function Settings({ onBack, onOpenAccount }: SettingsProps) {
                 <p className="field-hint">Choose between light and dark theme</p>
               </div>
           </div>
-            <div className="settings-card">
+            <div className="settings-card" data-tutorial="settings-help">
               <h2>Help</h2>
               <div className="settings-field">
                 <span className="settings-field-label">Show tutorial</span>
@@ -440,7 +447,7 @@ function Settings({ onBack, onOpenAccount }: SettingsProps) {
               </div>
             </div>
 
-            <div className="settings-card">
+            <div className="settings-card" data-tutorial="settings-updates">
               <h2>Updates</h2>
               <div className="settings-field">
                 <div className="settings-version-row">
@@ -487,7 +494,7 @@ function Settings({ onBack, onOpenAccount }: SettingsProps) {
 
             <div className="settings-card">
               <h2>Advanced</h2>
-          <div className="settings-field">
+          <div className="settings-field" data-tutorial="settings-developer-mode">
                 <span className="settings-field-label">Developer Mode</span>
                 <div className="toggle-switch">
             <input
@@ -508,7 +515,7 @@ function Settings({ onBack, onOpenAccount }: SettingsProps) {
                   Turn it off for a simplified single-node mode.
             </p>
           </div>
-          <div className="settings-field">
+          <div className="settings-field" data-tutorial="settings-debug-logs">
                 <span className="settings-field-label">Debug Logs</span>
                 <div className="toggle-switch">
             <input
@@ -525,11 +532,11 @@ function Settings({ onBack, onOpenAccount }: SettingsProps) {
                   </label>
                 </div>
             <p className="field-hint">
-                  Enable debug-level logging for the merod node. Produces more verbose logs useful for troubleshooting.
+                  On by default: debug-level logging for the merod node, so the logs have what you need when troubleshooting.
                   Restart the node for changes to take effect.
             </p>
           </div>
-          <div className="settings-field">
+          <div className="settings-field" data-tutorial="settings-cloud-toggle">
                 <span className="settings-field-label">Enable Cloud</span>
                 <div className="toggle-switch">
             <input
@@ -546,10 +553,10 @@ function Settings({ onBack, onOpenAccount }: SettingsProps) {
                   </label>
                 </div>
             <p className="field-hint">
-                  Show Calimero Cloud sign-in and High Availability features. Takes effect immediately.
+                  On by default: shows Calimero Cloud sign-in and High Availability features. Takes effect immediately.
             </p>
           </div>
-              <div className="settings-field" style={{ marginTop: '16px', paddingTop: '16px', borderTop: '1px solid var(--border-color, #333)' }}>
+              <div className="settings-field" data-tutorial="settings-reset" style={{ marginTop: '16px', paddingTop: '16px', borderTop: '1px solid var(--border-color, #333)' }}>
                 <span className="settings-field-label">Reset app</span>
                 <p className="field-hint" style={{ marginBottom: '8px' }}>
                   Clear all settings and theme, and start from scratch. Nodes are left running.
@@ -720,7 +727,7 @@ function Settings({ onBack, onOpenAccount }: SettingsProps) {
 
         {activeTab === 'agent' && (
           <div className="settings-content">
-            <div className="settings-card">
+            <div className="settings-card" data-tutorial="settings-agent">
               <h2>Connect AI agent</h2>
               <p className="field-hint" style={{ marginBottom: '16px' }}>
                 Give a coding agent - Claude Code, Cursor, Codex CLI - its own key for this node, so
@@ -815,7 +822,7 @@ function Settings({ onBack, onOpenAccount }: SettingsProps) {
 
         {activeTab === 'account' && (
           <div className="settings-content">
-            <div className="settings-card">
+            <div className="settings-card" data-tutorial="settings-account">
               <h2>Account</h2>
               <p className="field-hint">
                 This node's devices, what each one may act for, and the apps this account
@@ -835,7 +842,7 @@ function Settings({ onBack, onOpenAccount }: SettingsProps) {
 
         {isCloudEnabled() && activeTab === 'cloud' && (
           <div className="settings-content">
-            <div className="settings-card">
+            <div className="settings-card" data-tutorial="settings-cloud">
               <h2>Calimero Cloud</h2>
               {!cloudConnected ? (
                 <>
@@ -946,7 +953,7 @@ function Settings({ onBack, onOpenAccount }: SettingsProps) {
 
         {activeTab === 'registries' && (
           <div className="settings-content">
-        <div className="settings-card">
+        <div className="settings-card" data-tutorial="settings-registries">
           <h2>Application Registries</h2>
           <p className="field-hint" style={{ marginBottom: '16px' }}>
             Configure registry URLs to browse and install applications from the marketplace.

@@ -71,7 +71,7 @@ export default function AccountIdentityCard({
   const [showTechnical, setShowTechnical] = useState(false);
 
   return (
-    <div className="settings-card">
+    <div className="settings-card" data-tutorial="account-identity">
       {banner && (
         <p className="error-message" id="account-banner-revoked">
           {banner}

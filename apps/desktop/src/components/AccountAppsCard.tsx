@@ -17,7 +17,7 @@ export default function AccountAppsCard({
   onInstall,
 }: AccountAppsCardProps) {
   return (
-    <div className="settings-card">
+    <div className="settings-card" data-tutorial="account-apps">
       <h2>Apps on this account</h2>
       {rows.length === 0 ? (
         <p className="empty-hint" id="account-apps-empty">

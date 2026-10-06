@@ -1840,7 +1840,7 @@ function Namespaces() {
       <div className="ns-page">
         <main className="ns-main">
           <div className="ns-page-top">
-            <div className="ns-page-top-left">
+            <div className="ns-page-top-left" data-tutorial="namespaces-header">
               <span className="eyebrow">Developer</span>
               <h1>Namespaces</h1>
               <p className="ns-page-subtitle">
@@ -1868,6 +1868,7 @@ function Namespaces() {
                 className="ns-invite-btn"
                 onClick={() => setJoinNsModal(true)}
                 title="Join an existing namespace using an invitation"
+                data-tutorial="namespaces-join"
               >
                 <LogIn size={14} /> Join Namespace
               </button>

@@ -1,24 +1,11 @@
-/// <reference types="vite/client" />
-
 import { getSettings } from "./settings";
-
-const RAW_CLOUD = import.meta.env.VITE_ENABLE_CLOUD as string | undefined;
-
-/**
- * Build-time default for the cloud feature flag.
- * If VITE_ENABLE_CLOUD is "true"/"1" -> true; if explicitly other non-empty -> false;
- * if unset/empty -> defaults to import.meta.env.DEV.
- */
-function buildTimeDefault(): boolean {
-  if (RAW_CLOUD === undefined || RAW_CLOUD === "") return Boolean(import.meta.env.DEV);
-  return RAW_CLOUD === "true" || RAW_CLOUD === "1";
-}
 
 /**
  * Runtime read of the cloud feature flag.
  *
- * A persisted runtime override (settings.cloudEnabled) wins when it is an explicit
- * boolean; otherwise we fall back to the build-time default. Callable on each render —
+ * On by default. A persisted settings.cloudEnabled wins when it is an explicit
+ * boolean - only the Settings toggle writes it, so it is always the user's own
+ * choice. Callable on each render —
  * the result is intentionally not cached at module load so the Settings toggle takes
  * effect immediately without a rebuild.
  *
@@ -30,8 +17,7 @@ function buildTimeDefault(): boolean {
  */
 export function isCloudEnabled(): boolean {
   const { cloudEnabled } = getSettings();
-  if (typeof cloudEnabled === "boolean") return cloudEnabled;
-  return buildTimeDefault();
+  return typeof cloudEnabled === "boolean" ? cloudEnabled : true;
 }
 
 /**

@@ -60,7 +60,7 @@ export function VersionsPanel({ homeDir }: { homeDir: string }) {
   const total = versions.reduce((sum, v) => sum + v.size_bytes, 0);
 
   return (
-    <div className="versions-panel">
+    <div className="versions-panel" data-tutorial="nodes-versions">
       <div className="versions-panel-head">
         <h3 className="node-card-title">merod versions</h3>
         <span className="versions-total">{formatSize(total)} total</span>

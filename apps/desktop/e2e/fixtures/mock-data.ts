@@ -27,6 +27,10 @@ export interface AppSettings {
   debugLogs?: boolean;
   debugLogsChosen?: boolean;
   cloudEnabled?: boolean;
+  cloudConnected?: boolean;
+  cloudIdToken?: string;
+  cloudUserEmail?: string;
+  cloudUserName?: string;
   onboardingCompleted?: boolean;
   tutorialCompleted?: boolean;
 }

@@ -25,6 +25,8 @@ interface SettingsProps {
   onBack?: () => void;
   /** Leaves Settings for the Account page, where devices are managed. */
   onOpenAccount?: () => void;
+  /** Leaves Settings for the Cloud page, where High Availability is managed. */
+  onOpenCloud?: () => void;
   /** The tab the guided tour is showing; it switches tabs as the tour moves on. */
   tab?: SettingsTab;
 }
@@ -57,7 +59,7 @@ export function canConfirmNuke(
   return confirmed && !nuking && status.kind === 'ready';
 }
 
-function Settings({ onBack, onOpenAccount, tab }: SettingsProps) {
+function Settings({ onBack, onOpenAccount, onOpenCloud, tab }: SettingsProps) {
   const { theme, toggleTheme } = useTheme();
   const toast = useToast();
   const [registries, setRegistries] = useState<string[]>([]);
@@ -924,6 +926,16 @@ function Settings({ onBack, onOpenAccount, tab }: SettingsProps) {
                     )}
                   </div>
                   <div style={{ display: 'flex', gap: '8px' }}>
+                    {onOpenCloud && (
+                      <button
+                        type="button"
+                        id="settings-open-cloud"
+                        className="button button-primary"
+                        onClick={onOpenCloud}
+                      >
+                        Manage High Availability
+                      </button>
+                    )}
                     <button
                       className="button button-secondary"
                       onClick={() => invoke('open_url_in_browser', { url: 'https://cloud.calimero.network' })}

@@ -1,7 +1,7 @@
 import { getSettings, saveSettings } from './settings';
 
 /** Shell pages the tour can open; mirrors the sidebar's pages. */
-export type TourPage = 'home' | 'nodes' | 'namespaces' | 'account' | 'installed' | 'marketplace';
+export type TourPage = 'home' | 'nodes' | 'namespaces' | 'cloud' | 'account' | 'installed' | 'marketplace';
 /** Settings tabs the tour can open; mirrors the tab bar in pages/Settings. */
 export type SettingsTab = 'general' | 'registries' | 'agent' | 'account' | 'cloud';
 
@@ -125,6 +125,25 @@ export const TUTORIAL_STEPS: readonly TutorialStep[] = [
     requires: 'developerMode',
     title: 'Join a namespace',
     body: 'Someone invited you? Paste the invitation here to join their namespace. The invitation names the application, so you do not have to pick one first.',
+  },
+
+  // ─── Cloud ───
+  {
+    id: 'cloud',
+    at: page('cloud'),
+    target: 'nav-cloud',
+    requires: 'cloud',
+    title: 'Cloud',
+    body: 'Calimero Cloud in one place. The dot next to it shows whether you are signed in: green when you are, amber when the session ran out.',
+  },
+  {
+    id: 'cloud-apps',
+    at: page('cloud'),
+    target: 'cloud-apps',
+    requires: 'cloud',
+    optional: true,
+    title: 'High Availability',
+    body: 'Every namespace on this node, grouped by its application. Turn on High Availability and fleet nodes running in secure enclaves keep that namespace online and in sync while your devices are off. Only a namespace\'s admin can turn it on; namespaces shared with you show a lock.',
   },
 
   // ─── Account ───
@@ -267,7 +286,7 @@ export const TUTORIAL_STEPS: readonly TutorialStep[] = [
     at: tab('general'),
     target: 'settings-cloud-toggle',
     title: 'Enable Cloud',
-    body: 'On by default. Shows Calimero Cloud everywhere in the app: the Cloud tab, the cloud card on Account, and High Availability on namespaces. Turning it off hides them immediately.',
+    body: 'On by default. Shows Calimero Cloud everywhere in the app: the Cloud page in the sidebar, this Cloud tab, the cloud card on Account, and High Availability on namespaces. Turning it off hides them immediately.',
   },
   {
     id: 'settings-reset',
@@ -303,7 +322,7 @@ export const TUTORIAL_STEPS: readonly TutorialStep[] = [
     target: 'settings-cloud',
     requires: 'cloud',
     title: 'Calimero Cloud',
-    body: 'Sign in with Google to connect Calimero Cloud: cloud-hosted contexts, High Availability replication of your namespaces, and managed infrastructure. Your local node stays primary - cloud is additive. Once connected, you see your plan here and can disconnect at any time.',
+    body: 'Sign in with Google to connect Calimero Cloud: cloud-hosted contexts, High Availability replication of your namespaces, and managed infrastructure. Your local node stays primary - cloud is additive. Once connected, you see your plan here and can disconnect at any time. High Availability for each namespace is managed from the Cloud page in the sidebar.',
   },
 
   {

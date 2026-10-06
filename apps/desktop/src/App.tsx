@@ -27,6 +27,7 @@ import ToastContainer from "./components/ToastContainer";
 import { Tutorial } from "./components/Tutorial";
 import { isTutorialCompleted, setTutorialCompleted, tutorialSteps, type SettingsTab, type TutorialStep } from "./utils/tutorial";
 import { isCloudEnabled } from "./utils/featureFlags";
+import { useCloudEnabled } from "./hooks/useCloudEnabled";
 import { getCurrentVersion } from "./utils/updater";
 import { invoke } from "@tauri-apps/api/core";
 import { Settings as SettingsIcon } from "lucide-react";
@@ -42,11 +43,12 @@ const Onboarding = lazy(() => import("./pages/Onboarding"));
 const Marketplace = lazy(() => import("./pages/Marketplace"));
 const InstalledApps = lazy(() => import("./pages/InstalledApps"));
 const Namespaces = lazy(() => import("./pages/Namespaces"));
+const Cloud = lazy(() => import("./pages/Cloud"));
 const Account = lazy(() => import("./pages/Account"));
 const NodeManagement = lazy(() => import("./pages/NodeManagement"));
 const ConfirmAction = lazy(() => import("./pages/ConfirmAction"));
 
-type Page = 'home' | 'marketplace' | 'installed' | 'namespaces' | 'account' | 'nodes' | 'confirm';
+type Page = 'home' | 'marketplace' | 'installed' | 'namespaces' | 'cloud' | 'account' | 'nodes' | 'confirm';
 
 // 'confirm' takes over the whole window rather than rendering inside the shell.
 type ShellPage = Exclude<Page, 'confirm'>;
@@ -55,6 +57,7 @@ function App() {
   const toast = useToast();
   const { theme } = useTheme();
   const { refresh: refreshNodeVersions } = useNodeVersions();
+  const cloudEnabled = useCloudEnabled();
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
@@ -658,6 +661,10 @@ function App() {
             await handleSettingsBack();
             setCurrentPage('account');
           }}
+          onOpenCloud={async () => {
+            await handleSettingsBack();
+            setCurrentPage('cloud');
+          }}
         />
       </ErrorBoundary>
     );
@@ -681,7 +688,10 @@ function App() {
     );
   }
 
-  const shellPage: ShellPage = currentPage === 'confirm' ? 'home' : currentPage;
+  // The Cloud page goes with the cloud feature flag: switching it off while the
+  // page is open lands on Home rather than on a page the sidebar no longer lists.
+  const shellPage: ShellPage =
+    currentPage === 'confirm' || (currentPage === 'cloud' && !cloudEnabled) ? 'home' : currentPage;
 
   const pages: Record<ShellPage, { title: string; element: ReactNode }> = {
     home: {
@@ -718,6 +728,14 @@ function App() {
       element: (
         <MeroContext.Provider value={meroContextValue}>
           <Namespaces />
+        </MeroContext.Provider>
+      ),
+    },
+    cloud: {
+      title: 'Cloud',
+      element: (
+        <MeroContext.Provider value={meroContextValue}>
+          <Cloud />
         </MeroContext.Provider>
       ),
     },

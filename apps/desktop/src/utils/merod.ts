@@ -169,6 +169,30 @@ export async function getMerodLogs(
   return await invoke('get_merod_logs', { nodeName, homeDir, lines });
 }
 
+/** Lines of a node's log history inside a time window. */
+export interface MerodLogRange {
+  /** Matching lines, oldest first. */
+  content: string;
+  /** How many lines matched, including any dropped by the line cap. */
+  matched: number;
+  /** True when more lines matched than were returned (the newest are kept). */
+  truncated: boolean;
+}
+
+/**
+ * Get the lines of a node's whole retained log history (not just the tail)
+ * timestamped within `[fromMs, toMs]` (Unix ms; either may be omitted).
+ */
+export async function getMerodLogsRange(
+  nodeName: string,
+  homeDir: string | undefined,
+  fromMs?: number,
+  toMs?: number,
+  lines?: number
+): Promise<MerodLogRange> {
+  return await invoke('get_merod_logs_range', { nodeName, homeDir, fromMs, toMs, lines });
+}
+
 /**
  * Truncate the active log file and delete rotated segments for a node.
  */

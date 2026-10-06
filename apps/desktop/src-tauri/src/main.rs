@@ -3202,6 +3202,44 @@ async fn get_merod_logs(
     Ok(result)
 }
 
+/// Most lines a time-range read returns; the newest are kept past it.
+const MAX_RANGE_LINES: u32 = 20_000;
+
+/// Read the lines of a node's whole retained log history (not just the tail)
+/// whose timestamps fall within `[from_ms, to_ms]`, in Unix milliseconds. Either
+/// bound may be omitted. At most `lines` (capped at `MAX_RANGE_LINES`) of the
+/// newest matching lines are returned.
+#[tauri::command]
+async fn get_merod_logs_range(
+    node_name: String,
+    home_dir: Option<String>,
+    from_ms: Option<i64>,
+    to_ms: Option<i64>,
+    lines: Option<u32>,
+) -> Result<log_rotation::LogRange, TauriError> {
+    validate_node_name(&node_name).map_err(|e| TauriError::new(TauriErrorCode::InvalidInput, e))?;
+    if let (Some(from), Some(to)) = (from_ms, to_ms) {
+        if from > to {
+            return Err(TauriError::new(TauriErrorCode::InvalidInput, "The start of the time range is after its end"));
+        }
+    }
+    let lines = lines.unwrap_or(MAX_RANGE_LINES).min(MAX_RANGE_LINES) as usize;
+
+    // Same path resolution and safety as get_merod_logs.
+    let log_dir = resolve_home_dir(home_dir)?.join(&node_name).join("logs");
+    if !log_dir.exists() {
+        return Err(TauriError::new(
+            TauriErrorCode::FileNotFound,
+            format!("No log file found for node '{}'. Logs are only available for nodes started by the app.", node_name),
+        ));
+    }
+
+    tokio::task::spawn_blocking(move || log_rotation::read_range(&log_dir, from_ms, to_ms, lines))
+        .await
+        .map_err(|e| TauriError::with_details(TauriErrorCode::InternalError, "Log read task failed", e.to_string()))?
+        .map_err(|e| TauriError::with_details(TauriErrorCode::FileReadError, "Failed to read log file", e.to_string()))
+}
+
 /// Truncate the active log file and delete rotated segments for a node.
 #[tauri::command]
 async fn clear_merod_logs(
@@ -4276,6 +4314,7 @@ fn main() {
             init_merod_node,
             detect_running_merod_nodes,
             get_merod_logs,
+            get_merod_logs_range,
             clear_merod_logs,
             export_merod_logs,
             get_merod_binary_version,

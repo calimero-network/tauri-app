@@ -1,7 +1,12 @@
 import { useState, useMemo, useRef, useEffect } from "react";
-import { Search, Copy, Check, RefreshCw, X, Trash2, Download } from "lucide-react";
+import { Search, Copy, Check, RefreshCw, X, Trash2, Download, Clock } from "lucide-react";
 import Convert from "ansi-to-html";
 import { useTheme } from "../contexts/ThemeContext";
+import {
+  type LogTimeRange,
+  RELATIVE_RANGES,
+  toDateTimeLocal,
+} from "../utils/logTimeRange";
 import "./LogsViewer.css";
 
 interface LogsViewerProps {
@@ -15,6 +20,20 @@ interface LogsViewerProps {
   onDownload?: () => void;
   /** True while the export is streaming, so the button can't be double-fired. */
   downloading?: boolean;
+  /** Time window being shown; omit to hide the time-range picker. */
+  timeRange?: LogTimeRange;
+  /** Called with a new window; the parent re-fetches for it. */
+  onTimeRangeChange?: (range: LogTimeRange) => void;
+  /** Extra status about the fetched window, e.g. that it was cut to the newest lines. */
+  rangeNote?: string;
+}
+
+const TAIL_OPTION = "tail";
+const CUSTOM_OPTION = "custom";
+
+function rangeOptionValue(range: LogTimeRange): string {
+  if (range.kind === "relative") return String(range.minutes);
+  return range.kind === "custom" ? CUSTOM_OPTION : TAIL_OPTION;
 }
 
 // Cap how many lines are ever put in the DOM at once. The backend already tails
@@ -32,6 +51,9 @@ export function LogsViewer({
   onClear,
   onDownload,
   downloading = false,
+  timeRange,
+  onTimeRangeChange,
+  rangeNote,
 }: LogsViewerProps) {
   const { theme } = useTheme();
   const [filterInput, setFilterInput] = useState("");
@@ -45,6 +67,28 @@ export function LogsViewer({
   // Whether the user is scrolled to (near) the bottom. Auto-scroll only nudges
   // the view when they haven't deliberately scrolled up to read older lines.
   const pinnedToBottomRef = useRef(true);
+  // The custom picker is shown as soon as "Custom range" is chosen, but nothing
+  // is fetched until Apply - half-typed bounds would each trigger a full scan.
+  const [customOpen, setCustomOpen] = useState(timeRange?.kind === "custom");
+  const [customFrom, setCustomFrom] = useState(
+    timeRange?.kind === "custom" ? timeRange.from : ""
+  );
+  const [customTo, setCustomTo] = useState(timeRange?.kind === "custom" ? timeRange.to : "");
+
+  const handleRangeSelect = (value: string) => {
+    if (value === CUSTOM_OPTION) {
+      // Seed a sensible window (the last hour, open-ended) the first time.
+      if (!customFrom && !customTo) {
+        setCustomFrom(toDateTimeLocal(Date.now() - 60 * 60_000));
+      }
+      setCustomOpen(true);
+      return;
+    }
+    setCustomOpen(false);
+    onTimeRangeChange?.(
+      value === TAIL_OPTION ? { kind: "tail" } : { kind: "relative", minutes: Number(value) }
+    );
+  };
 
   const levels = [
     { id: "", label: "All" },
@@ -220,6 +264,26 @@ export function LogsViewer({
               </option>
             ))}
           </select>
+          {timeRange && onTimeRangeChange && (
+            <div className="logs-viewer-range">
+              <Clock size={14} className="logs-viewer-range-icon" />
+              <select
+                value={customOpen ? CUSTOM_OPTION : rangeOptionValue(timeRange)}
+                onChange={(e) => handleRangeSelect(e.target.value)}
+                className="logs-viewer-level-select"
+                aria-label="Time range"
+                disabled={loading}
+              >
+                <option value={TAIL_OPTION}>Latest lines</option>
+                {RELATIVE_RANGES.map((r) => (
+                  <option key={r.minutes} value={String(r.minutes)}>
+                    {r.label}
+                  </option>
+                ))}
+                <option value={CUSTOM_OPTION}>Custom range…</option>
+              </select>
+            </div>
+          )}
           <label className="logs-viewer-checkbox">
             <input
               type="checkbox"
@@ -229,6 +293,45 @@ export function LogsViewer({
             Auto-scroll
           </label>
         </div>
+
+        {customOpen && onTimeRangeChange && (
+          <form
+            className="logs-viewer-toolbar logs-viewer-custom-range"
+            onSubmit={(e) => {
+              e.preventDefault();
+              onTimeRangeChange({ kind: "custom", from: customFrom, to: customTo });
+            }}
+          >
+            <label className="logs-viewer-checkbox">
+              From
+              <input
+                type="datetime-local"
+                value={customFrom}
+                onChange={(e) => setCustomFrom(e.target.value)}
+                className="logs-viewer-datetime"
+                aria-label="From"
+              />
+            </label>
+            <label className="logs-viewer-checkbox">
+              To
+              <input
+                type="datetime-local"
+                value={customTo}
+                onChange={(e) => setCustomTo(e.target.value)}
+                className="logs-viewer-datetime"
+                aria-label="To"
+              />
+            </label>
+            <span className="logs-viewer-range-hint">Leave To empty for “until now”.</span>
+            <button
+              type="submit"
+              className="logs-viewer-btn"
+              disabled={loading || (!customFrom && !customTo)}
+            >
+              Apply
+            </button>
+          </form>
+        )}
 
         <div ref={scrollRef} className="logs-viewer-content" onScroll={handleScroll}>
           {loading ? (
@@ -249,10 +352,16 @@ export function LogsViewer({
             "(No log output)"
           )}
         </div>
-        {(filter || levelFilter) && (
+        {(filter || levelFilter || rangeNote) && (
           <div className="logs-viewer-footer">
-            Showing {filteredLines.length.toLocaleString()} of{" "}
-            {allLines.length.toLocaleString()} lines
+            {(filter || levelFilter) && (
+              <>
+                Showing {filteredLines.length.toLocaleString()} of{" "}
+                {allLines.length.toLocaleString()} lines
+              </>
+            )}
+            {(filter || levelFilter) && rangeNote && " · "}
+            {rangeNote}
           </div>
         )}
       </div>

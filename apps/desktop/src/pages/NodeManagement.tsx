@@ -15,6 +15,7 @@ import {
   restartMerod,
   detectRunningMerodNodes,
   getMerodLogs,
+  getMerodLogsRange,
   clearMerodLogs,
   exportMerodLogs,
   findRunningNode,
@@ -32,6 +33,7 @@ import { homeDir as getOsHomeDir } from "@tauri-apps/api/path";
 import { useToast } from "../contexts/ToastContext";
 import { Play, Square, RefreshCw, RotateCw, Check, FileText, ChevronDown } from "lucide-react";
 import { LogsViewer } from "../components/LogsViewer";
+import { type LogTimeRange, resolveLogTimeRange } from "../utils/logTimeRange";
 import { ScrollHint } from "../components/ScrollHint";
 import { VersionsPanel } from "../components/VersionsPanel";
 import { useNodeVersions } from "../contexts/NodeVersionsContext";
@@ -110,6 +112,10 @@ function NodeManagement() {
   const [logsContent, setLogsContent] = useState("");
   const [logsLoading, setLogsLoading] = useState(false);
   const [logsExporting, setLogsExporting] = useState(false);
+  const [logsRange, setLogsRange] = useState<LogTimeRange>({ kind: "tail" });
+  const [logsRangeNote, setLogsRangeNote] = useState("");
+  // Bumped per fetch so a slow scan for an old range can't overwrite a newer one.
+  const logsRequestRef = useRef(0);
   const [versionId, setVersionId] = useState<string>(BUNDLED_VERSION_ID);
   const [releases, setReleases] = useState<ReleaseInfo[]>([]);
   const [releasesError, setReleasesError] = useState<string>("");
@@ -423,14 +429,40 @@ function NodeManagement() {
     await performRestart(runningNode);
   };
 
+  /**
+   * Fetch the logs for `range` into the viewer: the latest 500 lines for the
+   * tail view, otherwise every line of the retained history in the window.
+   * Throws on failure; a superseded request resolves without touching state.
+   */
+  const loadLogs = async (range: LogTimeRange) => {
+    if (!selectedNode) return;
+    const request = ++logsRequestRef.current;
+    const bounds = resolveLogTimeRange(range);
+    if (!bounds) {
+      const logs = await getMerodLogs(selectedNode, homeDir, 500);
+      if (request !== logsRequestRef.current) return;
+      setLogsContent(logs || "(No log output yet)");
+      setLogsRangeNote("");
+      return;
+    }
+    const result = await getMerodLogsRange(selectedNode, homeDir, bounds.fromMs, bounds.toMs);
+    if (request !== logsRequestRef.current) return;
+    setLogsContent(result.content || "(No log lines in this time range)");
+    setLogsRangeNote(
+      result.truncated
+        ? `${result.matched.toLocaleString()} lines in range — showing the newest ${result.content.split("\n").length.toLocaleString()}. Narrow the range to see earlier ones.`
+        : `${result.matched.toLocaleString()} line(s) in range`
+    );
+  };
+
   const handleViewLogs = async () => {
     if (!selectedNode) return;
     setShowLogsModal(true);
     setLogsLoading(true);
     setLogsContent("");
+    setLogsRangeNote("");
     try {
-      const logs = await getMerodLogs(selectedNode, homeDir, 500);
-      setLogsContent(logs || "(No log output yet)");
+      await loadLogs(logsRange);
     } catch (err: any) {
       const msg = err?.message || "Failed to load logs";
       setLogsContent(
@@ -447,11 +479,32 @@ function NodeManagement() {
     if (!selectedNode) return;
     setLogsLoading(true);
     try {
-      const logs = await getMerodLogs(selectedNode, homeDir, 500);
-      setLogsContent(logs || "(No log output yet)");
+      await loadLogs(logsRange);
     } catch (err: any) {
       setLogsContent(err?.message || "Failed to load logs");
       toast.error("Failed to refresh logs");
+    } finally {
+      setLogsLoading(false);
+    }
+  };
+
+  const handleLogsRangeChange = async (range: LogTimeRange) => {
+    if (!selectedNode) return;
+    // Validate before switching, so a bad custom range keeps the current view.
+    try {
+      resolveLogTimeRange(range);
+    } catch (err: any) {
+      toast.error(err?.message || "Invalid time range");
+      return;
+    }
+    setLogsRange(range);
+    setLogsLoading(true);
+    try {
+      await loadLogs(range);
+    } catch (err: any) {
+      setLogsContent(err?.message || "Failed to load logs");
+      setLogsRangeNote("");
+      toast.error("Failed to load logs for that time range");
     } finally {
       setLogsLoading(false);
     }
@@ -471,10 +524,10 @@ function NodeManagement() {
     // Re-read in a separate step: a failed re-fetch (e.g. no merod.log yet after
     // clearing) must not be reported as a clear failure — the clear succeeded.
     try {
-      const logs = await getMerodLogs(selectedNode, homeDir, 500);
-      setLogsContent(logs || "(No log output yet)");
+      await loadLogs(logsRange);
     } catch {
       setLogsContent("(No log output yet)");
+      setLogsRangeNote("");
     } finally {
       setLogsLoading(false);
     }
@@ -887,6 +940,9 @@ function NodeManagement() {
             onClear={handleClearLogs}
             onDownload={handleDownloadLogs}
             downloading={logsExporting}
+            timeRange={logsRange}
+            onTimeRangeChange={handleLogsRangeChange}
+            rangeNote={logsRangeNote}
             onClose={() => setShowLogsModal(false)}
           />
         )}

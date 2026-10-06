@@ -26,12 +26,16 @@ export interface AppSettings {
   developerModeChosen?: boolean;
   debugLogs?: boolean;
   onboardingCompleted?: boolean;
+  tutorialCompleted?: boolean;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
   nodeUrl: DEFAULT_NODE_URL,
   registries: [DEFAULT_REGISTRY_URL],
   onboardingCompleted: false,
+  // The guided tour overlays the shell and swallows clicks; specs that are not
+  // about it start with it already seen (e2e/tutorial.spec.ts clears this).
+  tutorialCompleted: true,
 };
 
 export const AUTHENTICATED_SETTINGS: AppSettings = {

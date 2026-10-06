@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
-import { TUTORIAL_STEPS, computePopoverPosition, type Rect, type TutorialStep } from "../utils/tutorial";
+import { computePopoverPosition, type Rect, type TutorialStep } from "../utils/tutorial";
 import "./Tutorial.css";
 
 /** Breathing room between the highlighted element and the edge of the spotlight. */
@@ -22,30 +22,72 @@ function measure(el: Element | null): Rect | null {
   };
 }
 
+/** How long a step waits for its target: pages load lazily and fetch their data first. */
+const TARGET_TIMEOUT_MS = 3000;
+const TARGET_POLL_MS = 100;
+
+interface TutorialProps {
+  steps: readonly TutorialStep[];
+  index: number;
+  /** Move to another step; App opens the page or Settings tab the step is `at`. */
+  onIndexChange: (index: number) => void;
+  /** An optional step whose target never appeared: move on in the same direction. */
+  onSkip: () => void;
+  onClose: () => void;
+}
+
 /**
- * The first-run guided tour over the app shell: everything but the current step's
- * element is dimmed, and a popover beside it explains what it is.
+ * The guided tour over the app: everything but the current step's element is
+ * dimmed, and a popover beside it explains what it is. App owns which step is
+ * showing and navigates to it, so the tour survives moving between the shell
+ * and Settings, which are separate trees.
  *
  * Renders in a portal so no shell ancestor (scroll containers, backdrop-filter)
  * can clip the fixed overlay - see the note on Lightbox. Escape, the close button
  * and "Skip tour" all end it; the dimmed area swallows clicks so a stray one
  * cannot navigate the app out from under the tour.
  */
-export function Tutorial({ onClose }: { onClose: () => void }) {
-  // Resolved once on open: which steps have something on screen to point at.
-  const steps = useMemo(
-    () => TUTORIAL_STEPS.filter((step) => !step.target || findTarget(step)),
-    [],
-  );
-  const [index, setIndex] = useState(0);
+export function Tutorial({ steps, index, onIndexChange, onSkip, onClose }: TutorialProps) {
+  // The step whose target has been waited for: until then nothing is positioned,
+  // so the popover never points at the page being navigated away from.
+  const [readyStep, setReadyStep] = useState<string | null>(null);
   const [targetRect, setTargetRect] = useState<Rect | null>(null);
   const [position, setPosition] = useState<{ top: number; left: number } | null>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
   const step = steps[index];
   const isLast = index === steps.length - 1;
+  const ready = !!step && readyStep === step.id;
 
-  const layout = useCallback(() => {
+  // Wait for the step's target to render. A required step whose target never
+  // shows up is still worth reading, so it is shown centered; an optional one is
+  // skipped.
+  const onSkipRef = useRef(onSkip);
+  onSkipRef.current = onSkip;
+  useEffect(() => {
     if (!step) return;
+    setReadyStep(null);
+    setPosition(null);
+    if (!step.target || findTarget(step)) {
+      setReadyStep(step.id);
+      return;
+    }
+    const started = Date.now();
+    const timer = setInterval(() => {
+      if (findTarget(step)) {
+        clearInterval(timer);
+        setReadyStep(step.id);
+      } else if (Date.now() - started >= TARGET_TIMEOUT_MS) {
+        clearInterval(timer);
+        if (step.optional) onSkipRef.current();
+        else setReadyStep(step.id);
+      }
+    }, TARGET_POLL_MS);
+    return () => clearInterval(timer);
+  }, [step]);
+
+  // Re-queried on every call: a page re-rendering replaces the element.
+  const layout = useCallback(() => {
+    if (!step || !ready) return;
     const rect = measure(findTarget(step));
     setTargetRect(rect);
     const pop = popoverRef.current;
@@ -56,29 +98,38 @@ export function Tutorial({ onClose }: { onClose: () => void }) {
       { width: window.innerWidth, height: window.innerHeight },
     );
     setPosition({ top, left });
-  }, [step]);
+  }, [step, ready]);
 
   // Layout effect so the popover never paints a frame at the previous step's spot.
   useLayoutEffect(() => {
-    findTarget(step)?.scrollIntoView({ block: "nearest" });
+    if (!ready) return;
+    findTarget(step)?.scrollIntoView({ block: "center" });
     layout();
-  }, [layout, step]);
+  }, [layout, ready, step]);
 
   useEffect(() => {
+    if (!ready) return;
     window.addEventListener("resize", layout);
+    // Capture: the pages scroll inside their own containers, not the window.
+    window.addEventListener("scroll", layout, true);
     const observer = new ResizeObserver(layout);
     observer.observe(document.body);
+    const target = findTarget(step);
+    if (target) observer.observe(target);
     return () => {
       window.removeEventListener("resize", layout);
+      window.removeEventListener("scroll", layout, true);
       observer.disconnect();
     };
-  }, [layout]);
+  }, [layout, ready, step]);
 
   const next = useCallback(() => {
     if (isLast) onClose();
-    else setIndex((i) => i + 1);
-  }, [isLast, onClose]);
-  const back = useCallback(() => setIndex((i) => Math.max(0, i - 1)), []);
+    else onIndexChange(index + 1);
+  }, [isLast, onClose, onIndexChange, index]);
+  const back = useCallback(() => {
+    if (index > 0) onIndexChange(index - 1);
+  }, [onIndexChange, index]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -99,15 +150,15 @@ export function Tutorial({ onClose }: { onClose: () => void }) {
 
   // Focus the dialog so the arrow keys and Escape reach it without a click first.
   useEffect(() => {
-    popoverRef.current?.focus();
-  }, [index]);
+    if (ready) popoverRef.current?.focus();
+  }, [ready]);
 
   if (!step) return null;
 
   return createPortal(
     <div className="tutorial-root" data-testid="tutorial">
       <div className="tutorial-blocker" onClick={(e) => e.stopPropagation()} />
-      {targetRect ? (
+      {ready && targetRect ? (
         <div
           className="tutorial-spotlight"
           style={{
@@ -129,7 +180,7 @@ export function Tutorial({ onClose }: { onClose: () => void }) {
         aria-labelledby="tutorial-title"
         aria-describedby="tutorial-body"
         tabIndex={-1}
-        style={position ? { top: position.top, left: position.left } : { visibility: "hidden" }}
+        style={ready && position ? { top: position.top, left: position.left } : { visibility: "hidden" }}
       >
         <button
           type="button"

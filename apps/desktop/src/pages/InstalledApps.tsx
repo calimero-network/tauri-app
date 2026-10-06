@@ -214,7 +214,7 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
 
   return (
     <div className="installed-apps-page">
-      <header className="installed-apps-header">
+      <header className="installed-apps-header" data-tutorial="installed-header">
         <div>
           <span className="eyebrow">On this node</span>
           <h1>Applications</h1>

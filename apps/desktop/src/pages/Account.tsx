@@ -280,7 +280,7 @@ export default function Account() {
           />
         )}
 
-        <div className="settings-card">
+        <div className="settings-card" data-tutorial="account-devices">
           <div className="account-devices-header">
             <h2>Devices</h2>
             {isHolder && (
@@ -365,7 +365,7 @@ export default function Account() {
           onInstall={install}
         />
 
-        <div className="settings-card">
+        <div className="settings-card" data-tutorial="account-pair">
           <h2>Pair this computer into an account</h2>
           <DevicePairResponder
             enrolledDeviceId={identity?.deviceId ?? undefined}

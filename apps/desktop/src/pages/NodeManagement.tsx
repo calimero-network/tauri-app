@@ -541,7 +541,7 @@ function NodeManagement() {
 
       <main ref={mainScrollRef} className="node-management-main">
         {/* Section 1: Connection - what the app uses */}
-        <section className="node-section">
+        <section className="node-section" data-tutorial="nodes-connection">
           <h2 className="node-section-title">Connection</h2>
           <p className="node-section-desc">The app connects to this node URL. Use a local node or a remote one.</p>
           <div className="node-management-card node-config-card">
@@ -589,7 +589,7 @@ function NodeManagement() {
             Create and run merod nodes on this machine.
           </p>
 
-          <div className="node-management-card">
+          <div className="node-management-card" data-tutorial="nodes-local">
             <h3 className="node-card-title">Create New Node</h3>
             <div className="form-field">
               <label htmlFor="home-dir">Data Directory</label>

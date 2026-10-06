@@ -90,7 +90,7 @@ export default function CloudAccountLinkCard({
   if (!isHolder) return null;
 
   return (
-    <div className="settings-card">
+    <div className="settings-card" data-tutorial="account-cloud">
       <div className="account-devices-header">
         <h2>Calimero Cloud</h2>
         {linked && (

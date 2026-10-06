@@ -27,6 +27,7 @@ import {
   DEFAULT_EMBEDDED_NODE_PORT,
   DEFAULT_EMBEDDED_SWARM_PORT,
 } from './settings';
+import { isCloudEnabled } from './featureFlags';
 
 describe('embedded node ports', () => {
   it('round-trips the swarm port so autostart cannot revert it', () => {
@@ -102,10 +103,9 @@ describe('buildSettings defaults', () => {
     expect(getSettings().registries).toEqual(['https://apps.calimero.network/']);
   });
 
-  it('defaults debugLogs, onboardingCompleted and cloudConnected to false', () => {
+  it('defaults onboardingCompleted and cloudConnected to false', () => {
     localStorage.setItem('calimero-desktop-settings', JSON.stringify({ nodeUrl: 'http://localhost:2528' }));
     const settings = getSettings();
-    expect(settings.debugLogs).toBe(false);
     expect(settings.onboardingCompleted).toBe(false);
     expect(settings.cloudConnected).toBe(false);
   });
@@ -138,14 +138,45 @@ describe('developer mode default', () => {
 
   it('keeps the opt-out across unrelated writes that spread the settings', () => {
     saveSettings({ ...getSettings(), developerMode: false, developerModeChosen: true });
-    saveSettings({ ...getSettings(), debugLogs: true });
+    saveSettings({ ...getSettings(), nodeUrl: 'http://localhost:2529' });
     expect(getSettings().developerMode).toBe(false);
-    expect(getSettings().debugLogs).toBe(true);
   });
 
   it('respects an explicit opt-in', () => {
     saveSettings({ ...getSettings(), developerMode: true, developerModeChosen: true });
     expect(getSettings().developerMode).toBe(true);
+  });
+});
+
+describe('debug logs default', () => {
+  it('is on for a fresh install with nothing stored', () => {
+    expect(getSettings().debugLogs).toBe(true);
+  });
+
+  it('is on for an existing install whose false was only the persisted old default', () => {
+    localStorage.setItem(
+      'calimero-desktop-settings',
+      JSON.stringify({ nodeUrl: 'http://localhost:2528', debugLogs: false, onboardingCompleted: true })
+    );
+    expect(getSettings().debugLogs).toBe(true);
+  });
+
+  it('respects an explicit opt-out made through the toggle, across unrelated writes', () => {
+    saveSettings({ ...getSettings(), debugLogs: false, debugLogsChosen: true });
+    saveSettings({ ...getSettings(), nodeUrl: 'http://localhost:2529' });
+    expect(getSettings().debugLogs).toBe(false);
+  });
+});
+
+describe('cloud feature flag default', () => {
+  it('is on when the user never touched the toggle', () => {
+    saveSettings({ nodeUrl: 'http://localhost:2528' });
+    expect(isCloudEnabled()).toBe(true);
+  });
+
+  it('respects the toggle being switched off', () => {
+    saveSettings({ ...getSettings(), cloudEnabled: false });
+    expect(isCloudEnabled()).toBe(false);
   });
 });
 

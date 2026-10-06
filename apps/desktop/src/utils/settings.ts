@@ -11,8 +11,9 @@ export interface AppSettings {
   embeddedNodeName?: string; // Node name for embedded node
   developerMode?: boolean; // Developer mode - shows advanced features like multiple nodes and contexts. On unless the user turned it off (see developerModeChosen)
   developerModeChosen?: boolean; // True once the user flipped the Developer Mode toggle themselves; only then is a stored developerMode honoured
-  debugLogs?: boolean; // Enable debug-level logging for the merod node
-  cloudEnabled?: boolean; // Runtime override for the cloud feature flag. undefined = use build-time default (VITE_ENABLE_CLOUD / DEV)
+  debugLogs?: boolean; // Debug-level logging for the merod node. On unless the user turned it off (see debugLogsChosen)
+  debugLogsChosen?: boolean; // True once the user flipped the Debug Logs toggle themselves; only then is a stored debugLogs honoured
+  cloudEnabled?: boolean; // Calimero Cloud UI. Only the Settings toggle writes it, so a stored value is the user's choice; undefined = on
   onboardingCompleted?: boolean; // True once user has completed first-time setup - never show onboarding again
   tutorialCompleted?: boolean; // True once the guided tour was finished or closed; Settings → Help clears it to replay the tour
   cloudConnected?: boolean; // Whether user is connected to Calimero Cloud
@@ -72,16 +73,27 @@ function resolveDeveloperMode(rawSettings: AppSettings): boolean {
   return rawSettings.developerMode ?? true;
 }
 
+/**
+ * Debug logs are on unless the user explicitly switched them off. Same story as
+ * developer mode: buildSettings used to fill in `debugLogs: false`, and every
+ * write spreads getSettings(), so a stored false is only a choice when the
+ * toggle also set `debugLogsChosen`.
+ */
+function resolveDebugLogs(rawSettings: AppSettings): boolean {
+  if (!rawSettings.debugLogsChosen) return true;
+  return rawSettings.debugLogs ?? true;
+}
+
 function buildSettings(rawSettings: AppSettings | null): AppSettings {
   if (!rawSettings) {
-    return { nodeUrl: DEFAULT_NODE_URL, registries: [DEFAULT_REGISTRY_URL], developerMode: true };
+    return { nodeUrl: DEFAULT_NODE_URL, registries: [DEFAULT_REGISTRY_URL], developerMode: true, debugLogs: true };
   }
   return {
     ...rawSettings,
     nodeUrl: rawSettings.nodeUrl || DEFAULT_NODE_URL,
     registries: rawSettings.registries?.length ? rawSettings.registries : [DEFAULT_REGISTRY_URL],
     developerMode: resolveDeveloperMode(rawSettings),
-    debugLogs: rawSettings.debugLogs ?? false,
+    debugLogs: resolveDebugLogs(rawSettings),
     onboardingCompleted: rawSettings.onboardingCompleted ?? false,
     cloudConnected: rawSettings.cloudConnected ?? false,
   };

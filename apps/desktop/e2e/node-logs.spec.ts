@@ -40,6 +40,11 @@ test.describe("Nodes – logs viewer", () => {
       list_installed_merod_versions: [],
       list_merod_releases: [],
       get_merod_logs: LOG_TAIL,
+      get_merod_logs_range: {
+        content: "2026-08-11T10:00:01Z INFO in the window",
+        matched: 1,
+        truncated: false,
+      },
       clear_merod_logs: "Cleared logs (2 rotated segment(s) removed)",
       export_merod_logs: { path: `/Users/tester/Downloads/merod-${NODE}.txt`, bytes: 5 * 1024 * 1024 },
     });
@@ -100,5 +105,47 @@ test.describe("Nodes – logs viewer", () => {
       .poll(async () => (await getInvokeCalls(page)).map((c) => c.cmd))
       .toContain("clear_merod_logs");
     await expect(page.getByText("Logs cleared")).toBeVisible();
+  });
+  test("a preset time range reads the window from the whole history", async ({ page }) => {
+    await openLogs(page);
+    const before = Date.now();
+    await page.getByRole("combobox", { name: "Time range" }).selectOption({ label: "Last hour" });
+
+    await expect(page.getByText("in the window")).toBeVisible();
+    await expect(page.getByText("1 line(s) in range")).toBeVisible();
+    const call = (await getInvokeCalls(page)).find((c) => c.cmd === "get_merod_logs_range");
+    expect(call?.args?.nodeName).toBe(NODE);
+    // "Last hour" is resolved to an absolute lower bound at fetch time, open-ended.
+    const fromMs = call?.args?.fromMs as number;
+    expect(fromMs).toBeGreaterThanOrEqual(before - 3_600_000 - 1_000);
+    expect(fromMs).toBeLessThanOrEqual(Date.now() - 3_600_000 + 1_000);
+    expect(call?.args?.toMs).toBeUndefined();
+  });
+
+  test("a custom range is fetched only on Apply, with both bounds", async ({ page }) => {
+    await openLogs(page);
+    await page.getByRole("combobox", { name: "Time range" }).selectOption({ label: "Custom range…" });
+    await page.getByLabel("From", { exact: true }).fill("2026-08-11T10:00");
+    await page.getByLabel("To", { exact: true }).fill("2026-08-11T10:30");
+    expect((await getInvokeCalls(page)).map((c) => c.cmd)).not.toContain("get_merod_logs_range");
+
+    await page.getByRole("button", { name: "Apply" }).click();
+    await expect(page.getByText("in the window")).toBeVisible();
+    const call = (await getInvokeCalls(page)).find((c) => c.cmd === "get_merod_logs_range");
+    // The end bound covers its whole minute.
+    expect(call?.args?.fromMs).toBe(new Date("2026-08-11T10:00").getTime());
+    expect(call?.args?.toMs).toBe(new Date("2026-08-11T10:30").getTime() + 59_999);
+  });
+
+  test("an inverted custom range is refused without a fetch", async ({ page }) => {
+    await openLogs(page);
+    await page.getByRole("combobox", { name: "Time range" }).selectOption({ label: "Custom range…" });
+    await page.getByLabel("From", { exact: true }).fill("2026-08-11T11:00");
+    await page.getByLabel("To", { exact: true }).fill("2026-08-11T10:00");
+    await page.getByRole("button", { name: "Apply" }).click();
+
+    await expect(page.getByText(/start of the time range is after its end/)).toBeVisible();
+    expect((await getInvokeCalls(page)).map((c) => c.cmd)).not.toContain("get_merod_logs_range");
+    await expect(page.getByText("first line")).toBeVisible();
   });
 });

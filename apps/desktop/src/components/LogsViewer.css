@@ -143,6 +143,41 @@
   cursor: pointer;
 }
 
+.logs-viewer-range {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.logs-viewer-range-icon {
+  color: var(--text-tertiary);
+}
+
+.logs-viewer-custom-range {
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+
+.logs-viewer-datetime {
+  padding: 5px 8px;
+  font-size: 13px;
+  background: var(--surface-glass-soft);
+  border: 1px solid var(--border-color);
+  border-radius: 0;
+  color: var(--text-primary);
+  color-scheme: light dark;
+}
+
+.logs-viewer-datetime:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+}
+
+.logs-viewer-range-hint {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
 .logs-viewer-level-select:focus {
   outline: none;
   border-color: var(--accent-primary);

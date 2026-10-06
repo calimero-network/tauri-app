@@ -15,18 +15,10 @@ import type { GroupInfo, MetadataRecord } from "@calimero-network/mero-js";
 import { useToast } from "../contexts/ToastContext";
 import AppIcon from "../components/AppIcon";
 import { ChevronLeft, Users, Box, Layers, Copy, ChevronRight, Shield, Globe, Plus, X, Trash2, UserMinus, Link, MoreHorizontal, LogIn, LogOut, HardDrive } from "lucide-react";
-import { appInstalled, decodeMetadata, parseTauriError } from "../utils/appUtils";
-import { invalidateInstalledApps, listInstalledApps } from "../utils/installedAppsCache";
-import { getSettings } from "../utils/settings";
-import {
-  enableHaForNamespace,
-  disableHaNamespace,
-  getCloudNamespaces,
-  getNamespaceFleetStatus,
-  ensureTeeAdmissionPolicy,
-  CloudSessionExpiredError,
-  RELAY_UNSUPPORTED_WARNING,
-} from "../utils/cloudApi";
+import { parseTauriError } from "../utils/appUtils";
+import { invalidateInstalledApps } from "../utils/installedAppsCache";
+import { readInstalledApps, type InstalledApp } from "../utils/namespaceApps";
+import { getNamespaceFleetStatus } from "../utils/cloudApi";
 import { getCloudIdToken } from "../utils/cloudAuth";
 import { apiClient } from "../lib/mero-client";
 import {
@@ -42,6 +34,7 @@ import {
 import { parseJwtPayload } from "../utils/jwt";
 import { describeFleetRelay, type FleetRelayStatus } from "../utils/fleetStatus";
 import { useCloudEnabled } from "../hooks/useCloudEnabled";
+import { useHaStatus } from "../hooks/useHaStatus";
 import { useVisiblePoll } from "../hooks/useVisiblePoll";
 import { describeBytes, formatBytes, parseUsage, sumUsage, usageFor, type NamespaceBytes } from "../utils/diskUsage";
 import "./Namespaces.css";
@@ -78,57 +71,6 @@ function parseApiError(e: any): string {
 }
 
 const DEFAULT_NAMESPACE_CAPABILITIES = 1 | 2 | 8;
-
-interface InstalledApp {
-  id: string;
-  name: string;
-  /** The bundle's own package id (`only-peers-chat`), when it declares one. */
-  package: string | null;
-  version: string | null;
-  /** `data:image/png;base64,…` from the signed bundle, as the launcher uses. */
-  icon: string | null;
-  frontendUrl: string | null;
-  metadata?: unknown;
-  /** The node names an app as soon as a namespace targets it; the blob is what
-   *  makes it runnable here. */
-  installed: boolean;
-}
-
-function readInstalledApps(): Promise<InstalledApp[]> {
-  return listInstalledApps().then((res) => {
-    if (res.error || !Array.isArray(res.data)) return [];
-    return res.data.map((app: any) => {
-      let name: string = app.id;
-      let frontendUrl: string | null = null;
-      let pkg: string | null = null;
-      // The list row carries a version of its own; bundle metadata wins when
-      // both are present, matching InstalledAppCard.
-      let version: string | null = app.version ?? null;
-      let icon: string | null = null;
-      try {
-        const meta = decodeMetadata(app.metadata);
-        if (meta) {
-          name = meta.name || meta.alias || app.id;
-          frontendUrl = meta?.links?.frontend ?? null;
-          pkg = meta.package ?? null;
-          version = meta.version ?? version;
-          icon = meta.icon ?? null;
-        }
-      } catch {
-        // ignore
-      }
-      return {
-        id: app.id,
-        name,
-        package: pkg ?? app.package ?? null,
-        version,
-        icon,
-        frontendUrl,
-        installed: appInstalled(app),
-      };
-    });
-  });
-}
 
 /**
  * One application, with the namespaces bound to it.
@@ -921,9 +863,8 @@ function Namespaces() {
     }
   };
 
-  // ── HA state — keyed by namespaceId. `haEnabling` is a per-namespace map so toggling one namespace doesn't lock every other toggle. ──
-  const [haEnabling, setHaEnabling] = useState<Record<string, boolean>>({});
-  const [haEnabled, setHaEnabled] = useState<Record<string, boolean>>({});
+  // ── HA state, shared with the Cloud page ──
+  const { haEnabled, haEnabling, toggleHa } = useHaStatus(!!mero);
   // The fleet nodes of the namespace on screen and how each one's join is
   // going, as the cloud last reported. Only for a namespace with HA on.
   const [fleetStatus, setFleetStatus] = useState<{ nsId: string; relays: FleetRelayStatus[] } | null>(null);
@@ -967,142 +908,6 @@ function Namespaces() {
       setReaddingIdentity(null);
     }
   };
-
-  useEffect(() => {
-    const token = getCloudIdToken();
-    if (!token) return;
-    let cancelled = false;
-    getCloudNamespaces(token)
-      .then((namespaces) => {
-        if (cancelled) return;
-        const byNamespace: Record<string, boolean> = {};
-        for (const n of namespaces) {
-          if (!n.namespace_id) continue;
-          if (n.ha_status === "enabled") byNamespace[n.namespace_id] = true;
-          else if (byNamespace[n.namespace_id] === undefined) byNamespace[n.namespace_id] = false;
-        }
-        setHaEnabled(byNamespace);
-      })
-      .catch(() => {});
-    return () => { cancelled = true; };
-  }, []);
-
-  // ── Reconcile: ensure the TEE admission policy exists for HA-ENABLED
-  // namespaces we own. `enableHaForNamespace` authors the policy once, at
-  // toggle time — so a namespace enabled on an OLDER build (before that PUT
-  // existed) has NO policy, and its fleet TEE node loops forever on merod's
-  // "no TeeAdmissionPolicy set for group"; a namespace whose fleet MRTD
-  // later rotated has a STALE one. This self-heals both on load: for each
-  // enabled namespace where we are the root Admin, `ensureTeeAdmissionPolicy`
-  // re-asserts the policy from the current fleet measurements, in relay
-  // mode — which also converts the TEEs a pre-relay policy admitted as
-  // replicas. It is idempotent (a correct policy is a read-only no-op) and
-  // owner-gated (a namespace we merely joined is skipped), so the steady
-  // state is cheap and a member node never tries to author a policy it
-  // can't sign.
-  //
-  // A node too old for relay mode is told so once, not on every refresh.
-  const relayWarnedRef = useRef(false);
-  useEffect(() => {
-    const settings = getSettings();
-    if (!settings.nodeUrl) return;
-    const idToken = getCloudIdToken();
-    if (!idToken) return;
-    const enabledIds = Object.entries(haEnabled)
-      .filter(([, v]) => v === true)
-      .map(([id]) => id);
-    if (enabledIds.length === 0) return;
-
-    let cancelled = false;
-    void (async () => {
-      let reasserted = 0;
-      let relayUnsupported = false;
-      for (const nsId of enabledIds) {
-        if (cancelled) return;
-        try {
-          const outcome = await ensureTeeAdmissionPolicy(idToken, nsId);
-          if (outcome === "reasserted") reasserted += 1;
-          if (outcome === "relay-unsupported") relayUnsupported = true;
-        } catch (e) {
-          // Best-effort: one namespace failing (transient merod/cloud error)
-          // must not abort the rest. The fleet node keeps retrying admission,
-          // so a missed re-assert self-heals on the next load — log, no toast.
-          console.warn(
-            `ensure-policy: ${nsId} skipped (${(e as Error)?.name ?? "error"})`,
-          );
-        }
-      }
-      if (!cancelled && reasserted > 0) {
-        toast.success(
-          `Re-authored TEE admission policy for ${reasserted} HA namespace(s)`,
-        );
-      }
-      // Once per visit to this page: every HA-status refresh re-runs this, and
-      // the node stays too old until the user upgrades it.
-      if (!cancelled && relayUnsupported && !relayWarnedRef.current) {
-        relayWarnedRef.current = true;
-        toast.warning(RELAY_UNSUPPORTED_WARNING, 0);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [haEnabled]);
-
-  const toggleHa = useCallback(async (ns: Namespace) => {
-    const token = getCloudIdToken();
-    if (!token) { toast.error('Connect to Calimero Cloud first (Settings → Cloud)'); return; }
-    const settings = getSettings();
-    if (!settings.nodeUrl) { toast.error('Node URL not configured'); return; }
-    if (!mero) { toast.error('Local node client is not ready yet'); return; }
-
-    const nsId = ns.namespaceId;
-    const isEnabled = !!haEnabled[nsId];
-    setHaEnabling((prev) => ({ ...prev, [nsId]: true }));
-
-    try {
-      if (isEnabled) {
-        await disableHaNamespace(token, nsId);
-        setHaEnabled((prev) => ({ ...prev, [nsId]: false }));
-        // Nothing to remove locally. Each fleet node sees the namespace is no
-        // longer assigned to it and leaves on its own (`namespace leave`):
-        // that `MemberLeft` cascades through every subgroup on every node and
-        // purges the node's keys and data. Publishing `MemberRemoved` here
-        // instead would put the node's account on the namespace's removed
-        // list, which core never lets an attestation lift — so re-enabling HA
-        // would leave that node refused for good ("was removed ... cannot
-        // rejoin; an admin must re-add them").
-        toast.success('HA disabled — TEE nodes will leave the namespace');
-      } else {
-        // HA is namespace-scoped: always authorise via the namespace
-        // ownership-proof path, whether or not the namespace already has
-        // contexts. Attaching a real context_id here routes the request
-        // onto the cloud's legacy "real-context" branch, which gates on
-        // the `UserContext` ledger — a table the namespace-native pivot
-        // stopped populating, so it 404s ("Contexts not found or not
-        // owned by user") for any context that actually exists. An empty
-        // group list keeps the request on the server-verified
-        // namespace-ownership gate (UserNamespace); core admits the
-        // RelayTee fleet member at the root and auto-follows contexts.
-        const { relay } = await enableHaForNamespace(token, nsId, []);
-        setHaEnabled((prev) => ({ ...prev, [nsId]: true }));
-        toast.success('HA enabled — TEE fleet nodes will join');
-        if (relay === 'relay-unsupported') {
-          relayWarnedRef.current = true;
-          toast.warning(RELAY_UNSUPPORTED_WARNING, 0);
-        }
-      }
-    } catch (err: any) {
-      if (err instanceof CloudSessionExpiredError) {
-        toast.error('Cloud session expired — reconnect in Settings');
-      } else {
-        toast.error(err.message || 'Failed to toggle HA');
-      }
-    } finally {
-      setHaEnabling((prev) => { const next = { ...prev }; delete next[nsId]; return next; });
-    }
-  }, [haEnabled, mero, toast]);
 
   // ── Nav ──
   const openApp = (applicationId: string) => { setActionsMenuOpen(false); setView({ type: "app", applicationId }); };
@@ -1926,13 +1731,13 @@ function Namespaces() {
                 {!cloudConnected && !nsHaEnabled && (
                   <div className="ha-cloud-required-banner">
                     <Globe size={13} className="ha-cloud-banner-icon" />
-                    <span>Connect to Calimero Cloud first — <strong>Settings → Cloud</strong></span>
+                    <span>Sign in to Calimero Cloud first — in the <strong>Cloud</strong> tab, where you can also manage High Availability for every namespace</span>
                   </div>
                 )}
                 <div className="ha-toggle-row">
                   <button
                     className={`ha-toggle-btn ${nsHaEnabled ? 'ha-enabled' : ''}`}
-                    onClick={() => toggleHa(ns)}
+                    onClick={() => void toggleHa(ns.namespaceId)}
                     disabled={nsHaEnabling || (!cloudConnected && !nsHaEnabled)}
                   >
                     {nsHaEnabling ? 'Working...' : nsHaEnabled ? 'Disable HA' : 'Enable High Availability'}

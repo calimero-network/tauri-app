@@ -104,6 +104,28 @@
   flex: 1;
 }
 
+/* Cloud session at a glance: green signed in, amber expired, grey signed out. */
+.nav-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.nav-status-connected {
+  background: var(--success);
+  box-shadow: 0 0 0 3px rgb(var(--success-rgb) / 0.15);
+}
+
+.nav-status-expired {
+  background: var(--warning);
+  box-shadow: 0 0 0 3px rgb(var(--warning-rgb) / 0.15);
+}
+
+.nav-status-signed-out {
+  background: var(--text-tertiary);
+}
+
 .sidebar-footer {
   padding: 12px 8px;
   border-top: 1px solid var(--border-color);

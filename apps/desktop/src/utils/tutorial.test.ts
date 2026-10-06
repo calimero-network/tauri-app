@@ -74,12 +74,16 @@ describe('tutorialSteps', () => {
     const ids = tutorialSteps({ developerMode: false, cloud: true }).map((s) => s.id);
     expect(ids.some((id) => id.startsWith('nodes') || id.startsWith('namespaces'))).toBe(false);
     expect(ids).toContain('settings-cloud');
+    // Cloud is its own page, outside Developer Mode.
+    expect(ids).toContain('cloud');
   });
 
   it('drops the cloud steps when cloud is off', () => {
     const ids = tutorialSteps({ developerMode: true, cloud: false }).map((s) => s.id);
     expect(ids).not.toContain('settings-cloud');
     expect(ids).not.toContain('account-cloud');
+    expect(ids).not.toContain('cloud');
+    expect(ids).not.toContain('cloud-apps');
     expect(ids).toContain('nodes');
   });
 });

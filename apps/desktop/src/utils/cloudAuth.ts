@@ -11,6 +11,19 @@ const CLOUD_CALLBACK_SCHEME = 'calimero://cloud-callback';
 const LOGIN_POLL_INTERVAL_MS = 1500;
 const LOGIN_TIMEOUT_MS = 120_000; // 2 minutes
 
+/**
+ * Dispatched on `window` when the stored cloud session changes: a sign-in
+ * lands or the user disconnects. The Cloud tab's status dot in the sidebar and
+ * the Cloud page itself follow it, so signing in from Settings shows up
+ * there without a navigation.
+ */
+export const CLOUD_SESSION_CHANGED_EVENT = 'calimero:cloud-session-changed';
+
+function notifyCloudSessionChanged(): void {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new Event(CLOUD_SESSION_CHANGED_EVENT));
+}
+
 // OAuth CSRF state — rotated per startCloudLogin() call and checked when
 // the deep link arrives. Blocks forged calimero:// callbacks.
 //
@@ -254,6 +267,7 @@ export async function startCloudLogin(): Promise<CloudUserInfo | null> {
     cloudUserName: userInfo.name || settings.cloudUserName || '',
     cloudUserPicture: userInfo.picture || settings.cloudUserPicture || '',
   });
+  notifyCloudSessionChanged();
 
   return userInfo;
 }
@@ -361,6 +375,7 @@ export function disconnectCloud(): void {
     cloudUserName: undefined,
     cloudUserPicture: undefined,
   });
+  notifyCloudSessionChanged();
 }
 
 /**

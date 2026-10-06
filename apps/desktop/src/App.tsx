@@ -24,6 +24,8 @@ import { useDeepLinkConsent } from "./components/DeepLinkConsentDialog";
 import Sidebar from "./components/Sidebar";
 import { NodeStatusIndicator } from "./components/NodeStatusIndicator";
 import ToastContainer from "./components/ToastContainer";
+import { Tutorial } from "./components/Tutorial";
+import { isTutorialCompleted, setTutorialCompleted } from "./utils/tutorial";
 import { getCurrentVersion } from "./utils/updater";
 import { invoke } from "@tauri-apps/api/core";
 import { Settings as SettingsIcon } from "lucide-react";
@@ -72,6 +74,7 @@ function App() {
   } | null>(null);
   const [appVersion, setAppVersion] = useState<string>("");
   const [runningNodes, setRunningNodes] = useState<RunningMerodNode[]>([]);
+  const [showTutorial, setShowTutorial] = useState(false);
 
   // Expose the adapter's MeroJs instance to mero-react hooks (useNamespaces, etc.)
   // Include showLogin in deps so the value refreshes after login completes
@@ -515,6 +518,20 @@ function App() {
     };
   }, [checkingOnboarding]);
 
+  // The guided tour runs over the main shell only, the first time it is reached
+  // (straight after onboarding and login) and again whenever Settings → Help has
+  // cleared tutorialCompleted - leaving Settings re-runs this via showSettings.
+  const inShell = !checkingOnboarding && !showOnboarding && !showLogin && !showSettings && currentPage !== 'confirm';
+  useEffect(() => {
+    if (inShell && !isTutorialCompleted()) setShowTutorial(true);
+  }, [inShell]);
+
+  // Closing at any step counts as done: the user asked for it to go away.
+  const handleTutorialClose = useCallback(() => {
+    setTutorialCompleted(true);
+    setShowTutorial(false);
+  }, []);
+
   // Show onboarding if needed
   if (checkingOnboarding) {
     return (
@@ -664,6 +681,7 @@ function App() {
     <div className="app">
       <ToastContainer />
       {deepLinkConsentDialog}
+      {showTutorial && inShell && <Tutorial onClose={handleTutorialClose} />}
 
       <div className="app-layout">
         <Sidebar

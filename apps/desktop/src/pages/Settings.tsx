@@ -15,6 +15,7 @@ import {
 } from "../lib/agent-connect";
 import { truncateText } from "../utils/string";
 import { checkForUpdates, installUpdate, getCurrentVersion } from "../utils/updater";
+import { isTutorialCompleted, setTutorialCompleted } from "../utils/tutorial";
 import { useTheme } from "../contexts/ThemeContext";
 import { useToast } from "../contexts/ToastContext";
 import { ArrowLeft, RotateCcw, Trash2, Cloud, Bot, Copy, Check, RefreshCw, Download, MonitorSmartphone } from "lucide-react";
@@ -63,6 +64,7 @@ function Settings({ onBack, onOpenAccount }: SettingsProps) {
   // Node management state (removed - now in NodeManagement page)
   const [activeTab, setActiveTab] = useState<'general' | 'registries' | 'agent' | 'account' | 'cloud'>('general');
   const [developerMode, setDeveloperMode] = useState(true);
+  const [showTutorial, setShowTutorial] = useState(() => !isTutorialCompleted());
   const [debugLogs, setDebugLogs] = useState(false);
   const [cloudEnabled, setCloudEnabled] = useState(false);
   const [cloudConnected, setCloudConnected] = useState(false);
@@ -229,6 +231,13 @@ function Settings({ onBack, onOpenAccount }: SettingsProps) {
       developerModeChosen: true,
     });
     toast.success(`Developer mode ${newValue ? 'enabled' : 'disabled'}`);
+  };
+
+  const handleTutorialToggle = () => {
+    const newValue = !showTutorial;
+    setShowTutorial(newValue);
+    setTutorialCompleted(!newValue);
+    toast.success(newValue ? "The tutorial will start when you leave Settings" : "Tutorial turned off");
   };
 
   const handleDebugLogsToggle = () => {
@@ -409,6 +418,27 @@ function Settings({ onBack, onOpenAccount }: SettingsProps) {
                 <p className="field-hint">Choose between light and dark theme</p>
               </div>
           </div>
+            <div className="settings-card">
+              <h2>Help</h2>
+              <div className="settings-field">
+                <span className="settings-field-label">Show tutorial</span>
+                <div className="toggle-switch">
+                  <input
+                    id="show-tutorial"
+                    type="checkbox"
+                    checked={showTutorial}
+                    onChange={handleTutorialToggle}
+                  />
+                  <label htmlFor="show-tutorial" className="toggle-label">
+                    <span className="toggle-slider"></span>
+                    <span className="toggle-text">
+                      {showTutorial ? 'Enabled' : 'Disabled'}
+                    </span>
+                  </label>
+                </div>
+                <p className="field-hint">Replay the guided tour of the app the next time you leave Settings. It turns itself off again once you finish or close it.</p>
+              </div>
+            </div>
 
             <div className="settings-card">
               <h2>Updates</h2>

@@ -14,6 +14,7 @@ export interface AppSettings {
   debugLogs?: boolean; // Enable debug-level logging for the merod node
   cloudEnabled?: boolean; // Runtime override for the cloud feature flag. undefined = use build-time default (VITE_ENABLE_CLOUD / DEV)
   onboardingCompleted?: boolean; // True once user has completed first-time setup - never show onboarding again
+  tutorialCompleted?: boolean; // True once the guided tour was finished or closed; Settings → Help clears it to replay the tour
   cloudConnected?: boolean; // Whether user is connected to Calimero Cloud
   cloudIdToken?: string; // MDMA session token for Cloud API auth (7d TTL, rolling refresh). During the migration window may hold a Google ID token until exchange lands.
   cloudUserEmail?: string; // User's Google email (for display)

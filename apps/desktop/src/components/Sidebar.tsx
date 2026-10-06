@@ -41,6 +41,7 @@ export default function Sidebar({ currentPage, onNavigate, onOpenSettings, nodeD
             className={`sidebar-nav-item ${currentPage === item.id ? 'active' : ''}`}
             onClick={() => onNavigate(item.id)}
             title={item.label}
+            data-tutorial={`nav-${item.id}`}
           >
             <item.icon className="nav-icon" size={20} />
             <span className="nav-label">{item.label}</span>
@@ -53,6 +54,7 @@ export default function Sidebar({ currentPage, onNavigate, onOpenSettings, nodeD
           className="sidebar-nav-item"
           onClick={onOpenSettings}
           title="Settings"
+          data-tutorial="nav-settings"
         >
           <SettingsIcon className="nav-icon" size={20} />
           <span className="nav-label">Settings</span>

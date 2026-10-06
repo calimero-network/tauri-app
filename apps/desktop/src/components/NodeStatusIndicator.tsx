@@ -82,6 +82,7 @@ export function NodeStatusIndicator({
       type="button"
       className={`node-status-indicator ${connected ? "connected" : "disconnected"} ${isClickable || showDropdown ? "clickable" : ""} ${showDropdown ? "has-dropdown" : ""}`}
       onClick={handleToggle}
+      data-tutorial="node-status"
       title={
         hasError
           ? `${error} Click to reconnect.`

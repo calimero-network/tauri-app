@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 
-import { enableableIds, filterGroups, groupForCloud } from './cloudHa';
+import { desiredState, enableableIds, filterGroups, groupForCloud, pendingChanges } from './cloudHa';
 import type { InstalledApp } from './namespaceApps';
 
 const app = (id: string, name: string, pkg: string): InstalledApp => ({
@@ -105,5 +105,34 @@ describe('filterGroups', () => {
 describe('enableableIds', () => {
   it('lists administered namespaces with HA off', () => {
     expect(enableableIds(groupForCloud(NAMESPACES, APPS, ROLES, HA))).toEqual(['ns-trip', 'ns-q4']);
+  });
+});
+
+describe('unsaved changes', () => {
+  const groups = groupForCloud(NAMESPACES, APPS, ROLES, HA);
+  const row = (id: string) => groups.flatMap((g) => g.rows).find((r) => r.namespaceId === id)!;
+
+  it('shows the draft on the switch, and the saved state without one', () => {
+    expect(desiredState(row('ns-trip'), {})).toBe(false);
+    expect(desiredState(row('ns-trip'), { 'ns-trip': true })).toBe(true);
+  });
+
+  it('turns a draft into what Save would enable and disable', () => {
+    expect(pendingChanges(groups, { 'ns-trip': true, 'ns-design': false })).toEqual({
+      enable: ['ns-trip'],
+      disable: ['ns-design'],
+    });
+  });
+
+  it('drops entries that match the saved state or are not ours to change', () => {
+    // ns-design is already on; ns-board is administered by someone else.
+    expect(pendingChanges(groups, { 'ns-design': true, 'ns-board': false, 'ns-gone': true })).toEqual({
+      enable: [],
+      disable: [],
+    });
+  });
+
+  it('leaves out of "turn on all" the rows already switched on in the draft', () => {
+    expect(enableableIds(groups, { 'ns-trip': true })).toEqual(['ns-q4']);
   });
 });

@@ -9,7 +9,17 @@ import { useHaStatus } from "../hooks/useHaStatus";
 import { useVisiblePoll } from "../hooks/useVisiblePoll";
 import { CloudSessionExpiredError, getCloudSubscription } from "../utils/cloudApi";
 import { disconnectCloud, getCloudIdToken, startCloudLogin } from "../utils/cloudAuth";
-import { enableableIds, filterGroups, groupForCloud, type HaAppGroup, type HaFilter, type HaRow } from "../utils/cloudHa";
+import {
+  desiredState,
+  enableableIds,
+  filterGroups,
+  groupForCloud,
+  pendingChanges,
+  type HaAppGroup,
+  type HaDraft,
+  type HaFilter,
+  type HaRow,
+} from "../utils/cloudHa";
 import { formatBytes, parseUsage, sumUsage, usageFor, type NamespaceBytes } from "../utils/diskUsage";
 import { fetchGroupMembers, roleOf } from "../utils/groupRoles";
 import { readInstalledApps, type InstalledApp } from "../utils/namespaceApps";
@@ -135,9 +145,29 @@ export default function Cloud() {
       else next.add(applicationId);
       return next;
     });
-  // Turning HA off makes the fleet nodes leave and delete their copy, so it
-  // asks first; turning it on does not.
-  const [confirmOff, setConfirmOff] = useState<string | null>(null);
+  // Switches only change this draft; nothing reaches the cloud until Save.
+  // HA changes are slow (each one has the node sign a proof) and turning it
+  // off makes fleet nodes delete their copy, so a stray click must not act.
+  const [draft, setDraft] = useState<HaDraft>({});
+  const [saving, setSaving] = useState(false);
+  const setWanted = (ids: string[], want: boolean) =>
+    setDraft((prev) => {
+      const next = { ...prev };
+      for (const id of ids) next[id] = want;
+      return next;
+    });
+  const pending = useMemo(() => pendingChanges(groups, draft), [groups, draft]);
+  const pendingCount = pending.enable.length + pending.disable.length;
+  const save = async () => {
+    setSaving(true);
+    try {
+      const failed = new Set(await ha.applyChanges(pending));
+      // Keep what failed so it can be retried; everything else is saved.
+      setDraft((prev) => Object.fromEntries(Object.entries(prev).filter(([id]) => failed.has(id))));
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const manageable = groups.reduce((n, g) => n + g.manageable, 0);
   const manageableOn = groups.reduce((n, g) => n + g.manageableOn, 0);
@@ -145,7 +175,7 @@ export default function Cloud() {
   const fleetActive = onIds.reduce((n, id) => n + (ha.replicas[id]?.active ?? 0), 0);
   const fleetAssigned = onIds.reduce((n, id) => n + (ha.replicas[id]?.assigned ?? 0), 0);
   const bytesOn = sumUsage(usage, onIds);
-  const allOff = enableableIds(groups);
+  const allOff = enableableIds(groups, draft);
   const rolesLoading = !!accountId && namespaces.some((n) => !(n.namespaceId in roles));
 
   const user = getSettings();
@@ -154,14 +184,22 @@ export default function Cloud() {
     const busy = !!ha.haEnabling[row.namespaceId];
     const bytes = usageFor(usage, row.namespaceId);
     const fleet = ha.replicas[row.namespaceId];
-    const confirming = confirmOff === row.namespaceId;
-    let status: { label: string; tone: "on" | "off" | "busy" };
+    const want = desiredState(row, draft);
+    const changed = row.canManage === true && want !== row.haOn;
+    let status: { label: string; tone: "on" | "off" | "busy" | "pending" };
     if (busy) status = { label: row.haOn ? "Turning off…" : "Turning on…", tone: "busy" };
+    else if (changed) status = { label: want ? "Will turn on" : "Will turn off", tone: "pending" };
     else if (row.haOn) status = { label: "Always on", tone: "on" };
     else status = { label: "Off", tone: "off" };
+    const showFleet = fleet && row.haOn && !busy && !changed && fleet.assigned > 0;
 
     return (
-      <div key={row.namespaceId} className="cloud-ns-row" data-testid="cloud-ns-row" data-namespace-id={row.namespaceId}>
+      <div
+        key={row.namespaceId}
+        className={`cloud-ns-row${changed ? " pending" : ""}`}
+        data-testid="cloud-ns-row"
+        data-namespace-id={row.namespaceId}
+      >
         <div className="cloud-ns-name">
           <span className="cloud-ns-title">{row.name}</span>
           <span className="cloud-ns-id" title={row.namespaceId}>
@@ -174,54 +212,34 @@ export default function Cloud() {
         <span className="cloud-ns-meta" title="Disk used on this node (estimate)">
           {bytes ? formatBytes(bytes.total) : ""}
         </span>
-        {confirming ? (
-          <div className="cloud-ns-confirm" role="group" aria-label={`Turn off High Availability for ${row.name}`}>
-            <span>Fleet nodes will leave and delete their copy.</span>
-            <button
-              className="button button-small button-danger"
-              onClick={() => { setConfirmOff(null); void ha.toggleHa(row.namespaceId); }}
-            >
-              Turn off
-            </button>
-            <button className="button button-small button-secondary" onClick={() => setConfirmOff(null)}>
-              Cancel
-            </button>
-          </div>
+        <span
+          className={`cloud-pill cloud-pill-${status.tone}`}
+          title={showFleet ? `${fleet.active} of ${fleet.assigned} fleet nodes active` : undefined}
+        >
+          {status.label}
+          {showFleet ? ` · ${fleet.active}/${fleet.assigned}` : ""}
+        </span>
+        {row.canManage === true ? (
+          <button
+            type="button"
+            role="switch"
+            className="cloud-switch"
+            aria-checked={want}
+            aria-label={`High Availability for ${row.name}`}
+            disabled={busy || saving || !connected}
+            onClick={() => setWanted([row.namespaceId], !want)}
+          />
         ) : (
-          <>
-            <span
-              className={`cloud-pill cloud-pill-${status.tone}`}
-              title={fleet && row.haOn ? `${fleet.active} of ${fleet.assigned} fleet nodes active` : undefined}
-            >
-              {status.label}
-              {fleet && row.haOn && !busy && fleet.assigned > 0 ? ` · ${fleet.active}/${fleet.assigned}` : ""}
-            </span>
-            {row.canManage === true ? (
-              <button
-                type="button"
-                role="switch"
-                className="cloud-switch"
-                aria-checked={row.haOn}
-                aria-label={`High Availability for ${row.name}`}
-                disabled={busy || !connected}
-                onClick={() => {
-                  if (row.haOn) setConfirmOff(row.namespaceId);
-                  else void ha.toggleHa(row.namespaceId);
-                }}
-              />
-            ) : (
-              <span
-                className="cloud-ns-lock"
-                title={
-                  row.canManage === null
-                    ? "Checking your role…"
-                    : "Only the namespace admin can change High Availability"
-                }
-              >
-                {row.canManage === null ? "…" : <Lock size={14} />}
-              </span>
-            )}
-          </>
+          <span
+            className="cloud-ns-lock"
+            title={
+              row.canManage === null
+                ? "Checking your role…"
+                : "Only the namespace admin can change High Availability"
+            }
+          >
+            {row.canManage === null ? "…" : <Lock size={14} />}
+          </span>
         )}
       </div>
     );
@@ -230,7 +248,8 @@ export default function Cloud() {
   const renderGroup = (g: HaAppGroup) => {
     const isCollapsed = collapsed.has(g.applicationId) && !query;
     const title = g.app?.name ?? "Unknown application";
-    const offIds = g.rows.filter((r) => r.canManage === true && !r.haOn).map((r) => r.namespaceId);
+    // Switches still off in this app, counting unsaved changes.
+    const offIds = enableableIds([g], draft);
     const total = groups.find((x) => x.applicationId === g.applicationId)?.rows.length ?? g.rows.length;
     const pct = g.manageable > 0 ? (g.manageableOn / g.manageable) * 100 : 0;
     return (
@@ -269,8 +288,8 @@ export default function Cloud() {
             {connected && offIds.length > 0 && (
               <button
                 className="button button-small button-secondary"
-                onClick={(e) => { e.stopPropagation(); void ha.enableMany(offIds); }}
-                disabled={offIds.some((id) => ha.haEnabling[id])}
+                onClick={(e) => { e.stopPropagation(); setWanted(offIds, true); }}
+                disabled={saving}
               >
                 {offIds.length === 1 ? "Turn on" : `Turn on ${offIds.length}`}
               </button>
@@ -389,8 +408,8 @@ export default function Cloud() {
               {allOff.length > 1 && (
                 <button
                   className="button button-small button-primary"
-                  onClick={() => void ha.enableMany(allOff)}
-                  disabled={allOff.some((id) => ha.haEnabling[id])}
+                  onClick={() => setWanted(allOff, true)}
+                  disabled={saving}
                 >
                   Turn on all {allOff.length}
                 </button>
@@ -414,6 +433,32 @@ export default function Cloud() {
               <p className="cloud-list-note">Checking which namespaces you administer…</p>
             )}
           </div>
+
+          {(pendingCount > 0 || saving) && (
+            <div className="cloud-savebar" role="region" aria-label="Unsaved High Availability changes" data-testid="cloud-savebar">
+              <div className="cloud-savebar-text">
+                <span className="cloud-savebar-summary">
+                  {saving
+                    ? "Saving changes…"
+                    : [
+                        pending.enable.length > 0 ? `Turn on for ${plural(pending.enable.length, "namespace")}` : "",
+                        pending.disable.length > 0 ? `Turn off for ${plural(pending.disable.length, "namespace")}` : "",
+                      ].filter(Boolean).join(" · ")}
+                </span>
+                {!saving && pending.disable.length > 0 && (
+                  <span className="cloud-savebar-warning">
+                    Turning off makes the fleet nodes leave and delete their copy.
+                  </span>
+                )}
+              </div>
+              <button className="button button-small button-secondary" onClick={() => setDraft({})} disabled={saving}>
+                Discard
+              </button>
+              <button className="button button-small button-primary" onClick={() => void save()} disabled={saving}>
+                {saving ? "Saving…" : "Save changes"}
+              </button>
+            </div>
+          )}
         </>
       )}
     </div>

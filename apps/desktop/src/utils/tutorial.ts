@@ -143,7 +143,7 @@ export const TUTORIAL_STEPS: readonly TutorialStep[] = [
     requires: 'cloud',
     optional: true,
     title: 'High Availability',
-    body: 'Every namespace on this node, grouped by its application. Turn on High Availability and fleet nodes running in secure enclaves keep that namespace online and in sync while your devices are off. Only a namespace\'s admin can turn it on; namespaces shared with you show a lock.',
+    body: 'Every namespace on this node, grouped by its application. Switch on High Availability for the ones you want, then Save: fleet nodes running in secure enclaves keep them online and in sync while your devices are off. Only a namespace\'s admin can turn it on; namespaces shared with you show a lock.',
   },
 
   // ─── Account ───

@@ -114,7 +114,39 @@ export function filterGroups(groups: readonly HaAppGroup[], filter: HaFilter, qu
   return out;
 }
 
-/** Namespace ids in the groups that this node could turn on and has not. */
-export function enableableIds(groups: readonly HaAppGroup[]): string[] {
-  return groups.flatMap((g) => g.rows.filter((r) => r.canManage === true && !r.haOn).map((r) => r.namespaceId));
+/** Namespace ids this node could turn on whose switch is still off, counting unsaved changes. */
+export function enableableIds(groups: readonly HaAppGroup[], draft: HaDraft = {}): string[] {
+  return groups.flatMap((g) =>
+    g.rows.filter((r) => r.canManage === true && !desiredState(r, draft)).map((r) => r.namespaceId),
+  );
+}
+
+/**
+ * Switch positions the user has changed but not saved yet, keyed by
+ * namespace id. A value is the state the user wants, not a flip.
+ */
+export type HaDraft = Record<string, boolean>;
+
+/** The state a row's switch shows: the draft when the user moved it, else the saved state. */
+export function desiredState(row: HaRow, draft: HaDraft): boolean {
+  return draft[row.namespaceId] ?? row.haOn;
+}
+
+/**
+ * What Save would do: the rows this node may change whose wanted state differs
+ * from the saved one. A draft entry that the cloud has since caught up with, or
+ * for a namespace no longer listed or no longer ours to change, drops out.
+ */
+export function pendingChanges(groups: readonly HaAppGroup[], draft: HaDraft): { enable: string[]; disable: string[] } {
+  const enable: string[] = [];
+  const disable: string[] = [];
+  for (const g of groups) {
+    for (const r of g.rows) {
+      if (r.canManage !== true || !(r.namespaceId in draft)) continue;
+      const want = draft[r.namespaceId];
+      if (want && !r.haOn) enable.push(r.namespaceId);
+      else if (!want && r.haOn) disable.push(r.namespaceId);
+    }
+  }
+  return { enable, disable };
 }

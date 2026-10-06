@@ -17,6 +17,12 @@ import { useCloudSession } from "./useCloudSession";
 /** The fleet's view of one namespace, as `GET /api/cloud/me/namespaces` reports it. */
 export type FleetReplicas = CloudNamespace["fleet_replicas"];
 
+/** Namespaces to turn High Availability on for, and off for. */
+export interface HaChanges {
+  enable: string[];
+  disable: string[];
+}
+
 export interface HaStatus {
   /** HA on/off per namespace id, as the cloud reports it. Missing = not registered. */
   haEnabled: Record<string, boolean>;
@@ -28,8 +34,11 @@ export interface HaStatus {
   loaded: boolean;
   refresh: () => void;
   toggleHa: (namespaceId: string) => Promise<void>;
-  /** Turn HA on for several namespaces, one after another, with one summary toast. */
-  enableMany: (namespaceIds: string[]) => Promise<void>;
+  /**
+   * Apply a saved set of changes, one namespace after another, with one summary
+   * toast. Resolves to the ids that failed, so the caller can keep them unsaved.
+   */
+  applyChanges: (changes: HaChanges) => Promise<string[]>;
 }
 
 /**
@@ -221,46 +230,66 @@ export function useHaStatus(nodeReady: boolean): HaStatus {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [haEnabled, readyToken, reportError, toast]);
 
-  const enableMany = useCallback(async (nsIds: string[]) => {
-    const pending = nsIds.filter((id) => !haEnabled[id]);
-    if (pending.length === 0) return;
+  const applyChanges = useCallback(async ({ enable, disable }: HaChanges): Promise<string[]> => {
+    const all = [...enable, ...disable];
+    if (all.length === 0) return [];
     const token = readyToken();
-    if (!token) return;
-    pending.forEach((id) => setBusy(id, true));
+    if (!token) return all;
+    all.forEach((id) => setBusy(id, true));
     let enabled = 0;
+    let disabled = 0;
     let relayUnsupported = false;
-    const failures: string[] = [];
+    const failed: string[] = [];
+    let firstError = "";
     // One after another: each enable has the node sign an ownership proof and
     // write an admission policy, and running them side by side gains nothing
     // the user would notice while making a failure harder to attribute.
-    for (const nsId of pending) {
+    const queue = [
+      ...enable.map((id) => [id, true] as const),
+      ...disable.map((id) => [id, false] as const),
+    ];
+    for (let i = 0; i < queue.length; i += 1) {
+      const [nsId, turnOn] = queue[i];
       try {
-        if (await enableOne(token, nsId)) relayUnsupported = true;
-        enabled += 1;
+        if (turnOn) {
+          if (await enableOne(token, nsId)) relayUnsupported = true;
+          enabled += 1;
+        } else {
+          // Fleet nodes leave on their own once the namespace is unassigned —
+          // see `toggleHa` for why nothing is removed locally.
+          await disableHaNamespace(token, nsId);
+          setHaEnabled((prev) => ({ ...prev, [nsId]: false }));
+          disabled += 1;
+        }
       } catch (err) {
         if (err instanceof CloudSessionExpiredError) {
-          pending.forEach((id) => setBusy(id, false));
+          // Nothing after this can succeed: hand back this one and the rest.
+          all.forEach((id) => setBusy(id, false));
           reportError(err);
-          return;
+          return [...failed, ...queue.slice(i).map(([id]) => id)];
         }
-        failures.push((err as Error)?.message || "unknown error");
+        failed.push(nsId);
+        firstError ||= (err as Error)?.message || "unknown error";
       } finally {
         setBusy(nsId, false);
       }
     }
-    if (enabled > 0) {
-      toast.success(
-        `HA enabled for ${enabled} namespace${enabled === 1 ? "" : "s"} — TEE fleet nodes will join`,
-      );
+    const parts = [
+      enabled > 0 ? `turned on for ${enabled}` : "",
+      disabled > 0 ? `turned off for ${disabled}` : "",
+    ].filter(Boolean);
+    if (parts.length > 0) {
+      toast.success(`High Availability ${parts.join(", ")} namespace${enabled + disabled === 1 ? "" : "s"}`);
     }
-    if (failures.length > 0) {
+    if (failed.length > 0) {
       toast.error(
-        `Could not enable HA for ${failures.length} namespace${failures.length === 1 ? "" : "s"}: ${failures[0]}`,
+        `Could not change ${failed.length} namespace${failed.length === 1 ? "" : "s"}: ${firstError}`,
       );
     }
     if (relayUnsupported) warnRelayUnsupported();
+    return failed;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [haEnabled, readyToken, reportError, toast]);
+  }, [readyToken, reportError, toast]);
 
-  return { haEnabled, haEnabling, replicas, loaded, refresh, toggleHa, enableMany };
+  return { haEnabled, haEnabling, replicas, loaded, refresh, toggleHa, applyChanges };
 }

@@ -182,6 +182,12 @@
   border: 1px solid rgb(var(--warning-rgb) / 0.3);
 }
 
+.cloud-pill-pending {
+  background: transparent;
+  color: var(--accent-primary);
+  border: 1px dashed var(--accent-dim);
+}
+
 .cloud-pill-plan {
   background: var(--accent-light);
   color: var(--accent-primary);
@@ -450,15 +456,8 @@
   color: var(--text-tertiary);
 }
 
-.cloud-ns-confirm {
-  grid-column: 4 / -1;
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-  flex-wrap: wrap;
-  font-size: 12px;
-  color: var(--text-secondary);
+.cloud-ns-row.pending {
+  background: var(--accent-light);
 }
 
 /* ── Switch ── */
@@ -520,6 +519,41 @@
   border-top: 1px solid var(--border-color);
 }
 
+/* ── Unsaved changes ──
+   Sticks to the bottom of the scrolling page while there is something to save. */
+.cloud-savebar {
+  position: sticky;
+  bottom: 16px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 12px 16px;
+  border: 1px solid var(--accent-dim);
+  background: linear-gradient(var(--accent-light), var(--accent-light)), var(--bg-secondary);
+  box-shadow: var(--shadow-lg);
+}
+
+.cloud-savebar-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-right: auto;
+  min-width: 0;
+}
+
+.cloud-savebar-summary {
+  font-weight: 600;
+  color: var(--text-primary);
+  font-size: 13.5px;
+}
+
+.cloud-savebar-warning {
+  font-size: 12px;
+  color: var(--warning);
+}
+
 @media (max-width: 760px) {
   .cloud-benefits,
   .cloud-stats {
@@ -541,10 +575,6 @@
 
   .cloud-ns-row .cloud-ns-meta {
     display: none;
-  }
-
-  .cloud-ns-confirm {
-    grid-column: 1 / -1;
   }
 }
 

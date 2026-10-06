@@ -183,19 +183,47 @@ test.describe("Cloud – signed in", () => {
     await expect(chat.getByTestId("cloud-ns-row")).toHaveCount(0);
   });
 
-  test("asks before turning HA off, then turns it off", async ({ page }) => {
+  test("switches only stage changes; Discard drops them", async ({ page }) => {
+    const { disabled } = await setupCloudPage(page, SIGNED_IN);
+    const design = page.locator(`[data-namespace-id="${NS_DESIGN}"]`);
+    const trip = page.locator(`[data-namespace-id="${NS_TRIP}"]`);
+    const savebar = page.getByTestId("cloud-savebar");
+    await expect(savebar).toHaveCount(0);
+
+    await trip.getByRole("switch").click();
+    await design.getByRole("switch").click();
+    await expect(trip.getByRole("switch")).toHaveAttribute("aria-checked", "true");
+    await expect(trip.locator(".cloud-pill")).toHaveText("Will turn on");
+    await expect(design.locator(".cloud-pill")).toHaveText("Will turn off");
+    await expect(savebar).toContainText("Turn on for 1 namespace · Turn off for 1 namespace");
+    await expect(savebar).toContainText("delete their copy");
+    expect(disabled).toEqual([]);
+
+    await savebar.getByRole("button", { name: "Discard" }).click();
+    await expect(savebar).toHaveCount(0);
+    await expect(trip.getByRole("switch")).toHaveAttribute("aria-checked", "false");
+    await expect(design.getByRole("switch")).toHaveAttribute("aria-checked", "true");
+    expect(disabled).toEqual([]);
+  });
+
+  test("an app's Turn on stages every namespace still off", async ({ page }) => {
+    await setupCloudPage(page, SIGNED_IN);
+    const chat = page.getByTestId("cloud-app").filter({ hasText: "Only Peers Chat" });
+    await chat.getByRole("button", { name: "Turn on", exact: true }).click();
+    await expect(page.locator(`[data-namespace-id="${NS_TRIP}"]`).getByRole("switch")).toHaveAttribute("aria-checked", "true");
+    await expect(page.getByTestId("cloud-savebar")).toContainText("Turn on for 1 namespace");
+  });
+
+  test("Save applies the staged changes", async ({ page }) => {
     const { disabled } = await setupCloudPage(page, SIGNED_IN);
     const design = page.locator(`[data-namespace-id="${NS_DESIGN}"]`);
 
     await design.getByRole("switch").click();
-    await expect(design.locator(".cloud-ns-confirm")).toContainText("Fleet nodes will leave");
-    await design.getByRole("button", { name: "Cancel" }).click();
-    await expect(design.getByRole("switch")).toHaveAttribute("aria-checked", "true");
-    expect(disabled).toEqual([]);
+    await page.getByTestId("cloud-savebar").getByRole("button", { name: "Save changes" }).click();
 
-    await design.getByRole("switch").click();
-    await design.getByRole("button", { name: "Turn off" }).click();
+    await expect(page.getByTestId("cloud-savebar")).toHaveCount(0);
     await expect(design.getByRole("switch")).toHaveAttribute("aria-checked", "false");
+    await expect(design.locator(".cloud-pill")).toHaveText("Off");
     expect(disabled).toEqual([NS_DESIGN]);
   });
 });

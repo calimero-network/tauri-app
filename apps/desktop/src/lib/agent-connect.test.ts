@@ -60,9 +60,14 @@ function json(body: unknown, init?: ResponseInit): Response {
   });
 }
 
-/** A token the node would mint for `clientId`: only the `sub` claim is read. */
+/** A token a node before `key_id` would mint for `clientId`: its `sub` names the key. */
 function tokenFor(clientId: string): string {
   return `header.${btoa(JSON.stringify({ sub: clientId }))}.signature`;
+}
+
+/** A token a current node mints: `sub` names the user, `key_id` the client key. */
+function userTokenFor(clientId: string): string {
+  return `header.${btoa(JSON.stringify({ sub: 'user-1', key_id: clientId }))}.signature`;
 }
 
 beforeEach(async () => {
@@ -216,12 +221,45 @@ describe('connectAiAgent', () => {
     expect(invoke).not.toHaveBeenCalled();
   });
 
-  it('remembers the minted key by the sub of its own token', async () => {
+  it('remembers the minted key by the sub of its own token on a node without key_id', async () => {
     installFetch(json({ data: { access_token: tokenFor('client-1'), refresh_token: 'mcp-rt' } }));
 
     await agentConnect.connectAiAgent();
 
     expect(settings.mcpAgentClientId).toBe('client-1');
+  });
+
+  it('remembers the minted key by its key_id when sub names the user', async () => {
+    installFetch(json({ data: { access_token: userTokenFor('client-1'), refresh_token: 'mcp-rt' } }));
+
+    await agentConnect.connectAiAgent();
+
+    expect(settings.mcpAgentClientId).toBe('client-1');
+  });
+
+  it('revokes the first key on a reconnect when both keys belong to the same user', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+    let minted = 0;
+    installFetch(({ url }) => {
+      if (url.endsWith('/admin/client-key')) {
+        minted += 1;
+        return json({ data: { access_token: userTokenFor(`client-${minted}`), refresh_token: 'mcp-rt' } });
+      }
+      if (url.endsWith('/admin/keys/clients')) {
+        return json({ data: [{ client_id: 'client-1', root_key_id: 'user-1', is_valid: true }] });
+      }
+      return json({ data: null });
+    });
+
+    await agentConnect.connectAiAgent();
+    vi.setSystemTime(new Date('2026-01-01T00:00:01.000Z'));
+    const result = await agentConnect.connectAiAgent();
+
+    expect(result.replacedPrevious).toBe(true);
+    expect(calls.map((c) => c.url)).toContain(
+      'http://localhost:2528/admin/keys/user-1/clients/client-1',
+    );
   });
 
   it('revokes the key a previous connect left behind', async () => {
@@ -369,7 +407,7 @@ describe('connectAiAgent', () => {
   });
 
   it('rejects a minted token with no derivable client id, writing and persisting nothing', async () => {
-    // A token with no `sub` claim: the id the delete endpoint needs cannot be
+    // A token with neither a `key_id` nor a `sub` claim: the id the delete endpoint needs cannot be
     // recovered, so the key must not be written or tracked as revocable.
     const noSubToken = `header.${btoa(JSON.stringify({}))}.signature`;
     installFetch(json({ data: { access_token: noSubToken, refresh_token: 'mcp-rt' } }));

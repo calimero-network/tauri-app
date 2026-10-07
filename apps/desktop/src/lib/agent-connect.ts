@@ -30,10 +30,11 @@ function nonLoopbackOrigin(url: string): string | null {
   return parsed.origin === 'null' ? parsed.protocol : parsed.origin;
 }
 
-/** Client keys are keyed by the `sub` of the tokens they mint. */
+/** A token names its client key in `key_id`; a node older than that claim named it in `sub`. */
 function clientIdFromToken(accessToken: string): string | null {
-  const sub = parseJwtPayload(accessToken)?.sub;
-  return typeof sub === 'string' ? sub : null;
+  const payload = parseJwtPayload(accessToken);
+  const id = payload?.key_id ?? payload?.sub;
+  return typeof id === 'string' ? id : null;
 }
 
 /**
@@ -106,7 +107,7 @@ export interface ConnectAiAgentResult {
   path: string;
   /** The node the credential was minted for, which the setting may since have moved off. */
   nodeUrl: string;
-  /** The new credential's client id (JWT `sub`) - an identifier, not a secret. */
+  /** The new credential's client id (JWT `key_id`) - an identifier, not a secret. */
   clientId: string | null;
   /** False on a first connect; true when this connect replaced an existing credential. */
   replacedPrevious: boolean;

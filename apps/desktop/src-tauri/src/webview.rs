@@ -9,7 +9,54 @@
 //! longer exists. IP-hosted pages (127.0.0.1) still fall back to native fetch via
 //! the injected proxy script.
 
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Mutex;
+
+use tauri::webview::DownloadEvent;
+use tauri::{AppHandle, Manager, Runtime, Webview, WebviewUrl, WebviewWindowBuilder};
+
+/// Where each app webview's in-flight download is going, by webview label.
+/// macOS reports no path when a download finishes, so the one chosen at
+/// `Requested` is kept until then.
+static DOWNLOAD_DESTINATIONS: Mutex<Option<HashMap<String, PathBuf>>> = Mutex::new(None);
+
+/// Download hook for app windows: lets every download proceed to its default
+/// place (~/Downloads, uniquely named), then tells the page how it went with a
+/// `calimero-download` DOM event — `detail: { success, path }`.
+///
+/// Without it the page cannot know: the write happens outside the webview, so
+/// an app said "saved" even when it failed, e.g. after the user answered
+/// macOS's "access files in your Downloads folder?" with Don't Allow (macOS
+/// asks once; afterwards every save fails silently until it is re-enabled in
+/// System Settings). The proxy script sets `__CALIMERO_DOWNLOAD_EVENTS__` so
+/// a page knows this event will come.
+pub fn report_download<R: Runtime>(webview: Webview<R>, event: DownloadEvent<'_>) -> bool {
+    let label = webview.label().to_string();
+    match event {
+        DownloadEvent::Requested { destination, .. } => {
+            if let Ok(mut map) = DOWNLOAD_DESTINATIONS.lock() {
+                map.get_or_insert_with(HashMap::new).insert(label, destination.clone());
+            }
+        }
+        DownloadEvent::Finished { path, success, .. } => {
+            let remembered = DOWNLOAD_DESTINATIONS
+                .lock()
+                .ok()
+                .and_then(|mut map| map.as_mut().and_then(|m| m.remove(&label)));
+            let path = path.or(remembered).map(|p| p.display().to_string());
+            if !success {
+                log::warn!("[Tauri] Download in '{}' failed (destination {:?})", label, path);
+            }
+            let detail = serde_json::json!({ "success": success, "path": path });
+            let _ = webview.eval(format!(
+                "window.dispatchEvent(new CustomEvent('calimero-download', {{ detail: {detail} }}));"
+            ));
+        }
+        _ => {}
+    }
+    true
+}
 
 /// Parses an app frontend URL and refuses any that may not hold a node session.
 ///
@@ -71,6 +118,7 @@ pub fn open_app_webview(
     .resizable(true)
     .center()
     .initialization_script(&proxy_script)
+    .on_download(report_download)
     .build()
     .map_err(|e| {
         format!(

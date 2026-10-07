@@ -2,6 +2,11 @@
     if (window.__TAURI_FETCH_PROXY_INJECTED__) return;
     window.__TAURI_FETCH_PROXY_INJECTED__ = true;
 
+    // The window reports each download's outcome as a `calimero-download`
+    // event (src/webview.rs report_download); a page waits for it only when
+    // this is set, so it still works under an older desktop.
+    window.__CALIMERO_DOWNLOAD_EVENTS__ = true;
+
     // Get configured node URL (injected by Rust backend)
     // This is replaced at runtime by Rust when creating the window
     const configuredNodeUrl = '__CONFIGURED_NODE_URL__';

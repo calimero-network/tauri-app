@@ -1340,7 +1340,9 @@ async fn create_app_window(
     // dragenter/dragover/drop and HTML5 drag-and-drop is dead — e.g. dropping
     // a file onto mero-chat's composer. Nothing listens for Tauri's
     // DragDropEvent on app windows, so nothing is lost.
-    .disable_drag_drop_handler();
+    .disable_drag_drop_handler()
+    // Tell the page whether a download it started was actually written.
+    .on_download(calimero_tauri_app::webview::report_download);
 
     // A stable per-(app, node) bucket so the window keeps its own session across
     // opens. macOS has no per-webview data directory, hence the identifier.

@@ -12,6 +12,9 @@ import {
   agentSetupPrompt,
   MCP_CONFIG_SNIPPET,
   MCP_CLIENT_LOCATIONS,
+  LOCAL_MODEL_CLIENTS,
+  LOCAL_MODEL_SUGGESTIONS,
+  LOCAL_MODEL_TIPS,
 } from "../lib/agent-connect";
 import { truncateText } from "../utils/string";
 import { checkForUpdates, installUpdate, getCurrentVersion } from "../utils/updater";
@@ -100,7 +103,7 @@ function Settings({ onBack, onOpenAccount, onOpenCloud, tab }: SettingsProps) {
   const [agentNodeUrl, setAgentNodeUrl] = useState('');
   const [agentConnectedAt, setAgentConnectedAt] = useState<number | null>(null);
   const [agentRevokeWarning, setAgentRevokeWarning] = useState(false);
-  const [copiedBlock, setCopiedBlock] = useState<'prompt' | 'mcp' | null>(null);
+  const [copiedBlock, setCopiedBlock] = useState<string | null>(null);
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [appVersion, setAppVersion] = useState("");
   const [updateState, setUpdateState] = useState<'idle' | 'checking' | 'current' | 'available'>('idle');
@@ -304,7 +307,7 @@ function Settings({ onBack, onOpenAccount, onOpenCloud, tab }: SettingsProps) {
     }
   };
 
-  const copyAgentBlock = async (block: 'prompt' | 'mcp', text: string) => {
+  const copyAgentBlock = async (block: string, text: string) => {
     try {
       await navigator.clipboard.writeText(text);
     } catch {
@@ -818,6 +821,64 @@ function Settings({ onBack, onOpenAccount, onOpenCloud, tab }: SettingsProps) {
                   </p>
                 </div>
               )}
+            </div>
+
+            <div className="settings-card" data-tutorial="settings-agent-local">
+              <h2>Use a local open-source model</h2>
+              <p className="field-hint" style={{ marginBottom: '16px' }}>
+                The MCP server works with any client that speaks MCP, including ones that run an
+                open-weight model on this machine through Ollama or LM Studio. Click{' '}
+                <strong>Connect AI agent</strong> above first, then set up one of these clients.
+              </p>
+
+              <div className="settings-field">
+                <span className="settings-field-label">Models that handle tool calls well</span>
+                <ul className="agent-clients">
+                  {LOCAL_MODEL_SUGGESTIONS.map(({ model, note }) => (
+                    <li key={model}>
+                      <code>{model}</code>
+                      <span className="agent-client-name">{note}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+
+              {LOCAL_MODEL_CLIENTS.map(({ id, client, summary, steps, configLocation, config }) => {
+                const blockId = `local-${id}`;
+                return (
+                  <details key={id} className="agent-local-client">
+                    <summary>
+                      <span className="agent-local-client-name">{client}</span>
+                      <span className="field-hint">{summary}</span>
+                    </summary>
+                    <ol className="agent-local-steps">
+                      {steps.map((step) => (
+                        <li key={step}>{step}</li>
+                      ))}
+                    </ol>
+                    <div className="agent-config-header">
+                      <span className="settings-field-label">
+                        Add to <code>{configLocation}</code>
+                      </span>
+                      <button
+                        type="button"
+                        className={`agent-config-copy${copiedBlock === blockId ? ' agent-config-copy--copied' : ''}`}
+                        onClick={() => copyAgentBlock(blockId, config)}
+                      >
+                        {copiedBlock === blockId ? <Check size={13} /> : <Copy size={13} />}
+                        {copiedBlock === blockId ? 'Copied!' : 'Copy'}
+                      </button>
+                    </div>
+                    <pre className="agent-config" tabIndex={0}>{config}</pre>
+                  </details>
+                );
+              })}
+
+              <ul className="agent-local-tips">
+                {LOCAL_MODEL_TIPS.map((tip) => (
+                  <li key={tip} className="field-hint">{tip}</li>
+                ))}
+              </ul>
             </div>
           </div>
         )}

@@ -551,3 +551,18 @@ describe('MCP_CONFIG_SNIPPET', () => {
     });
   });
 });
+
+describe('LOCAL_MODEL_CLIENTS', () => {
+  it('runs the same server as MCP_CONFIG_SNIPPET in every client', () => {
+    for (const { client, config } of agentConnect.LOCAL_MODEL_CLIENTS) {
+      expect(config, client).toMatch(/npx/);
+      expect(config, client).toContain('"@calimero-network/mero-mcp"');
+      expect(config, client).toMatch(/"-y",\s*"@calimero-network\/mero-mcp"/);
+    }
+  });
+
+  it('has unique ids, since each one keys a copy button', () => {
+    const ids = agentConnect.LOCAL_MODEL_CLIENTS.map((c) => c.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+});

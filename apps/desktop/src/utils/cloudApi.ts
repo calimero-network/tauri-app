@@ -1006,7 +1006,53 @@ export async function enableHaForNamespace(
   // root (a ReadOnlyTee on a node too old for relay mode) and auto-follows
   // contexts created later.
   const proof = await requestNamespaceOwnershipProof(namespaceId, { subject });
+  await ensureFounderLinked(idToken, proof.founding);
   return { ...(await enableHaNamespace(idToken, namespaceId, [], proof)), relay };
+}
+
+/**
+ * The cloud accepts a namespace proof that carries `founding` only when the
+ * founding account is linked to the signed-in cloud login, and refuses it with
+ * "Ownership proof failed: the founding account is not linked to this cloud
+ * login" otherwise. Linking used to be a separate button on the Account page
+ * that nothing in the HA flow pointed to, so HA failed for everyone who had not
+ * found it.
+ *
+ * Link it here when this node holds the founder's root — the same signature
+ * the Account page's button makes. A founder held on another device cannot be
+ * linked from this one, so say where to do it instead.
+ */
+async function ensureFounderLinked(
+  idToken: string,
+  founding: NamespaceFounding | undefined,
+): Promise<void> {
+  // A proof without `founding` comes from a node too old to attach it; the
+  // cloud does not check the link for it.
+  if (!founding?.founderAccountId) return;
+  const founder = founding.founderAccountId.toLowerCase();
+
+  const { accounts } = await listCloudAccounts(idToken);
+  if (accounts.some((a) => a.accountId.toLowerCase() === founder)) return;
+
+  const identity = await admin().getNodeIdentity();
+  const holdsFounderRoot =
+    identity?.accountId?.toLowerCase() === founder &&
+    identity.holdsAccountRoot !== false;
+  if (!holdsFounderRoot) {
+    throw new Error(
+      `This namespace was founded by account ${founder.slice(0, 8)}…, which is ` +
+        'not linked to your cloud login. Link it from the Account page on the ' +
+        'device that holds that account, then try again.',
+    );
+  }
+
+  const linked = await linkAccountToCloud(idToken);
+  if (linked.accountId.toLowerCase() !== founder) {
+    throw new Error(
+      `Linked account ${linked.accountId.slice(0, 8)}…, but this namespace was ` +
+        `founded by ${founder.slice(0, 8)}…`,
+    );
+  }
 }
 
 export { CloudSessionExpiredError };

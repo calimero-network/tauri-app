@@ -535,6 +535,110 @@ describe('enableHaForNamespace', () => {
     });
   });
 
+  describe('founder link', () => {
+    const FOUNDER = 'a'.repeat(64);
+    // A proof that names its founder, as merod >= rc.80 issues it.
+    const founderRoutes = (
+      calls: string[],
+      opts: { linked: string[]; identity: Record<string, unknown> },
+    ) =>
+      (url: string, init?: RequestInit) => {
+        calls.push(`${init?.method ?? 'GET'} ${url}`);
+        return route(url, init, {
+          '/admin-api/identity': () => jsonResponse({ data: opts.identity }),
+          '/admin-api/groups/ns-root/members': () =>
+            jsonResponse({
+              members: [{ identity: opts.identity.accountId, role: 'Admin' }],
+            }),
+          '/admin-api/groups/ns-root/issue-namespace-ownership-proof': () =>
+            jsonResponse({
+              signerPublicKey: 'pk',
+              signedPayload: 'sp',
+              signature: 'sig',
+              founding: { founderAccountId: FOUNDER, salt: 'b'.repeat(64) },
+              credential: 'cred',
+            }),
+          '/api/cloud/fleet/measurements': () =>
+            jsonResponse({
+              release_tag: 'mero-kms-v2.3.74',
+              allowed_mrtd: [],
+              allowed_rtmr0: [],
+              allowed_rtmr1: [],
+              allowed_rtmr2: [],
+              allowed_rtmr3: [],
+            }),
+          '/admin-api/groups/ns-root/settings/tee-admission-policy': () =>
+            new Response('{}', { status: 200 }),
+          '/api/cloud/me/accounts/challenge': () =>
+            jsonResponse({ nonce: 'n0nce', expires_at_ms: Date.now() + 60_000 }),
+          '/admin-api/account/sign-with-root': () =>
+            jsonResponse({
+              data: { rootPublicKey: 'f'.repeat(64), signature: 'c2ln', accountId: FOUNDER },
+            }),
+          '/api/cloud/me/accounts': () =>
+            init?.method === 'POST'
+              ? jsonResponse({ account_id: FOUNDER, user_email: 'u@e' })
+              : jsonResponse({
+                  accounts: opts.linked.map((account_id) => ({ account_id })),
+                  limit: null,
+                }),
+          '/api/cloud/me/namespaces/ns-root/enable-ha': () =>
+            jsonResponse({ status: 'enabling', namespace_id: 'ns-root', groups: [] }),
+        });
+      };
+
+    it('links the founder before enabling when this node holds its root', async () => {
+      // The reported failure: the cloud refused the proof with "the founding
+      // account is not linked to this cloud login" because nothing linked it.
+      const calls: string[] = [];
+      const { restore: r } = installFetch(
+        founderRoutes(calls, {
+          linked: [],
+          identity: { accountId: FOUNDER, holdsAccountRoot: true },
+        }),
+      );
+      restore = r;
+
+      const res = await enableHaForNamespace(makeJwt({ iss: 'mdma', email: 'u@e' }), 'ns-root', []);
+      expect(res.status).toBe('enabling');
+      const at = (s: string) => calls.findIndex((c) => c.includes(s));
+      const link = calls.findIndex((c) => /^POST .*\/api\/cloud\/me\/accounts$/.test(c));
+      expect(link).toBeGreaterThan(-1);
+      expect(link).toBeLessThan(at('/enable-ha'));
+    });
+
+    it('does not link again when the founder is already linked', async () => {
+      const calls: string[] = [];
+      const { restore: r } = installFetch(
+        founderRoutes(calls, {
+          linked: [FOUNDER.toUpperCase()],
+          identity: { accountId: FOUNDER, holdsAccountRoot: true },
+        }),
+      );
+      restore = r;
+
+      await enableHaForNamespace(makeJwt({ iss: 'mdma', email: 'u@e' }), 'ns-root', []);
+      expect(calls.some((c) => c.includes('/accounts/challenge'))).toBe(false);
+      expect(calls.some((c) => c.includes('/enable-ha'))).toBe(true);
+    });
+
+    it('says where to link when the founder root is on another device', async () => {
+      const calls: string[] = [];
+      const { restore: r } = installFetch(
+        founderRoutes(calls, {
+          linked: [],
+          identity: { accountId: FOUNDER, holdsAccountRoot: false },
+        }),
+      );
+      restore = r;
+
+      await expect(
+        enableHaForNamespace(makeJwt({ iss: 'mdma', email: 'u@e' }), 'ns-root', []),
+      ).rejects.toThrow(/not linked to your cloud login.*Account page/);
+      expect(calls.some((c) => c.includes('/enable-ha'))).toBe(false);
+    });
+  });
+
   // Every enable-HA mock is the same but for the release the fleet serves.
   const enableHaRoutes = (releaseTag: string, onPolicy: (body: any) => void) =>
     (url: string, init?: RequestInit) =>

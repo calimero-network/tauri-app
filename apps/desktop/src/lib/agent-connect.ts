@@ -82,6 +82,99 @@ export const MCP_CLIENT_LOCATIONS: { client: string; location: string }[] = [
   { client: 'Codex CLI', location: '~/.codex/config.toml (same fields, TOML syntax)' },
 ];
 
+/** One way to run the MCP server against a model served on this machine. */
+export interface LocalModelClient {
+  /** Stable key, also used as the copy-button id. */
+  id: string;
+  client: string;
+  /** What the client is and how it reaches the local model. */
+  summary: string;
+  /** Ordered setup steps, in plain text. */
+  steps: string[];
+  /** Where `config` goes. */
+  configLocation: string;
+  /** The mero-mcp entry in this client's own config syntax. */
+  config: string;
+}
+
+/**
+ * Open-weight models that call tools reliably enough to drive the MCP server;
+ * anything without tool calling cannot use it at all.
+ */
+export const LOCAL_MODEL_SUGGESTIONS: { model: string; note: string }[] = [
+  { model: 'qwen3:8b', note: 'good default on 16 GB of RAM' },
+  { model: 'qwen3:30b-a3b', note: 'stronger, needs ~24 GB' },
+  { model: 'gpt-oss:20b', note: 'solid tool use, needs ~16 GB' },
+  { model: 'llama3.1:8b', note: 'widely supported fallback' },
+];
+
+/**
+ * MCP-capable clients that run on a local model server (Ollama or LM Studio).
+ * Each carries the same command as MCP_CONFIG_SNIPPET, in that client's syntax.
+ */
+export const LOCAL_MODEL_CLIENTS: LocalModelClient[] = [
+  {
+    id: 'lmstudio',
+    client: 'LM Studio',
+    summary: 'Desktop app that downloads and runs models, with built-in MCP support.',
+    steps: [
+      'Install LM Studio (lmstudio.ai) and download a tool-capable model from its Discover tab.',
+      'Open the Program tab in the right sidebar, then Install > Edit mcp.json.',
+      'Paste the block below, save, and enable mero-mcp in the chat\'s tool list.',
+    ],
+    configLocation: '~/.lmstudio/mcp.json',
+    config: MCP_CONFIG_SNIPPET,
+  },
+  {
+    id: 'goose',
+    client: 'Goose',
+    summary: 'Open-source agent (CLI and desktop) that runs on Ollama.',
+    steps: [
+      'Install Ollama (ollama.com), then pull a model, e.g. "ollama pull qwen3:8b".',
+      'Install Goose (block.github.io/goose) and run "goose configure" > Configure Providers > Ollama.',
+      'Add the extension below to its config, or via "goose configure" > Add Extension > Command-line Extension.',
+    ],
+    configLocation: '~/.config/goose/config.yaml',
+    config: `extensions:
+  mero-mcp:
+    name: mero-mcp
+    type: stdio
+    cmd: npx
+    args: ["-y", "@calimero-network/mero-mcp"]
+    enabled: true
+    timeout: 300`,
+  },
+  {
+    id: 'continue',
+    client: 'Continue',
+    summary: 'Open-source VS Code / JetBrains assistant; MCP tools work in Agent mode.',
+    steps: [
+      'Install Ollama (ollama.com), then pull a model, e.g. "ollama pull qwen3:8b".',
+      'Install the Continue extension and open its config.yaml.',
+      'Add the model and server below, then switch the chat to Agent mode.',
+    ],
+    configLocation: '~/.continue/config.yaml',
+    config: `models:
+  - name: Qwen3 8B (local)
+    provider: ollama
+    model: qwen3:8b
+    roles: [chat, edit]
+    capabilities: [tool_use]
+mcpServers:
+  - name: mero-mcp
+    command: npx
+    args: ["-y", "@calimero-network/mero-mcp"]`,
+  },
+];
+
+/** Practical limits of small local models, shown under the clients. */
+export const LOCAL_MODEL_TIPS: string[] = [
+  'Pick a model with tool calling - without it the model cannot see the MCP server at all.',
+  'Raise the context window: the server\'s tool list overflows small defaults. For Ollama, start it with OLLAMA_CONTEXT_LENGTH=16384 (or set num_ctx); in LM Studio, raise Context Length when loading the model.',
+  'Small models rarely configure themselves from the setup prompt - add the config by hand, then ask the model to run node_status to check the connection.',
+  'Everything stays on this machine: the model, the MCP server and the node credential.',
+];
+
 /**
  * A copy-paste setup prompt built from live values (credential path, node URL),
  * never the token - the server reads that from disk, not from its config.

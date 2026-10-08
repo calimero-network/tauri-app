@@ -28,6 +28,9 @@ import { brokerAccessToken, unpatchedFetch } from './token-broker';
  */
 export const APP_TOKEN_PERMISSIONS: readonly string[] = [
   'context:create',
+  // `DELETE /admin-api/contexts/:id` requires it; without it an app can create
+  // a project but deleting it answers 403.
+  'context:delete',
   'context:list',
   'context:execute',
   'context:subscribe',
@@ -48,7 +51,18 @@ interface AppTokenPair {
   refresh_token: string;
 }
 
-type SlotStore = Record<string, AppTokenPair>;
+/**
+ * A stored pair plus the grant set it was minted with. A rotation keeps the
+ * family's permissions, so a pair minted before APP_TOKEN_PERMISSIONS grew
+ * would never gain the new grant: it has to be minted again.
+ */
+interface StoredPair extends AppTokenPair {
+  grant?: string;
+}
+
+type SlotStore = Record<string, StoredPair>;
+
+const GRANT = APP_TOKEN_PERMISSIONS.join(',');
 
 function readSlots(): SlotStore {
   try {
@@ -62,7 +76,7 @@ function readSlots(): SlotStore {
 
 function writeSlot(slot: string, pair: AppTokenPair | null): void {
   const slots = readSlots();
-  if (pair) slots[slot] = pair;
+  if (pair) slots[slot] = { ...pair, grant: GRANT };
   else delete slots[slot];
   localStorage.setItem(STORAGE_KEY, JSON.stringify(slots));
 }
@@ -131,7 +145,7 @@ async function rotate(pair: AppTokenPair): Promise<AppTokenPair | null> {
   const res = await unpatchedFetch()(`${nodeBase()}/auth/refresh`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(pair),
+    body: JSON.stringify({ access_token: pair.access_token, refresh_token: pair.refresh_token }),
   });
   if (!res.ok) return null;
   return pairFrom(await res.json().catch(() => null));
@@ -150,7 +164,8 @@ export function appAccessToken(slot: string): Promise<string> {
   if (pending) return pending;
 
   const run = async (): Promise<string> => {
-    const stored = readSlots()[slot];
+    const slotted = readSlots()[slot];
+    const stored = slotted?.grant === GRANT ? slotted : undefined;
     if (stored && isFresh(stored)) return stored.access_token;
 
     let next = stored ? await rotate(stored).catch(() => null) : null;

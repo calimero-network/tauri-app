@@ -73,7 +73,8 @@ function App() {
     message: string;
     itemName: string;
     actionLabel: string;
-    onConfirm: () => void;
+    onConfirm: (optionChecked: boolean) => void;
+    option?: { label: string; hint?: string; defaultChecked: boolean };
     breadcrumbs: Array<{ label: string; onClick?: () => void }>;
   } | null>(null);
   const [appVersion, setAppVersion] = useState<string>("");
@@ -446,14 +447,19 @@ function App() {
 
   const handleOpenSettings = useCallback(() => setShowSettings(true), []);
 
-  const handleConfirmUninstall = useCallback((_appId: string, appName: string, onConfirm: () => Promise<void>) => {
+  const handleConfirmUninstall = useCallback((_appId: string, appName: string, onConfirm: (deleteData: boolean) => Promise<void>) => {
     setConfirmAction({
       title: "Uninstall Application",
       message: "Are you sure you want to uninstall this application? This action cannot be undone.",
       itemName: appName,
       actionLabel: "Uninstall",
-      onConfirm: async () => {
-        await onConfirm();
+      option: {
+        label: "Also delete all application data",
+        hint: "Removes every context this node holds for the app. Contexts you administer are deleted for their group; the rest are left on this node only.",
+        defaultChecked: true,
+      },
+      onConfirm: async (deleteData) => {
+        await onConfirm(deleteData);
         setCurrentPage('installed');
         setConfirmAction(null);
       },
@@ -681,6 +687,7 @@ function App() {
           itemName={confirmAction.itemName}
           actionLabel={confirmAction.actionLabel}
           onConfirm={confirmAction.onConfirm}
+          option={confirmAction.option}
           onCancel={handleConfirmCancel}
           breadcrumbs={confirmAction.breadcrumbs}
         />

@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import "./ConfirmAction.css";
 
 interface ConfirmActionProps {
@@ -6,7 +6,10 @@ interface ConfirmActionProps {
   message: string;
   itemName: string;
   actionLabel: string;
-  onConfirm: () => void;
+  /** Called with the option's state, or `false` when the page shows none. */
+  onConfirm: (optionChecked: boolean) => void;
+  /** An extra opt-in shown above the buttons, e.g. "also delete the app's data". */
+  option?: { label: string; hint?: string; defaultChecked: boolean };
   onCancel: () => void;
   breadcrumbs: Array<{ label: string; onClick?: () => void }>;
 }
@@ -19,7 +22,9 @@ const ConfirmAction: React.FC<ConfirmActionProps> = ({
   onConfirm,
   onCancel,
   breadcrumbs,
+  option,
 }) => {
+  const [optionChecked, setOptionChecked] = useState(option?.defaultChecked ?? false);
   return (
     <div className="confirm-action-page">
       <nav className="breadcrumbs">
@@ -47,6 +52,19 @@ const ConfirmAction: React.FC<ConfirmActionProps> = ({
           <p>{message}</p>
           <p className="item-name">"{itemName}"</p>
         </div>
+        {option && (
+          <label className="confirm-option" data-testid="confirm-option">
+            <input
+              type="checkbox"
+              checked={optionChecked}
+              onChange={(e) => setOptionChecked(e.target.checked)}
+            />
+            <span>
+              <span className="confirm-option-label">{option.label}</span>
+              {option.hint && <span className="confirm-option-hint">{option.hint}</span>}
+            </span>
+          </label>
+        )}
         <div className="confirm-actions">
           <button
             onClick={onCancel}
@@ -56,7 +74,7 @@ const ConfirmAction: React.FC<ConfirmActionProps> = ({
             Cancel
           </button>
           <button
-            onClick={onConfirm}
+            onClick={() => onConfirm(option ? optionChecked : false)}
             className="button button-danger"
             type="button"
           >

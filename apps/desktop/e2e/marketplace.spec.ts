@@ -531,6 +531,74 @@ test.describe("Installed Applications – row variants", () => {
   });
 });
 
+// ─── Uninstall confirm: delete application data ──────────────────────────────
+
+test.describe("Installed Applications – uninstall data option", () => {
+  /** Serve one context for the app and record every call the uninstall makes. */
+  async function mockUninstall(page: import("@playwright/test").Page) {
+    const calls: string[] = [];
+    await page.route("**/admin-api/contexts/for-application/*", (route) => {
+      calls.push(`GET ${new URL(route.request().url()).pathname}`);
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ data: { contexts: [{ id: "ctx-1", applicationId: "installed-app-2" }] } }),
+      });
+    });
+    await page.route("**/admin-api/contexts/ctx-1", (route) => {
+      calls.push(`${route.request().method()} ${new URL(route.request().url()).pathname}`);
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ data: { isDeleted: true } }),
+      });
+    });
+    await page.route(API_ROUTES.uninstallApplication, (route) => {
+      if (route.request().method() !== "DELETE") return route.fallback();
+      calls.push(`DELETE ${new URL(route.request().url()).pathname}`);
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ data: { applicationId: "installed-app-2" } }),
+      });
+    });
+    return calls;
+  }
+
+  async function openUninstallConfirm(page: import("@playwright/test").Page) {
+    await setupAuthenticatedPage(page);
+    await navigateVia(page, "Applications");
+    const row = page.locator("[data-testid='installed-app-card']", { hasText: "Blockchain Demo" });
+    await row.locator(".installed-app-more-btn").click();
+    await page.locator(".app-actions-dropdown .dropdown-item", { hasText: "Uninstall" }).click();
+    await expect(page.getByRole("heading", { name: "Uninstall Application" })).toBeVisible();
+  }
+
+  test("delete-data checkbox is on by default and removes the app's contexts first", async ({ page }) => {
+    const calls = await mockUninstall(page);
+    await openUninstallConfirm(page);
+
+    const option = page.getByTestId("confirm-option").getByRole("checkbox");
+    await expect(option).toBeChecked();
+
+    await page.locator(".confirm-actions .button-danger").click();
+    await expect.poll(() => calls.length).toBe(3);
+    expect(calls[0]).toMatch(/^GET .*\/contexts\/for-application\/installed-app-2$/);
+    expect(calls[1]).toMatch(/^DELETE .*\/contexts\/ctx-1$/);
+    expect(calls[2]).toMatch(/^DELETE .*\/applications\/installed-app-2$/);
+  });
+
+  test("unchecking the box uninstalls without touching contexts", async ({ page }) => {
+    const calls = await mockUninstall(page);
+    await openUninstallConfirm(page);
+
+    await page.getByTestId("confirm-option").getByRole("checkbox").uncheck();
+    await page.locator(".confirm-actions .button-danger").click();
+    await expect.poll(() => calls.length).toBe(1);
+    expect(calls[0]).toMatch(/^DELETE .*\/applications\/installed-app-2$/);
+  });
+});
+
 // ─── Open & Shortcut buttons ─────────────────────────────────────────────────
 
 test.describe("Installed Applications – actions", () => {

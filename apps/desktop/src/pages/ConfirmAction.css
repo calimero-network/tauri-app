@@ -76,6 +76,34 @@
   font-size: 16px;
 }
 
+.confirm-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: -16px 0 32px 0;
+  cursor: pointer;
+}
+
+.confirm-option input {
+  margin: 3px 0 0 0;
+  accent-color: var(--error);
+  cursor: pointer;
+}
+
+.confirm-option-label {
+  display: block;
+  color: var(--text-primary);
+  font-weight: 700;
+}
+
+.confirm-option-hint {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 .confirm-actions {
   display: flex;
   gap: 12px;

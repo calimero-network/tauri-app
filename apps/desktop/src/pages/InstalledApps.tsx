@@ -31,7 +31,7 @@ interface InstalledApplication {
 
 export interface InstalledAppsProps {
   onAuthRequired?: () => void;
-  onConfirmUninstall?: (appId: string, appName: string, onConfirm: () => Promise<void>) => void;
+  onConfirmUninstall?: (appId: string, appName: string, onConfirm: (deleteData: boolean) => Promise<void>) => void;
   clientReady?: boolean;
   onNavigate?: (page: 'marketplace') => void;
 }
@@ -153,33 +153,39 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
     }
   };
 
-  const handleUninstall = async (appId: string, appName: string) => {
-    if (onConfirmUninstall) {
-      onConfirmUninstall(appId, appName, async () => {
-        try {
-          const response = await apiClient.node.uninstallApplication(appId);
-          if (response.error) {
-            toast.error(`Failed to uninstall: ${response.error.message}`);
-            return;
-          }
-          toast.success(`"${appName}" uninstalled`);
-          await loadInstalledApps(true);
-        } catch (err) {
-          toast.error(`Failed to uninstall: ${parseTauriError(err, "Unknown error")}`);
-        }
-      });
-    } else {
-      try {
-        const response = await apiClient.node.uninstallApplication(appId);
-        if (response.error) {
-          toast.error(`Failed to uninstall: ${response.error.message}`);
+  const uninstall = async (appId: string, appName: string, deleteData: boolean) => {
+    try {
+      if (deleteData) {
+        const cleared = await apiClient.node.deleteApplicationData(appId);
+        if (cleared.error) {
+          toast.error(`Failed to delete application data: ${cleared.error.message}`);
           return;
         }
-        toast.success(`"${appName}" uninstalled`);
-        await loadInstalledApps(true);
-      } catch (err) {
-        toast.error(`Failed to uninstall: ${err instanceof Error ? err.message : "Unknown error"}`);
+        // Uninstalling past a context we could not remove would orphan it
+        // behind an app that is gone, so stop and let the user retry or
+        // uninstall without the data.
+        if (cleared.data && cleared.data.failed > 0) {
+          toast.error(`Could not remove ${cleared.data.failed} context(s) of "${appName}"; it was not uninstalled`);
+          return;
+        }
       }
+      const response = await apiClient.node.uninstallApplication(appId);
+      if (response.error) {
+        toast.error(`Failed to uninstall: ${response.error.message}`);
+        return;
+      }
+      toast.success(deleteData ? `"${appName}" and its data uninstalled` : `"${appName}" uninstalled`);
+      await loadInstalledApps(true);
+    } catch (err) {
+      toast.error(`Failed to uninstall: ${parseTauriError(err, "Unknown error")}`);
+    }
+  };
+
+  const handleUninstall = async (appId: string, appName: string) => {
+    if (onConfirmUninstall) {
+      onConfirmUninstall(appId, appName, (deleteData) => uninstall(appId, appName, deleteData));
+    } else {
+      await uninstall(appId, appName, false);
     }
   };
 

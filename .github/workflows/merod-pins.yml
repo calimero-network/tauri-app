@@ -1,0 +1,39 @@
+name: Merod pins
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    paths:
+      - merod-config.json
+      - apps/desktop/scripts/**
+      - .github/workflows/merod-pins.yml
+
+concurrency:
+  group: merod-pins-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
+
+jobs:
+  pins:
+    name: Pins match the release
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: package.json
+
+      - name: Recompute the pins and compare
+        working-directory: apps/desktop
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: pnpm merod:pin && git diff --exit-code && test -z "$(git status --porcelain)"

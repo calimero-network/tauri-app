@@ -53,6 +53,50 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+/**
+ * Every admin-api route an app reaches with this token, and the grant core's
+ * `PermissionValidator` (crates/auth/src/auth/permissions/validator.rs) asks
+ * for it. Pinned by hand so a dropped grant fails here instead of as a 403 in
+ * an app — the old test compared the request body to the constant itself and
+ * could never notice one missing.
+ */
+const ROUTE_GRANTS: Array<[route: string, grant: string]> = [
+  ['GET /admin-api/contexts', 'context:list'],
+  ['POST /admin-api/contexts', 'context:create'],
+  ['DELETE /admin-api/contexts/:id', 'context:delete'],
+  ['POST /jsonrpc', 'context:execute'],
+  ['GET /sse, /ws', 'context:subscribe'],
+  ['GET /admin-api/applications', 'application:list'],
+  ['/admin-api/namespaces/*', 'namespace'],
+  ['/admin-api/groups/*', 'group'],
+  ['/admin-api/blobs/*', 'blob'],
+  ['/admin-api/alias/*/context', 'context:alias'],
+];
+
+describe('APP_TOKEN_PERMISSIONS', () => {
+  it.each(ROUTE_GRANTS)('lets an app call %s (%s)', (_route, grant) => {
+    expect(mod.APP_TOKEN_PERMISSIONS).toContain(grant);
+  });
+
+  it('matches mero-react`s MultiContext grant set exactly', () => {
+    // mero-react getPermissionsForMode(AppMode.MultiContext); keep in lockstep.
+    expect([...mod.APP_TOKEN_PERMISSIONS].sort()).toEqual(
+      [
+        'context:create',
+        'context:delete',
+        'context:list',
+        'context:execute',
+        'context:subscribe',
+        'application:list',
+        'namespace',
+        'group',
+        'blob',
+        'context:alias',
+      ].sort(),
+    );
+  });
+});
+
 describe('appAccessToken', () => {
   it('mints a client key with app grants only — no admin, no keys — using the desktop session', async () => {
     const minted = { access_token: jwt('a1', 3600), refresh_token: 'r1' };
@@ -137,6 +181,33 @@ describe('appAccessToken', () => {
     await mod.appAccessToken('app-x');
     const [, init] = calls('/admin/client-key')[1] as [string, RequestInit];
     expect((init.headers as Record<string, string>).Authorization).toBe('Bearer desktop-rotated');
+  });
+
+  it('mints a new key for a pair stored before the grant set changed', async () => {
+    // A pair the previous release stored: no `grant`, minted without
+    // context:delete. Rotating it would keep the old permissions forever.
+    localStorage.setItem(
+      'calimero_app_token_slots',
+      JSON.stringify({ 'app-design': { access_token: jwt('old', 3600), refresh_token: 'r-old' } }),
+    );
+    const fresh = { access_token: jwt('new', 3600), refresh_token: 'r-new' };
+    fetchMock.mockResolvedValueOnce(ok(fresh));
+
+    await expect(mod.appAccessToken('app-design')).resolves.toBe(fresh.access_token);
+    expect(calls('/auth/refresh')).toHaveLength(0);
+    const [, init] = calls('/admin/client-key')[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string).permissions).toContain('context:delete');
+  });
+
+  it('keeps reusing a pair minted with the current grant set', async () => {
+    fetchMock.mockResolvedValueOnce(ok({ access_token: jwt('a1', 3600), refresh_token: 'r1' }));
+    await mod.appAccessToken('app-design');
+    vi.resetModules();
+    mod = await import('./app-tokens');
+    fetchMock.mockClear();
+
+    await mod.appAccessToken('app-design');
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('refuses when the desktop is not logged in', async () => {

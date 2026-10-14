@@ -259,7 +259,7 @@ describe('trusted apps', () => {
     fetchMock.mockImplementation(async () => ok({ access_token: jwt('hf', 3600), refresh_token: 'rh' }));
 
   it('mints full access for Hyperfeed at its own origin, still bound to its application', async () => {
-    installed = [hyperfeed('https://hyperfeed-two.vercel.app')];
+    installed = [hyperfeed('https://hyperfeed.me')];
     mintEach();
 
     await mod.appAccessToken('app-hyperfeed', HYPERFEED);
@@ -299,5 +299,22 @@ describe('trusted apps', () => {
     await expect(mod.appAccessToken('app-hyperfeed', HYPERFEED)).resolves.toBe(full.access_token);
     expect(minted(1).permissions).toEqual(['admin']);
     expect(calls('/auth/refresh')).toHaveLength(0);
+  });
+
+  it('trusts www.hyperfeed.me and, until bundles move, the vercel.app frontend', async () => {
+    mintEach();
+    for (const [i, frontend] of ['https://www.hyperfeed.me', 'https://hyperfeed-two.vercel.app'].entries()) {
+      installed = [hyperfeed(frontend)];
+      await mod.appAccessToken(`app-hyperfeed-${i}`, HYPERFEED);
+      expect(minted(i).permissions).toEqual(['admin']);
+    }
+  });
+
+  it('gives the plain app set to a look-alike of hyperfeed.me', async () => {
+    installed = [hyperfeed('https://hyperfeed.me.evil.example')];
+    mintEach();
+
+    await mod.appAccessToken('app-hyperfeed', HYPERFEED);
+    expect(minted().permissions).toEqual([...mod.APP_TOKEN_PERMISSIONS]);
   });
 });

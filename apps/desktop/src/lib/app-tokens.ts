@@ -56,7 +56,9 @@ export const APP_TOKEN_PERMISSIONS: readonly string[] = [
  * Hyperfeed installs apps and deletes feeds for you.
  */
 export const TRUSTED_APPS: Readonly<Record<string, readonly string[]>> = {
-  'com.calimero.hyperfeed': ['https://hyperfeed-two.vercel.app'],
+  // hyperfeed.me is Hyperfeed's own domain; the vercel.app origin stays until
+  // every node runs a Hyperfeed bundle that names hyperfeed.me.
+  'com.calimero.hyperfeed': ['https://hyperfeed.me', 'https://www.hyperfeed.me', 'https://hyperfeed-two.vercel.app'],
 };
 
 /** What a trusted app acts with: the admin dashboard's grant. Never `keys`. */

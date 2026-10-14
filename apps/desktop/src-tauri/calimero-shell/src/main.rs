@@ -114,11 +114,12 @@ mod shell {
     /// Set (or clear) this app's dock badge. `count <= 0` clears it. The badge
     /// shows on the per-app launcher's own dock icon (this shell process).
     #[tauri::command]
-    fn set_badge(count: i64) {
+    fn set_badge<R: tauri::Runtime>(webview: tauri::Webview<R>, count: i64) -> Result<(), String> {
         use cocoa::appkit::NSApp;
         use cocoa::base::{id, nil};
         use cocoa::foundation::NSString;
         use objc::{msg_send, sel, sel_impl};
+        app_window::authorize_webview(&webview)?;
         unsafe {
             let app = NSApp();
             let dock_tile: id = msg_send![app, dockTile];
@@ -129,6 +130,7 @@ mod shell {
             };
             let _: () = msg_send![dock_tile, setBadgeLabel: label];
         }
+        Ok(())
     }
 
     /// Post a native notification LOCALLY from this shell process. Because the
@@ -137,15 +139,20 @@ mod shell {
     /// is what we want. (Do NOT forward to the host: that would attribute it to the
     /// host bundle `network.calimero.desktop` instead.)
     #[tauri::command]
-    fn notify(title: String, body: String) {
+    fn notify<R: tauri::Runtime>(
+        webview: tauri::Webview<R>,
+        title: String,
+        body: String,
+    ) -> Result<(), String> {
         use cocoa::base::{id, nil};
         use cocoa::foundation::NSString;
         use objc::{class, msg_send, sel, sel_impl};
+        app_window::authorize_webview(&webview)?;
         unsafe {
             let center: id =
                 msg_send![class!(NSUserNotificationCenter), defaultUserNotificationCenter];
             if center == nil {
-                return;
+                return Ok(());
             }
             let notif: id = msg_send![class!(NSUserNotification), new];
             let t: id = NSString::alloc(nil).init_str(&title);
@@ -154,6 +161,7 @@ mod shell {
             let _: () = msg_send![notif, setInformativeText: b];
             let _: () = msg_send![center, deliverNotification: notif];
         }
+        Ok(())
     }
 
     /// Build the app URL with the same SSO hash the desktop's "Open" injects, so
@@ -272,6 +280,81 @@ mod shell {
             ])
             .run(tauri::generate_context!())
             .expect("error while running calimero-shell");
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use tauri::ipc::{CallbackFn, InvokeBody};
+        use tauri::test::{get_ipc_response, mock_builder, mock_context, noop_assets, INVOKE_KEY};
+        use tauri::webview::InvokeRequest;
+        use tauri::{WebviewUrl, WebviewWindowBuilder};
+
+        const APP_ORIGIN: &str = "https://app.example/";
+
+        /// Sends `cmd` from a window the shell bound to `APP_ORIGIN` but that now shows `page`.
+        fn call_from_page(cmd: &str, body: serde_json::Value, page: &str) -> Result<(), String> {
+            let app = mock_builder()
+                .manage(app_window::AppWindowBindings::default())
+                .invoke_handler(tauri::generate_handler![set_badge, notify])
+                .build(mock_context(noop_assets()))
+                .unwrap();
+            app.state::<app_window::AppWindowBindings>().bind(
+                "app",
+                &APP_ORIGIN.parse().unwrap(),
+                "http://localhost:2528",
+            );
+            let window =
+                WebviewWindowBuilder::new(&app, "app", WebviewUrl::External(page.parse().unwrap()))
+                    .build()
+                    .unwrap();
+            get_ipc_response(
+                &window,
+                InvokeRequest {
+                    cmd: cmd.into(),
+                    callback: CallbackFn(0),
+                    error: CallbackFn(1),
+                    url: "tauri://localhost".parse().unwrap(),
+                    body: InvokeBody::Json(body),
+                    headers: Default::default(),
+                    invoke_key: INVOKE_KEY.to_string(),
+                },
+            )
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+        }
+
+        #[test]
+        fn set_badge_refuses_a_page_that_is_not_the_app() {
+            let err = call_from_page(
+                "set_badge",
+                serde_json::json!({ "count": 3 }),
+                "https://evil.example/",
+            )
+            .expect_err("a foreign origin set the dock badge");
+            assert!(err.contains("not the app"), "unexpected error: {err}");
+        }
+
+        #[test]
+        fn notify_refuses_a_page_that_is_not_the_app() {
+            let err = call_from_page(
+                "notify",
+                serde_json::json!({ "title": "t", "body": "b" }),
+                "https://evil.example/",
+            )
+            .expect_err("a foreign origin posted a notification");
+            assert!(err.contains("not the app"), "unexpected error: {err}");
+        }
+
+        #[test]
+        fn set_badge_serves_the_app_itself() {
+            call_from_page(
+                "set_badge",
+                serde_json::json!({ "count": 0 }),
+                "https://app.example/inbox",
+            )
+            .expect("the app's own page was refused");
+        }
     }
 }
 

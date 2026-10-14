@@ -24,7 +24,7 @@ import { brokerAccessToken, unpatchedFetch } from './token-broker';
  * What an app window may do, inside its own application: the node scopes every
  * grant to the `application_id` the key is minted with. The blob verbs are
  * admin-dashboard's APP_TOKEN_PERMISSIONS; `blob:list` would enumerate every app's blobs.
- * Never `admin`, never `keys`.
+ * Never `admin`, never `keys`: only a TRUSTED_APPS entry acts with more.
  */
 export const APP_TOKEN_PERMISSIONS: readonly string[] = [
   'context:create',
@@ -44,6 +44,48 @@ export const APP_TOKEN_PERMISSIONS: readonly string[] = [
   'context:alias',
 ];
 
+/**
+ * First-party apps that run the node for you, as the admin dashboard does, and
+ * so act with full access: package → the frontend origins it is trusted at.
+ * Both must match, so a bundle claiming the package from anywhere else gets
+ * the plain app set, and app_window.rs serves a window only while it shows the
+ * origin it was opened at. The key stays bound to the app's application, so
+ * its contexts and groups are still its own.
+ *
+ * Fixed here and never read from a manifest: an app cannot ask its way in.
+ * Hyperfeed installs apps and deletes feeds for you.
+ */
+export const TRUSTED_APPS: Readonly<Record<string, readonly string[]>> = {
+  'com.calimero.hyperfeed': ['https://hyperfeed-two.vercel.app'],
+};
+
+/** What a trusted app acts with: the admin dashboard's grant. Never `keys`. */
+export const TRUSTED_APP_PERMISSIONS: readonly string[] = ['admin'];
+
+/** The grant for an app: full access for a trusted package at its own origin. */
+export function grantForApp(pkg: string | undefined, frontendUrl: string | undefined): readonly string[] {
+  const origins = pkg ? TRUSTED_APPS[pkg] : undefined;
+  if (!origins || !frontendUrl) return APP_TOKEN_PERMISSIONS;
+  try {
+    return origins.includes(new URL(frontendUrl).origin) ? TRUSTED_APP_PERMISSIONS : APP_TOKEN_PERMISSIONS;
+  } catch {
+    return APP_TOKEN_PERMISSIONS;
+  }
+}
+
+/** An application's grant, read from what the node has installed under its id. */
+async function grantForApplication(applicationId: string): Promise<readonly string[]> {
+  // Imported here: the cache reaches back into appUtils, which imports this file.
+  const { listInstalledApps } = await import('../utils/installedAppsCache');
+  const { decodeMetadata } = await import('../utils/appUtils');
+  const res = await listInstalledApps();
+  const app: any = Array.isArray(res.data) ? res.data.find((a: any) => a.id === applicationId) : undefined;
+  if (!app) return APP_TOKEN_PERMISSIONS;
+  return grantForApp(app.package, decodeMetadata(app.metadata)?.links?.frontend);
+}
+
+const grantKey = (permissions: readonly string[]) => [...permissions].sort().join(',');
+
 const LAUNCHER_SLOT_PREFIX = 'launcher-';
 /** Which application each slot was opened for. Not a credential, so it outlives a logout. */
 const SLOT_APPS_KEY = 'calimero_app_token_slot_apps';
@@ -62,6 +104,8 @@ interface AppTokenPair {
 
 interface SlotEntry extends AppTokenPair {
   application_id: string;
+  /** The grant it was minted with (`grantKey`); absent on pairs from before trusted apps. */
+  grant?: string;
 }
 
 type SlotStore = Record<string, SlotEntry>;
@@ -115,10 +159,11 @@ function pairFrom(body: unknown): AppTokenPair | null {
 }
 
 /**
- * Mint a fresh scoped pair with the desktop's session. Retries once after a
- * desktop rotation, because the desktop's own access token may simply be stale.
+ * Mint a fresh pair with the desktop's session, bound to `applicationId` and
+ * granting `permissions`. Retries once after a desktop rotation, because the
+ * desktop's own access token may simply be stale.
  */
-async function mint(applicationId: string): Promise<AppTokenPair> {
+async function mint(applicationId: string, permissions: readonly string[]): Promise<AppTokenPair> {
   const post = (bearer: string) =>
     unpatchedFetch()(`${nodeBase()}/admin/client-key`, {
       method: 'POST',
@@ -127,7 +172,7 @@ async function mint(applicationId: string): Promise<AppTokenPair> {
         context_id: '',
         context_identity: '',
         application_id: applicationId,
-        permissions: [...APP_TOKEN_PERMISSIONS],
+        permissions: [...permissions],
       }),
     });
 
@@ -184,6 +229,9 @@ function slotApplication(slot: string, named?: string): string | undefined {
  * while fresh, else a rotation of this slot's own pair, else (no pair, its
  * family is dead, or it was minted for another application) a freshly minted
  * one. Never the desktop's token, and none for a slot whose application is unknown.
+ *
+ * A pair minted with another grant than the application gets now (an app made
+ * trusted, or a pair from before trusted apps) is not reused: one is minted.
  */
 export function appAccessToken(slot: string, applicationId?: string): Promise<string> {
   const application = slotApplication(slot, applicationId);
@@ -196,14 +244,19 @@ export function appAccessToken(slot: string, applicationId?: string): Promise<st
 
   const run = async (): Promise<string> => {
     rememberSlotApp(slot, application);
+    const permissions = await grantForApplication(application).catch(() => APP_TOKEN_PERMISSIONS);
+    const grant = grantKey(permissions);
     const found = readSlots()[slot];
-    const stored = found?.application_id === application ? found : undefined;
+    const stored =
+      found?.application_id === application && (found.grant ?? grantKey(APP_TOKEN_PERMISSIONS)) === grant
+        ? found
+        : undefined;
     if (stored && isFresh(stored)) return stored.access_token;
 
     let next = stored ? await rotate(stored).catch(() => null) : null;
-    if (!next) next = await mint(application);
+    if (!next) next = await mint(application, permissions);
 
-    writeSlot(slot, { ...next, application_id: application });
+    writeSlot(slot, { ...next, application_id: application, grant });
     return next.access_token;
   };
 

@@ -16,9 +16,23 @@ vi.mock('./token-broker', () => ({
   brokerAccessToken: (...a: unknown[]) => brokerAccessToken(...a),
 }));
 
+/** What the node has installed, as the desktop's cache lists it. */
+let installed: { id: string; package?: string; metadata?: unknown }[] = [];
+vi.mock('../utils/installedAppsCache', () => ({
+  listInstalledApps: async () => ({ data: installed }),
+}));
+vi.mock('../utils/appUtils', () => ({ decodeMetadata: (m: unknown) => m }));
+
+const HYPERFEED = '7Vp3x1Rn9qWkL2mBcD4fGh6JtYz8sAeUoQiP5uNvXyZ';
+const hyperfeed = (frontend: string) => ({
+  id: HYPERFEED,
+  package: 'com.calimero.hyperfeed',
+  metadata: { links: { frontend } },
+});
+
 type AppTokens = typeof import('./app-tokens');
 
-const APP = 'FsP2jwzu5bJ9KnXzM1wQzWyCdQvjDu4YNtK7QFbXnTq';
+const APP ='FsP2jwzu5bJ9KnXzM1wQzWyCdQvjDu4YNtK7QFbXnTq';
 let mod: AppTokens;
 
 /** An unsigned JWT whose `exp` is `secondsFromNow` away. */
@@ -40,6 +54,7 @@ function calls(path: string) {
 
 beforeEach(async () => {
   vi.resetAllMocks();
+  installed = [];
   desktopAccess = 'desktop-root-access';
   const store = new Map<string, string>();
   vi.stubGlobal('localStorage', {
@@ -232,5 +247,57 @@ describe('appAccessToken', () => {
   it('refuses when the desktop is not logged in', async () => {
     desktopAccess = null;
     await expect(mod.appAccessToken('app-x', APP)).rejects.toThrow('Desktop is not authenticated');
+  });
+});
+
+// Hyperfeed installs apps and deletes feeds for you: it acts as the admin
+// dashboard does, and only it, only from its own frontend.
+describe('trusted apps', () => {
+  const minted = (i = 0) =>
+    JSON.parse((calls('/admin/client-key')[i] as [string, RequestInit])[1].body as string);
+  const mintEach = () =>
+    fetchMock.mockImplementation(async () => ok({ access_token: jwt('hf', 3600), refresh_token: 'rh' }));
+
+  it('mints full access for Hyperfeed at its own origin, still bound to its application', async () => {
+    installed = [hyperfeed('https://hyperfeed-two.vercel.app')];
+    mintEach();
+
+    await mod.appAccessToken('app-hyperfeed', HYPERFEED);
+    await mod.appAccessToken(`launcher-${HYPERFEED}`);
+
+    for (const i of [0, 1]) {
+      expect(minted(i).permissions).toEqual(['admin']);
+      expect(minted(i).application_id).toBe(HYPERFEED);
+    }
+  });
+
+  it('gives the plain app set to the package served from anywhere else', async () => {
+    installed = [hyperfeed('https://hyperfeed.evil.example')];
+    mintEach();
+
+    await mod.appAccessToken('app-hyperfeed', HYPERFEED);
+    expect(minted().permissions).toEqual([...mod.APP_TOKEN_PERMISSIONS]);
+  });
+
+  it('gives the plain app set to any other package at that origin', async () => {
+    installed = [{ ...hyperfeed('https://hyperfeed-two.vercel.app'), package: 'com.example.copycat' }];
+    mintEach();
+
+    await mod.appAccessToken('app-hyperfeed', HYPERFEED);
+    expect(minted().permissions).toEqual([...mod.APP_TOKEN_PERMISSIONS]);
+  });
+
+  it('replaces a scoped pair kept from before, instead of rotating it', async () => {
+    const scoped = { access_token: jwt('old', 3600), refresh_token: 'r-old' };
+    fetchMock.mockResolvedValueOnce(ok(scoped));
+    await mod.appAccessToken('app-hyperfeed', HYPERFEED); // not installed yet: the plain set
+
+    installed = [hyperfeed('https://hyperfeed-two.vercel.app')];
+    const full = { access_token: jwt('new', 3600), refresh_token: 'r-new' };
+    fetchMock.mockResolvedValueOnce(ok(full));
+
+    await expect(mod.appAccessToken('app-hyperfeed', HYPERFEED)).resolves.toBe(full.access_token);
+    expect(minted(1).permissions).toEqual(['admin']);
+    expect(calls('/auth/refresh')).toHaveLength(0);
   });
 });

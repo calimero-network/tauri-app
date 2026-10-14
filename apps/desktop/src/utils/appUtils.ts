@@ -260,7 +260,7 @@ export async function openAppFrontend(
     // credentials: it logs in for itself inside its own isolated store.
     if (!isCrossNode && getAccessToken() && getRefreshToken()) {
       try {
-        const appToken = await appAccessToken(windowLabel);
+        const appToken = await appAccessToken(windowLabel, context?.applicationId);
         hashParams.set('access_token', appToken);
         hashParams.set('refresh_token', BROKERED_REFRESH_TOKEN);
         hashParams.set('expires_at', String(expiresAtFromJwt(appToken)));

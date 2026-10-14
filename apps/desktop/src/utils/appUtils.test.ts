@@ -113,7 +113,7 @@ describe('openAppFrontend token handoff', () => {
       applicationId: 'app-1',
     });
 
-    expect(appAccessToken).toHaveBeenCalledWith('app-app-1');
+    expect(appAccessToken).toHaveBeenCalledWith('app-app-1', 'app-1');
   });
 
   it('fails closed: no token at all when an app token cannot be minted', async () => {

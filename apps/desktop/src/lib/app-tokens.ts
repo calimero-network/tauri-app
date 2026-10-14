@@ -10,8 +10,8 @@
  *
  * Now each app window (a "slot": its window label, or `launcher-<appId>` for a
  * per-app launcher process) gets its OWN client key, minted by the desktop via
- * `POST /admin/client-key` with the grant set mero-react asks for in
- * multi-context mode and nothing else. The desktop still holds the refresh
+ * `POST /admin/client-key`, bound to the window's application and holding only
+ * the grants apps call. The desktop still holds the refresh
  * token and stays the sole rotator of each pair (see token-broker.ts), so the
  * single-use rule (core#3083) holds per family exactly as before — and a
  * leaked app token can no longer rotate, revoke or out-rank the desktop's.
@@ -21,10 +21,10 @@ import { getAccessToken } from './token-storage';
 import { brokerAccessToken, unpatchedFetch } from './token-broker';
 
 /**
- * What an app window may do. Mirrors mero-react's
- * `getPermissionsForMode(AppMode.MultiContext)` — the grant set a mero-react app
- * would request through the auth frontend anyway — and admin-dashboard's
- * APP_TOKEN_PERMISSIONS. Never `admin`, never `keys`.
+ * What an app window may do, inside its own application: the node scopes every
+ * grant to the `application_id` the key is minted with. The blob verbs are
+ * admin-dashboard's APP_TOKEN_PERMISSIONS; `blob:list` would enumerate every app's blobs.
+ * Never `admin`, never `keys`.
  */
 export const APP_TOKEN_PERMISSIONS: readonly string[] = [
   'context:create',
@@ -32,11 +32,19 @@ export const APP_TOKEN_PERMISSIONS: readonly string[] = [
   'context:execute',
   'context:subscribe',
   'application:list',
-  'namespace',
-  'group',
-  'blob',
+  'namespace:list',
+  'namespace:create',
+  'namespace:manage',
+  'group:list',
+  'group:create',
+  'group:manage',
+  'blob:add',
+  'blob:get',
+  'blob:remove',
   'context:alias',
 ];
+
+const LAUNCHER_SLOT_PREFIX = 'launcher-';
 
 const STORAGE_KEY = 'calimero_app_token_slots';
 
@@ -48,7 +56,11 @@ interface AppTokenPair {
   refresh_token: string;
 }
 
-type SlotStore = Record<string, AppTokenPair>;
+interface SlotEntry extends AppTokenPair {
+  application_id: string;
+}
+
+type SlotStore = Record<string, SlotEntry>;
 
 function readSlots(): SlotStore {
   try {
@@ -60,7 +72,7 @@ function readSlots(): SlotStore {
   }
 }
 
-function writeSlot(slot: string, pair: AppTokenPair | null): void {
+function writeSlot(slot: string, pair: SlotEntry | null): void {
   const slots = readSlots();
   if (pair) slots[slot] = pair;
   else delete slots[slot];
@@ -102,7 +114,7 @@ function pairFrom(body: unknown): AppTokenPair | null {
  * Mint a fresh scoped pair with the desktop's session. Retries once after a
  * desktop rotation, because the desktop's own access token may simply be stale.
  */
-async function mint(): Promise<AppTokenPair> {
+async function mint(applicationId: string): Promise<AppTokenPair> {
   const post = (bearer: string) =>
     unpatchedFetch()(`${nodeBase()}/admin/client-key`, {
       method: 'POST',
@@ -110,6 +122,7 @@ async function mint(): Promise<AppTokenPair> {
       body: JSON.stringify({
         context_id: '',
         context_identity: '',
+        application_id: applicationId,
         permissions: [...APP_TOKEN_PERMISSIONS],
       }),
     });
@@ -131,7 +144,7 @@ async function rotate(pair: AppTokenPair): Promise<AppTokenPair | null> {
   const res = await unpatchedFetch()(`${nodeBase()}/auth/refresh`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(pair),
+    body: JSON.stringify({ access_token: pair.access_token, refresh_token: pair.refresh_token }),
   });
   if (!res.ok) return null;
   return pairFrom(await res.json().catch(() => null));
@@ -140,23 +153,35 @@ async function rotate(pair: AppTokenPair): Promise<AppTokenPair | null> {
 /** One in-flight acquisition per slot, so an app's burst of 401s rotates once. */
 const inflight = new Map<string, Promise<string>>();
 
+/** The application a slot's key is bound to: named by the caller, else remembered, else a launcher's own. */
+function slotApplication(slot: string, stored: SlotEntry | undefined, named?: string): string | undefined {
+  if (named) return named;
+  if (stored?.application_id) return stored.application_id;
+  if (slot.startsWith(LAUNCHER_SLOT_PREFIX)) return slot.slice(LAUNCHER_SLOT_PREFIX.length) || undefined;
+  return undefined;
+}
+
 /**
- * An access token for this app slot: the stored one while fresh, else a
- * rotation of this slot's own pair, else (no pair, or its family is dead) a
- * freshly minted one. Never the desktop's token.
+ * An access token for this app slot, bound to its application: the stored one
+ * while fresh, else a rotation of this slot's own pair, else (no pair, its
+ * family is dead, or it was minted for another application) a freshly minted
+ * one. Never the desktop's token, and none for a slot whose application is unknown.
  */
-export function appAccessToken(slot: string): Promise<string> {
+export function appAccessToken(slot: string, applicationId?: string): Promise<string> {
   const pending = inflight.get(slot);
   if (pending) return pending;
 
   const run = async (): Promise<string> => {
-    const stored = readSlots()[slot];
+    const found = readSlots()[slot];
+    const application = slotApplication(slot, found, applicationId);
+    if (!application) throw new Error(`No application is known for ${slot}`);
+    const stored = found?.application_id === application ? found : undefined;
     if (stored && isFresh(stored)) return stored.access_token;
 
     let next = stored ? await rotate(stored).catch(() => null) : null;
-    if (!next) next = await mint();
+    if (!next) next = await mint(application);
 
-    writeSlot(slot, next);
+    writeSlot(slot, { ...next, application_id: application });
     return next.access_token;
   };
 

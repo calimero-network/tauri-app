@@ -45,6 +45,8 @@ export interface NamespaceGraph {
   namespaceId: string;
   name: string;
   applicationId?: string;
+  /** The release the namespace runs, as core reports it on the listing. */
+  appVersion?: string;
   /** This node's role at the namespace ROOT. */
   role?: string;
   contexts?: GraphContext[];
@@ -202,6 +204,7 @@ export async function mockNamespaceGraph(
                 memberCount: 2,
                 contextCount: (graph.contexts ?? []).length,
                 subgroupCount: (graph.subgroups ?? []).length,
+                ...(graph.appVersion ? { appVersion: graph.appVersion } : {}),
               },
             ],
           }),

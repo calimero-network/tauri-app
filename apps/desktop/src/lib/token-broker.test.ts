@@ -26,8 +26,11 @@ vi.mock('./token-storage', () => ({
 
 // The broker answers app windows with THEIR scoped token (app-tokens.ts).
 const appAccessToken = vi.fn();
+const installedFrontendUrl = vi.fn();
 vi.mock('./app-tokens', () => ({
   appAccessToken: (...a: unknown[]) => appAccessToken(...a),
+  installedFrontendUrl: (...a: unknown[]) => installedFrontendUrl(...a),
+  LAUNCHER_SLOT_PREFIX: 'launcher-',
 }));
 
 // Imported fresh for every test: the module keeps the in-flight rotation and the
@@ -273,6 +276,40 @@ describe('startTokenBroker', () => {
     expect(Object.keys(payload)).not.toContain('refreshToken');
     expect(JSON.stringify(payload)).not.toContain('access-1');
     expect(JSON.stringify(payload)).not.toContain('refresh-1');
+  });
+
+  it('tells a launcher where its app is installed now, so a moved app opens at its new origin', async () => {
+    appAccessToken.mockResolvedValue('app-scoped-2');
+    installedFrontendUrl.mockResolvedValue('https://chat.hyperfeed.me');
+
+    await fireRequest({ requestId: 'tok-4', slot: 'launcher-app123' });
+
+    expect(installedFrontendUrl).toHaveBeenCalledWith('app123');
+    expect(invoke).toHaveBeenCalledWith('resolve_token_request', {
+      requestId: 'tok-4',
+      accessToken: 'app-scoped-2',
+      frontendUrl: 'https://chat.hyperfeed.me',
+    });
+  });
+
+  it('still answers a launcher with its token when the frontend lookup fails', async () => {
+    appAccessToken.mockResolvedValue('app-scoped-3');
+    installedFrontendUrl.mockRejectedValue(new Error('node unreachable'));
+
+    await fireRequest({ requestId: 'tok-5', slot: 'launcher-app123' });
+
+    expect(invoke).toHaveBeenCalledWith('resolve_token_request', {
+      requestId: 'tok-5',
+      accessToken: 'app-scoped-3',
+    });
+  });
+
+  it('does not look up a frontend for an in-process app window', async () => {
+    appAccessToken.mockResolvedValue('app-scoped-4');
+
+    await fireRequest({ requestId: 'tok-6', slot: 'app-mero-drive' });
+
+    expect(installedFrontendUrl).not.toHaveBeenCalled();
   });
 
   it('refuses a request that names no app instead of answering with our token', async () => {

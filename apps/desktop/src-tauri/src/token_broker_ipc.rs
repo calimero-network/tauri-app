@@ -1,5 +1,6 @@
 //! macOS-only: Unix-socket token broker. Newline-delimited JSON.
-//! The ONLY thing crossing this socket is "give me a fresh access token".
+//! The ONLY thing crossing this socket is "give me a fresh access token" (and,
+//! with it, the frontend the app is installed at now).
 
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -10,10 +11,24 @@ pub struct BrokerRequest {
     pub app_id: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct BrokerResponse {
     pub access_token: Option<String>,
+    /// The `links.frontend` of the app as installed on the node now. A launcher
+    /// bakes its URL in when it is built, so after an app moves domain it would
+    /// keep opening the old origin, where the node's sign-in page refuses the
+    /// login callback. Absent from an older host, or when the app is unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frontend_url: Option<String>,
     pub error: Option<String>,
+}
+
+/// What the host hands a launcher: a fresh access token and, when known, the
+/// app's current frontend.
+#[derive(Debug, Clone)]
+pub struct BrokeredSession {
+    pub access_token: String,
+    pub frontend_url: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -52,8 +67,8 @@ where
     let resp = match serde_json::from_str::<BrokerRequest>(line.trim()) {
         Ok(req) => handler(req).await,
         Err(e) => BrokerResponse {
-            access_token: None,
             error: Some(format!("bad request: {e}")),
+            ..Default::default()
         },
     };
     let mut bytes = serde_json::to_vec(&resp).unwrap_or_default();
@@ -83,6 +98,17 @@ pub async fn request_access_token(
     cap: &str,
     app_id: &str,
 ) -> Result<String, IpcError> {
+    request_session(socket_path, cap, app_id)
+        .await
+        .map(|s| s.access_token)
+}
+
+/// [`request_access_token`], plus the app's current frontend when the host knows it.
+pub async fn request_session(
+    socket_path: &Path,
+    cap: &str,
+    app_id: &str,
+) -> Result<BrokeredSession, IpcError> {
     let stream = UnixStream::connect(socket_path).await?;
     let mut reader = BufReader::new(stream);
     let mut bytes = serde_json::to_vec(&BrokerRequest {
@@ -95,7 +121,10 @@ pub async fn request_access_token(
     reader.read_line(&mut line).await?;
     let resp: BrokerResponse = serde_json::from_str(line.trim())?;
     match resp.access_token {
-        Some(t) => Ok(t),
+        Some(access_token) => Ok(BrokeredSession {
+            access_token,
+            frontend_url: resp.frontend_url,
+        }),
         None => Err(IpcError::Denied(resp.error.unwrap_or_else(|| "denied".into()))),
     }
 }
@@ -117,12 +146,16 @@ mod tests {
 
         let resp = BrokerResponse {
             access_token: Some("AT".into()),
-            error: None,
+            ..Default::default()
         };
         let s2 = serde_json::to_string(&resp).unwrap();
         let back2: BrokerResponse = serde_json::from_str(&s2).unwrap();
         assert_eq!(back2.access_token.as_deref(), Some("AT"));
         assert!(back2.error.is_none());
+        // An older host's reply, with no frontend, still parses.
+        let old: BrokerResponse =
+            serde_json::from_str(r#"{"access_token":"AT","error":null}"#).unwrap();
+        assert!(old.frontend_url.is_none());
     }
 
     fn temp_sock(tag: &str) -> std::path::PathBuf {
@@ -148,12 +181,13 @@ mod tests {
             if req.cap == "good" {
                 BrokerResponse {
                     access_token: Some(format!("AT-{}", req.app_id)),
+                    frontend_url: Some(format!("https://{}.example/", req.app_id)),
                     error: None,
                 }
             } else {
                 BrokerResponse {
-                    access_token: None,
                     error: Some("bad cap".into()),
+                    ..Default::default()
                 }
             }
         };
@@ -163,6 +197,13 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(ok, "AT-mero-drive");
+
+        let session = request_session(&path, "good", "mero-drive").await.unwrap();
+        assert_eq!(session.access_token, "AT-mero-drive");
+        assert_eq!(
+            session.frontend_url.as_deref(),
+            Some("https://mero-drive.example/")
+        );
 
         let err = request_access_token(&path, "wrong", "mero-drive").await;
         assert!(matches!(err, Err(IpcError::Denied(_))));

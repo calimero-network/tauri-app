@@ -164,30 +164,41 @@ mod shell {
         Ok(())
     }
 
+    /// Ask the host for a session: a brokered access token and the app's
+    /// current frontend. None (manual login at the baked URL) if the host does
+    /// not answer in time.
+    fn request_session(
+        cfg: &shell_config::ShellConfig,
+    ) -> Option<token_broker_ipc::BrokeredSession> {
+        let sock = host_socket_path();
+        tauri::async_runtime::block_on(async {
+            tokio::time::timeout(
+                std::time::Duration::from_secs(6),
+                token_broker_ipc::request_session(&sock, &cfg.cap, &cfg.id),
+            )
+            .await
+            .ok()
+            .and_then(|r| r.ok())
+        })
+    }
+
     /// Build the app URL with the same SSO hash the desktop's "Open" injects, so
     /// the app starts authenticated + pointed at the node (node_url + a brokered
-    /// access token + the brokered-refresh sentinel). Falls back to the raw URL
-    /// (manual login) if no token can be brokered.
-    fn build_app_url(cfg: &shell_config::ShellConfig) -> String {
+    /// access token + the brokered-refresh sentinel). Without a token the app
+    /// logs in by itself.
+    fn build_app_url(
+        cfg: &shell_config::ShellConfig,
+        frontend: &str,
+        token: Option<&str>,
+    ) -> String {
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis())
             .unwrap_or(0);
 
-        let sock = host_socket_path();
-        let token = tauri::async_runtime::block_on(async {
-            tokio::time::timeout(
-                std::time::Duration::from_secs(6),
-                token_broker_ipc::request_access_token(&sock, &cfg.cap, &cfg.id),
-            )
-            .await
-            .ok()
-            .and_then(|r| r.ok())
-        });
-
         let mut ser = url::form_urlencoded::Serializer::new(String::new());
         ser.append_pair("node_url", cfg.node_url.trim_end_matches('/'));
-        if let Some(ref t) = token {
+        if let Some(t) = token {
             ser.append_pair("access_token", t);
             ser.append_pair("refresh_token", BROKERED_REFRESH_TOKEN);
             ser.append_pair("expires_at", &(now_ms + 3_600_000).to_string());
@@ -197,12 +208,12 @@ mod shell {
         ser.append_pair("app-id", &cfg.id);
         let hash = ser.finish();
 
-        match url::Url::parse(&cfg.url) {
+        match url::Url::parse(frontend) {
             Ok(mut u) => {
                 u.query_pairs_mut().append_pair("_cb", &now_ms.to_string());
                 format!("{}#{}", u, hash)
             }
-            Err(_) => format!("{}#{}", cfg.url, hash),
+            Err(_) => format!("{}#{}", frontend, hash),
         }
     }
 
@@ -249,9 +260,15 @@ mod shell {
                 });
 
                 ensure_host_running(&host_socket_path());
+                let session = request_session(&cfg_for_setup);
+                let frontend_url = webview::launcher_frontend_url(
+                    &cfg_for_setup.url,
+                    session.as_ref().and_then(|s| s.frontend_url.as_deref()),
+                )
+                .to_string();
                 // Bind the window to the app's origin and node before its page
                 // exists, so only that page can reach the proxy and broker.
-                let frontend = webview::validate_app_frontend_url(&cfg_for_setup.url)
+                let frontend = webview::validate_app_frontend_url(&frontend_url)
                     .map_err(std::io::Error::other)?;
                 app.state::<app_window::AppWindowBindings>().bind(
                     "app",
@@ -259,7 +276,11 @@ mod shell {
                     &cfg_for_setup.node_url,
                 );
                 // Inject SSO (node_url + brokered token) like the desktop's "Open".
-                let url = build_app_url(&cfg_for_setup);
+                let url = build_app_url(
+                    &cfg_for_setup,
+                    &frontend_url,
+                    session.as_ref().map(|s| s.access_token.as_str()),
+                );
                 webview::open_app_webview(
                     app.handle(),
                     "app",

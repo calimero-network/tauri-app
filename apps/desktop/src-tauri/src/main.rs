@@ -265,8 +265,17 @@ async fn proxy_http_request(
 // whole family, so the desktop window is the sole holder and rotator; every app
 // webview brokers a fresh access token off it instead of keeping its own.
 
+/// A fresh access token for an app slot, and that app's current frontend when
+/// the desktop knows it (only launchers use it; see `BrokerResponse::frontend_url`).
+struct BrokeredToken {
+    access_token: String,
+    // Read only by the macOS launcher broker.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    frontend_url: Option<String>,
+}
+
 /// What the desktop window answers with: a fresh access token, or why not.
-type TokenBrokerReply = Result<String, String>;
+type TokenBrokerReply = Result<BrokeredToken, String>;
 
 /// In-flight broker requests, keyed by request id, awaiting the desktop's reply.
 type TokenBrokerRegistry = std::sync::Arc<
@@ -293,7 +302,7 @@ async fn rotate_access_token(
     app_handle: &tauri::AppHandle,
     registry: &TokenBrokerRegistry,
     slot: String,
-) -> Result<String, String> {
+) -> Result<BrokeredToken, String> {
     static NEXT_REQUEST_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let request_id = format!(
         "tok-{}",
@@ -323,7 +332,7 @@ async fn rotate_access_token(
     }
 
     match tokio::time::timeout(TOKEN_BROKER_TIMEOUT, reply_rx).await {
-        Ok(Ok(Ok(access_token))) => Ok(access_token),
+        Ok(Ok(Ok(token))) => Ok(token),
         Ok(Ok(Err(reason))) => Err(reason),
         // Sender dropped without replying (desktop window closed mid-request).
         Ok(Err(_)) => Err("Desktop window closed before the token refresh completed".into()),
@@ -360,6 +369,7 @@ async fn broker_token_refresh(
     // token minted for itself.
     rotate_access_token(&app_handle, &registry, window.label().to_string())
         .await
+        .map(|t| t.access_token)
         .map_err(|reason| TauriError::new(TauriErrorCode::InternalError, reason))
 }
 
@@ -399,8 +409,8 @@ async fn run_broker_service(app_handle: tauri::AppHandle) {
             let caps = app_handle.state::<CapRegistry>();
             if !cap_is_valid(&caps, &req.cap, &req.app_id) {
                 return token_broker_ipc::BrokerResponse {
-                    access_token: None,
                     error: Some("unknown capability".into()),
+                    ..Default::default()
                 };
             }
             let registry = app_handle.state::<TokenBrokerRegistry>();
@@ -408,12 +418,13 @@ async fn run_broker_service(app_handle: tauri::AppHandle) {
             let slot = format!("launcher-{}", req.app_id);
             match rotate_access_token(&app_handle, &registry, slot).await {
                 Ok(t) => token_broker_ipc::BrokerResponse {
-                    access_token: Some(t),
+                    access_token: Some(t.access_token),
+                    frontend_url: t.frontend_url,
                     error: None,
                 },
                 Err(e) => token_broker_ipc::BrokerResponse {
-                    access_token: None,
                     error: Some(e),
+                    ..Default::default()
                 },
             }
         }
@@ -428,6 +439,7 @@ async fn run_broker_service(app_handle: tauri::AppHandle) {
 fn resolve_token_request(
     request_id: String,
     access_token: Option<String>,
+    frontend_url: Option<String>,
     error: Option<String>,
     registry: tauri::State<'_, TokenBrokerRegistry>,
 ) {
@@ -436,7 +448,10 @@ fn resolve_token_request(
         .remove(&request_id)
     {
         let reply = match access_token {
-            Some(token) => Ok(token),
+            Some(access_token) => Ok(BrokeredToken {
+                access_token,
+                frontend_url,
+            }),
             None => Err(error.unwrap_or_else(|| "Token refresh failed".to_string())),
         };
         // Receiver gone means the request already timed out — nothing to do.

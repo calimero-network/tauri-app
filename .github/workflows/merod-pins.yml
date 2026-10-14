@@ -9,6 +9,11 @@ on:
       - merod-config.json
       - apps/desktop/scripts/**
       - .github/workflows/merod-pins.yml
+  schedule:
+    - cron: "0 6 * * 1"
+
+permissions:
+  contents: read
 
 concurrency:
   group: merod-pins-${{ github.event_name }}-${{ github.ref }}

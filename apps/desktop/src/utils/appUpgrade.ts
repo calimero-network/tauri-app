@@ -26,7 +26,12 @@ export type UpgradePlan =
   | { kind: 'install'; version: string }
   /** This node holds a release newer than the namespace runs. */
   | { kind: 'upgrade'; version: string }
-  /** The namespace's running version is unknown, so there is nothing to compare. */
+  /**
+   * Core names no running version. On a member's node that is the normal state
+   * right after an upgrade: the node learns the new target at once but fetches
+   * the release, and so can name its version, only when a context is next used
+   * there.
+   */
   | { kind: 'unknown' };
 
 /** Is `version` strictly newer than `than`? Missing or unparsable is never newer. */

@@ -1,0 +1,98 @@
+name: Desktop E2E (live nodes)
+
+# The desktop UI against two REAL merod nodes: an admin upgrades a namespace
+# from one desktop and a member's node follows (apps/desktop/e2e-live). The
+# mocked suite (e2e-desktop.yml) cannot see that, because the upgrade crosses
+# two nodes, a registry and a governance op.
+#
+# merod is the version merod-config.json pins, checked against its sha256 pin,
+# so this tests what the desktop ships. The two releases are the two newest
+# kv-store releases that merod can run, from the public registry, served to
+# both nodes by a registry the suite starts locally.
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    paths:
+      - "apps/desktop/src/**"
+      - "apps/desktop/e2e-live/**"
+      - "apps/desktop/playwright.live.config.ts"
+      - "apps/desktop/package.json"
+      - "merod-config.json"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/e2e-live.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: e2e-live-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
+
+permissions:
+  contents: read
+
+jobs:
+  live:
+    name: Playwright (live nodes)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: package.json
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright Chromium
+        working-directory: apps/desktop
+        run: pnpm exec playwright install chromium --with-deps
+
+      - name: Fetch the pinned merod
+        run: |
+          version=$(jq -r .version merod-config.json)
+          asset=merod_x86_64-unknown-linux-gnu.tar.gz
+          want=$(jq -r --arg a "$asset" '.sha256[$a]' merod-config.json)
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/$asset" \
+            "https://github.com/calimero-network/core/releases/download/$version/$asset"
+          echo "$want  $RUNNER_TEMP/$asset" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/merod"
+          tar -xzf "$RUNNER_TEMP/$asset" -C "$RUNNER_TEMP/merod"
+          echo "MEROD_BINARY=$RUNNER_TEMP/merod/merod" >> "$GITHUB_ENV"
+          echo "MEROD_VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Fetch two releases to upgrade between
+        working-directory: apps/desktop
+        env:
+          OUT_DIR: ${{ runner.temp }}/releases
+        run: |
+          node e2e-live/fetch-releases.mjs
+          echo "LIVE_BUNDLE_DIR=$OUT_DIR" >> "$GITHUB_ENV"
+
+      - name: Run the live suite
+        working-directory: apps/desktop
+        env:
+          CI: true
+          LIVE_DATA_DIR: ${{ runner.temp }}/live-data
+        run: pnpm test:e2e:live
+
+      - name: Upload report and node logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-live-report
+          path: |
+            apps/desktop/playwright-report/
+            apps/desktop/test-results/
+            ${{ runner.temp }}/live-data/*.log
+          retention-days: 7

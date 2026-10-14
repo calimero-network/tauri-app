@@ -170,7 +170,7 @@ export default function NamespaceUpgradeCard({ ns, app, isAdmin, onInstalled, on
         <div>
           <span className="field-label">Running</span>
           <span className="ns-upgrade-version" data-testid="ns-upgrade-running">
-            {running ?? "unknown"}
+            {running ?? "not on this node yet"}
           </span>
         </div>
         <div>
@@ -217,7 +217,8 @@ export default function NamespaceUpgradeCard({ ns, app, isAdmin, onInstalled, on
       )}
       {plan.kind === "unknown" && (
         <div className="ns-upgrade-note" data-testid="ns-upgrade-unknown">
-          This node can't tell which release the namespace runs, so it can't offer an upgrade.
+          This node doesn't hold the release this namespace runs yet. After an upgrade it fetches the new one the next
+          time the app is used here.
         </div>
       )}
 

@@ -35,7 +35,9 @@ permissions:
 jobs:
   live:
     name: Playwright (live nodes)
-    runs-on: ubuntu-22.04
+    # merod's linux release links glibc 2.38 and GLIBCXX_3.4.31, newer than
+    # 22.04 ships, so the binary the desktop pins cannot start there.
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
 
     steps:

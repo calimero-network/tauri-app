@@ -1,5 +1,14 @@
 import { invoke } from '@tauri-apps/api/core';
 import { pollUntil } from './appUtils';
+import { getSettings } from './settings';
+
+/**
+ * The extra login-callback origins from Settings → Developer, sent with every
+ * start and restart so the node's config.toml always matches the setting (an
+ * empty list removes them). Read here rather than at each call site: there are
+ * many, and one that forgot would silently put the old list back.
+ */
+const trustedCallbackOrigins = (): string[] => [...(getSettings().trustedCallbackOrigins ?? [])];
 
 interface MerodHealth {
   status: number;
@@ -18,7 +27,10 @@ export async function listMerodNodes(homeDir?: string): Promise<string[]> {
  * Start the embedded merod node
  */
 export async function startMerod(serverPort?: number, swarmPort?: number, dataDir?: string, nodeName?: string, debugLogs?: boolean): Promise<string> {
-  return await invoke('start_merod', { serverPort, swarmPort, dataDir, nodeName, debugLogs });
+  return await invoke('start_merod', {
+    serverPort, swarmPort, dataDir, nodeName, debugLogs,
+    trustedCallbackOrigins: trustedCallbackOrigins(),
+  });
 }
 
 /**
@@ -38,7 +50,10 @@ interface RestartOutcome {
  * Restart the embedded merod node, stopping it first if already running.
  */
 export async function restartMerod(serverPort?: number, swarmPort?: number, dataDir?: string, nodeName?: string, debugLogs?: boolean, allowUnowned?: boolean): Promise<RestartOutcome> {
-  return await invoke('restart_merod', { serverPort, swarmPort, dataDir, nodeName, debugLogs, allowUnowned });
+  return await invoke('restart_merod', {
+    serverPort, swarmPort, dataDir, nodeName, debugLogs, allowUnowned,
+    trustedCallbackOrigins: trustedCallbackOrigins(),
+  });
 }
 
 /**

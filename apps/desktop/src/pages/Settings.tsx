@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, memo } from "react";
-import { getSettings, saveSettings, DEFAULT_NODE_HOME_DIR } from "../utils/settings";
+import { getSettings, saveSettings, parseTrustedOrigins, DEFAULT_NODE_HOME_DIR } from "../utils/settings";
 import { parseTauriError } from "../utils/appUtils";
 import { invoke } from "@tauri-apps/api/core";
 import { hardReset, wipeClientState, previewHardReset, type HardResetPreview } from "../utils/hardReset";
@@ -76,6 +76,9 @@ function Settings({ onBack, onOpenAccount, onOpenCloud, tab }: SettingsProps) {
   const [developerMode, setDeveloperMode] = useState(true);
   const [showTutorial, setShowTutorial] = useState(() => !isTutorialCompleted());
   const [debugLogs, setDebugLogs] = useState(true);
+  const [trustedOriginsText, setTrustedOriginsText] = useState(
+    () => (getSettings().trustedCallbackOrigins ?? []).join("\n"),
+  );
   const [cloudEnabled, setCloudEnabled] = useState(true);
   const [cloudConnected, setCloudConnected] = useState(false);
   const [cloudEmail, setCloudEmail] = useState<string | undefined>();
@@ -261,6 +264,20 @@ function Settings({ onBack, onOpenAccount, onOpenCloud, tab }: SettingsProps) {
       debugLogsChosen: true,
     });
     toast.success(`Debug logs ${newValue ? 'enabled' : 'disabled'}. Restart the node for changes to take effect.`);
+  };
+
+  const savedTrustedOrigins = (getSettings().trustedCallbackOrigins ?? []).join("\n");
+  const handleSaveTrustedOrigins = () => {
+    const { origins, invalid } = parseTrustedOrigins(trustedOriginsText);
+    if (invalid.length > 0) {
+      toast.error(
+        `Not an exact origin: ${invalid.join(", ")}. Use scheme://host[:port], with no path and no wildcard.`,
+      );
+      return;
+    }
+    saveSettings({ ...getSettings(), trustedCallbackOrigins: origins });
+    setTrustedOriginsText(origins.join("\n"));
+    toast.success("Trusted app origins saved. Restart the node for changes to take effect.");
   };
 
   const handleCloudEnabledToggle = () => {
@@ -541,6 +558,31 @@ function Settings({ onBack, onOpenAccount, onOpenCloud, tab }: SettingsProps) {
                   Restart the node for changes to take effect.
             </p>
           </div>
+          {developerMode && (
+            <div className="settings-field" data-testid="settings-trusted-origins">
+              <label htmlFor="trusted-origins" className="settings-field-label">Trusted App Origins</label>
+              <textarea
+                id="trusted-origins"
+                rows={3}
+                spellCheck={false}
+                value={trustedOriginsText}
+                onChange={(e) => setTrustedOriginsText(e.target.value)}
+                placeholder="https://mero-crm-git-my-branch-calimero-network.vercel.app"
+              />
+              <p className="field-hint">
+                One origin per line. Apps served from these addresses, such as a Vercel preview, can log in to this node
+                as well as the app's registered address. Each one can receive this node's login tokens, so only add
+                addresses you control. Restart the node for changes to take effect.
+              </p>
+              <button
+                className="button button-primary"
+                onClick={handleSaveTrustedOrigins}
+                disabled={trustedOriginsText.trim() === savedTrustedOrigins}
+              >
+                Save
+              </button>
+            </div>
+          )}
           <div className="settings-field" data-tutorial="settings-cloud-toggle">
                 <span className="settings-field-label">Enable Cloud</span>
                 <div className="toggle-switch">

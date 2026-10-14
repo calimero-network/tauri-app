@@ -83,6 +83,18 @@ pub fn validate_app_frontend_url(url: &str) -> Result<url::Url, String> {
     }
 }
 
+/// Where a per-app launcher opens its app: the frontend the desktop says the
+/// app is installed at now, else the URL baked into the launcher when it was
+/// built. A launcher started from the Dock or Finder would otherwise keep
+/// opening an app at the domain it has moved away from, where the node's
+/// sign-in page refuses the login callback. The desktop's answer must pass
+/// the same check as the baked URL, or the baked URL stands.
+pub fn launcher_frontend_url<'a>(baked: &'a str, current: Option<&'a str>) -> &'a str {
+    current
+        .filter(|u| validate_app_frontend_url(u).is_ok())
+        .unwrap_or(baked)
+}
+
 /// Open a webview window for an external app URL. Injects the proxy script (with
 /// `node_url` baked in) before the page loads, then shows and focuses the window.
 pub fn open_app_webview(
@@ -143,7 +155,24 @@ pub fn open_app_webview(
 
 #[cfg(test)]
 mod tests {
-    use super::validate_app_frontend_url;
+    use super::{launcher_frontend_url, validate_app_frontend_url};
+
+    #[test]
+    fn launcher_opens_where_the_app_is_installed_now() {
+        let baked = "https://mero-chat-pwa.vercel.app/";
+        assert_eq!(
+            launcher_frontend_url(baked, Some("https://chat.hyperfeed.me/")),
+            "https://chat.hyperfeed.me/"
+        );
+        assert_eq!(launcher_frontend_url(baked, None), baked);
+        for refused in ["http://evil.example/", "javascript:alert(1)", "not a url"] {
+            assert_eq!(
+                launcher_frontend_url(baked, Some(refused)),
+                baked,
+                "{refused}"
+            );
+        }
+    }
 
     #[test]
     fn accepts_https_and_loopback_http() {

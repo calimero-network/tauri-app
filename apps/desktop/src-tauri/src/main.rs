@@ -265,8 +265,17 @@ async fn proxy_http_request(
 // whole family, so the desktop window is the sole holder and rotator; every app
 // webview brokers a fresh access token off it instead of keeping its own.
 
+/// A fresh access token for an app slot, and that app's current frontend when
+/// the desktop knows it (only launchers use it; see `BrokerResponse::frontend_url`).
+struct BrokeredToken {
+    access_token: String,
+    // Read only by the macOS launcher broker.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    frontend_url: Option<String>,
+}
+
 /// What the desktop window answers with: a fresh access token, or why not.
-type TokenBrokerReply = Result<String, String>;
+type TokenBrokerReply = Result<BrokeredToken, String>;
 
 /// In-flight broker requests, keyed by request id, awaiting the desktop's reply.
 type TokenBrokerRegistry = std::sync::Arc<
@@ -293,7 +302,7 @@ async fn rotate_access_token(
     app_handle: &tauri::AppHandle,
     registry: &TokenBrokerRegistry,
     slot: String,
-) -> Result<String, String> {
+) -> Result<BrokeredToken, String> {
     static NEXT_REQUEST_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let request_id = format!(
         "tok-{}",
@@ -323,7 +332,7 @@ async fn rotate_access_token(
     }
 
     match tokio::time::timeout(TOKEN_BROKER_TIMEOUT, reply_rx).await {
-        Ok(Ok(Ok(access_token))) => Ok(access_token),
+        Ok(Ok(Ok(token))) => Ok(token),
         Ok(Ok(Err(reason))) => Err(reason),
         // Sender dropped without replying (desktop window closed mid-request).
         Ok(Err(_)) => Err("Desktop window closed before the token refresh completed".into()),
@@ -360,6 +369,7 @@ async fn broker_token_refresh(
     // token minted for itself.
     rotate_access_token(&app_handle, &registry, window.label().to_string())
         .await
+        .map(|t| t.access_token)
         .map_err(|reason| TauriError::new(TauriErrorCode::InternalError, reason))
 }
 
@@ -399,8 +409,8 @@ async fn run_broker_service(app_handle: tauri::AppHandle) {
             let caps = app_handle.state::<CapRegistry>();
             if !cap_is_valid(&caps, &req.cap, &req.app_id) {
                 return token_broker_ipc::BrokerResponse {
-                    access_token: None,
                     error: Some("unknown capability".into()),
+                    ..Default::default()
                 };
             }
             let registry = app_handle.state::<TokenBrokerRegistry>();
@@ -408,12 +418,13 @@ async fn run_broker_service(app_handle: tauri::AppHandle) {
             let slot = format!("launcher-{}", req.app_id);
             match rotate_access_token(&app_handle, &registry, slot).await {
                 Ok(t) => token_broker_ipc::BrokerResponse {
-                    access_token: Some(t),
+                    access_token: Some(t.access_token),
+                    frontend_url: t.frontend_url,
                     error: None,
                 },
                 Err(e) => token_broker_ipc::BrokerResponse {
-                    access_token: None,
                     error: Some(e),
+                    ..Default::default()
                 },
             }
         }
@@ -428,6 +439,7 @@ async fn run_broker_service(app_handle: tauri::AppHandle) {
 fn resolve_token_request(
     request_id: String,
     access_token: Option<String>,
+    frontend_url: Option<String>,
     error: Option<String>,
     registry: tauri::State<'_, TokenBrokerRegistry>,
 ) {
@@ -436,7 +448,10 @@ fn resolve_token_request(
         .remove(&request_id)
     {
         let reply = match access_token {
-            Some(token) => Ok(token),
+            Some(access_token) => Ok(BrokeredToken {
+                access_token,
+                frontend_url,
+            }),
             None => Err(error.unwrap_or_else(|| "Token refresh failed".to_string())),
         };
         // Receiver gone means the request already timed out — nothing to do.
@@ -1902,6 +1917,48 @@ fn spawn_log_drain<R>(
 
 /// Repoint the port of the first `/<proto>/<digits>` component of a multiaddr,
 /// leaving any trailing components (e.g. `/quic-v1`) intact.
+/// Write the app origins the node's login page may hand tokens to
+/// (`[server.embedded_auth.development] trusted_callback_origins`, read by
+/// merod's embedded auth and published to the login page on
+/// `/auth/providers`). Settings → Developer edits the list; an empty one
+/// removes the key, so a node nobody configured keeps a config.toml without it.
+///
+/// Only touches a node that runs the embedded auth: a config without
+/// `[server.embedded_auth]` is left alone (creating that table here would hand
+/// merod a partial auth config it cannot load). Returns whether it wrote.
+/// merod validates each entry (exact http(s) origins only) and drops the rest,
+/// so this does not second-guess them.
+fn apply_trusted_callback_origins(config: &mut toml::Value, origins: &[String]) -> bool {
+    let Some(auth) = config
+        .get_mut("server")
+        .and_then(|server| server.get_mut("embedded_auth"))
+        .and_then(toml::Value::as_table_mut)
+    else {
+        return false;
+    };
+    let development = auth
+        .entry("development")
+        .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+    let Some(development) = development.as_table_mut() else {
+        return false;
+    };
+    let cleaned: Vec<toml::Value> = origins
+        .iter()
+        .map(|o| o.trim())
+        .filter(|o| !o.is_empty())
+        .map(|o| toml::Value::String(o.to_owned()))
+        .collect();
+    if cleaned.is_empty() {
+        development.remove("trusted_callback_origins");
+    } else {
+        development.insert(
+            "trusted_callback_origins".to_owned(),
+            toml::Value::Array(cleaned),
+        );
+    }
+    true
+}
+
 fn replace_multiaddr_port(addr: &str, proto: &str, port: u16) -> String {
     let needle = format!("/{}/", proto);
     let Some(start) = addr.find(&needle) else {
@@ -1996,6 +2053,7 @@ async fn start_merod(
     data_dir: Option<String>,
     node_name: Option<String>,
     debug_logs: Option<bool>,
+    trusted_callback_origins: Option<Vec<String>>,
     app_handle: tauri::AppHandle,
     merod_state: tauri::State<'_, MerodState>,
     log_writers: tauri::State<'_, MerodLogWriters>,
@@ -2006,6 +2064,7 @@ async fn start_merod(
         data_dir,
         node_name,
         debug_logs,
+        trusted_callback_origins,
         app_handle,
         merod_state,
         log_writers,
@@ -2098,6 +2157,7 @@ async fn restart_merod(
     node_name: Option<String>,
     debug_logs: Option<bool>,
     allow_unowned: Option<bool>,
+    trusted_callback_origins: Option<Vec<String>>,
     app_handle: tauri::AppHandle,
     merod_state: tauri::State<'_, MerodState>,
     log_writers: tauri::State<'_, MerodLogWriters>,
@@ -2144,6 +2204,7 @@ async fn restart_merod(
         data_dir,
         node_name,
         debug_logs,
+        trusted_callback_origins,
         app_handle,
         merod_state,
         log_writers,
@@ -2167,6 +2228,7 @@ async fn start_node(
     data_dir: Option<String>,
     node_name: Option<String>,
     debug_logs: Option<bool>,
+    trusted_callback_origins: Option<Vec<String>>,
     app_handle: tauri::AppHandle,
     merod_state: tauri::State<'_, MerodState>,
     log_writers: tauri::State<'_, MerodLogWriters>,
@@ -2318,6 +2380,15 @@ async fn start_node(
                             }
                         }
                     }
+                }
+            }
+
+            // `None` from a caller that does not manage the list: leave it.
+            if let Some(origins) = trusted_callback_origins.as_deref() {
+                if !apply_trusted_callback_origins(&mut config, origins) && !origins.is_empty() {
+                    warn!(
+                        "[Merod] node '{name}' has no embedded auth; trusted callback origins not applied"
+                    );
                 }
             }
 
@@ -4359,6 +4430,67 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn trusted_callback_origins_land_in_the_embedded_auth_config() {
+        let mut config: toml::Value = r#"
+            [server]
+            listen = ["/ip4/127.0.0.1/tcp/2528"]
+            [server.embedded_auth]
+            listen_addr = "127.0.0.1:3001"
+            [server.embedded_auth.development]
+            enable_mock_auth = false
+        "#
+        .parse()
+        .unwrap();
+        let origins = vec![
+            " https://app-git-x-team.vercel.app ".to_owned(),
+            String::new(),
+        ];
+        assert!(super::apply_trusted_callback_origins(&mut config, &origins));
+        let dev = &config["server"]["embedded_auth"]["development"];
+        assert_eq!(
+            dev["trusted_callback_origins"].as_array().unwrap(),
+            &vec![toml::Value::String(
+                "https://app-git-x-team.vercel.app".into()
+            )]
+        );
+        // The rest of the table is untouched.
+        assert_eq!(dev["enable_mock_auth"].as_bool(), Some(false));
+
+        // Clearing the list removes the key rather than writing an empty one.
+        assert!(super::apply_trusted_callback_origins(&mut config, &[]));
+        assert!(config["server"]["embedded_auth"]["development"]
+            .get("trusted_callback_origins")
+            .is_none());
+    }
+
+    #[test]
+    fn trusted_callback_origins_create_the_development_table_when_missing() {
+        let mut config: toml::Value = "[server.embedded_auth]\nlisten_addr = \"x\"\n"
+            .parse()
+            .unwrap();
+        assert!(super::apply_trusted_callback_origins(
+            &mut config,
+            &["http://localhost:5173".to_owned()]
+        ));
+        assert_eq!(
+            config["server"]["embedded_auth"]["development"]["trusted_callback_origins"][0]
+                .as_str(),
+            Some("http://localhost:5173")
+        );
+    }
+
+    #[test]
+    fn trusted_callback_origins_leave_a_node_without_embedded_auth_alone() {
+        let mut config: toml::Value = "[server]\nauth_mode = \"proxy\"\n".parse().unwrap();
+        let before = config.clone();
+        assert!(!super::apply_trusted_callback_origins(
+            &mut config,
+            &["https://a.example".to_owned()]
+        ));
+        assert_eq!(config, before);
+    }
+
     use super::{
         is_browser_openable_url, launcher_bundle_is_removable, parse_app_deep_link,
         parse_node_ports, replace_multiaddr_port, update_menu_label, validate_shortcut_inputs,

@@ -327,3 +327,16 @@
 .settings-account-link {
   margin-top: 16px;
 }
+
+/* Trusted App Origins (Advanced, developer mode) */
+[data-testid="settings-trusted-origins"] textarea {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12px;
+  resize: vertical;
+}
+[data-testid="settings-trusted-origins"] .button {
+  align-self: flex-start;
+  margin-top: 8px;
+}

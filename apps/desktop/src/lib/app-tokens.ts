@@ -86,9 +86,23 @@ async function grantForApplication(applicationId: string): Promise<readonly stri
   return grantForApp(app.package, decodeMetadata(app.metadata)?.links?.frontend);
 }
 
+/**
+ * The frontend an application is installed at on the node now: what a
+ * per-app launcher should open, rather than the URL baked into it when it was
+ * built. Undefined when the node does not list it or it names no frontend.
+ */
+export async function installedFrontendUrl(applicationId: string): Promise<string | undefined> {
+  const { listInstalledApps } = await import('../utils/installedAppsCache');
+  const { decodeMetadata } = await import('../utils/appUtils');
+  const res = await listInstalledApps();
+  const app: any = Array.isArray(res.data) ? res.data.find((a: any) => a.id === applicationId) : undefined;
+  const frontend = app ? decodeMetadata(app.metadata)?.links?.frontend : undefined;
+  return typeof frontend === 'string' && frontend ? frontend : undefined;
+}
+
 const grantKey = (permissions: readonly string[]) => [...permissions].sort().join(',');
 
-const LAUNCHER_SLOT_PREFIX = 'launcher-';
+export const LAUNCHER_SLOT_PREFIX = 'launcher-';
 /** Which application each slot was opened for. Not a credential, so it outlives a logout. */
 const SLOT_APPS_KEY = 'calimero_app_token_slot_apps';
 /** What the node accepts as an `application_id`; anything else it would not bind. */

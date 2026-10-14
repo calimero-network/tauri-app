@@ -318,3 +318,18 @@ describe('trusted apps', () => {
     expect(minted().permissions).toEqual([...mod.APP_TOKEN_PERMISSIONS]);
   });
 });
+
+describe('installedFrontendUrl', () => {
+  it('names the frontend the node has the app installed at', async () => {
+    installed = [
+      { id: APP, package: 'com.calimero.chat', metadata: { links: { frontend: 'https://mero-chat-pwa.vercel.app' } } },
+    ];
+    await expect(mod.installedFrontendUrl(APP)).resolves.toBe('https://mero-chat-pwa.vercel.app');
+  });
+
+  it('names none for an app the node does not list, or one with no frontend', async () => {
+    installed = [{ id: APP, package: 'com.calimero.chat', metadata: { links: {} } }];
+    await expect(mod.installedFrontendUrl(APP)).resolves.toBeUndefined();
+    await expect(mod.installedFrontendUrl('someone-else')).resolves.toBeUndefined();
+  });
+});

@@ -16,6 +16,20 @@ vi.mock('./token-broker', () => ({
   brokerAccessToken: (...a: unknown[]) => brokerAccessToken(...a),
 }));
 
+/** What the node has installed, as the desktop's cache lists it. */
+let installed: { id: string; package?: string; metadata?: unknown }[] = [];
+vi.mock('../utils/installedAppsCache', () => ({
+  listInstalledApps: async () => ({ data: installed }),
+}));
+vi.mock('../utils/appUtils', () => ({ decodeMetadata: (m: unknown) => m }));
+
+const HYPERFEED_ID = '7Vp3x1Rn9qWkL2mBcD4fGh6JtYz8sAeUoQiP5uNvXyZ';
+const hyperfeed = (frontend: string) => ({
+  id: HYPERFEED_ID,
+  package: 'com.calimero.hyperfeed',
+  metadata: { links: { frontend } },
+});
+
 type AppTokens = typeof import('./app-tokens');
 let mod: AppTokens;
 
@@ -38,6 +52,7 @@ function calls(path: string) {
 
 beforeEach(async () => {
   vi.clearAllMocks();
+  installed = [];
   desktopAccess = 'desktop-root-access';
   const store = new Map<string, string>();
   vi.stubGlobal('localStorage', {
@@ -142,5 +157,62 @@ describe('appAccessToken', () => {
   it('refuses when the desktop is not logged in', async () => {
     desktopAccess = null;
     await expect(mod.appAccessToken('app-x')).rejects.toThrow('Desktop is not authenticated');
+  });
+});
+
+// Hyperfeed installs apps and deletes feeds for you: it acts as the admin
+// dashboard does, and only it, only from its own frontend.
+describe('trusted apps', () => {
+  const mintedPermissions = (i = 0) =>
+    JSON.parse((calls('/admin/client-key')[i] as [string, RequestInit])[1].body as string).permissions;
+
+  it('mints full access for Hyperfeed at its own origin, in a window and in its launcher', async () => {
+    installed = [hyperfeed('https://hyperfeed-two.vercel.app')];
+    fetchMock.mockImplementation(async () => ok({ access_token: jwt('hf', 3600), refresh_token: 'rh' }));
+
+    await mod.appAccessToken(`app-${HYPERFEED_ID}`);
+    await mod.appAccessToken(`launcher-${HYPERFEED_ID}`);
+
+    expect(mintedPermissions(0)).toEqual(['admin']);
+    expect(mintedPermissions(1)).toEqual(['admin']);
+    expect(mintedPermissions(0)).not.toContain('keys');
+  });
+
+  it('gives the plain app set to the package served from anywhere else', async () => {
+    installed = [hyperfeed('https://hyperfeed.evil.example')];
+    fetchMock.mockImplementation(async () => ok({ access_token: jwt('hf', 3600), refresh_token: 'rh' }));
+
+    await mod.appAccessToken(`app-${HYPERFEED_ID}`);
+    expect(mintedPermissions()).toEqual([...mod.APP_TOKEN_PERMISSIONS]);
+  });
+
+  it('gives the plain app set to any other package at that origin', async () => {
+    installed = [{ ...hyperfeed('https://hyperfeed-two.vercel.app'), package: 'com.example.copycat' }];
+    fetchMock.mockImplementation(async () => ok({ access_token: jwt('hf', 3600), refresh_token: 'rh' }));
+
+    await mod.appAccessToken(`app-${HYPERFEED_ID}`);
+    expect(mintedPermissions()).toEqual([...mod.APP_TOKEN_PERMISSIONS]);
+  });
+
+  it('replaces a scoped pair kept from before, instead of rotating it', async () => {
+    const scoped = { access_token: jwt('old', 3600), refresh_token: 'r-old' };
+    fetchMock.mockResolvedValueOnce(ok(scoped));
+    await mod.appAccessToken(`app-${HYPERFEED_ID}`); // not installed yet: the plain set
+
+    installed = [hyperfeed('https://hyperfeed-two.vercel.app')];
+    const full = { access_token: jwt('new', 3600), refresh_token: 'r-new' };
+    fetchMock.mockResolvedValueOnce(ok(full));
+
+    await expect(mod.appAccessToken(`app-${HYPERFEED_ID}`)).resolves.toBe(full.access_token);
+    expect(mintedPermissions(1)).toEqual(['admin']);
+    expect(calls('/auth/refresh')).toHaveLength(0);
+  });
+
+  it('reads the app id off a slot, cross-node suffix and all', () => {
+    expect(mod.appIdOfSlot(`app-${HYPERFEED_ID}`)).toBe(HYPERFEED_ID);
+    expect(mod.appIdOfSlot(`app-${HYPERFEED_ID}-nabc123`)).toBe(HYPERFEED_ID);
+    expect(mod.appIdOfSlot(`launcher-${HYPERFEED_ID}`)).toBe(HYPERFEED_ID);
+    expect(mod.appIdOfSlot('app-drive-example-com')).toBeNull();
+    expect(mod.appIdOfSlot(`main-${HYPERFEED_ID}`)).toBeNull();
   });
 });

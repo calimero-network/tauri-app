@@ -1,4 +1,10 @@
 {
     "name": "merod binary",
-    "version": "0.11.0-rc.84"
+    "version": "0.11.0-rc.84",
+    "sha256": {
+        "merod_aarch64-apple-darwin.tar.gz": "38b3a6aa9a85f38be174cdd2f777f30d9bea931dac019c24e27633881b71fb74",
+        "merod_aarch64-unknown-linux-gnu.tar.gz": "c10bb45beb49f211585104cc7735b97a7e37187acf946a218f9a5796812dd4a3",
+        "merod_x86_64-pc-windows-msvc.tar.gz": "53b57febc146058ecad950f9593692a19f433f177423a0fbe61d8d5a629a3d2e",
+        "merod_x86_64-unknown-linux-gnu.tar.gz": "c207bae8883c78b9d2f93756fa3ffdf8fe59d858957669040dc2566e396c24ee"
+    }
 }

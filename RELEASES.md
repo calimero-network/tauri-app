@@ -51,6 +51,9 @@ and publishes. So merging a version bump is the whole release, including the
 
 - It does nothing if `v<version>` already exists as a tag or a (draft) release.
 - It refuses to release if `apps/desktop/package.json` has a different version.
+- A bump of `merod-config.json` also needs fresh sha256 pins: run `pnpm merod:pin` in
+  `apps/desktop` and commit the result. `prepare-merod` refuses a download that does not
+  match its pin, and `merod-pins.yml` fails when the committed pins differ from the release.
 - Do **not** also push the tag by hand for a bumped version. The tag-triggered and
   dispatched runs are separate and would race to create the same release.
 

@@ -7,8 +7,6 @@ const invalidateInstalledApps = vi.fn();
 const openAppFrontend = vi.fn();
 const installApplication = vi.fn();
 const fetchAppsFromRegistry = vi.fn();
-const describeContextDeletion = vi.fn();
-const deleteContext = vi.fn();
 
 vi.mock("../utils/installedAppsCache", () => ({
   listInstalledApps: (...a: unknown[]) => listInstalledApps(...a),
@@ -18,13 +16,7 @@ vi.mock("../utils/registry", () => ({
   fetchAppsFromRegistry: (...a: unknown[]) => fetchAppsFromRegistry(...a),
 }));
 vi.mock("../lib/mero-client", () => ({
-  apiClient: {
-    node: {
-      installApplication: (...a: unknown[]) => installApplication(...a),
-      describeContextDeletion: (...a: unknown[]) => describeContextDeletion(...a),
-      deleteContext: (...a: unknown[]) => deleteContext(...a),
-    },
-  },
+  apiClient: { node: { installApplication: (...a: unknown[]) => installApplication(...a) } },
 }));
 vi.mock("../utils/appUtils", () => ({
   openAppFrontend: (...a: unknown[]) => openAppFrontend(...a),
@@ -323,94 +315,5 @@ describe("a deep link never acts without the user's consent", () => {
     expect(agree).not.toHaveBeenCalled();
     expect(openAppFrontend).not.toHaveBeenCalled();
     expect(r.failures[0]).toContain("HTTPS");
-  });
-});
-
-// An app window's token cannot install or delete (core answers 403), so an app
-// hands those to the desktop as links the desktop carries out itself.
-describe("actions the desktop carries out for an app", () => {
-  const CALENDAR = { slug: "com.calimero.calendar", action: "install", params: "" };
-
-  it("installs without opening anything, once the user agrees", async () => {
-    listInstalledApps.mockResolvedValue({ data: [INSTALLED] });
-    fetchAppsFromRegistry.mockResolvedValue([{ id: "com.calimero.calendar", name: "Calendar", latest_version: "2.0.0" }]);
-    installApplication.mockResolvedValue({ data: { applicationId: "app-2" } });
-    const r = recorder();
-
-    expect(await resolveAndOpen(CALENDAR, r.report, agree)).toBe("opened");
-
-    expect(agree).toHaveBeenCalledWith(expect.objectContaining({ kind: "add", pkg: "com.calimero.calendar", version: "2.0.0" }));
-    expect(installApplication).toHaveBeenCalledWith({ package: "com.calimero.calendar", version: "2.0.0" });
-    expect(openAppFrontend).not.toHaveBeenCalled();
-    expect(r.done).toEqual(["Installed Calendar"]);
-  });
-
-  it("installs nothing the user declined", async () => {
-    listInstalledApps.mockResolvedValue({ data: [] });
-    fetchAppsFromRegistry.mockResolvedValue([{ id: "com.calimero.calendar", latest_version: "2.0.0" }]);
-    const r = recorder();
-
-    expect(await resolveAndOpen(CALENDAR, r.report, vi.fn(async () => false))).toBe("forget");
-    expect(installApplication).not.toHaveBeenCalled();
-  });
-
-  it("does not ask again for a package already installed", async () => {
-    listInstalledApps.mockResolvedValue({ data: [{ ...INSTALLED, package: "com.calimero.calendar" }] });
-    const r = recorder();
-
-    expect(await resolveAndOpen(CALENDAR, r.report, agree)).toBe("opened");
-    expect(agree).not.toHaveBeenCalled();
-    expect(installApplication).not.toHaveBeenCalled();
-    expect(r.done).toEqual(["Mero Drive is already installed"]);
-  });
-
-  const DELETE = { slug: "com.calimero.drive", action: "delete-context", params: "context=ctx-1" };
-
-  it("deletes the app's own context and its empty namespace, once the user agrees", async () => {
-    listInstalledApps.mockResolvedValue({ data: [INSTALLED] });
-    describeContextDeletion.mockResolvedValue({ data: { applicationId: "app-1", emptyGroup: "ns-1" } });
-    deleteContext.mockResolvedValue({ data: { namespace: true } });
-    const r = recorder();
-
-    expect(await resolveAndOpen(DELETE, r.report, agree)).toBe("opened");
-
-    expect(agree).toHaveBeenCalledWith(
-      expect.objectContaining({ kind: "delete", appName: "Mero Drive", contextId: "ctx-1", namespace: true }),
-    );
-    expect(deleteContext).toHaveBeenCalledWith("ctx-1", "ns-1");
-    expect(openAppFrontend).not.toHaveBeenCalled();
-    expect(r.done).toEqual(["Deleted from Mero Drive"]);
-    expect(r.cleared).toEqual(r.shown);
-  });
-
-  it("refuses a context that runs another app, without asking", async () => {
-    listInstalledApps.mockResolvedValue({
-      data: [INSTALLED, { id: "app-9", package: "com.calimero.chat", metadata: { name: "Chat" } }],
-    });
-    describeContextDeletion.mockResolvedValue({ data: { applicationId: "app-9", emptyGroup: null } });
-    const r = recorder();
-
-    expect(await resolveAndOpen(DELETE, r.report, agree)).toBe("forget");
-    expect(agree).not.toHaveBeenCalled();
-    expect(deleteContext).not.toHaveBeenCalled();
-    expect(r.failures[0]).toContain("does not belong to com.calimero.drive");
-  });
-
-  it("deletes nothing the user declined", async () => {
-    listInstalledApps.mockResolvedValue({ data: [INSTALLED] });
-    describeContextDeletion.mockResolvedValue({ data: { applicationId: "app-1", emptyGroup: null } });
-    const r = recorder();
-
-    expect(await resolveAndOpen(DELETE, r.report, vi.fn(async () => false))).toBe("forget");
-    expect(deleteContext).not.toHaveBeenCalled();
-  });
-
-  it("says why when the link names no context", async () => {
-    listInstalledApps.mockResolvedValue({ data: [INSTALLED] });
-    const r = recorder();
-
-    expect(await resolveAndOpen({ ...DELETE, params: "" }, r.report, agree)).toBe("forget");
-    expect(describeContextDeletion).not.toHaveBeenCalled();
-    expect(r.failures[0]).toContain("names no context");
   });
 });

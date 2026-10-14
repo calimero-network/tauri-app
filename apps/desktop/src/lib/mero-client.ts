@@ -266,34 +266,6 @@ class NodeApi {
     });
   }
 
-  /**
-   * What deleting one context takes with it: the application it runs, and the
-   * group it is in when that group holds no other context (so the namespace
-   * goes too, as an app that makes one namespace per context expects).
-   */
-  describeContextDeletion(
-    contextId: string,
-  ): Promise<ApiResponse<{ applicationId: string; emptyGroup: string | null }>> {
-    return wrap('Failed to read the context', async () => {
-      const context = await this.meroJs.admin.getContext(contextId);
-      const group = await this.meroJs.admin.getContextGroup(contextId).catch(() => null);
-      if (!group) return { applicationId: context.applicationId, emptyGroup: null };
-      const left = await this.meroJs.admin.listGroupContexts(group).catch(() => null);
-      const alone = !!left && left.every((c) => c.contextId === contextId);
-      return { applicationId: context.applicationId, emptyGroup: alone ? group : null };
-    });
-  }
-
-  /** Delete a context, then the group `describeContextDeletion` found empty. */
-  deleteContext(contextId: string, emptyGroup: string | null): Promise<ApiResponse<{ namespace: boolean }>> {
-    return wrap('Failed to delete', async () => {
-      await this.meroJs.admin.deleteContext(contextId);
-      if (!emptyGroup) return { namespace: false };
-      await this.meroJs.admin.deleteNamespace(emptyGroup);
-      return { namespace: true };
-    });
-  }
-
   uninstallApplication(applicationId: string): Promise<ApiResponse<{ applicationId: string }>> {
     return wrap('Failed to uninstall application', async () => {
       await this.meroJs.admin.uninstallApplication(applicationId);

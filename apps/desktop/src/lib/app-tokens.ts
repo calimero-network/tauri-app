@@ -45,6 +45,10 @@ export const APP_TOKEN_PERMISSIONS: readonly string[] = [
 ];
 
 const LAUNCHER_SLOT_PREFIX = 'launcher-';
+/** Which application each slot was opened for. Not a credential, so it outlives a logout. */
+const SLOT_APPS_KEY = 'calimero_app_token_slot_apps';
+/** What the node accepts as an `application_id`; anything else it would not bind. */
+const APPLICATION_ID = /^[A-Za-z0-9_-]+$/;
 
 const STORAGE_KEY = 'calimero_app_token_slots';
 
@@ -150,13 +154,27 @@ async function rotate(pair: AppTokenPair): Promise<AppTokenPair | null> {
   return pairFrom(await res.json().catch(() => null));
 }
 
-/** One in-flight acquisition per slot, so an app's burst of 401s rotates once. */
+/** One in-flight acquisition per slot and application, so an app's burst of 401s rotates once. */
 const inflight = new Map<string, Promise<string>>();
 
+function readSlotApps(): Record<string, string> {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(SLOT_APPS_KEY) ?? '{}');
+    return parsed && typeof parsed === 'object' ? (parsed as Record<string, string>) : {};
+  } catch {
+    return {};
+  }
+}
+
+function rememberSlotApp(slot: string, application: string): void {
+  localStorage.setItem(SLOT_APPS_KEY, JSON.stringify({ ...readSlotApps(), [slot]: application }));
+}
+
 /** The application a slot's key is bound to: named by the caller, else remembered, else a launcher's own. */
-function slotApplication(slot: string, stored: SlotEntry | undefined, named?: string): string | undefined {
+function slotApplication(slot: string, named?: string): string | undefined {
   if (named) return named;
-  if (stored?.application_id) return stored.application_id;
+  const remembered = readSlotApps()[slot];
+  if (remembered) return remembered;
   if (slot.startsWith(LAUNCHER_SLOT_PREFIX)) return slot.slice(LAUNCHER_SLOT_PREFIX.length) || undefined;
   return undefined;
 }
@@ -168,13 +186,17 @@ function slotApplication(slot: string, stored: SlotEntry | undefined, named?: st
  * one. Never the desktop's token, and none for a slot whose application is unknown.
  */
 export function appAccessToken(slot: string, applicationId?: string): Promise<string> {
-  const pending = inflight.get(slot);
+  const application = slotApplication(slot, applicationId);
+  if (!application || !APPLICATION_ID.test(application)) {
+    return Promise.reject(new Error(`No application is known for ${slot}`));
+  }
+  const key = `${slot}\n${application}`;
+  const pending = inflight.get(key);
   if (pending) return pending;
 
   const run = async (): Promise<string> => {
+    rememberSlotApp(slot, application);
     const found = readSlots()[slot];
-    const application = slotApplication(slot, found, applicationId);
-    if (!application) throw new Error(`No application is known for ${slot}`);
     const stored = found?.application_id === application ? found : undefined;
     if (stored && isFresh(stored)) return stored.access_token;
 
@@ -185,7 +207,7 @@ export function appAccessToken(slot: string, applicationId?: string): Promise<st
     return next.access_token;
   };
 
-  const p = run().finally(() => inflight.delete(slot));
-  inflight.set(slot, p);
+  const p = run().finally(() => inflight.delete(key));
+  inflight.set(key, p);
   return p;
 }

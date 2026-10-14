@@ -39,7 +39,7 @@ function calls(path: string) {
 }
 
 beforeEach(async () => {
-  vi.clearAllMocks();
+  vi.resetAllMocks();
   desktopAccess = 'desktop-root-access';
   const store = new Map<string, string>();
   vi.stubGlobal('localStorage', {
@@ -118,6 +118,7 @@ describe('appAccessToken', () => {
 
     const minted = calls('/admin/client-key').map(([, init]) => JSON.parse((init as RequestInit).body as string).application_id);
     expect(minted).toEqual([APP, 'OtherApp']);
+    expect(calls('/auth/refresh')).toHaveLength(0);
   });
 
   it('drops a stored pair minted before keys were bound', async () => {
@@ -128,6 +129,36 @@ describe('appAccessToken', () => {
     fetchMock.mockResolvedValueOnce(ok({ access_token: jwt('a1', 3600), refresh_token: 'r1' }));
     await expect(mod.appAccessToken('app-x', APP)).resolves.not.toBe(jwt('old', 3600));
     expect(calls('/admin/client-key')).toHaveLength(1);
+    expect(calls('/auth/refresh')).toHaveLength(0);
+  });
+
+  it('mints nothing for an application id the node would not bind', async () => {
+    for (const bad of ['launcher-', 'launcher-a b']) {
+      await expect(mod.appAccessToken(bad)).rejects.toThrow('No application is known');
+    }
+    await expect(mod.appAccessToken('app-x', 'app<x>')).rejects.toThrow('No application is known');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('remembers a window`s application across a logout', async () => {
+    fetchMock
+      .mockResolvedValueOnce(ok({ access_token: jwt('a1', 3600), refresh_token: 'r1' }))
+      .mockResolvedValueOnce(ok({ access_token: jwt('a2', 3600), refresh_token: 'r2' }));
+    await mod.appAccessToken('app-drive', APP);
+    localStorage.removeItem('calimero_app_token_slots');
+
+    await mod.appAccessToken('app-drive');
+    const [, init] = calls('/admin/client-key')[1] as [string, RequestInit];
+    expect(JSON.parse(init.body as string).application_id).toBe(APP);
+  });
+
+  it('keeps concurrent calls for different applications apart', async () => {
+    fetchMock
+      .mockResolvedValueOnce(ok({ access_token: jwt('a1', 3600), refresh_token: 'r1' }))
+      .mockResolvedValueOnce(ok({ access_token: jwt('b1', 3600), refresh_token: 'r2' }));
+    await Promise.all([mod.appAccessToken('app-x', APP), mod.appAccessToken('app-x', 'OtherApp')]);
+    const minted = calls('/admin/client-key').map(([, init]) => JSON.parse((init as RequestInit).body as string).application_id);
+    expect(minted.sort()).toEqual([APP, 'OtherApp'].sort());
   });
 
   it('never returns the desktop`s own token', async () => {

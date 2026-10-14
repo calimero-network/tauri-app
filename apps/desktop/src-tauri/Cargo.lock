@@ -457,6 +457,7 @@ dependencies = [
  "calimero-tauri-app",
  "cocoa",
  "objc",
+ "serde_json",
  "tauri",
  "tauri-build",
  "tokio",

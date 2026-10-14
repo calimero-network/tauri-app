@@ -17,6 +17,8 @@ vi.mock('./token-broker', () => ({
 }));
 
 type AppTokens = typeof import('./app-tokens');
+
+const APP = 'FsP2jwzu5bJ9KnXzM1wQzWyCdQvjDu4YNtK7QFbXnTq';
 let mod: AppTokens;
 
 /** An unsigned JWT whose `exp` is `secondsFromNow` away. */
@@ -37,7 +39,7 @@ function calls(path: string) {
 }
 
 beforeEach(async () => {
-  vi.clearAllMocks();
+  vi.resetAllMocks();
   desktopAccess = 'desktop-root-access';
   const store = new Map<string, string>();
   vi.stubGlobal('localStorage', {
@@ -58,7 +60,7 @@ describe('appAccessToken', () => {
     const minted = { access_token: jwt('a1', 3600), refresh_token: 'r1' };
     fetchMock.mockResolvedValueOnce(ok(minted));
 
-    await expect(mod.appAccessToken('app-drive')).resolves.toBe(minted.access_token);
+    await expect(mod.appAccessToken('app-drive', APP)).resolves.toBe(minted.access_token);
 
     const [url, init] = calls('/admin/client-key')[0] as [string, RequestInit];
     expect(url).toBe('http://localhost:2528/admin/client-key');
@@ -67,22 +69,110 @@ describe('appAccessToken', () => {
     expect(body.permissions).toEqual([...mod.APP_TOKEN_PERMISSIONS]);
     expect(body.permissions).not.toContain('admin');
     expect(body.permissions.some((p: string) => p === 'keys' || p.startsWith('keys:'))).toBe(false);
+    expect(body.application_id).toBe(APP);
     // core's GenerateClientKeyRequest is deny_unknown_fields.
-    expect(Object.keys(body).sort()).toEqual(['context_id', 'context_identity', 'permissions']);
+    expect(Object.keys(body).sort()).toEqual(['application_id', 'context_id', 'context_identity', 'permissions']);
+  });
+
+  it('grants no umbrella and no blob listing', () => {
+    for (const umbrella of ['blob', 'namespace', 'group', 'context', 'application']) {
+      expect(mod.APP_TOKEN_PERMISSIONS).not.toContain(umbrella);
+    }
+    expect(mod.APP_TOKEN_PERMISSIONS).not.toContain('blob:list');
+    expect(mod.APP_TOKEN_PERMISSIONS).toEqual(expect.arrayContaining(['blob:add', 'blob:get', 'blob:remove']));
+  });
+
+  it('binds a launcher slot to the application it names', async () => {
+    fetchMock.mockResolvedValueOnce(ok({ access_token: jwt('l1', 3600), refresh_token: 'rl' }));
+    await mod.appAccessToken(`launcher-${APP}`);
+    const [, init] = calls('/admin/client-key')[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string).application_id).toBe(APP);
+  });
+
+  it('mints nothing for a slot whose application is unknown', async () => {
+    await expect(mod.appAccessToken('app-localhost-5173')).rejects.toThrow('No application is known');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('re-mints for the slot`s remembered application when its family is dead', async () => {
+    const stale = { access_token: jwt('a1', -10), refresh_token: 'r1' };
+    const fresh = { access_token: jwt('a2', 3600), refresh_token: 'r2' };
+    fetchMock
+      .mockResolvedValueOnce(ok(stale))
+      .mockResolvedValueOnce(new Response('{}', { status: 401 }))
+      .mockResolvedValueOnce(ok(fresh));
+    await mod.appAccessToken('app-drive', APP);
+
+    // A broker refresh names only the slot.
+    await expect(mod.appAccessToken('app-drive')).resolves.toBe(fresh.access_token);
+    const [, init] = calls('/admin/client-key')[1] as [string, RequestInit];
+    expect(JSON.parse(init.body as string).application_id).toBe(APP);
+  });
+
+  it('never reuses a pair minted for another application', async () => {
+    fetchMock
+      .mockResolvedValueOnce(ok({ access_token: jwt('a1', 3600), refresh_token: 'r1' }))
+      .mockResolvedValueOnce(ok({ access_token: jwt('b1', 3600), refresh_token: 'r2' }));
+    await mod.appAccessToken('app-x', APP);
+    await mod.appAccessToken('app-x', 'OtherApp');
+
+    const minted = calls('/admin/client-key').map(([, init]) => JSON.parse((init as RequestInit).body as string).application_id);
+    expect(minted).toEqual([APP, 'OtherApp']);
+    expect(calls('/auth/refresh')).toHaveLength(0);
+  });
+
+  it('drops a stored pair minted before keys were bound', async () => {
+    localStorage.setItem(
+      'calimero_app_token_slots',
+      JSON.stringify({ 'app-x': { access_token: jwt('old', 3600), refresh_token: 'r0' } }),
+    );
+    fetchMock.mockResolvedValueOnce(ok({ access_token: jwt('a1', 3600), refresh_token: 'r1' }));
+    await expect(mod.appAccessToken('app-x', APP)).resolves.not.toBe(jwt('old', 3600));
+    expect(calls('/admin/client-key')).toHaveLength(1);
+    expect(calls('/auth/refresh')).toHaveLength(0);
+  });
+
+  it('mints nothing for an application id the node would not bind', async () => {
+    for (const bad of ['launcher-', 'launcher-a b']) {
+      await expect(mod.appAccessToken(bad)).rejects.toThrow('No application is known');
+    }
+    await expect(mod.appAccessToken('app-x', 'app<x>')).rejects.toThrow('No application is known');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('remembers a window`s application across a logout', async () => {
+    fetchMock
+      .mockResolvedValueOnce(ok({ access_token: jwt('a1', 3600), refresh_token: 'r1' }))
+      .mockResolvedValueOnce(ok({ access_token: jwt('a2', 3600), refresh_token: 'r2' }));
+    await mod.appAccessToken('app-drive', APP);
+    localStorage.removeItem('calimero_app_token_slots');
+
+    await mod.appAccessToken('app-drive');
+    const [, init] = calls('/admin/client-key')[1] as [string, RequestInit];
+    expect(JSON.parse(init.body as string).application_id).toBe(APP);
+  });
+
+  it('keeps concurrent calls for different applications apart', async () => {
+    fetchMock
+      .mockResolvedValueOnce(ok({ access_token: jwt('a1', 3600), refresh_token: 'r1' }))
+      .mockResolvedValueOnce(ok({ access_token: jwt('b1', 3600), refresh_token: 'r2' }));
+    await Promise.all([mod.appAccessToken('app-x', APP), mod.appAccessToken('app-x', 'OtherApp')]);
+    const minted = calls('/admin/client-key').map(([, init]) => JSON.parse((init as RequestInit).body as string).application_id);
+    expect(minted.sort()).toEqual([APP, 'OtherApp'].sort());
   });
 
   it('never returns the desktop`s own token', async () => {
     fetchMock.mockResolvedValueOnce(ok({ access_token: jwt('a1', 3600), refresh_token: 'r1' }));
-    await expect(mod.appAccessToken('app-drive')).resolves.not.toBe('desktop-root-access');
+    await expect(mod.appAccessToken('app-drive', APP)).resolves.not.toBe('desktop-root-access');
   });
 
   it('reuses a fresh stored pair without touching the network', async () => {
     const minted = { access_token: jwt('a1', 3600), refresh_token: 'r1' };
     fetchMock.mockResolvedValueOnce(ok(minted));
-    await mod.appAccessToken('app-drive');
+    await mod.appAccessToken('app-drive', APP);
     fetchMock.mockClear();
 
-    await expect(mod.appAccessToken('app-drive')).resolves.toBe(minted.access_token);
+    await expect(mod.appAccessToken('app-drive', APP)).resolves.toBe(minted.access_token);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -90,9 +180,9 @@ describe('appAccessToken', () => {
     const stale = { access_token: jwt('a1', -10), refresh_token: 'r1' };
     const rotated = { access_token: jwt('a2', 3600), refresh_token: 'r2' };
     fetchMock.mockResolvedValueOnce(ok(stale)).mockResolvedValueOnce(ok(rotated));
-    await mod.appAccessToken('app-drive');
+    await mod.appAccessToken('app-drive', APP);
 
-    await expect(mod.appAccessToken('app-drive')).resolves.toBe(rotated.access_token);
+    await expect(mod.appAccessToken('app-drive', APP)).resolves.toBe(rotated.access_token);
     const [, init] = calls('/auth/refresh')[0] as [string, RequestInit];
     expect(JSON.parse(init.body as string)).toEqual(stale);
   });
@@ -104,9 +194,9 @@ describe('appAccessToken', () => {
       .mockResolvedValueOnce(ok(stale))
       .mockResolvedValueOnce(new Response('{}', { status: 401 }))
       .mockResolvedValueOnce(ok(fresh));
-    await mod.appAccessToken('app-drive');
+    await mod.appAccessToken('app-drive', APP);
 
-    await expect(mod.appAccessToken('app-drive')).resolves.toBe(fresh.access_token);
+    await expect(mod.appAccessToken('app-drive', APP)).resolves.toBe(fresh.access_token);
     expect(calls('/admin/client-key')).toHaveLength(2);
   });
 
@@ -115,7 +205,7 @@ describe('appAccessToken', () => {
       .mockResolvedValueOnce(ok({ access_token: jwt('drive', 3600), refresh_token: 'rd' }))
       .mockResolvedValueOnce(ok({ access_token: jwt('chat', 3600), refresh_token: 'rc' }));
 
-    const drive = await mod.appAccessToken('app-drive');
+    const drive = await mod.appAccessToken('app-drive', APP);
     const chat = await mod.appAccessToken('launcher-chat');
     expect(drive).not.toBe(chat);
     expect(calls('/admin/client-key')).toHaveLength(2);
@@ -124,7 +214,7 @@ describe('appAccessToken', () => {
   it('collapses a burst for one slot into a single mint', async () => {
     fetchMock.mockResolvedValue(ok({ access_token: jwt('a1', 3600), refresh_token: 'r1' }));
 
-    await Promise.all([mod.appAccessToken('app-x'), mod.appAccessToken('app-x'), mod.appAccessToken('app-x')]);
+    await Promise.all([mod.appAccessToken('app-x', APP), mod.appAccessToken('app-x', APP), mod.appAccessToken('app-x', APP)]);
     expect(calls('/admin/client-key')).toHaveLength(1);
   });
 
@@ -134,13 +224,13 @@ describe('appAccessToken', () => {
       .mockResolvedValueOnce(new Response('{}', { status: 401 }))
       .mockResolvedValueOnce(ok({ access_token: jwt('a1', 3600), refresh_token: 'r1' }));
 
-    await mod.appAccessToken('app-x');
+    await mod.appAccessToken('app-x', APP);
     const [, init] = calls('/admin/client-key')[1] as [string, RequestInit];
     expect((init.headers as Record<string, string>).Authorization).toBe('Bearer desktop-rotated');
   });
 
   it('refuses when the desktop is not logged in', async () => {
     desktopAccess = null;
-    await expect(mod.appAccessToken('app-x')).rejects.toThrow('Desktop is not authenticated');
+    await expect(mod.appAccessToken('app-x', APP)).rejects.toThrow('Desktop is not authenticated');
   });
 });

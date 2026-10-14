@@ -1,16 +1,18 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
-import { createWriteStream, existsSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { pipeline } from "node:stream/promises";
-import { Readable } from "node:stream";
 import * as tar from "tar";
+import {
+  downloadToFile,
+  fetchRelease,
+  isMerodAsset,
+  readConfig,
+  sha256File,
+} from "./merod-release.mjs";
 
-const CORE_REPO = "calimero-network/core";
-const rootDir = path.resolve(import.meta.dirname, "../../..");
 const desktopDir = path.resolve(import.meta.dirname, "..");
-const configPath = path.join(rootDir, "merod-config.json");
 const merodDir = path.join(desktopDir, "src-tauri", "merod");
 const merodBinaryName = process.platform === "win32" ? "merod.exe" : "merod";
 const merodBinaryPath = path.join(merodDir, merodBinaryName);
@@ -25,54 +27,6 @@ function shouldUseExistingMerodBinary() {
     return false;
   }
   return envTruthy("MEROD_SKIP_IF_EXISTS");
-}
-
-function githubHeaders() {
-  const headers = {
-    Accept: "application/vnd.github+json",
-    "User-Agent": "calimero-desktop-merod-prep",
-  };
-
-  if (process.env.GITHUB_TOKEN) {
-    headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
-  }
-
-  return headers;
-}
-
-async function readErrorBody(response) {
-  try {
-    const text = await response.text();
-    const trimmed = text.trim();
-    if (!trimmed) {
-      return "";
-    }
-    return trimmed.length > 800 ? `${trimmed.slice(0, 800)}…` : trimmed;
-  } catch {
-    return "";
-  }
-}
-
-async function fetchJson(url) {
-  const response = await fetch(url, { headers: githubHeaders() });
-  if (!response.ok) {
-    const body = await readErrorBody(response);
-    const detail = body ? ` — ${body}` : "";
-    throw new Error(
-      `GitHub API request failed (${response.status}) for ${url}${detail}`,
-    );
-  }
-
-  return response.json();
-}
-
-async function readConfig() {
-  if (!existsSync(configPath)) {
-    return {};
-  }
-
-  const raw = await fs.readFile(configPath, "utf8");
-  return JSON.parse(raw);
 }
 
 function resolveTarget() {
@@ -128,34 +82,13 @@ function resolveTarget() {
   throw new Error(`Unsupported platform/architecture: ${platform}/${arch}`);
 }
 
-async function resolveRelease(config) {
-  if (config.version) {
-    return {
-      release: await fetchJson(
-        `https://api.github.com/repos/${CORE_REPO}/releases/tags/${encodeURIComponent(
-          config.version,
-        )}`,
-      ),
-      source: `merod-config.json version=${config.version}`,
-    };
-  }
-
-  const release = await fetchJson(
-    `https://api.github.com/repos/${CORE_REPO}/releases/latest`,
-  );
-  return {
-    release,
-    source: "latest stable release",
-  };
-}
-
 function scoreAsset(name, target) {
   const lower = name.toLowerCase();
   const targetIndex = target.candidates.findIndex((candidate) =>
     lower.includes(candidate.toLowerCase()),
   );
 
-  if (targetIndex === -1 || !lower.startsWith("merod")) {
+  if (targetIndex === -1 || !isMerodAsset(name)) {
     return Number.POSITIVE_INFINITY;
   }
 
@@ -190,17 +123,6 @@ function pickAsset(release, target) {
       assetNames || "none"
     }`,
   );
-}
-
-async function downloadToFile(url, destination) {
-  const response = await fetch(url, { headers: githubHeaders() });
-  if (!response.ok || !response.body) {
-    const body = await readErrorBody(response);
-    const detail = body ? ` — ${body}` : "";
-    throw new Error(`Failed to download ${url} (${response.status})${detail}`);
-  }
-
-  await pipeline(Readable.fromWeb(response.body), createWriteStream(destination));
 }
 
 function shellExtractZip(archivePath, destinationDir) {
@@ -295,11 +217,17 @@ async function main() {
 
   const config = await readConfig();
   const target = resolveTarget();
-  const { release, source } = await resolveRelease(config);
+  const release = await fetchRelease(config.version);
   const asset = pickAsset(release, target);
+  const pinned = config.sha256?.[asset.name];
+  if (!pinned) {
+    throw new Error(
+      `merod-config.json has no pinned sha256 for ${asset.name}; run pnpm merod:pin`,
+    );
+  }
 
   console.log(`[merod] target: ${target.label}`);
-  console.log(`[merod] release: ${release.tag_name} (${source})`);
+  console.log(`[merod] release: ${release.tag_name}`);
   console.log(`[merod] asset: ${asset.name}`);
 
   await fs.rm(merodBinaryPath, { force: true });
@@ -314,6 +242,12 @@ async function main() {
 
   try {
     await downloadToFile(asset.browser_download_url, assetPath);
+    const actual = await sha256File(assetPath);
+    if (actual !== pinned.toLowerCase()) {
+      throw new Error(
+        `${asset.name} does not match the pinned sha256 (expected ${pinned}, got ${actual})`,
+      );
+    }
     const extracted = await extractBinary(assetPath, asset.name);
     try {
       const extractedBinaryPath =

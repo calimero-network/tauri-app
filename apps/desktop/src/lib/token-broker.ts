@@ -56,7 +56,7 @@ import {
 // Cycle by design: app-tokens needs `unpatchedFetch` / `brokerAccessToken` from
 // here, and the listener below needs `appAccessToken`. Both sides only touch the
 // other inside function bodies, so ESM live bindings resolve it.
-import { appAccessToken } from './app-tokens';
+import { appAccessToken, installedFrontendUrl, LAUNCHER_SLOT_PREFIX } from './app-tokens';
 
 /**
  * Sentinel handed to app windows in place of the real refresh token.
@@ -253,7 +253,13 @@ export async function startTokenBroker(): Promise<() => void> {
     try {
       if (!slot) throw new Error('Token request names no app');
       const accessToken = await appAccessToken(slot);
-      await invoke('resolve_token_request', { requestId, accessToken });
+      // A launcher opens the URL baked into it when it was built; tell it where
+      // the app is installed now, so an app that moved domain opens at the
+      // origin the node's sign-in page still trusts.
+      const frontendUrl = slot.startsWith(LAUNCHER_SLOT_PREFIX)
+        ? await installedFrontendUrl(slot.slice(LAUNCHER_SLOT_PREFIX.length)).catch(() => undefined)
+        : undefined;
+      await invoke('resolve_token_request', { requestId, accessToken, frontendUrl });
     } catch (error) {
       // Always answer: a dropped reply would leave the app window's fetch
       // hanging until the Rust-side timeout.

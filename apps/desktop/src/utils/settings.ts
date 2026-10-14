@@ -24,6 +24,7 @@ export interface AppSettings {
   mcpAgentClientId?: string; // Client key minted by "Connect AI agent", revoked when the next connect replaces it
   mcpAgentCredentialPath?: string; // Where that credential was written, so the tab can show it again without re-minting
   mcpAgentNodeUrl?: string; // Node the credential was minted for, which nodeUrl may since have moved off
+  trustedCallbackOrigins?: string[]; // Settings → Developer: extra app origins (e.g. Vercel previews) the node's login page may hand tokens to. Written to the node's config.toml on every start (utils/merod.ts)
 }
 
 const SETTINGS_KEY = 'calimero-desktop-settings';
@@ -156,3 +157,40 @@ export function clearAllAppData(): void {
 }
 
 
+
+/**
+ * Parse the "Trusted app origins" box: one origin per line. Mirrors merod's own
+ * check (an exact http(s) origin: no path, query, credentials or wildcard), so
+ * the user sees a rejected line here instead of the node silently dropping it.
+ * Each origin can receive the node's login tokens, which is why nothing looser
+ * is accepted.
+ */
+export function parseTrustedOrigins(text: string): { origins: string[]; invalid: string[] } {
+  const origins: string[] = [];
+  const invalid: string[] = [];
+  for (const line of text.split(/\r?\n/)) {
+    const raw = line.trim();
+    if (!raw) continue;
+    let url: URL | null = null;
+    try {
+      url = new URL(raw);
+    } catch {
+      url = null;
+    }
+    const exact =
+      url !== null &&
+      (url.protocol === 'http:' || url.protocol === 'https:') &&
+      !raw.includes('*') &&
+      !url.username &&
+      !url.password &&
+      url.pathname === '/' &&
+      !url.search &&
+      !url.hash;
+    if (!exact || !url) {
+      invalid.push(raw);
+      continue;
+    }
+    if (!origins.includes(url.origin)) origins.push(url.origin);
+  }
+  return { origins, invalid };
+}

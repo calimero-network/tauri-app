@@ -194,3 +194,36 @@ describe('clearAllAppData', () => {
     expect(sessionStorage.length).toBe(0);
   });
 });
+
+describe('parseTrustedOrigins', () => {
+  it('keeps exact http(s) origins, one per line, normalised and deduplicated', async () => {
+    const { parseTrustedOrigins } = await import('./settings');
+    expect(parseTrustedOrigins([
+      'https://mero-crm-git-x-calimero-network.vercel.app',
+      '  http://localhost:5173/  ',
+      '',
+      'HTTPS://Upper.Example',
+      'https://upper.example/',
+    ].join('\n'))).toEqual({
+      origins: [
+        'https://mero-crm-git-x-calimero-network.vercel.app',
+        'http://localhost:5173',
+        'https://upper.example',
+      ],
+      invalid: [],
+    });
+  });
+
+  it('rejects anything wider than one origin', async () => {
+    const { parseTrustedOrigins } = await import('./settings');
+    const bad = [
+      'https://*.vercel.app',
+      'https://a.example/login',
+      'https://a.example/?x=1',
+      'https://user:pw@a.example',
+      'javascript:alert(1)',
+      'mero-crm.vercel.app',
+    ];
+    expect(parseTrustedOrigins(bad.join('\n'))).toEqual({ origins: [], invalid: bad });
+  });
+});

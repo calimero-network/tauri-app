@@ -170,8 +170,39 @@ describe('restartMerod', () => {
       dataDir: '/Users/dev/.calimero',
       nodeName: 'default',
       debugLogs: true,
+      trustedCallbackOrigins: [],
     });
     expect(result).toEqual({ restarted: true, pid: 999 });
+  });
+
+  // Settings → Developer → Trusted App Origins reaches the node on every start
+  // and restart, so its config.toml always matches the setting.
+  it('sends the trusted app origins from settings', async () => {
+    const stored = new Map([[
+      'calimero-desktop-settings',
+      JSON.stringify({ trustedCallbackOrigins: ['https://app-git-x-team.vercel.app'] }),
+    ]]);
+    vi.stubGlobal('localStorage', {
+      getItem: (k: string) => stored.get(k) ?? null,
+      setItem: (k: string, v: string) => stored.set(k, v),
+      removeItem: (k: string) => stored.delete(k),
+    });
+    try {
+      invoke.mockResolvedValue({ restarted: false, pid: 1 });
+      await restartMerod(2528, 2428, '~/.calimero', 'default', false);
+      expect(invoke).toHaveBeenLastCalledWith('restart_merod', expect.objectContaining({
+        trustedCallbackOrigins: ['https://app-git-x-team.vercel.app'],
+      }));
+
+      invoke.mockResolvedValue('started');
+      const { startMerod } = await import('./merod');
+      await startMerod(2528, 2428, '~/.calimero', 'default', false);
+      expect(invoke).toHaveBeenLastCalledWith('start_merod', expect.objectContaining({
+        trustedCallbackOrigins: ['https://app-git-x-team.vercel.app'],
+      }));
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
 

@@ -58,10 +58,11 @@ function DeepLinkConsentDialog({
   request: DeepLinkConsentRequest;
   onAnswer: (agreed: boolean) => void;
 }) {
-  const installing = request.kind === "install";
+  const installing = request.kind === "install" || request.kind === "add";
+  const deleting = request.kind === "delete";
   const unverified = installing && !request.verified;
   const params = [...new URLSearchParams(request.params).entries()];
-  const title = installing ? "Install app from link?" : "Open app from link?";
+  const { title, ask, confirm } = wording(request);
 
   return createPortal(
     <div className="account-modal-backdrop" onClick={() => onAnswer(false)}>
@@ -84,11 +85,7 @@ function DeepLinkConsentDialog({
           </button>
         </div>
         <div className="account-modal-body deep-link-consent">
-          <p>
-            A link wants to {installing ? "install and open" : "open"}{" "}
-            <strong>{request.appName}</strong>. The app will be signed in to your node
-            with full access to it.
-          </p>
+          <p>{ask}</p>
 
           <dl className="deep-link-consent-facts">
             <dt>Package</dt>
@@ -96,15 +93,27 @@ function DeepLinkConsentDialog({
               <code>{request.pkg}</code>
               {installing && request.version ? ` ${request.version}` : ""}
             </dd>
-            <dt>Opens</dt>
-            <dd>
-              <code>{request.frontendOrigin ?? "unknown"}</code>
-            </dd>
-            <dt>Action</dt>
-            <dd>
-              <code>{request.action}</code>
-            </dd>
-            {params.length > 0 && (
+            {deleting ? (
+              <>
+                <dt>Deletes</dt>
+                <dd>
+                  <code>{request.contextId}</code>
+                  {request.namespace ? " and its namespace" : ""}
+                </dd>
+              </>
+            ) : (
+              <>
+                <dt>{request.kind === "add" ? "Frontend" : "Opens"}</dt>
+                <dd>
+                  <code>{request.frontendOrigin ?? "unknown"}</code>
+                </dd>
+                <dt>Action</dt>
+                <dd>
+                  <code>{request.action}</code>
+                </dd>
+              </>
+            )}
+            {!deleting && params.length > 0 && (
               <>
                 <dt>Parameters</dt>
                 <dd>
@@ -145,10 +154,10 @@ function DeepLinkConsentDialog({
             </button>
             <button
               type="button"
-              className="button button-primary"
+              className={deleting ? "button button-danger" : "button button-primary"}
               onClick={() => onAnswer(true)}
             >
-              {installing ? "Install and open" : "Open"}
+              {confirm}
             </button>
           </div>
         </div>
@@ -156,4 +165,40 @@ function DeepLinkConsentDialog({
     </div>,
     document.body,
   );
+}
+
+/** What the dialog asks, by what the link would do. */
+function wording(request: DeepLinkConsentRequest): { title: string; ask: ReactNode; confirm: string } {
+  const app = <strong>{request.appName}</strong>;
+  switch (request.kind) {
+    case "install":
+      return {
+        title: "Install app from link?",
+        ask: <>A link wants to install and open {app}. The app will be signed in to your node with full access to it.</>,
+        confirm: "Install and open",
+      };
+    case "add":
+      return {
+        title: "Install app?",
+        ask: <>An app or link wants to install {app} on your node. Nothing opens; you can open it later from Apps.</>,
+        confirm: "Install",
+      };
+    case "delete":
+      return {
+        title: "Delete from app?",
+        ask: (
+          <>
+            {app} wants to delete one of its contexts{request.namespace ? " and its namespace" : ""}, with
+            everything in it. This can't be undone.
+          </>
+        ),
+        confirm: "Delete",
+      };
+    default:
+      return {
+        title: "Open app from link?",
+        ask: <>A link wants to open {app}. The app will be signed in to your node with full access to it.</>,
+        confirm: "Open",
+      };
+  }
 }

@@ -47,8 +47,12 @@ export interface Reporter {
  * this exact app, origin and parameters.
  */
 export interface DeepLinkConsentRequest {
-  /** `install`: the package is not on this node and will be installed first. */
-  kind: 'install' | 'open';
+  /**
+   * `install`: the package is not on this node and will be installed first,
+   * then opened. `add`: installed and not opened (the `install` action).
+   * `delete`: one of the app's contexts is deleted (the `delete-context` action).
+   */
+  kind: 'install' | 'open' | 'add' | 'delete';
   appName: string;
   /** The registry package the link names. */
   pkg: string;
@@ -63,6 +67,10 @@ export interface DeepLinkConsentRequest {
   verified?: boolean;
   /** `install` only: the publishing account is verified. */
   publisherVerified?: boolean;
+  /** `delete` only: the context that goes. */
+  contextId?: string;
+  /** `delete` only: its namespace goes too, since nothing else is in it. */
+  namespace?: boolean;
 }
 
 /** Resolves `true` only when the user explicitly agreed. */
@@ -189,12 +197,125 @@ export interface AppDeepLink {
 
 /**
  * Outcome of trying to resolve + open a deep-link:
- *   - `opened`: the target app was opened — done.
+ *   - `opened`: done — the app was opened, or the action it asked for was carried out.
  *   - `forget`: terminal — no installed app for this slug, or it has no
  *     frontend URL. Drop the link.
  *   - `retry`: transient (node not ready to list apps yet) — try again later.
  */
 export type OpenOutcome = 'opened' | 'retry' | 'forget';
+
+/**
+ * `calimero://<package>/install`: install the package and open nothing.
+ *
+ * An app window cannot install (its token lacks `application:install`, and is
+ * meant to), so an app that offers to install another one hands it here: the
+ * user agrees to this package in the desktop, and the desktop installs it.
+ */
+export const INSTALL_ACTION = 'install';
+
+/**
+ * `calimero://<package>/delete-context?context=<id>`: delete one of that
+ * package's contexts, and its namespace when nothing else is in it.
+ *
+ * The same hand-off for deleting (an app token lacks `context:delete`). Only a
+ * context of the package the link names is deleted, so a link cannot dress one
+ * app's data up as another's, and the user is shown which context goes.
+ */
+export const DELETE_CONTEXT_ACTION = 'delete-context';
+
+async function installOnly(
+  dl: AppDeepLink,
+  installed: any[],
+  report: Reporter,
+  consent: Consent,
+): Promise<OpenOutcome> {
+  const present = installed.find((app: any) => app.package === dl.slug);
+  if (present) {
+    const name = decodeMetadata(present.metadata)?.name || dl.slug;
+    report.done(`${name} is already installed`);
+    return 'opened';
+  }
+
+  const bundle = await lookupRegistryBundle(dl.slug, report);
+  if (!bundle) return 'forget';
+  const name = bundle.name || dl.slug;
+  const agreed = await consent({
+    kind: 'add',
+    appName: name,
+    pkg: dl.slug,
+    action: dl.action,
+    params: dl.params,
+    frontendOrigin: originOf(bundle.links?.frontend),
+    version: bundle.latest_version,
+    verified: bundle.verified === true,
+    publisherVerified: bundle.publisherVerified === true,
+  });
+  if (!agreed) {
+    console.log(`[deep-link] install of "${dl.slug}" declined`);
+    return 'forget';
+  }
+  if (!(await installBundle(dl.slug, bundle.latest_version, report))) return 'forget';
+  report.done(`Installed ${name}`);
+  return 'opened';
+}
+
+async function deleteContextOf(
+  dl: AppDeepLink,
+  installed: any[],
+  report: Reporter,
+  consent: Consent,
+): Promise<OpenOutcome> {
+  const contextId = new URLSearchParams(dl.params).get('context');
+  if (!contextId) {
+    report.failed('This delete link names no context, so nothing was deleted.');
+    return 'forget';
+  }
+
+  const facts = await apiClient.node.describeContextDeletion(contextId);
+  if (facts.error || !facts.data) {
+    report.failed(`Could not delete: ${facts.error?.message ?? 'the node did not describe the context'}`);
+    return 'forget';
+  }
+
+  // The context must run an app of the package the link names: that is the
+  // app asking, and the one the user is told about.
+  const app = installed.find((a: any) => a.id === facts.data!.applicationId);
+  if (!app || app.package !== dl.slug) {
+    console.warn(`[deep-link] ${contextId} is not a context of "${dl.slug}"`);
+    report.failed(`That context does not belong to ${dl.slug}, so nothing was deleted.`);
+    return 'forget';
+  }
+
+  const appName = decodeMetadata(app.metadata)?.name || dl.slug;
+  const emptyGroup = facts.data.emptyGroup;
+  const agreed = await consent({
+    kind: 'delete',
+    appName,
+    pkg: dl.slug,
+    action: dl.action,
+    params: dl.params,
+    frontendOrigin: null,
+    contextId,
+    namespace: !!emptyGroup,
+  });
+  if (!agreed) {
+    console.log(`[deep-link] delete of ${contextId} declined`);
+    return 'forget';
+  }
+
+  const clear = once(report.progress(`Deleting from ${appName}\u2026`));
+  try {
+    const res = await apiClient.node.deleteContext(contextId, emptyGroup);
+    if (res.error) {
+      report.failed(`Could not delete from ${appName}: ${res.error.message}`);
+      return 'forget';
+    }
+  } finally {
+    clear();
+  }
+  report.done(`Deleted from ${appName}`);
+  return 'opened';
+}
 
 /**
  * Resolve a deep-link `slug` → an app and open it with the deep-link params
@@ -217,6 +338,11 @@ export async function resolveAndOpen(
     // Node isn't ready to list apps yet (cold boot) — transient, retry.
     return 'retry';
   }
+
+  // Two actions the desktop carries out itself instead of opening the app: an
+  // app window holds a scoped token that the node refuses both, by design.
+  if (dl.action === INSTALL_ACTION) return installOnly(dl, response.data, report, consent);
+  if (dl.action === DELETE_CONTEXT_ACTION) return deleteContextOf(dl, response.data, report, consent);
 
   const byPackage = (apps: any[]) =>
     apps.find((app: any) => !!app.package && app.package === dl.slug);

@@ -33,7 +33,6 @@ import {
   roleOf,
   type GroupAction,
 } from "../utils/groupRoles";
-import { parseJwtPayload } from "../utils/jwt";
 import { describeFleetRelay, type FleetRelayStatus } from "../utils/fleetStatus";
 import { useCloudEnabled } from "../hooks/useCloudEnabled";
 import { useHaStatus } from "../hooks/useHaStatus";
@@ -445,13 +444,6 @@ function Namespaces() {
   const actionsMenuRef = useRef<HTMLDivElement>(null);
   const [joinNsModal, setJoinNsModal] = useState(false);
   const [joinCtxModal, setJoinCtxModal] = useState<{ groupId: string; refetch: () => void } | null>(null);
-
-  const [myIdentity, setMyIdentity] = useState<string | null>(null);
-  useEffect(() => {
-    const payload = parseJwtPayload(apiClient.meroJs.getTokenData()?.access_token);
-    const id = payload?.sub || payload?.identity || payload?.public_key;
-    if (id && typeof id === 'string') setMyIdentity(id);
-  }, []);
 
   const [installedApps, setInstalledApps] = useState<InstalledApp[]>([]);
   const [installingApp, setInstallingApp] = useState("");
@@ -1817,7 +1809,7 @@ function Namespaces() {
                             ) : (
                               <span className="member-name mono">{truncateId(m.identity)}</span>
                             )}
-                            {myIdentity && m.identity === myIdentity && <span className="ns-me-badge">you</span>}
+                            {myAccountId && m.identity === myAccountId && <span className="ns-me-badge">you</span>}
                           </div>
                           {hasName && <span className="member-id mono">{truncateId(m.identity)}</span>}
                         </div>
@@ -1970,7 +1962,7 @@ function Namespaces() {
                               ) : (
                                 <span className="member-name mono">{truncateId(m.identity)}</span>
                               )}
-                              {myIdentity && m.identity === myIdentity && <span className="ns-me-badge">you</span>}
+                              {myAccountId && m.identity === myAccountId && <span className="ns-me-badge">you</span>}
                             </div>
                             {hasName && <span className="member-id mono">{truncateId(m.identity)}</span>}
                           </div>

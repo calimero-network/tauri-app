@@ -60,11 +60,8 @@
         console.warn('[Calimero bridge] could not install the launcher bridge:', e);
     }
 
-    // Get configured node URL (injected by Rust backend)
-    // This is replaced at runtime by Rust when creating the window
-    const configuredNodeUrl = '__CONFIGURED_NODE_URL__';
-    const defaultNodeUrl = 'http://localhost:2528';
-    const nodeUrl = configuredNodeUrl !== '__CONFIGURED_NODE_URL__' ? configuredNodeUrl : defaultNodeUrl;
+    // Replaced with a JSON string literal by webview::proxy_script in Rust.
+    const nodeUrl = __CONFIGURED_NODE_URL__;
 
     console.log('[Tauri Proxy] Configured node URL for interception:', nodeUrl);
 

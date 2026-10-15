@@ -1355,14 +1355,9 @@ async fn create_app_window(
     // Inject fetch interceptor to proxy node requests through Tauri
     // Since calimero-client-js now uses fetch instead of Axios, we only need fetch interception
     // CRITICAL: Intercept IMMEDIATELY before React makes any fetch calls
-    // Load proxy script from external file and inject configured node URL
-    let mut proxy_script = include_str!("proxy_script.js").to_string();
-
-    // Inject configured node URL into the proxy script
     // Default to http://localhost:2528 for backwards compatibility
     let node_url_to_use = node_url.as_deref().unwrap_or("http://localhost:2528");
-    // Replace placeholder in script with actual node URL
-    proxy_script = proxy_script.replace("__CONFIGURED_NODE_URL__", node_url_to_use);
+    let proxy_script = calimero_tauri_app::webview::proxy_script(node_url_to_use);
 
     // Create window with proxy script injected BEFORE page loads
     let mut builder = WebviewWindowBuilder::new(

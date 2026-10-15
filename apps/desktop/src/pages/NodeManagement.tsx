@@ -6,7 +6,7 @@ import {
   DEFAULT_EMBEDDED_SWARM_PORT,
   DEFAULT_NODE_HOME_DIR,
 } from "../utils/settings";
-import { clearAccessToken, clearRefreshToken } from "../lib/token-storage";
+import { logOutOfNode } from "../lib/app-tokens";
 import {
   listMerodNodes,
   initMerodNode,
@@ -328,18 +328,16 @@ function NodeManagement() {
       const nodeUrlNew = `http://localhost:${portToUse}`;
       const settings = getSettings();
       const urlChanged = settings.nodeUrl !== nodeUrlNew;
+      // End the session on the old node while settings still point at it
+      if (urlChanged) {
+        await logOutOfNode();
+        localStorage.removeItem('calimero-auth-tokens');
+      }
       saveSettings({
         ...settings,
         nodeUrl: nodeUrlNew,
         authUrl: undefined,
       });
-
-      // Clear auth tokens when switching nodes — old tokens are invalid
-      if (urlChanged) {
-        await clearAccessToken();
-        await clearRefreshToken();
-        localStorage.removeItem('calimero-auth-tokens');
-      }
 
       setNodeUrl(nodeUrlNew);
       toast.success(`Switched to ${nodeUrlNew}. Reloading to connect.`);
@@ -561,18 +559,16 @@ function NodeManagement() {
       const settings = getSettings();
       const newNodeUrl = nodeUrl.trim() || "http://localhost:2528";
       const urlChanged = settings.nodeUrl !== newNodeUrl;
+      // End the session on the old node while settings still point at it
+      if (urlChanged) {
+        await logOutOfNode();
+        localStorage.removeItem('calimero-auth-tokens');
+      }
       saveSettings({
         ...settings,
         nodeUrl: newNodeUrl,
         authUrl: authUrl.trim() || undefined,
       });
-
-      // Clear auth tokens when switching to a different node — old tokens are invalid
-      if (urlChanged) {
-        await clearAccessToken();
-        await clearRefreshToken();
-        localStorage.removeItem('calimero-auth-tokens');
-      }
 
       setSaved(true);
       toast.success("Node configuration saved successfully");

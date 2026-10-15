@@ -5,8 +5,15 @@ vi.mock('../utils/settings', () => ({
 }));
 
 let desktopAccess: string | null;
+let desktopRefresh: string | null;
 vi.mock('./token-storage', () => ({
   getAccessToken: () => desktopAccess,
+  getRefreshToken: () => desktopRefresh,
+  clearAllTokens: () => {
+    desktopAccess = null;
+    desktopRefresh = null;
+    localStorage.removeItem('calimero_app_token_slots');
+  },
 }));
 
 const fetchMock = vi.fn();
@@ -56,6 +63,7 @@ beforeEach(async () => {
   vi.resetAllMocks();
   installed = [];
   desktopAccess = 'desktop-root-access';
+  desktopRefresh = 'desktop-root-refresh';
   const store = new Map<string, string>();
   vi.stubGlobal('localStorage', {
     getItem: (k: string) => store.get(k) ?? null,
@@ -316,6 +324,115 @@ describe('trusted apps', () => {
 
     await mod.appAccessToken('app-hyperfeed', HYPERFEED);
     expect(minted().permissions).toEqual([...mod.APP_TOKEN_PERMISSIONS]);
+  });
+});
+
+describe('retiring app keys', () => {
+  /** The refresh tokens presented to `/auth/logout`, which revokes a client key. */
+  const retired = () =>
+    calls('/auth/logout').map(([, init]) => JSON.parse((init as RequestInit).body as string).refresh_token);
+
+  async function openTwoApps() {
+    fetchMock
+      .mockResolvedValueOnce(ok({ access_token: jwt('drive', 3600), refresh_token: 'rd' }))
+      .mockResolvedValueOnce(ok({ access_token: jwt('chat', 3600), refresh_token: 'rc' }));
+    await mod.appAccessToken('app-drive', APP);
+    await mod.appAccessToken('launcher-chat');
+    fetchMock.mockReset();
+    fetchMock.mockResolvedValue(new Response('{}', { status: 200 }));
+  }
+
+  it('retires a closed window`s key and keeps the others', async () => {
+    await openTwoApps();
+
+    await mod.retireAppToken('app-drive');
+
+    expect(retired()).toEqual(['rd']);
+    fetchMock.mockClear();
+    await mod.appAccessToken('launcher-chat');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('mints afresh for a window reopened after its key was retired', async () => {
+    await openTwoApps();
+    await mod.retireAppToken('app-drive');
+    fetchMock.mockResolvedValueOnce(ok({ access_token: jwt('drive2', 3600), refresh_token: 'rd2' }));
+
+    await mod.appAccessToken('app-drive', APP);
+
+    expect(calls('/admin/client-key')).toHaveLength(1);
+  });
+
+  it('logs out of the node: every app key and the desktop`s session', async () => {
+    await openTwoApps();
+
+    await mod.logOutOfNode();
+
+    expect(retired().sort()).toEqual(['desktop-root-refresh', 'rc', 'rd']);
+    expect(desktopAccess).toBeNull();
+    expect(desktopRefresh).toBeNull();
+    expect(localStorage.getItem('calimero_app_token_slots')).toBeNull();
+  });
+
+  it('forgets the keys even when the node cannot be reached', async () => {
+    await openTwoApps();
+    fetchMock.mockRejectedValue(new TypeError('offline'));
+
+    await expect(mod.logOutOfNode()).resolves.toBeUndefined();
+
+    expect(desktopRefresh).toBeNull();
+    expect(localStorage.getItem('calimero_app_token_slots')).toBeNull();
+  });
+
+  it('gives up on a node that does not answer instead of hanging the logout', async () => {
+    await openTwoApps();
+    fetchMock.mockImplementation(
+      (_url: string, init: RequestInit) =>
+        new Promise((_, reject) => init.signal?.addEventListener('abort', () => reject(new Error('aborted')))),
+    );
+    vi.useFakeTimers();
+    try {
+      const done = mod.logOutOfNode();
+      await vi.advanceTimersByTimeAsync(5_000);
+      await expect(done).resolves.toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('still retires on a webview without AbortSignal.timeout (macOS 10.15)', async () => {
+    await openTwoApps();
+    vi.stubGlobal('AbortSignal', { ...AbortSignal, timeout: undefined });
+
+    await mod.retireAppToken('app-drive');
+
+    expect(retired()).toEqual(['rd']);
+  });
+
+  it('retires the key a window was still being given when it closed', async () => {
+    let answer!: (r: Response) => void;
+    fetchMock.mockReturnValueOnce(new Promise<Response>((r) => (answer = r)));
+    const opening = mod.appAccessToken('app-drive', APP);
+    await vi.waitFor(() => expect(calls('/admin/client-key')).toHaveLength(1));
+
+    const closing = mod.retireAppToken('app-drive');
+    answer(ok({ access_token: jwt('late', 3600), refresh_token: 'r-late' }));
+    await opening;
+    await closing;
+
+    expect(retired()).toEqual(['r-late']);
+    expect(localStorage.getItem('calimero_app_token_slots')).toBe('{}');
+  });
+
+  it('retires the pair it replaces with one for another application', async () => {
+    fetchMock
+      .mockResolvedValueOnce(ok({ access_token: jwt('a1', 3600), refresh_token: 'r1' }))
+      .mockResolvedValueOnce(ok({ access_token: jwt('b1', 3600), refresh_token: 'r2' }));
+    await mod.appAccessToken('app-x', APP);
+
+    await mod.appAccessToken('app-x', 'OtherApp');
+
+    expect(retired()).toEqual(['r1']);
   });
 });
 

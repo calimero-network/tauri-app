@@ -1437,6 +1437,7 @@ async fn create_app_window(
                 handle
                     .state::<calimero_tauri_app::app_window::AppWindowBindings>()
                     .unbind(&label, generation);
+                let _ = handle.emit_to("main", APP_WINDOW_CLOSED_EVENT, &label);
                 if isolated {
                     webview_isolation::forget(&handle, &label);
                 }
@@ -3497,6 +3498,8 @@ const TRAY_CHECK_UPDATES_ID: &str = "check-updates";
 /// Event that item emits to the main window, which runs the check.
 /// Must match `TRAY_CHECK_EVENT` in src/utils/updater.ts.
 const TRAY_CHECK_UPDATES_EVENT: &str = "tray-check-for-updates";
+/// Tells the main window an app window is gone, so it revokes that window's key.
+const APP_WINDOW_CLOSED_EVENT: &str = "calimero:app-window-closed";
 
 /// The tray's update item, kept so a check's outcome can relabel it. While the
 /// main window is hidden the tray is the only place an update can be noticed.

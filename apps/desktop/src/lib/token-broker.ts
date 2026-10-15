@@ -56,7 +56,7 @@ import {
 // Cycle by design: app-tokens needs `unpatchedFetch` / `brokerAccessToken` from
 // here, and the listener below needs `appAccessToken`. Both sides only touch the
 // other inside function bodies, so ESM live bindings resolve it.
-import { appAccessToken, installedFrontendUrl, LAUNCHER_SLOT_PREFIX } from './app-tokens';
+import { appAccessToken, installedFrontendUrl, LAUNCHER_SLOT_PREFIX, retireAppToken } from './app-tokens';
 
 /**
  * Sentinel handed to app windows in place of the real refresh token.
@@ -76,6 +76,9 @@ import { appAccessToken, installedFrontendUrl, LAUNCHER_SLOT_PREFIX } from './ap
  * MUST be kept in sync with BROKERED_REFRESH_TOKEN in proxy_script.js.
  */
 export const BROKERED_REFRESH_TOKEN = 'calimero-desktop-brokered-refresh-token';
+
+/** Emitted by the host when an app window is destroyed; must match APP_WINDOW_CLOSED_EVENT in main.rs. */
+export const APP_WINDOW_CLOSED_EVENT = 'calimero:app-window-closed';
 
 /** Treat an access token expiring within this window as already expired. */
 const EXPIRY_SKEW_MS = 30_000;
@@ -245,7 +248,7 @@ export async function brokerAccessToken(): Promise<string> {
  * A request without a slot is refused rather than answered with ours.
  */
 export async function startTokenBroker(): Promise<() => void> {
-  return listen<{ requestId: string; slot?: string }>('calimero:token-request', async (event) => {
+  const offRequest = await listen<{ requestId: string; slot?: string }>('calimero:token-request', async (event) => {
     const requestId = event.payload?.requestId;
     if (!requestId) return;
     const slot = event.payload?.slot;
@@ -269,4 +272,10 @@ export async function startTokenBroker(): Promise<() => void> {
       }).catch(() => {});
     }
   });
+  // The host emits this when an app window is destroyed; its key dies with it.
+  const offClosed = await listen<string>(APP_WINDOW_CLOSED_EVENT, (event) => retireAppToken(event.payload));
+  return () => {
+    offRequest();
+    offClosed();
+  };
 }

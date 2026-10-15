@@ -3,8 +3,9 @@ import ErrorBoundary from "./components/ErrorBoundary";
 import { createClientAsync, apiClient } from "./lib/mero-client";
 import { MeroContext, type MeroContextValue } from "@calimero-network/mero-react";
 import { LoginView } from "./components/LoginView";
-import { getAccessToken, clearAccessToken, clearRefreshToken } from "./lib/token-storage";
+import { getAccessToken } from "./lib/token-storage";
 import { startTokenBroker } from "./lib/token-broker";
+import { logOutOfNode } from "./lib/app-tokens";
 import {
   getSettings,
   getAuthUrl,
@@ -97,7 +98,7 @@ function App() {
     contextId: null,
     contextIdentity: null,
     connectToNode: () => {},
-    logout: () => { clearAccessToken(); clearRefreshToken(); window.location.reload(); },
+    logout: () => { logOutOfNode().finally(() => window.location.reload()); },
     isLoading: checkingOnboarding,
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }), [clientReady, clientVersion, connected, checkingOnboarding, showLogin]);
@@ -105,9 +106,8 @@ function App() {
   const handleSelectNode = useCallback(async (nodeUrl: string) => {
     const settings = getSettings();
     if (settings.nodeUrl !== nodeUrl) {
-      // Clear auth tokens — old tokens are invalid for the new node
-      await clearAccessToken();
-      await clearRefreshToken();
+      // End the session on the old node: its tokens are no use on the new one
+      await logOutOfNode();
       localStorage.removeItem('calimero-auth-tokens');
     }
     saveSettings({ ...settings, nodeUrl });

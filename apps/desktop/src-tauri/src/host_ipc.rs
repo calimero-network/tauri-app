@@ -24,6 +24,13 @@ pub fn shell_instance_socket_path(app_id: &str) -> PathBuf {
     host_socket_path().with_file_name(format!("shell-{short}.sock"))
 }
 
+/// Where the host leaves a deep-link for an app's shell to collect (see
+/// `deep_link::write_handoff`), beside that shell's instance socket in the
+/// 0700 data dir.
+pub fn shell_link_path(app_id: &str) -> PathBuf {
+    shell_instance_socket_path(app_id).with_extension("link")
+}
+
 /// If `sock` is absent, boot the installed host headless and poll (bounded, ~5s)
 /// for the socket to appear. No-op if the socket already exists or no installed
 /// host binary can be found.
@@ -64,5 +71,8 @@ mod tests {
         assert!(a.as_os_str().len() < 104, "must fit in sockaddr_un.sun_path");
         assert_ne!(a, b, "two apps sharing a socket would relink their instances");
         assert_eq!(a, shell_instance_socket_path("D4rz4jmKQngmnhTwUvc5rGFXQZ3VGYkrx5HaJjcW7sLh"));
+        let link = shell_link_path("D4rz4jmKQngmnhTwUvc5rGFXQZ3VGYkrx5HaJjcW7sLh");
+        assert_eq!(link.parent(), a.parent(), "the handoff lives in the 0700 data dir");
+        assert_ne!(link, a);
     }
 }

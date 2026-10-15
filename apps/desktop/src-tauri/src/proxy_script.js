@@ -7,6 +7,59 @@
     // this is set, so it still works under an older desktop.
     window.__CALIMERO_DOWNLOAD_EVENTS__ = true;
 
+    // The launcher bridge mero-platform's `getBridge()` looks for. Apps take a
+    // deep-link that arrives while they are open (an invitation followed with
+    // the app already running) from its `deep-link` event, as `{ raw }` with
+    // `raw` = `calimero://<package>/<action>?<params>`. The host and the shell
+    // fire it with a `calimero-deep-link` DOM event (src/deep_link.rs
+    // dispatch_script) into this window only; a link that lands before the app
+    // subscribes is held for the first subscriber. Nothing else is offered yet:
+    // `invoke` rejects, as the contract says an unknown method does.
+    try {
+        if (!window.__calimero_platform__ && typeof window.addEventListener === 'function') {
+            const handlers = new Map();
+            const heldLinks = [];
+            window.addEventListener('calimero-deep-link', function (event) {
+                const raw = event && event.detail && event.detail.raw;
+                if (typeof raw !== 'string' || !raw) return;
+                const payload = { raw: raw };
+                const subscribers = handlers.get('deep-link');
+                if (!subscribers || subscribers.size === 0) {
+                    heldLinks.push(payload);
+                    return;
+                }
+                subscribers.forEach(function (handler) {
+                    try { handler(payload); } catch (e) { console.warn('[Calimero bridge] deep-link handler failed:', e); }
+                });
+            });
+            const bridge = Object.freeze({
+                version: 1,
+                capabilities: Object.freeze(['deepLink']),
+                invoke: function (method) {
+                    return Promise.reject(new Error('Calimero Desktop does not support "' + String(method) + '"'));
+                },
+                on: function (event, handler) {
+                    if (typeof handler !== 'function') return function () {};
+                    let subscribers = handlers.get(event);
+                    if (!subscribers) {
+                        subscribers = new Set();
+                        handlers.set(event, subscribers);
+                    }
+                    subscribers.add(handler);
+                    if (event === 'deep-link') {
+                        heldLinks.splice(0).forEach(function (payload) {
+                            try { handler(payload); } catch (e) { console.warn('[Calimero bridge] deep-link handler failed:', e); }
+                        });
+                    }
+                    return function () { subscribers.delete(handler); };
+                },
+            });
+            Object.defineProperty(window, '__calimero_platform__', { value: bridge, configurable: false, writable: false });
+        }
+    } catch (e) {
+        console.warn('[Calimero bridge] could not install the launcher bridge:', e);
+    }
+
     // Get configured node URL (injected by Rust backend)
     // This is replaced at runtime by Rust when creating the window
     const configuredNodeUrl = '__CONFIGURED_NODE_URL__';

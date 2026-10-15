@@ -269,13 +269,15 @@ pub fn refresh_trampoline(
     Ok(())
 }
 
-/// True when `bundle` is a launcher this host built for `id`: its `app.json`
-/// carries `cap`, a secret only the host's cap store and that bundle hold.
+/// True when `bundle` is a directory (not a link) this host built for `id`: its
+/// `app.json` carries `cap`, a secret only the host's cap store and that bundle hold.
 pub fn is_own_launcher(bundle: &Path, id: &str, cap: &str) -> bool {
-    std::fs::read(bundle.join("Contents/Resources/app.json"))
-        .ok()
-        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
-        .is_some_and(|v| v["id"] == id && v["cap"] == cap)
+    let is_dir = bundle.symlink_metadata().is_ok_and(|m| m.is_dir());
+    is_dir
+        && std::fs::read(bundle.join("Contents/Resources/app.json"))
+            .ok()
+            .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+            .is_some_and(|v| v["id"] == id && v["cap"] == cap)
 }
 
 /// Delete `bundle` only if it is this host's launcher for `id`; true if removed.
@@ -325,6 +327,23 @@ pub fn generate_launcher(
     }
     // create_dir, not _all: anything that appeared here since the check is not ours.
     std::fs::create_dir(&app_dir)?;
+    // A half-built bundle carries no proof of ownership and would hold the name.
+    if let Err(e) = fill_launcher(&app_dir, trampoline_src, spec) {
+        let _ = std::fs::remove_dir_all(&app_dir);
+        return Err(e);
+    }
+    if let Some(old) = previous.filter(|old| !same_file(old, &app_dir)) {
+        remove_own_launcher(old, &spec.id, &spec.cap);
+    }
+    Ok(app_dir)
+}
+
+/// Write the bundle's contents, named after `app_dir` so a suffixed launcher shows its suffix.
+fn fill_launcher(
+    app_dir: &Path,
+    trampoline_src: &Path,
+    spec: &AppSpec,
+) -> Result<(), LauncherError> {
     let shown = app_dir
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned());
@@ -348,11 +367,8 @@ pub fn generate_launcher(
     write_app_json(&resources, spec)?;
     write_info_plist(&contents, spec, has_icon)?;
     write_trampoline(&macos, trampoline_src)?;
-    sign_bundle(&app_dir);
-    if let Some(old) = previous.filter(|old| !same_file(old, &app_dir)) {
-        remove_own_launcher(old, &spec.id, &spec.cap);
-    }
-    Ok(app_dir)
+    sign_bundle(app_dir);
+    Ok(())
 }
 
 #[cfg(test)]
@@ -677,6 +693,53 @@ mod tests {
 
         let plist = std::fs::read_to_string(app.join("Contents/Info.plist")).unwrap();
         assert!(plist.contains("<key>CFBundleDisplayName</key><string>MeroDrive 2</string>"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_failed_build_does_not_keep_the_name() {
+        let dir = scratch("failed");
+        let tramp = std::env::current_exe().unwrap();
+        let broken = AppSpec {
+            icon: Some(dir.join("missing.icns")),
+            ..sample()
+        };
+        assert!(generate_launcher(&dir, &tramp, &broken, None).is_err());
+
+        let app = generate_launcher(&dir, &tramp, &sample(), None).unwrap();
+
+        assert!(app.ends_with("MeroDrive.app"), "got {}", app.display());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_symlink_to_our_launcher_is_not_ours_to_replace() {
+        let dir = scratch("symlink");
+        let tramp = std::env::current_exe().unwrap();
+        let ours = generate_launcher(&dir, &tramp, &sample(), None).unwrap();
+        let link = dir.join("Link.app");
+        std::os::unix::fs::symlink(&ours, &link).unwrap();
+
+        assert!(!is_own_launcher(&link, "mero-drive", "cap-123"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn gives_up_when_every_name_is_taken() {
+        let dir = scratch("taken");
+        let tramp = std::env::current_exe().unwrap();
+        for n in 1..=MAX_NAME_SUFFIX {
+            let name = if n == 1 {
+                "MeroDrive.app".into()
+            } else {
+                format!("MeroDrive {n}.app")
+            };
+            std::fs::create_dir(dir.join(name)).unwrap();
+        }
+
+        let err = generate_launcher(&dir, &tramp, &sample(), None).unwrap_err();
+
+        assert!(matches!(err, LauncherError::NameTaken(_)), "got {err}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

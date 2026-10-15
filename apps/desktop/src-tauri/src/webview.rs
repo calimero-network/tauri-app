@@ -83,6 +83,62 @@ pub fn validate_app_frontend_url(url: &str) -> Result<url::Url, String> {
     }
 }
 
+/// How long opening an app waits to learn where its frontend redirects.
+const LANDING_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(4);
+
+/// Where `requested` lands once its server's redirects are followed.
+///
+/// An app window serves the proxy and broker only while it shows the origin it
+/// was bound to (`app_window.rs`). A frontend whose server redirects to another
+/// origin - `https://hyperfeed.me` answers 308 to `https://www.hyperfeed.me/` -
+/// would leave the page on an origin the window was never bound to, and every
+/// node request from it would be refused. So the window is bound to, and
+/// opened at, the URL the redirects end on: the same page the webview would
+/// have landed on anyway, chosen by the app's own server, never by the page.
+///
+/// The landing URL has to pass `validate_app_frontend_url` too, and it keeps
+/// `requested`'s fragment, which carries the session and never reaches the
+/// server. Any failure (offline, timeout, too many hops) opens `requested`.
+pub async fn resolve_frontend_landing(requested: &url::Url) -> url::Url {
+    static CLIENT: std::sync::OnceLock<Option<reqwest::Client>> = std::sync::OnceLock::new();
+    let Some(client) = CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::limited(5))
+            .timeout(LANDING_TIMEOUT)
+            .build()
+            .ok()
+    }) else {
+        return requested.clone();
+    };
+    let mut probe = requested.clone();
+    probe.set_fragment(None);
+    match client.head(probe).send().await {
+        Ok(response) => landing_url(requested, response.url()),
+        Err(e) => {
+            log::warn!("[Tauri] Could not resolve where {requested} lands: {e}");
+            requested.clone()
+        }
+    }
+}
+
+/// `landed` with `requested`'s fragment, or `requested` when `landed` may not
+/// hold a node session.
+fn landing_url(requested: &url::Url, landed: &url::Url) -> url::Url {
+    let Ok(mut landed) = validate_app_frontend_url(landed.as_str()) else {
+        log::warn!("[Tauri] {requested} redirects to {landed}, which is no app frontend");
+        return requested.clone();
+    };
+    landed.set_fragment(requested.fragment());
+    if landed.origin() != requested.origin() {
+        log::info!(
+            "[Tauri] {} redirects to {}; the window is bound there",
+            requested.origin().ascii_serialization(),
+            landed.origin().ascii_serialization()
+        );
+    }
+    landed
+}
+
 /// Where a per-app launcher opens its app: the frontend the desktop says the
 /// app is installed at now, else the URL baked into the launcher when it was
 /// built. A launcher started from the Dock or Finder would otherwise keep
@@ -155,7 +211,9 @@ pub fn open_app_webview(
 
 #[cfg(test)]
 mod tests {
-    use super::{launcher_frontend_url, validate_app_frontend_url};
+    use super::{
+        landing_url, launcher_frontend_url, resolve_frontend_landing, validate_app_frontend_url,
+    };
 
     #[test]
     fn launcher_opens_where_the_app_is_installed_now() {
@@ -172,6 +230,75 @@ mod tests {
                 "{refused}"
             );
         }
+    }
+
+    #[test]
+    fn landing_keeps_the_session_fragment_and_refuses_non_frontends() {
+        let requested: url::Url = "https://hyperfeed.me/?_cb=1#access_token=x&node_url=y"
+            .parse()
+            .unwrap();
+        let landed = landing_url(
+            &requested,
+            &"https://www.hyperfeed.me/?_cb=1".parse().unwrap(),
+        );
+        assert_eq!(
+            landed.as_str(),
+            "https://www.hyperfeed.me/?_cb=1#access_token=x&node_url=y"
+        );
+        for refused in ["http://evil.example/", "data:text/html,x"] {
+            assert_eq!(
+                landing_url(&requested, &refused.parse().unwrap()),
+                requested
+            );
+        }
+    }
+
+    /// Serves one request on `listener` with `response`.
+    async fn answer_once(listener: tokio::net::TcpListener, response: String) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let (mut sock, _) = listener.accept().await.unwrap();
+        let mut buf = [0u8; 4096];
+        let _ = sock.read(&mut buf).await;
+        sock.write_all(response.as_bytes()).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn resolves_a_frontend_that_redirects_to_another_origin() {
+        // 127.0.0.1 and localhost are different origins, as apex and www are.
+        let target = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let landing = format!(
+            "http://localhost:{}/app/",
+            target.local_addr().unwrap().port()
+        );
+        let source = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let requested: url::Url = format!(
+            "http://127.0.0.1:{}/app/?_cb=1#access_token=x",
+            source.local_addr().unwrap().port()
+        )
+        .parse()
+        .unwrap();
+        tokio::spawn(answer_once(
+            source,
+            format!("HTTP/1.1 308 Permanent Redirect\r\nLocation: {landing}?_cb=1\r\nContent-Length: 0\r\n\r\n"),
+        ));
+        tokio::spawn(answer_once(
+            target,
+            "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n".to_string(),
+        ));
+
+        let landed = resolve_frontend_landing(&requested).await;
+        assert_eq!(landed.as_str(), format!("{landing}?_cb=1#access_token=x"));
+    }
+
+    #[tokio::test]
+    async fn an_unreachable_frontend_opens_where_it_was_asked() {
+        let closed = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = closed.local_addr().unwrap().port();
+        drop(closed);
+        let requested: url::Url = format!("http://127.0.0.1:{port}/#access_token=x")
+            .parse()
+            .unwrap();
+        assert_eq!(resolve_frontend_landing(&requested).await, requested);
     }
 
     #[test]

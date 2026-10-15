@@ -267,9 +267,13 @@ mod shell {
                 )
                 .to_string();
                 // Bind the window to the app's origin and node before its page
-                // exists, so only that page can reach the proxy and broker.
+                // exists, so only that page can reach the proxy and broker. The
+                // origin is where the frontend's server redirects to, which is
+                // where the page will be.
                 let frontend = webview::validate_app_frontend_url(&frontend_url)
                     .map_err(std::io::Error::other)?;
+                let frontend =
+                    tauri::async_runtime::block_on(webview::resolve_frontend_landing(&frontend));
                 app.state::<app_window::AppWindowBindings>().bind(
                     "app",
                     &frontend,
@@ -278,7 +282,7 @@ mod shell {
                 // Inject SSO (node_url + brokered token) like the desktop's "Open".
                 let url = build_app_url(
                     &cfg_for_setup,
-                    &frontend_url,
+                    frontend.as_str(),
                     session.as_ref().map(|s| s.access_token.as_str()),
                 );
                 webview::open_app_webview(

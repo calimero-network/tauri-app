@@ -1314,6 +1314,9 @@ async fn create_app_window(
     // Fail before any window exists: the page would receive the node session.
     let parsed_url = calimero_tauri_app::webview::validate_app_frontend_url(&url)
         .map_err(|e| TauriError::new(TauriErrorCode::InvalidUrl, e))?;
+    // Bind and open where the frontend's server redirects to, or the page lands
+    // on an origin the window is not bound to and loses the node.
+    let parsed_url = calimero_tauri_app::webview::resolve_frontend_landing(&parsed_url).await;
 
     // A live window already owns this label and its bindings. Building would
     // fail on the duplicate label anyway, and the failure path below would then

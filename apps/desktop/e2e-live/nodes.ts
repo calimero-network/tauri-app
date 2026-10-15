@@ -1,7 +1,7 @@
 import { execFileSync, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { createSocket } from "node:dgram";
-import { existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type AddressInfo } from "node:net";
 import path from "node:path";
 import { readTomlString, setTomlKey } from "./toml";
@@ -216,7 +216,8 @@ export async function startNodes(opts: {
     let toml = readFileSync(configPath(n), "utf8");
     toml = isolateNetwork(
       toml,
-      i === 0 ? [] : [swarmAddr(planned[0]!.swarmPort, peerIds[0]!)],
+      // Every earlier node, so a node restarted while the first is down still finds a peer.
+      planned.slice(0, i).map((p, j) => swarmAddr(p.swarmPort, peerIds[j]!)),
       rendezvous,
     );
     // Every node resolves releases from the suite's registry, as a member's
@@ -229,7 +230,7 @@ export async function startNodes(opts: {
 
   const nodes: LiveNode[] = [];
   try {
-    for (const n of planned) nodes.push({ ...n, pid: spawnMerod(opts.merod, n) });
+    for (const n of planned) nodes.push({ ...n, pid: startRecorded(opts.merod, n) });
     for (const node of nodes) {
       await waitFor(`${node.name} healthy on ${node.url}`, () => healthy(node.url), 60_000);
     }
@@ -253,6 +254,31 @@ export async function startNodes(opts: {
       .join("\n");
     throw new Error(`${e instanceof Error ? e.message : String(e)}\n${logs}`);
   }
+}
+
+/** Starts a node and records its pid, so teardown stops it even after a restart. */
+function startRecorded(merod: string, n: Pick<LiveNode, "home" | "name" | "log">): number {
+  const pid = spawnMerod(merod, n);
+  appendFileSync(path.join(path.dirname(n.home), "pids"), `${pid}\n`);
+  return pid;
+}
+
+/** Every pid started under `dataDir`, restarts included. */
+export function recordedPids(dataDir: string): number[] {
+  const file = path.join(dataDir, "pids");
+  return existsSync(file) ? readFileSync(file, "utf8").split("\n").filter(Boolean).map(Number) : [];
+}
+
+/** Takes a node offline, as a laptop that closes. */
+export async function stopNode(node: LiveNode): Promise<void> {
+  await stopNodes([node.pid]);
+}
+
+/** Brings a stopped node back on its own data, and waits for it to answer. */
+export async function restartNode(merod: string, node: LiveNode): Promise<LiveNode> {
+  const restarted = { ...node, pid: startRecorded(merod, node) };
+  await waitFor(`${node.name} healthy again on ${node.url}`, () => healthy(node.url), 60_000);
+  return restarted;
 }
 
 function alive(pid: number): boolean {

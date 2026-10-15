@@ -29,6 +29,7 @@ vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
 import {
+  canResolveDeepLinks,
   resolveAndOpen,
   supersede,
   type DeepLinkConsentRequest,
@@ -315,5 +316,26 @@ describe("a deep link never acts without the user's consent", () => {
     expect(agree).not.toHaveBeenCalled();
     expect(openAppFrontend).not.toHaveBeenCalled();
     expect(r.failures[0]).toContain("HTTPS");
+  });
+});
+
+describe("a deep link waits for the user to be signed in", () => {
+  const ready = { clientReady: true, checkingOnboarding: false, showOnboarding: false, showLogin: false };
+
+  // The client is built before the token check routes a signed-out user to
+  // login. Resolving then 401s into `retry` until the drain gives up, and the
+  // invite was lost by the time the user had signed in.
+  it("does not resolve behind the login screen, though the client is ready", () => {
+    expect(canResolveDeepLinks({ ...ready, showLogin: true })).toBe(false);
+  });
+
+  it("does not resolve during onboarding or before the client exists", () => {
+    expect(canResolveDeepLinks({ ...ready, showOnboarding: true })).toBe(false);
+    expect(canResolveDeepLinks({ ...ready, checkingOnboarding: true })).toBe(false);
+    expect(canResolveDeepLinks({ ...ready, clientReady: false })).toBe(false);
+  });
+
+  it("resolves once signed in", () => {
+    expect(canResolveDeepLinks(ready)).toBe(true);
   });
 });

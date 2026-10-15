@@ -20,7 +20,7 @@ import { homeDir } from "@tauri-apps/api/path";
 import { useToast } from "./contexts/ToastContext";
 import { checkOnboardingState } from "./utils/onboarding";
 import { openAppFrontend, parseTauriError } from "./utils/appUtils";
-import { useAppDeepLink } from "./hooks/useAppDeepLink";
+import { canResolveDeepLinks, useAppDeepLink } from "./hooks/useAppDeepLink";
 import { useDeepLinkConsent } from "./components/DeepLinkConsentDialog";
 import Sidebar from "./components/Sidebar";
 import { NodeStatusIndicator } from "./components/NodeStatusIndicator";
@@ -455,7 +455,7 @@ function App() {
       actionLabel: "Uninstall",
       option: {
         label: "Also delete all application data",
-        hint: "Removes every context this node holds for the app. Contexts you administer are deleted for their group; the rest are left on this node only.",
+        hint: "Removes every namespace and context this node holds for the app. Namespaces you administer are deleted from this node; the rest are left, which their members will see.",
         defaultChecked: true,
       },
       onConfirm: async (deleteData) => {
@@ -484,10 +484,15 @@ function App() {
 
   // Route incoming app deep-links (calimero://<slug>/<action>?<params> and the
   // https://links.calimero.network/... Universal Link) to the target app.
-  // Gated on clientReady since resolution lists installed apps via the client.
-  // A link may install and open an app only once the user agrees in this dialog.
+  // Gated on a signed-in client, since resolution lists installed apps through
+  // it; a link that arrives while signed out waits for the login (see
+  // canResolveDeepLinks). A link may install and open an app only once the
+  // user agrees in this dialog.
   const { consent: deepLinkConsent, dialog: deepLinkConsentDialog } = useDeepLinkConsent();
-  useAppDeepLink(clientReady, deepLinkConsent);
+  useAppDeepLink(
+    canResolveDeepLinks({ clientReady, checkingOnboarding, showOnboarding, showLogin }),
+    deepLinkConsent,
+  );
 
   // Serve token refreshes for app windows. Refresh tokens are single-use
   // (calimero-network/core#3083), so the desktop keeps the only copy and is the

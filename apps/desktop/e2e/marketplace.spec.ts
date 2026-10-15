@@ -537,6 +537,22 @@ test.describe("Installed Applications – uninstall data option", () => {
   /** Serve one context for the app and record every call the uninstall makes. */
   async function mockUninstall(page: import("@playwright/test").Page) {
     const calls: string[] = [];
+    await page.route("**/admin-api/namespaces/for-application/*", (route) => {
+      calls.push(`GET ${new URL(route.request().url()).pathname}`);
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ data: [{ namespaceId: "ns-1", targetApplicationId: "installed-app-2" }] }),
+      });
+    });
+    await page.route("**/admin-api/namespaces/ns-1", (route) => {
+      calls.push(`${route.request().method()} ${new URL(route.request().url()).pathname}`);
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ data: { isDeleted: true } }),
+      });
+    });
     await page.route("**/admin-api/contexts/for-application/*", (route) => {
       calls.push(`GET ${new URL(route.request().url()).pathname}`);
       return route.fulfill({
@@ -574,7 +590,7 @@ test.describe("Installed Applications – uninstall data option", () => {
     await expect(page.getByRole("heading", { name: "Uninstall Application" })).toBeVisible();
   }
 
-  test("delete-data checkbox is on by default and removes the app's contexts first", async ({ page }) => {
+  test("delete-data checkbox is on by default and removes the app's namespaces and contexts first", async ({ page }) => {
     const calls = await mockUninstall(page);
     await openUninstallConfirm(page);
 
@@ -582,10 +598,12 @@ test.describe("Installed Applications – uninstall data option", () => {
     await expect(option).toBeChecked();
 
     await page.locator(".confirm-actions .button-danger").click();
-    await expect.poll(() => calls.length).toBe(3);
-    expect(calls[0]).toMatch(/^GET .*\/contexts\/for-application\/installed-app-2$/);
-    expect(calls[1]).toMatch(/^DELETE .*\/contexts\/ctx-1$/);
-    expect(calls[2]).toMatch(/^DELETE .*\/applications\/installed-app-2$/);
+    await expect.poll(() => calls.length).toBe(5);
+    expect(calls[0]).toMatch(/^GET .*\/namespaces\/for-application\/installed-app-2$/);
+    expect(calls[1]).toMatch(/^DELETE .*\/namespaces\/ns-1$/);
+    expect(calls[2]).toMatch(/^GET .*\/contexts\/for-application\/installed-app-2$/);
+    expect(calls[3]).toMatch(/^DELETE .*\/contexts\/ctx-1$/);
+    expect(calls[4]).toMatch(/^DELETE .*\/applications\/installed-app-2$/);
   });
 
   test("unchecking the box uninstalls without touching contexts", async ({ page }) => {

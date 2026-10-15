@@ -329,6 +329,28 @@ export async function resolveAndOpen(
 }
 
 /**
+ * Whether the launcher can resolve a deep-link now: the client is built AND
+ * the user is past onboarding and signed in.
+ *
+ * `clientReady` alone is not enough. It turns true as soon as the client is
+ * built, before the token check sends a signed-out user to the login screen.
+ * Gating on it alone started the cold-launch drain behind that screen: every
+ * attempt 401'd into `retry`, the ~30s backoff ran out while the user was
+ * still typing their password, and nothing read the pending link after they
+ * signed in, so an invite opened while signed out was lost. Gated here, the
+ * drain starts when login completes, and the link is still pending because
+ * only a terminal outcome clears it.
+ */
+export function canResolveDeepLinks(state: {
+  clientReady: boolean;
+  checkingOnboarding: boolean;
+  showOnboarding: boolean;
+  showLogin: boolean;
+}): boolean {
+  return state.clientReady && !state.checkingOnboarding && !state.showOnboarding && !state.showLogin;
+}
+
+/**
  * Listens for app deep-links and opens the target app.
  *
  * Two channels, deduped against each other by link key:

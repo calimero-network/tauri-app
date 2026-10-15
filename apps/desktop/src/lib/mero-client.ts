@@ -236,30 +236,22 @@ class NodeApi {
     }));
   }
 
-  /**
-   * Delete the contexts of the application, ahead of an uninstall that should
-   * take the app's data with it.
-   *
-   * Delete is gated on admin-ship of the owning group, so a 403 means this node
-   * only joined the context. That context is kept: leaving it would disarm
-   * auto-follow, and a reinstall would not bring it back. Any other failure
-   * rejects so the caller can stop before the uninstall.
-   */
-  deleteApplicationData(applicationId: string): Promise<ApiResponse<{ removed: number; kept: number }>> {
+  /** Delete the app's contexts before an uninstall. A 403 (not admin) keeps the context: leaving it would disarm auto-follow. */
+  deleteApplicationData(applicationId: string): Promise<ApiResponse<{ kept: number }>> {
     return wrap('Failed to delete application data', async () => {
       const { contexts } = await this.meroJs.admin.getContextsForApplication(applicationId);
-      let removed = 0;
       let kept = 0;
       for (const ctx of contexts ?? []) {
         try {
           await this.meroJs.admin.deleteContext(ctx.id);
-          removed++;
         } catch (err) {
-          if (!(err instanceof HTTPError && err.status === 403)) throw err;
+          // A revoked session also answers 403 but is not a shared context.
+          const notAdmin = err instanceof HTTPError && !(err instanceof AuthRevokedError) && err.status === 403;
+          if (!notAdmin) throw err;
           kept++;
         }
       }
-      return { removed, kept };
+      return { kept };
     });
   }
 

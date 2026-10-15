@@ -537,7 +537,7 @@ test.describe("Installed Applications – uninstall data option", () => {
   /** Serve one context for the app and record every call the uninstall makes. */
   async function mockUninstall(
     page: import("@playwright/test").Page,
-    deleteContext?: { status: number; error: string },
+    deleteContext?: { status: number; error: string; headers?: Record<string, string> },
   ) {
     const calls: string[] = [];
     await page.route("**/admin-api/contexts/for-application/*", (route) => {
@@ -553,6 +553,7 @@ test.describe("Installed Applications – uninstall data option", () => {
       if (route.request().method() === "DELETE" && deleteContext) {
         return route.fulfill({
           status: deleteContext.status,
+          headers: deleteContext.headers,
           contentType: "application/json",
           body: JSON.stringify({ error: deleteContext.error }),
         });
@@ -624,6 +625,19 @@ test.describe("Installed Applications – uninstall data option", () => {
     await page.locator(".confirm-actions .button-danger").click();
     await expect(page.getByText(/Failed to delete application data: namespace not found/)).toBeVisible();
     expect(calls.some((c) => c.endsWith("/leave"))).toBe(false);
+    expect(calls.some((c) => c.includes("/applications/"))).toBe(false);
+  });
+
+  test("a revoked session on delete aborts the uninstall instead of counting a kept context", async ({ page }) => {
+    const calls = await mockUninstall(page, {
+      status: 403,
+      error: "token revoked",
+      headers: { "x-auth-error": "token_revoked", "access-control-expose-headers": "x-auth-error" },
+    });
+    await openUninstallConfirm(page);
+
+    await page.locator(".confirm-actions .button-danger").click();
+    await expect(page.getByText(/Failed to delete application data/)).toBeVisible();
     expect(calls.some((c) => c.includes("/applications/"))).toBe(false);
   });
 

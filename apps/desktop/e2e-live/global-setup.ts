@@ -1,4 +1,4 @@
-import { readdirSync } from "node:fs";
+import { mkdtempSync, readdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { compareSemverDesc } from "../src/utils/registry";
@@ -47,12 +47,11 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   if (newer.version === older.version) throw new Error(`both bundles are ${older.version}`);
 
   const registry = await startRegistry([older, newer]);
-  const dataDir = process.env["LIVE_DATA_DIR"] ?? path.join(os.tmpdir(), "desktop-live-e2e");
+  const dataDir = process.env["LIVE_DATA_DIR"] ?? mkdtempSync(path.join(os.tmpdir(), "desktop-live-e2e-"));
   const nodes = await startNodes({
     merod: resolveMerod(),
     dataDir,
     count: 2,
-    basePort: Number(process.env["LIVE_BASE_PORT"]) || 2840,
     registryUrl: registry.url,
   });
 

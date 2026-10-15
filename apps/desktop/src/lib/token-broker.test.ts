@@ -27,8 +27,10 @@ vi.mock('./token-storage', () => ({
 // The broker answers app windows with THEIR scoped token (app-tokens.ts).
 const appAccessToken = vi.fn();
 const installedFrontendUrl = vi.fn();
+const retireAppToken = vi.fn();
 vi.mock('./app-tokens', () => ({
   appAccessToken: (...a: unknown[]) => appAccessToken(...a),
+  retireAppToken: (...a: unknown[]) => retireAppToken(...a),
   installedFrontendUrl: (...a: unknown[]) => installedFrontendUrl(...a),
   LAUNCHER_SLOT_PREFIX: 'launcher-',
 }));
@@ -337,6 +339,20 @@ describe('startTokenBroker', () => {
     await fireRequest({});
     expect(invoke).not.toHaveBeenCalled();
   });
+  it('retires a closed app window`s key, and stops listening for both events', async () => {
+    const offs = [vi.fn(), vi.fn()];
+    listen.mockResolvedValueOnce(offs[0]).mockResolvedValueOnce(offs[1]);
+    const stop = await broker.startTokenBroker();
+    const closed = listen.mock.calls.find(([name]) => name === 'calimero:app-window-closed');
+    expect(closed).toBeDefined();
+
+    await (closed![1] as (e: unknown) => Promise<void>)({ payload: 'app-mero-drive' });
+    expect(retireAppToken).toHaveBeenCalledWith('app-mero-drive');
+
+    stop();
+    expect(offs[0]).toHaveBeenCalled();
+    expect(offs[1]).toHaveBeenCalled();
+  });
 });
 
 describe('BROKERED_REFRESH_TOKEN', () => {
@@ -356,5 +372,14 @@ describe('BROKERED_REFRESH_TOKEN', () => {
     expect(script).toContain(
       `const BROKERED_REFRESH_TOKEN = '${broker.BROKERED_REFRESH_TOKEN}'`,
     );
+  });
+
+  it('listens for the window-closed event main.rs emits', async () => {
+    const { readFileSync } = await import('fs');
+    const { fileURLToPath } = await import('url');
+    const path = await import('path');
+    const dir = path.dirname(fileURLToPath(import.meta.url));
+    const main = readFileSync(path.resolve(dir, '../../src-tauri/src/main.rs'), 'utf-8');
+    expect(main).toContain(`const APP_WINDOW_CLOSED_EVENT: &str = "${broker.APP_WINDOW_CLOSED_EVENT}";`);
   });
 });

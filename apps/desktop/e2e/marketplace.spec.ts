@@ -535,7 +535,10 @@ test.describe("Installed Applications – row variants", () => {
 
 test.describe("Installed Applications – uninstall data option", () => {
   /** Serve one context for the app and record every call the uninstall makes. */
-  async function mockUninstall(page: import("@playwright/test").Page) {
+  async function mockUninstall(
+    page: import("@playwright/test").Page,
+    deleteContext?: { status: number; error: string; headers?: Record<string, string> },
+  ) {
     const calls: string[] = [];
     await page.route("**/admin-api/contexts/for-application/*", (route) => {
       calls.push(`GET ${new URL(route.request().url()).pathname}`);
@@ -547,10 +550,26 @@ test.describe("Installed Applications – uninstall data option", () => {
     });
     await page.route("**/admin-api/contexts/ctx-1", (route) => {
       calls.push(`${route.request().method()} ${new URL(route.request().url()).pathname}`);
+      if (route.request().method() === "DELETE" && deleteContext) {
+        return route.fulfill({
+          status: deleteContext.status,
+          headers: deleteContext.headers,
+          contentType: "application/json",
+          body: JSON.stringify({ error: deleteContext.error }),
+        });
+      }
       return route.fulfill({
         status: 200,
         contentType: "application/json",
         body: JSON.stringify({ data: { isDeleted: true } }),
+      });
+    });
+    await page.route("**/admin-api/contexts/ctx-1/leave", (route) => {
+      calls.push(`POST ${new URL(route.request().url()).pathname}`);
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ data: { contextId: "ctx-1", memberPublicKey: "pk-1" } }),
       });
     });
     await page.route(API_ROUTES.uninstallApplication, (route) => {
@@ -586,6 +605,40 @@ test.describe("Installed Applications – uninstall data option", () => {
     expect(calls[0]).toMatch(/^GET .*\/contexts\/for-application\/installed-app-2$/);
     expect(calls[1]).toMatch(/^DELETE .*\/contexts\/ctx-1$/);
     expect(calls[2]).toMatch(/^DELETE .*\/applications\/installed-app-2$/);
+  });
+
+  test("a context this node did not create is kept, not left, and the toast says so", async ({ page }) => {
+    const calls = await mockUninstall(page, { status: 403, error: "identity abc is not an admin of group 0xdead" });
+    await openUninstallConfirm(page);
+
+    await page.locator(".confirm-actions .button-danger").click();
+    await expect.poll(() => calls.length).toBe(3);
+    expect(calls.some((c) => c.endsWith("/leave"))).toBe(false);
+    expect(calls[2]).toMatch(/^DELETE .*\/applications\/installed-app-2$/);
+    await expect(page.getByText(/1 shared context kept on this device/)).toBeVisible();
+  });
+
+  test("a failed delete that is not a 403 stops the uninstall and is reported", async ({ page }) => {
+    const calls = await mockUninstall(page, { status: 500, error: "namespace not found" });
+    await openUninstallConfirm(page);
+
+    await page.locator(".confirm-actions .button-danger").click();
+    await expect(page.getByText(/Failed to delete application data: namespace not found/)).toBeVisible();
+    expect(calls.some((c) => c.endsWith("/leave"))).toBe(false);
+    expect(calls.some((c) => c.includes("/applications/"))).toBe(false);
+  });
+
+  test("a revoked session on delete aborts the uninstall instead of counting a kept context", async ({ page }) => {
+    const calls = await mockUninstall(page, {
+      status: 403,
+      error: "token revoked",
+      headers: { "x-auth-error": "token_revoked", "access-control-expose-headers": "x-auth-error" },
+    });
+    await openUninstallConfirm(page);
+
+    await page.locator(".confirm-actions .button-danger").click();
+    await expect(page.getByText(/Failed to delete application data/)).toBeVisible();
+    expect(calls.some((c) => c.includes("/applications/"))).toBe(false);
   });
 
   test("unchecking the box uninstalls without touching contexts", async ({ page }) => {

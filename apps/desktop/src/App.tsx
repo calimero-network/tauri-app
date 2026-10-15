@@ -455,7 +455,7 @@ function App() {
       actionLabel: "Uninstall",
       option: {
         label: "Also delete all application data",
-        hint: "Removes every context this node holds for the app. Contexts you administer are deleted for their group; the rest are left on this node only.",
+        hint: "Removes every namespace and context this node holds for the app. Namespaces you administer are deleted from this node; the rest are left, which their members will see.",
         defaultChecked: true,
       },
       onConfirm: async (deleteData) => {

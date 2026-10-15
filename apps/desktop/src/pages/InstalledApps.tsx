@@ -165,7 +165,7 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
         // behind an app that is gone, so stop and let the user retry or
         // uninstall without the data.
         if (cleared.data && cleared.data.failed > 0) {
-          toast.error(`Could not remove ${cleared.data.failed} context(s) of "${appName}"; it was not uninstalled`);
+          toast.error(`Could not remove ${cleared.data.failed} namespace(s) or context(s) of "${appName}"; it was not uninstalled`);
           return;
         }
       }

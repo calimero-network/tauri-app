@@ -12,6 +12,9 @@ on:
       - master
       - main
 
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -22,7 +25,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
 
@@ -39,6 +42,7 @@ jobs:
             echo "config={\"bundle\":{\"createUpdaterArtifacts\":false}}" >> $GITHUB_OUTPUT
           else
             echo "mode=release" >> $GITHUB_OUTPUT
+            [[ "$RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo "invalid version: $RELEASE_VERSION" >&2; exit 1; }
             echo "version=$RELEASE_VERSION" >> $GITHUB_OUTPUT
             # bundle.macOS.files embeds the profile at Contents/embedded.provisionprofile so
             # Tauri's own codesign seals it; the source path is relative to src-tauri/.
@@ -222,9 +226,10 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+          TAURI_CONFIG: ${{ steps.build-mode.outputs.config }}
         run: >
           pnpm tauri build --target universal-apple-darwin
-          --config '${{ steps.build-mode.outputs.config }}'
+          --config "$TAURI_CONFIG"
 
       - name: Build Tauri app for macOS (Universal) - Validation
         if: steps.build-mode.outputs.mode == 'validation'
@@ -233,9 +238,10 @@ jobs:
           MEROD_SKIP_IF_EXISTS: "1"
           SHELL_SKIP_IF_EXISTS: "1"
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_CONFIG: ${{ steps.build-mode.outputs.config }}
         run: >
           pnpm tauri build --target universal-apple-darwin
-          --config '${{ steps.build-mode.outputs.config }}'
+          --config "$TAURI_CONFIG"
 
       - name: Cleanup keychain
         if: always() && steps.build-mode.outputs.mode == 'release'
@@ -280,15 +286,17 @@ jobs:
 
       - name: Collect and normalize assets
         if: steps.build-mode.outputs.mode == 'release'
+        env:
+          VERSION: ${{ steps.build-mode.outputs.version }}
         run: |
           node scripts/release/collect-assets.cjs \
-            --version "${{ steps.build-mode.outputs.version }}" \
+            --version "$VERSION" \
             --platform macos \
             --output release-assets/
 
       - name: Upload artifacts
         if: steps.build-mode.outputs.mode == 'release'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: macos-build
           path: release-assets/

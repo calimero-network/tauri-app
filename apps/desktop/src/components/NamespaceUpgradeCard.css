@@ -1,0 +1,67 @@
+.ns-upgrade-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 12px 14px;
+  background: var(--surface-glass-soft);
+  border: 1px solid var(--border-color);
+}
+
+.ns-upgrade-versions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 24px;
+}
+
+.ns-upgrade-versions > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ns-upgrade-version {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.ns-upgrade-note {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.ns-upgrade-note-warn {
+  color: var(--warning-color, #d97706);
+}
+
+.ns-upgrade-action {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px 12px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.ns-upgrade-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.ns-upgrade-spin {
+  animation: ns-upgrade-spin 1s linear infinite;
+}
+
+@keyframes ns-upgrade-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

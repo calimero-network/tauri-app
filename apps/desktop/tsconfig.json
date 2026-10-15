@@ -16,7 +16,7 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src", "e2e", "playwright.config.ts"],
+  "include": ["src", "e2e", "e2e-live", "playwright.config.ts", "playwright.live.config.ts"],
   "references": [{ "path": "./tsconfig.node.json" }]
 }
 

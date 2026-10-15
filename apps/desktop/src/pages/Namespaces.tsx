@@ -14,6 +14,7 @@ import {
 import type { GroupInfo, MetadataRecord } from "@calimero-network/mero-js";
 import { useToast } from "../contexts/ToastContext";
 import AppIcon from "../components/AppIcon";
+import NamespaceUpgradeCard from "../components/NamespaceUpgradeCard";
 import { ChevronLeft, Users, Box, Layers, Copy, ChevronRight, Shield, Globe, Plus, X, Trash2, UserMinus, Link, MoreHorizontal, LogIn, LogOut, HardDrive } from "lucide-react";
 import { parseTauriError } from "../utils/appUtils";
 import { invalidateInstalledApps } from "../utils/installedAppsCache";
@@ -23,6 +24,7 @@ import { getCloudIdToken } from "../utils/cloudAuth";
 import { apiClient } from "../lib/mero-client";
 import {
   fetchGroupMembers,
+  isAdminRole,
   isInheritedMembershipError,
   isPermissionError,
   isReasonlessRefusal,
@@ -1237,9 +1239,9 @@ function Namespaces() {
           ) : null;
         })()}
       </div>
-      {ns.upgradePolicy && (
-        <div className="ns-card-policy">
-          <Shield size={12} /> {ns.upgradePolicy}
+      {ns.appVersion && (
+        <div className="ns-card-policy" title="Release this namespace runs">
+          v{ns.appVersion}
         </div>
       )}
       {missing && (
@@ -1546,7 +1548,9 @@ function Namespaces() {
 
   // ─── Namespace Detail View ───
   if (view.type === "namespace") {
-    const { ns } = view;
+    // The view holds the namespace as it was when opened; the listing is what an
+    // upgrade refreshes, so read the version from there.
+    const ns = namespaces.find((n) => n.namespaceId === view.ns.namespaceId) ?? view.ns;
     // Counts span the whole tree (root + nested subgroups). Fall back to the
     // single-level hook data while the tree is still loading.
     const nsContextCount = tree ? countTreeContexts(tree) : nsRootContexts.length;
@@ -1622,9 +1626,9 @@ function Namespaces() {
               <div className="stat-value">{countsLoading || nsLoadingGroups ? '…' : nsSubgroupCount}</div>
               <div className="stat-label">Subgroups</div>
             </div>
-            <div className="stat-card" title="Upgrade Policy — how this namespace adopts new application versions">
-              <div className="stat-value" style={{ fontSize: "0.85rem" }}>{ns.upgradePolicy || "—"}</div>
-              <div className="stat-label">Upgrade Policy</div>
+            <div className="stat-card" title="Version — the release of the application this namespace runs" data-testid="ns-detail-version">
+              <div className="stat-value" style={{ fontSize: "0.85rem" }}>{ns.appVersion ? `v${ns.appVersion}` : "—"}</div>
+              <div className="stat-label">Version</div>
             </div>
             {(() => {
               const b = usageFor(usage, ns.namespaceId);
@@ -1655,6 +1659,17 @@ function Namespaces() {
                 <Copy size={12} />
               </button>
             </div>
+            <NamespaceUpgradeCard
+              key={ns.namespaceId}
+              ns={ns}
+              app={appById[ns.targetApplicationId]}
+              isAdmin={!nsMembersLoading && isAdminRole(myNsRole)}
+              onInstalled={async () => {
+                invalidateInstalledApps();
+                setInstalledApps(await readInstalledApps());
+              }}
+              onUpgraded={refetchNamespaces}
+            />
           </div>
 
           <div className="ns-detail-section">
@@ -1931,10 +1946,6 @@ function Namespaces() {
                     <div className="stat-label">Contexts</div>
                   </div>
                   <div className="stat-card">
-                    <div className="stat-value" style={{ fontSize: "0.85rem" }}>{groupInfo.upgradePolicy || "—"}</div>
-                    <div className="stat-label">Upgrade Policy</div>
-                  </div>
-                  <div className="stat-card">
                     <div className="stat-value" style={{ fontSize: "0.85rem" }}>{groupInfo.subgroupVisibility || "—"}</div>
                     <div className="stat-label">Visibility</div>
                   </div>
@@ -2125,7 +2136,7 @@ function CreateNamespaceModal({ app, loading, onClose, onSubmit }: CreateNamespa
             />
           </label>
           <p className="ns-modal-hint">
-            Upgrade policy: <code>Automatic</code>. Default capabilities (create context, invite, manage members) will be applied to new members.
+            Default capabilities (create context, invite, manage members) will be applied to new members.
           </p>
           <div className="ns-modal-actions">
             <button type="button" className="ns-modal-cancel" onClick={onClose} disabled={loading}>Cancel</button>

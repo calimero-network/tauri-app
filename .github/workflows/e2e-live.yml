@@ -1,14 +1,14 @@
 name: Desktop E2E (live nodes)
 
-# The desktop UI against two REAL merod nodes: an admin upgrades a namespace
-# from one desktop and a member's node follows (apps/desktop/e2e-live). The
-# mocked suite (e2e-desktop.yml) cannot see that, because the upgrade crosses
-# two nodes, a registry and a governance op.
+# The desktop UI against three REAL merod nodes: an admin upgrades a namespace
+# from one desktop, and a member's node and a high-availability node follow
+# (apps/desktop/e2e-live). The mocked suite (e2e-desktop.yml) cannot see that,
+# because the upgrade crosses nodes, a registry and a governance op.
 #
 # merod is the version merod-config.json pins, checked against its sha256 pin,
 # so this tests what the desktop ships. The two releases are the two newest
 # kv-store releases that merod can run, from the public registry, served to
-# both nodes by a registry the suite starts locally.
+# every node by a registry the suite starts locally.
 
 on:
   push:

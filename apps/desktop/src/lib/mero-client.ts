@@ -237,32 +237,29 @@ class NodeApi {
   }
 
   /**
-   * Remove every context this node holds for the application, ahead of an
-   * uninstall that should take the app's data with it.
+   * Delete the contexts of the application, ahead of an uninstall that should
+   * take the app's data with it.
    *
-   * Delete tears a context down for its group and is gated on admin-ship of
-   * the owning group, so a context this node is only a member of is left
-   * instead: that is node-local and still drops it from this node.
+   * Delete is gated on admin-ship of the owning group, so a 403 means this node
+   * only joined the context. That context is kept: leaving it would disarm
+   * auto-follow, and a reinstall would not bring it back. Any other failure
+   * rejects so the caller can stop before the uninstall.
    */
-  deleteApplicationData(applicationId: string): Promise<ApiResponse<{ removed: number; failed: number }>> {
+  deleteApplicationData(applicationId: string): Promise<ApiResponse<{ removed: number; kept: number }>> {
     return wrap('Failed to delete application data', async () => {
       const { contexts } = await this.meroJs.admin.getContextsForApplication(applicationId);
       let removed = 0;
-      let failed = 0;
+      let kept = 0;
       for (const ctx of contexts ?? []) {
         try {
           await this.meroJs.admin.deleteContext(ctx.id);
           removed++;
-        } catch {
-          try {
-            await this.meroJs.admin.leaveContext(ctx.id);
-            removed++;
-          } catch {
-            failed++;
-          }
+        } catch (err) {
+          if (!(err instanceof HTTPError && err.status === 403)) throw err;
+          kept++;
         }
       }
-      return { removed, failed };
+      return { removed, kept };
     });
   }
 

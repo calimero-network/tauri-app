@@ -455,7 +455,7 @@ function App() {
       actionLabel: "Uninstall",
       option: {
         label: "Also delete all application data",
-        hint: "Removes every context this node holds for the app. Contexts you administer are deleted for their group; the rest are left on this node only.",
+        hint: "Deletes the contexts you administer, for everyone in them. Contexts you only joined are kept on this device, so reinstalling the app brings them back.",
         defaultChecked: true,
       },
       onConfirm: async (deleteData) => {

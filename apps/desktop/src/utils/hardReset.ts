@@ -31,6 +31,7 @@ import {
 } from './merod';
 import { getSettings, clearAllAppData, DEFAULT_NODE_HOME_DIR } from './settings';
 import { revokeMdmaSession } from './cloudAuth';
+import { logOutOfNode } from '../lib/app-tokens';
 import { sleep, pollUntil } from './appUtils';
 
 /** How long to wait for targeted nodes to disappear from the process scan. */
@@ -77,6 +78,8 @@ export async function wipeClientState({
     console.warn('[hardReset] cloud session revocation failed:', err);
   }
 
+  // Revoke the node session and every app's key while we still hold them.
+  await logOutOfNode();
   clearAllAppData();
 
   let ok = true;

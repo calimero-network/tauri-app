@@ -9,8 +9,11 @@ let desktopRefresh: string | null;
 vi.mock('./token-storage', () => ({
   getAccessToken: () => desktopAccess,
   getRefreshToken: () => desktopRefresh,
-  clearAccessToken: () => void (desktopAccess = null),
-  clearRefreshToken: () => void (desktopRefresh = null),
+  clearAllTokens: () => {
+    desktopAccess = null;
+    desktopRefresh = null;
+    localStorage.removeItem('calimero_app_token_slots');
+  },
 }));
 
 const fetchMock = vi.fn();
@@ -395,6 +398,30 @@ describe('retiring app keys', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('still retires on a webview without AbortSignal.timeout (macOS 10.15)', async () => {
+    await openTwoApps();
+    vi.stubGlobal('AbortSignal', { ...AbortSignal, timeout: undefined });
+
+    await mod.retireAppToken('app-drive');
+
+    expect(retired()).toEqual(['rd']);
+  });
+
+  it('retires the key a window was still being given when it closed', async () => {
+    let answer!: (r: Response) => void;
+    fetchMock.mockReturnValueOnce(new Promise<Response>((r) => (answer = r)));
+    const opening = mod.appAccessToken('app-drive', APP);
+    await vi.waitFor(() => expect(calls('/admin/client-key')).toHaveLength(1));
+
+    const closing = mod.retireAppToken('app-drive');
+    answer(ok({ access_token: jwt('late', 3600), refresh_token: 'r-late' }));
+    await opening;
+    await closing;
+
+    expect(retired()).toEqual(['r-late']);
+    expect(localStorage.getItem('calimero_app_token_slots')).toBe('{}');
   });
 
   it('retires the pair it replaces with one for another application', async () => {

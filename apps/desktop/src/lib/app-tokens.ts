@@ -17,7 +17,7 @@
  * leaked app token can no longer rotate, revoke or out-rank the desktop's.
  */
 import { getSettings } from '../utils/settings';
-import { clearAccessToken, clearRefreshToken, getAccessToken, getRefreshToken } from './token-storage';
+import { clearAllTokens, getAccessToken, getRefreshToken } from './token-storage';
 import { brokerAccessToken, unpatchedFetch } from './token-broker';
 
 /**
@@ -151,20 +151,32 @@ function writeSlot(slot: string, pair: SlotEntry | null): void {
  * key; the desktop's own root key only loses the refresh token. Best-effort.
  */
 async function retire(refreshToken: string): Promise<void> {
+  // Not AbortSignal.timeout: the macOS 10.15 webview lacks it.
+  const abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(), RETIRE_TIMEOUT_MS);
   try {
     await unpatchedFetch()(`${nodeBase()}/auth/logout`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ refresh_token: refreshToken }),
-      signal: AbortSignal.timeout(RETIRE_TIMEOUT_MS),
+      signal: abort.signal,
     });
   } catch {
     // Offline or gone: the key still expires, and we forget it either way.
+  } finally {
+    clearTimeout(timer);
   }
+}
+
+/** Let in-flight acquisitions land first, so a pair they store is retired too. */
+async function settle(slot?: string): Promise<void> {
+  const pending = [...inflight].filter(([key]) => slot === undefined || key.startsWith(`${slot}\n`));
+  await Promise.allSettled(pending.map(([, p]) => p));
 }
 
 /** Revoke one slot's key on the node and forget it: its window closed. */
 export async function retireAppToken(slot: string): Promise<void> {
+  await settle(slot);
   const pair = readSlots()[slot];
   writeSlot(slot, null);
   if (pair) await retire(pair.refresh_token);
@@ -175,11 +187,10 @@ export async function retireAppToken(slot: string): Promise<void> {
  * own session and forget all of them. Call before the node URL changes.
  */
 export async function logOutOfNode(): Promise<void> {
+  await settle();
   const pairs = Object.values(readSlots());
   const own = getRefreshToken();
-  localStorage.removeItem(STORAGE_KEY);
-  clearAccessToken();
-  clearRefreshToken();
+  clearAllTokens();
   await Promise.all([...pairs.map((p) => retire(p.refresh_token)), own ? retire(own) : undefined]);
 }
 

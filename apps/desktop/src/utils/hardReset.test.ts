@@ -22,6 +22,11 @@ vi.mock('./cloudAuth', () => ({
   revokeMdmaSession: (...a: unknown[]) => revokeMdmaSession(...a),
 }));
 
+const logOutOfNode = vi.fn();
+vi.mock('../lib/app-tokens', () => ({
+  logOutOfNode: (...a: unknown[]) => logOutOfNode(...a),
+}));
+
 // getSettings is stubbed, but clearAllAppData is the REAL one: that it clears the
 // whole storage silo (not a stale allowlist of keys) is part of what's under test.
 let settings: Record<string, unknown> = {};
@@ -335,6 +340,17 @@ describe('wipeClientState', () => {
     await expect(wipeClientState()).resolves.toBe(false);
 
     expect(localStorage.length).toBe(0);
+  });
+
+  it('logs out of the node before the tokens to do it with are cleared', async () => {
+    localStorage.setItem('calimero_refresh_token', 'r');
+    logOutOfNode.mockImplementationOnce(async () => {
+      expect(localStorage.getItem('calimero_refresh_token')).toBe('r');
+    });
+
+    await wipeClientState();
+
+    expect(logOutOfNode).toHaveBeenCalledTimes(1);
   });
 
   it('keeps the launchers unless asked to remove them (the softer reset)', async () => {

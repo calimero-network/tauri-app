@@ -912,14 +912,12 @@ fn ensure_app_launcher(
             "bundled launcher trampoline missing",
         )
     })?;
-    let bundle = launcher::generate_launcher(dest_dir, &trampoline, &spec)
+    let previous = prev
+        .as_ref()
+        .filter(|p| !p.bundle_path.is_empty())
+        .map(|p| std::path::Path::new(&p.bundle_path));
+    let bundle = launcher::generate_launcher(dest_dir, &trampoline, &spec, previous)
         .map_err(|e| TauriError::new(TauriErrorCode::ShortcutCreationFailed, e.to_string()))?;
-    if let Some(p) = prev.as_ref() {
-        let old = std::path::Path::new(&p.bundle_path);
-        if !p.bundle_path.is_empty() && old != bundle {
-            launcher::remove_own_launcher(old, app_id, &p.cap);
-        }
-    }
 
     app_registry::persist_app(
         &store,

@@ -283,6 +283,19 @@ pub fn remove_own_launcher(bundle: &Path, id: &str, cap: &str) -> bool {
     is_own_launcher(bundle, id, cap) && std::fs::remove_dir_all(bundle).is_ok()
 }
 
+fn is_absent(path: &Path) -> bool {
+    matches!(path.symlink_metadata(), Err(e) if e.kind() == std::io::ErrorKind::NotFound)
+}
+
+/// Same directory entry, whatever the spelling: APFS matches names case-insensitively.
+fn same_file(a: &Path, b: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    match (a.symlink_metadata(), b.symlink_metadata()) {
+        (Ok(a), Ok(b)) => (a.dev(), a.ino()) == (b.dev(), b.ino()),
+        _ => false,
+    }
+}
+
 /// `<name>.app`, or `<name> N.app` when a bundle this host did not build for
 /// `spec` already holds the name.
 fn launcher_path(dest_dir: &Path, spec: &AppSpec) -> Result<PathBuf, LauncherError> {
@@ -291,23 +304,34 @@ fn launcher_path(dest_dir: &Path, spec: &AppSpec) -> Result<PathBuf, LauncherErr
             1 => dest_dir.join(format!("{}.app", spec.name)),
             n => dest_dir.join(format!("{} {n}.app", spec.name)),
         })
-        .find(|p| p.symlink_metadata().is_err() || is_own_launcher(p, &spec.id, &spec.cap))
+        .find(|p| is_absent(p) || is_own_launcher(p, &spec.id, &spec.cap))
         .ok_or_else(|| LauncherError::NameTaken(spec.name.clone()))
 }
 
 /// Build `<dest_dir>/<name>.app`: a launcher whose Mach-O trampoline execs
-/// the installed shell with `--app-config <this-bundle>/Contents/Resources/app.json`.
+/// the installed shell with `--app-config <this-bundle>/Contents/Resources/app.json`,
+/// then drop the app's `previous` launcher if it lives elsewhere and is ours.
 /// Ad-hoc signed: macOS 26 LaunchServices refuses unsigned bundles.
 pub fn generate_launcher(
     dest_dir: &Path,
     trampoline_src: &Path,
     spec: &AppSpec,
+    previous: Option<&Path>,
 ) -> Result<PathBuf, LauncherError> {
     validate_app_id(&spec.id)?;
     let app_dir = launcher_path(dest_dir, spec)?;
-    if app_dir.symlink_metadata().is_ok() {
+    if !is_absent(&app_dir) {
         std::fs::remove_dir_all(&app_dir)?;
     }
+    // create_dir, not _all: anything that appeared here since the check is not ours.
+    std::fs::create_dir(&app_dir)?;
+    let shown = app_dir
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned());
+    let spec = &AppSpec {
+        name: shown.unwrap_or_else(|| spec.name.clone()),
+        ..spec.clone()
+    };
     let contents = app_dir.join("Contents");
     let macos = contents.join("MacOS");
     let resources = contents.join("Resources");
@@ -325,6 +349,9 @@ pub fn generate_launcher(
     write_info_plist(&contents, spec, has_icon)?;
     write_trampoline(&macos, trampoline_src)?;
     sign_bundle(&app_dir);
+    if let Some(old) = previous.filter(|old| !same_file(old, &app_dir)) {
+        remove_own_launcher(old, &spec.id, &spec.cap);
+    }
     Ok(app_dir)
 }
 
@@ -509,7 +536,7 @@ mod tests {
         let dir = scratch("gen");
         // A real Mach-O (this test binary) so the ad-hoc bundle signing succeeds.
         let tramp = std::env::current_exe().unwrap();
-        let app = generate_launcher(&dir, &tramp, &sample()).unwrap();
+        let app = generate_launcher(&dir, &tramp, &sample(), None).unwrap();
 
         assert!(app.ends_with("MeroDrive.app") && app.is_dir());
         let launch = app.join("Contents/MacOS/launch");
@@ -546,7 +573,7 @@ mod tests {
         std::fs::create_dir_all(theirs.parent().unwrap()).unwrap();
         std::fs::write(&theirs, b"user's own app").unwrap();
 
-        let app = generate_launcher(&dir, &tramp, &sample()).unwrap();
+        let app = generate_launcher(&dir, &tramp, &sample(), None).unwrap();
 
         assert_eq!(std::fs::read(&theirs).unwrap(), b"user's own app");
         assert!(app.ends_with("MeroDrive 2.app"), "got {}", app.display());
@@ -558,14 +585,14 @@ mod tests {
     fn generate_launcher_never_replaces_another_apps_launcher() {
         let dir = scratch("other-app");
         let tramp = std::env::current_exe().unwrap();
-        let first = generate_launcher(&dir, &tramp, &sample()).unwrap();
+        let first = generate_launcher(&dir, &tramp, &sample(), None).unwrap();
         let other = AppSpec {
             id: "impostor".into(),
             cap: "cap-impostor".into(),
             ..sample()
         };
 
-        let second = generate_launcher(&dir, &tramp, &other).unwrap();
+        let second = generate_launcher(&dir, &tramp, &other, None).unwrap();
 
         assert_ne!(first, second);
         assert!(is_own_launcher(&first, "mero-drive", "cap-123"));
@@ -577,13 +604,13 @@ mod tests {
     fn generate_launcher_rebuilds_its_own_launcher_in_place() {
         let dir = scratch("rebuild");
         let tramp = std::env::current_exe().unwrap();
-        let first = generate_launcher(&dir, &tramp, &sample()).unwrap();
+        let first = generate_launcher(&dir, &tramp, &sample(), None).unwrap();
         let renamed_url = AppSpec {
             url: "https://example.com".into(),
             ..sample()
         };
 
-        let second = generate_launcher(&dir, &tramp, &renamed_url).unwrap();
+        let second = generate_launcher(&dir, &tramp, &renamed_url, None).unwrap();
 
         assert_eq!(first, second);
         let v: serde_json::Value = serde_json::from_slice(
@@ -595,10 +622,69 @@ mod tests {
     }
 
     #[test]
+    fn a_renamed_app_drops_its_previous_launcher() {
+        let dir = scratch("rename");
+        let tramp = std::env::current_exe().unwrap();
+        let first = generate_launcher(&dir, &tramp, &sample(), None).unwrap();
+        let renamed = AppSpec {
+            name: "Mero Drive".into(),
+            ..sample()
+        };
+
+        let second = generate_launcher(&dir, &tramp, &renamed, Some(&first)).unwrap();
+
+        assert!(second.ends_with("Mero Drive.app") && second.is_dir());
+        assert!(!first.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_case_only_rename_keeps_the_rebuilt_launcher() {
+        let dir = scratch("case");
+        let tramp = std::env::current_exe().unwrap();
+        let lower = AppSpec {
+            name: "merodrive".into(),
+            ..sample()
+        };
+        let first = generate_launcher(&dir, &tramp, &lower, None).unwrap();
+
+        let second = generate_launcher(&dir, &tramp, &sample(), Some(&first)).unwrap();
+
+        assert!(is_own_launcher(&second, "mero-drive", "cap-123"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_previous_path_holding_a_foreign_bundle_is_kept() {
+        let dir = scratch("prev-foreign");
+        let tramp = std::env::current_exe().unwrap();
+        let theirs = dir.join("Theirs.app");
+        std::fs::create_dir_all(theirs.join("Contents")).unwrap();
+
+        generate_launcher(&dir, &tramp, &sample(), Some(&theirs)).unwrap();
+
+        assert!(theirs.is_dir());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_suffixed_launcher_shows_its_suffix() {
+        let dir = scratch("suffix-name");
+        let tramp = std::env::current_exe().unwrap();
+        std::fs::create_dir_all(dir.join("MeroDrive.app/Contents")).unwrap();
+
+        let app = generate_launcher(&dir, &tramp, &sample(), None).unwrap();
+
+        let plist = std::fs::read_to_string(app.join("Contents/Info.plist")).unwrap();
+        assert!(plist.contains("<key>CFBundleDisplayName</key><string>MeroDrive 2</string>"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn ownership_needs_the_matching_cap() {
         let dir = scratch("cap");
         let tramp = std::env::current_exe().unwrap();
-        let app = generate_launcher(&dir, &tramp, &sample()).unwrap();
+        let app = generate_launcher(&dir, &tramp, &sample(), None).unwrap();
 
         assert!(is_own_launcher(&app, "mero-drive", "cap-123"));
         assert!(!is_own_launcher(&app, "mero-drive", "cap-other"));
@@ -626,7 +712,7 @@ mod tests {
     fn remove_own_launcher_leaves_foreign_bundles() {
         let dir = scratch("remove");
         let tramp = std::env::current_exe().unwrap();
-        let ours = generate_launcher(&dir, &tramp, &sample()).unwrap();
+        let ours = generate_launcher(&dir, &tramp, &sample(), None).unwrap();
         let theirs = dir.join("Theirs.app");
         std::fs::create_dir_all(theirs.join("Contents")).unwrap();
 

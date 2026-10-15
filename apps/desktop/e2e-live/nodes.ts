@@ -1,6 +1,7 @@
 import { execFileSync, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createServer, type AddressInfo } from "node:net";
 import path from "node:path";
 import { readTomlString, setTomlKey } from "./toml";
 
@@ -33,14 +34,14 @@ export function resolveMerod(): string {
   );
 }
 
-function nodeEnv(): NodeJS.ProcessEnv {
+export function nodeEnv(): NodeJS.ProcessEnv {
   const env = { ...process.env };
   delete env["MERO_AUTH_ADMIN_USER"];
   delete env["MERO_AUTH_ADMIN_PASSWORD"];
   return { ...env, RUST_LOG: process.env["LIVE_RUST_LOG"] ?? "merod=info,calimero_=info" };
 }
 
-function configPath(node: Pick<LiveNode, "home" | "name">): string {
+export function configPath(node: Pick<LiveNode, "home" | "name">): string {
   return path.join(node.home, node.name, "config.toml");
 }
 
@@ -105,25 +106,60 @@ async function peerCount(url: string, token: string): Promise<number> {
   return Number(body.data?.count ?? body.count ?? 0);
 }
 
+export function swarmAddr(port: number, peerId: string): string {
+  return `/ip4/127.0.0.1/tcp/${port}/p2p/${peerId}`;
+}
+
+/** Peers only with this run's nodes, and syncs fast: the suite's network, not the public one. */
+export function isolateNetwork(toml: string, bootstrap: string[], rendezvous: string): string {
+  toml = setTomlKey(toml, "bootstrap", "nodes", bootstrap);
+  toml = setTomlKey(toml, "discovery", "mdns", true);
+  toml = setTomlKey(toml, "discovery.rendezvous", "namespace", rendezvous);
+  toml = setTomlKey(toml, "sync", "interval_ms", 500);
+  return setTomlKey(toml, "sync", "frequency_ms", 1000);
+}
+
+/** Runs an initialised node detached, logging to `log`, and returns its pid. */
+export function spawnMerod(merod: string, n: Pick<LiveNode, "home" | "name" | "log">): number {
+  const out = openSync(n.log, "a");
+  const proc = spawn(merod, ["--home", n.home, "--node", n.name, "run"], {
+    stdio: ["ignore", out, out],
+    env: nodeEnv(),
+    detached: true,
+  });
+  proc.unref();
+  if (!proc.pid) throw new Error(`could not start ${n.name}`);
+  return proc.pid;
+}
+
+/** Ports the OS hands out as free, all held at once so no two are the same. */
+export async function freePorts(count: number): Promise<number[]> {
+  const servers = Array.from({ length: count }, () => createServer());
+  await Promise.all(servers.map((s) => new Promise<void>((resolve) => s.listen(0, "127.0.0.1", resolve))));
+  const ports = servers.map((s) => (s.address() as AddressInfo).port);
+  await Promise.all(servers.map((s) => new Promise((resolve) => s.close(resolve))));
+  return ports;
+}
+
 export async function startNodes(opts: {
   merod: string;
   dataDir: string;
   count: number;
-  basePort: number;
   registryUrl: string;
 }): Promise<LiveNode[]> {
   rmSync(opts.dataDir, { recursive: true, force: true });
   mkdirSync(opts.dataDir, { recursive: true });
   const rendezvous = `/calimero/desktop-live/${randomBytes(4).toString("hex")}`;
+  const ports = await freePorts(opts.count * 2);
 
   const planned = Array.from({ length: opts.count }, (_, i) => {
     const name = `live-${i + 1}`;
-    const serverPort = opts.basePort + i * 2;
+    const serverPort = ports[i * 2]!;
     return {
       name,
       home: path.join(opts.dataDir, name),
       serverPort,
-      swarmPort: serverPort + 1,
+      swarmPort: ports[i * 2 + 1]!,
       url: `http://127.0.0.1:${serverPort}`,
       log: path.join(opts.dataDir, `${name}.log`),
     };
@@ -157,16 +193,11 @@ export async function startNodes(opts: {
 
   planned.forEach((n, i) => {
     let toml = readFileSync(configPath(n), "utf8");
-    toml = setTomlKey(
+    toml = isolateNetwork(
       toml,
-      "bootstrap",
-      "nodes",
-      i === 0 ? [] : [`/ip4/127.0.0.1/tcp/${planned[0]!.swarmPort}/p2p/${peerIds[0]}`],
+      i === 0 ? [] : [swarmAddr(planned[0]!.swarmPort, peerIds[0]!)],
+      rendezvous,
     );
-    toml = setTomlKey(toml, "discovery", "mdns", true);
-    toml = setTomlKey(toml, "discovery.rendezvous", "namespace", rendezvous);
-    toml = setTomlKey(toml, "sync", "interval_ms", 500);
-    toml = setTomlKey(toml, "sync", "frequency_ms", 1000);
     // Every node resolves releases from the suite's registry, as a member's
     // node resolves them from its own.
     toml = setTomlKey(toml, "registry", "mode", "http");
@@ -176,17 +207,7 @@ export async function startNodes(opts: {
 
   const nodes: LiveNode[] = [];
   try {
-    for (const n of planned) {
-      const out = openSync(n.log, "a");
-      const proc = spawn(opts.merod, ["--home", n.home, "--node", n.name, "run"], {
-        stdio: ["ignore", out, out],
-        env: nodeEnv(),
-        detached: true,
-      });
-      proc.unref();
-      if (!proc.pid) throw new Error(`could not start ${n.name}`);
-      nodes.push({ ...n, pid: proc.pid });
-    }
+    for (const n of planned) nodes.push({ ...n, pid: spawnMerod(opts.merod, n) });
     for (const node of nodes) {
       await waitFor(`${node.name} healthy on ${node.url}`, () => healthy(node.url), 60_000);
     }

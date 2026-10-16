@@ -1,9 +1,9 @@
 import { defineConfig, devices } from "@playwright/test";
 
 /**
- * The live suite: the desktop UI against REAL merod nodes, two of them, so a
- * flow that needs a second member (an upgrade reaching a peer) is tested end to
- * end. `e2e/` stays mocked and never reaches a node; this suite starts its own
+ * The live suite: the desktop UI against REAL merod nodes, three of them, so a
+ * flow that needs other members (an upgrade reaching a peer, or a node that
+ * only replicates) is tested end to end. `e2e/` stays mocked and never reaches a node; this suite starts its own
  * on ports of its own (see e2e-live/global-setup.ts) and never touches 2528.
  *
  * Needs MEROD_BINARY and LIVE_BUNDLES (or LIVE_BUNDLE_DIR); see

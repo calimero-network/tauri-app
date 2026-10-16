@@ -1,13 +1,14 @@
 import { execFileSync, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { readTomlString, setTomlKey } from "./toml";
 
 /**
  * Real merod nodes for the live suite, after calimero-network/apps'
  * `packages/e2e-node` rig: embedded auth with a known admin login, peered
- * through the first node, and every node pointed at the same local registry.
+ * through the nodes started before it, and every node pointed at the same
+ * local registry.
  */
 
 export const ADMIN_USER = "admin";
@@ -161,7 +162,8 @@ export async function startNodes(opts: {
       toml,
       "bootstrap",
       "nodes",
-      i === 0 ? [] : [`/ip4/127.0.0.1/tcp/${planned[0]!.swarmPort}/p2p/${peerIds[0]}`],
+      // Every earlier node, so a node restarted while the first is down still finds a peer.
+      planned.slice(0, i).map((p, j) => `/ip4/127.0.0.1/tcp/${p.swarmPort}/p2p/${peerIds[j]}`),
     );
     toml = setTomlKey(toml, "discovery", "mdns", true);
     toml = setTomlKey(toml, "discovery.rendezvous", "namespace", rendezvous);
@@ -176,17 +178,7 @@ export async function startNodes(opts: {
 
   const nodes: LiveNode[] = [];
   try {
-    for (const n of planned) {
-      const out = openSync(n.log, "a");
-      const proc = spawn(opts.merod, ["--home", n.home, "--node", n.name, "run"], {
-        stdio: ["ignore", out, out],
-        env: nodeEnv(),
-        detached: true,
-      });
-      proc.unref();
-      if (!proc.pid) throw new Error(`could not start ${n.name}`);
-      nodes.push({ ...n, pid: proc.pid });
-    }
+    for (const n of planned) nodes.push({ ...n, pid: spawnNode(opts.merod, n) });
     for (const node of nodes) {
       await waitFor(`${node.name} healthy on ${node.url}`, () => healthy(node.url), 60_000);
     }
@@ -210,6 +202,42 @@ export async function startNodes(opts: {
       .join("\n");
     throw new Error(`${e instanceof Error ? e.message : String(e)}\n${logs}`);
   }
+}
+
+function pidFile(node: Pick<LiveNode, "home">): string {
+  return path.join(path.dirname(node.home), "pids");
+}
+
+/** Starts an initialised node and records its pid, so teardown stops it even after a restart. */
+function spawnNode(merod: string, n: Omit<LiveNode, "pid">): number {
+  const out = openSync(n.log, "a");
+  const proc = spawn(merod, ["--home", n.home, "--node", n.name, "run"], {
+    stdio: ["ignore", out, out],
+    env: nodeEnv(),
+    detached: true,
+  });
+  proc.unref();
+  if (!proc.pid) throw new Error(`could not start ${n.name}`);
+  appendFileSync(pidFile(n), `${proc.pid}\n`);
+  return proc.pid;
+}
+
+/** Every pid started under `dataDir`, restarts included. */
+export function recordedPids(dataDir: string): number[] {
+  const file = path.join(dataDir, "pids");
+  return existsSync(file) ? readFileSync(file, "utf8").split("\n").filter(Boolean).map(Number) : [];
+}
+
+/** Takes a node offline, as a laptop that closes. */
+export async function stopNode(node: LiveNode): Promise<void> {
+  await stopNodes([node.pid]);
+}
+
+/** Brings a stopped node back on its own data, and waits for it to answer. */
+export async function restartNode(merod: string, node: LiveNode): Promise<LiveNode> {
+  const restarted = { ...node, pid: spawnNode(merod, node) };
+  await waitFor(`${node.name} healthy again on ${node.url}`, () => healthy(node.url), 60_000);
+  return restarted;
 }
 
 function alive(pid: number): boolean {

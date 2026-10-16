@@ -1,10 +1,11 @@
-import { test, expect, type Browser, type Page } from "@playwright/test";
-import { MeroJs } from "@calimero-network/mero-js";
+import { test, expect } from "@playwright/test";
+import type { MeroJs } from "@calimero-network/mero-js";
 import type { LiveState } from "./global-setup";
-import { ADMIN_PASSWORD, ADMIN_USER, mintTokens, waitFor } from "./nodes";
+import { waitFor } from "./nodes";
+import { admin, openDesktop, openNamespace } from "./desktop";
 
 /**
- * Two desktops, two real nodes: an admin upgrades a namespace and a member's
+ * Two desktops on two real nodes: an admin upgrades a namespace and a member's
  * node follows.
  *
  * Node A is the namespace's admin and node B a member; each has its own
@@ -14,56 +15,13 @@ import { ADMIN_PASSWORD, ADMIN_USER, mintTokens, waitFor } from "./nodes";
  *
  * What only real nodes show, and this pins:
  * - installing on A changes nothing for the namespace; the upgrade does;
- * - B learns the new target as soon as the op arrives, but fetches the release
- *   (and so can name its version) only when the app is next used on B.
+ * - B follows without the app being used there: a member who only reads gets
+ *   what the admin wrote on the new release, and B's desktop names it.
  */
 
 const NS_NAME = "Upgrade test";
 
 const state = (): LiveState => JSON.parse(process.env["LIVE_STATE"] ?? "null") as LiveState;
-
-async function admin(url: string): Promise<MeroJs> {
-  const mero = new MeroJs({ baseUrl: url, credentials: { username: ADMIN_USER, password: ADMIN_PASSWORD } });
-  await mero.authenticate();
-  return mero;
-}
-
-/** A desktop session on `nodeUrl`: what onboarding plus login leave behind. */
-async function openDesktop(browser: Browser, nodeUrl: string, registryUrl: string): Promise<Page> {
-  const tokens = await mintTokens(nodeUrl);
-  const context = await browser.newContext();
-  const page = await context.newPage();
-  await page.goto("/");
-  await page.evaluate(
-    ({ nodeUrl, registryUrl, tokens }) => {
-      localStorage.setItem(
-        "calimero-desktop-settings",
-        JSON.stringify({
-          nodeUrl,
-          registries: [registryUrl],
-          onboardingCompleted: true,
-          tutorialCompleted: true,
-          developerMode: true,
-        }),
-      );
-      localStorage.setItem("calimero_access_token", tokens.access_token);
-      localStorage.setItem("calimero_refresh_token", tokens.refresh_token);
-      localStorage.setItem("calimero_token_expires_at", String(Date.now() + 3_600_000));
-      localStorage.setItem("calimero-autostart-default-applied", "1");
-    },
-    { nodeUrl, registryUrl, tokens },
-  );
-  await page.reload();
-  await expect(page.locator("aside.sidebar")).toBeVisible();
-  return page;
-}
-
-async function openNamespace(page: Page, applicationId: string, name: string) {
-  await page.locator("aside.sidebar").getByTitle("Namespaces").click();
-  await page.locator(`.ns-app-card[data-application-id="${applicationId}"]`).click();
-  await page.locator(".ns-card", { hasText: name }).click();
-  await expect(page.getByTestId("ns-upgrade-card")).toBeVisible();
-}
 
 test("an admin upgrades a namespace from the desktop, and a member's node follows", async ({ browser }) => {
   const live = state();
@@ -113,30 +71,30 @@ test("an admin upgrades a namespace from the desktop, and a member's node follow
   await expect(pageA.getByTestId("ns-upgrade-running")).toHaveText(live.newer);
   await expect(pageA.getByTestId("ns-upgrade-current")).toBeVisible();
 
-  // ── Desktop B: the member's node has the op, not yet the release ──
+  // The admin writes on the new release.
+  await a.rpc.execute({ contextId, method: "set", argsJson: { key: "who", value: "admin, upgraded" } });
+
+  // ── Desktop B: the member only reads; nothing runs the app on B first ──
+  const stateHash = async (mero: MeroJs) => (await mero.admin.getContext(contextId)).contextStateHash;
   await waitFor(
-    "the upgrade to reach the member's node",
-    async () => (await b.admin.listNamespaces()).find((n) => n.namespaceId === namespaceId)?.appVersion !== live.older,
+    "the member's node to take the admin's post-upgrade write",
+    async () => (await stateHash(b)) === (await stateHash(a)),
     60_000,
+    1_000,
   );
   const pageB = await openDesktop(browser, nodeB!.url, live.registryUrl);
-  await openNamespace(pageB, applicationId, NS_NAME);
-  await expect(pageB.getByTestId("ns-upgrade-unknown")).toBeVisible();
-  await expect(pageB.getByTestId("ns-upgrade-install")).toHaveCount(0);
-  await expect(pageB.getByTestId("ns-upgrade-upgrade")).toHaveCount(0);
-
-  // The member uses the app: the node fetches the newer release from its own
-  // registry and switches the context, and the write still lands.
-  await b.rpc.execute({ contextId, method: "set", argsJson: { key: "who", value: "member, upgraded" } });
-  expect(await b.rpc.execute({ contextId, method: "get", argsJson: { key: "who" } })).toBe("member, upgraded");
-
-  await pageB.reload();
   await openNamespace(pageB, applicationId, NS_NAME);
   await expect(pageB.getByTestId("ns-detail-version")).toContainText(`v${live.newer}`);
   await expect(pageB.getByTestId("ns-upgrade-running")).toHaveText(live.newer);
   await expect(pageB.getByTestId("ns-upgrade-installed")).toHaveText(live.newer);
   await expect(pageB.getByTestId("ns-upgrade-install")).toHaveCount(0);
   await expect(pageB.getByTestId("ns-upgrade-upgrade")).toHaveCount(0);
+
+  // The member's first read is what they see on opening the app.
+  expect(await b.rpc.execute({ contextId, method: "get", argsJson: { key: "who" } })).toBe("admin, upgraded");
+
+  // The member writes on the new release too.
+  await b.rpc.execute({ contextId, method: "set", argsJson: { key: "who", value: "member, upgraded" } });
 
   // The admin's node sees the member's write made on the newer release.
   await waitFor(

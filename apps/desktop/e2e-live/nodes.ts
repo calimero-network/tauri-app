@@ -1,5 +1,6 @@
 import { execFileSync, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import { createSocket } from "node:dgram";
 import { existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type AddressInfo } from "node:net";
 import path from "node:path";
@@ -133,11 +134,26 @@ export function spawnMerod(merod: string, n: Pick<LiveNode, "home" | "name" | "l
 }
 
 /** Ports the OS hands out as free, all held at once so no two are the same. */
+/** Ports free on both TCP and UDP: a swarm port also listens on QUIC, and the OS only vouches for the TCP side. */
 export async function freePorts(count: number): Promise<number[]> {
-  const servers = Array.from({ length: count }, () => createServer());
-  await Promise.all(servers.map((s) => new Promise<void>((resolve) => s.listen(0, "127.0.0.1", resolve))));
-  const ports = servers.map((s) => (s.address() as AddressInfo).port);
-  await Promise.all(servers.map((s) => new Promise((resolve) => s.close(resolve))));
+  const held: { close(cb: () => void): unknown }[] = []; // kept open until the end so the OS never hands a port out twice
+  const ports: number[] = [];
+  while (ports.length < count) {
+    const server = createServer();
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    held.push(server);
+    const port = (server.address() as AddressInfo).port;
+    const udp = createSocket("udp4");
+    const bound = await new Promise<boolean>((resolve) => {
+      udp.once("error", () => resolve(false));
+      udp.bind(port, () => resolve(true));
+    });
+    if (bound) {
+      held.push(udp);
+      ports.push(port);
+    }
+  }
+  await Promise.all(held.map((h) => new Promise<void>((resolve) => h.close(resolve))));
   return ports;
 }
 

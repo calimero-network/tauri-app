@@ -151,6 +151,13 @@ pub fn launcher_frontend_url<'a>(baked: &'a str, current: Option<&'a str>) -> &'
         .unwrap_or(baked)
 }
 
+/// The fetch proxy script with `node_url` baked in as a JSON string literal, so
+/// no character in the URL can end the string and run as script.
+pub fn proxy_script(node_url: &str) -> String {
+    let literal = serde_json::Value::from(node_url).to_string();
+    include_str!("proxy_script.js").replace("__CONFIGURED_NODE_URL__", &literal)
+}
+
 /// Open a webview window for an external app URL. Injects the proxy script (with
 /// `node_url` baked in) before the page loads, then shows and focuses the window.
 pub fn open_app_webview(
@@ -164,8 +171,7 @@ pub fn open_app_webview(
 
     // Inject fetch interceptor to proxy node requests through Tauri.
     // CRITICAL: Intercept IMMEDIATELY before the app makes any fetch calls.
-    let mut proxy_script = include_str!("proxy_script.js").to_string();
-    proxy_script = proxy_script.replace("__CONFIGURED_NODE_URL__", node_url);
+    let proxy_script = proxy_script(node_url);
 
     // If a window with this label already exists (e.g. single-instance relaunch),
     // just focus it rather than failing on a duplicate-label build.
@@ -212,8 +218,16 @@ pub fn open_app_webview(
 #[cfg(test)]
 mod tests {
     use super::{
-        landing_url, launcher_frontend_url, resolve_frontend_landing, validate_app_frontend_url,
+        landing_url, launcher_frontend_url, proxy_script, resolve_frontend_landing,
+        validate_app_frontend_url,
     };
+
+    #[test]
+    fn proxy_script_bakes_the_node_url_in_as_a_string_literal() {
+        let script = proxy_script("http://node/'+alert(1)+'\"\\");
+        assert!(script.contains(r#"const nodeUrl = "http://node/'+alert(1)+'\"\\";"#));
+        assert!(!script.contains("__CONFIGURED_NODE_URL__"));
+    }
 
     #[test]
     fn launcher_opens_where_the_app_is_installed_now() {

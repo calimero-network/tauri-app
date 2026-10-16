@@ -31,10 +31,10 @@ runs:
           xdg-utils
 
     - name: Setup pnpm
-      uses: pnpm/action-setup@v4
+      uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
 
     - name: Setup Node.js
-      uses: actions/setup-node@v4
+      uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
       with:
         node-version-file: package.json
         cache: "pnpm"
@@ -47,7 +47,7 @@ runs:
         echo "path=$STORE_PATH" >> $GITHUB_OUTPUT
 
     - name: Setup pnpm cache
-      uses: actions/cache@v4
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
         path: ${{ steps.get-pnpm-store.outputs.path }}
         key: ${{ runner.os }}-${{ inputs.cache-suffix }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
@@ -55,12 +55,12 @@ runs:
           ${{ runner.os }}-${{ inputs.cache-suffix }}-pnpm-store-
 
     - name: Setup Rust
-      uses: dtolnay/rust-toolchain@stable
+      uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
       with:
         targets: ${{ inputs.rust-targets }}
 
     - name: Cache Rust dependencies
-      uses: Swatinem/rust-cache@v2
+      uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       with:
         workspaces: apps/desktop/src-tauri
         key: ${{ inputs.cache-suffix }}

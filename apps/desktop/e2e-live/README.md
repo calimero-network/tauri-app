@@ -57,7 +57,7 @@ The `LIVE_BUNDLES` variable takes comma-separated paths instead of a directory.
 
 ### Ports and data
 
-- The nodes listen on ports the OS reports free, never on `2528`, so a running Calimero Desktop is safe.
+- The nodes listen on ports the OS reports free, never on `2528`, and the pages are refused `2528`, so a running Calimero Desktop is neither touched nor seen.
 - The web UI runs on port `1420`, or on `LIVE_UI_PORT` if another checkout's Vite already holds it.
 - Data goes to a fresh `$TMPDIR/desktop-live-e2e-*`, or to `LIVE_DATA_DIR` if set.
 - Each node's log is `<data dir>/live-N.log`, or `<data dir>/device-link-*/<desktop>.log`.

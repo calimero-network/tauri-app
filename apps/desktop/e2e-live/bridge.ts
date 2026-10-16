@@ -23,6 +23,8 @@ interface BridgeNode {
 
 type Args = Record<string, unknown>;
 
+const DEFAULT_NODE = /^http:\/\/(localhost|127\.0\.0\.1):2528\//; // the desktop's default node, which on a dev machine is a real one
+
 export class NodeBridge {
   private readonly nodes: BridgeNode[] = [];
   private readonly rendezvous = `/calimero/desktop-live/${randomBytes(4).toString("hex")}`;
@@ -34,6 +36,8 @@ export class NodeBridge {
 
   /** Answers `invoke` in every page of `context` from this bridge. */
   async attach(context: BrowserContext): Promise<void> {
+    // First launch probes the default port; refuse it as a fresh machine would, so a local run matches CI.
+    await context.route(DEFAULT_NODE, (route) => route.abort("connectionrefused"));
     await context.exposeBinding("__nodeBridge", (_source, cmd: string, args: Args) => this.invoke(cmd, args ?? {}));
     await context.addInitScript(() => {
       const bridge = (window as unknown as { __nodeBridge: (cmd: string, args: unknown) => Promise<unknown> }).__nodeBridge;

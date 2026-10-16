@@ -31,7 +31,9 @@ const ALIAS_HINT = 'Use letters, digits, dots, dashes or underscores, up to 50 c
 
 const HEX_64 = /^[0-9a-fA-F]{64}$/;
 const ALL_ZERO = /^0{64}$/;
-const HEX_128 = /^[0-9a-fA-F]{128}$/;
+/** Core's `PairingStatement` (`crates/account/src/pairing.rs`): a u64 issue time, then an Ed25519 signature. */
+const STATEMENT_BYTES = 8 + 64;
+const STATEMENT_HEX = new RegExp(`^[0-9a-fA-F]{${STATEMENT_BYTES * 2}}$`);
 
 /** What the pairing device mints, to be read across to the account holder. */
 export type PairInitResult = AccountPairInitResponseData;
@@ -260,7 +262,7 @@ export function validatePairPayload(
   for (const field of ['deviceId', 'kemPublicKey', 'signPublicKey'] as const) {
     if (!HEX_64.test(p[field] ?? '')) return `${field} must be 64 hex characters`;
   }
-  if (!HEX_128.test(p.statement ?? '')) return 'statement must be 128 hex characters';
+  if (!STATEMENT_HEX.test(p.statement ?? '')) return `statement must be ${STATEMENT_BYTES * 2} hex characters`;
   if (!normalizeConfirmationCode(p.confirmationCode ?? '')) {
     return 'confirmationCode must not be empty';
   }

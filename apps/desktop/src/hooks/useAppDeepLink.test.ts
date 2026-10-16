@@ -20,7 +20,6 @@ vi.mock("../lib/mero-client", () => ({
 }));
 vi.mock("../utils/appUtils", () => ({
   openAppFrontend: (...a: unknown[]) => openAppFrontend(...a),
-  appendParamsToUrl: (url: string, params: string) => (params ? `${url}?${params}` : url),
   decodeMetadata: (m: unknown) => m,
   sleep: () => Promise.resolve(),
   isAllowedAppFrontendUrl: (url: string) => url.startsWith("https://"),
@@ -29,7 +28,10 @@ vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
 import {
+  LINK_DEDUP_MS,
   canResolveDeepLinks,
+  createLinkDedup,
+  deepLinkRaw,
   resolveAndOpen,
   supersede,
   type DeepLinkConsentRequest,
@@ -83,12 +85,25 @@ describe("a deep link always tells the user what happened", () => {
     // ...and the progress message is always taken back down.
     expect(r.cleared).toEqual(r.shown);
     expect(r.failures).toEqual([]);
+    // The link rides beside the URL, so an app that is already open can be
+    // handed it too: focusing an open window does not reload it.
     expect(openAppFrontend).toHaveBeenCalledWith(
-      "https://drive.example?invitation=abc",
+      "https://drive.example",
       "Mero Drive",
       expect.any(Function),
-      { applicationId: "app-1" },
+      {
+        applicationId: "app-1",
+        deepLink: {
+          raw: "calimero://com.calimero.drive/join?invitation=abc",
+          params: "invitation=abc",
+        },
+      },
     );
+  });
+
+  it("names the link the way an app's launcher bridge delivers it", () => {
+    expect(deepLinkRaw(LINK)).toBe("calimero://com.calimero.drive/join?invitation=abc");
+    expect(deepLinkRaw({ ...LINK, params: "" })).toBe("calimero://com.calimero.drive/join");
   });
 
   it("installs on demand, and shows the install rather than hanging silently", async () => {
@@ -337,5 +352,34 @@ describe("a deep link waits for the user to be signed in", () => {
 
   it("resolves once signed in", () => {
     expect(canResolveDeepLinks(ready)).toBe(true);
+  });
+});
+
+describe("the same link delivered twice", () => {
+  it("acts once when the live event and the cold drain both deliver it", () => {
+    let t = 1_000;
+    const dedup = createLinkDedup(() => t);
+    expect(dedup.claim(LINK)).toBe(true);
+    expect(dedup.claim(LINK)).toBe(false); // in flight
+    dedup.settle(LINK, "opened");
+    t += 1_000;
+    expect(dedup.claim(LINK)).toBe(false); // just handled
+  });
+
+  it("acts again when the user follows the same invite later", () => {
+    let t = 1_000;
+    const dedup = createLinkDedup(() => t);
+    dedup.claim(LINK);
+    dedup.settle(LINK, "forget");
+    t += LINK_DEDUP_MS + 1;
+    expect(dedup.claim(LINK)).toBe(true);
+  });
+
+  it("lets a retry be claimed again at once, and other links through", () => {
+    const dedup = createLinkDedup(() => 1_000);
+    dedup.claim(LINK);
+    expect(dedup.claim({ ...LINK, params: "invitation=other" })).toBe(true);
+    dedup.settle(LINK, "retry");
+    expect(dedup.claim(LINK)).toBe(true);
   });
 });

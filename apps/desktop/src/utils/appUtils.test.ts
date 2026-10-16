@@ -404,3 +404,90 @@ describe('app frontends that may receive the node session', () => {
     expect(invoke.mock.calls.map((c) => c[0])).not.toContain('open_app_launcher');
   });
 });
+
+// An invitation opened in the desktop: the link has to reach the app whether a
+// window is opened for it now or the app is already open.
+describe('openAppFrontend with a deep link', () => {
+  const LINK = {
+    raw: 'calimero://com.calimero.drive/join?invitation=abc',
+    params: 'invitation=abc',
+  };
+
+  function focusableWindow() {
+    return {
+      isMinimized: vi.fn().mockResolvedValue(false),
+      unminimize: vi.fn().mockResolvedValue(undefined),
+      show: vi.fn().mockResolvedValue(undefined),
+      setFocus: vi.fn().mockResolvedValue(undefined),
+      emit: vi.fn().mockResolvedValue(undefined),
+    };
+  }
+
+  it('hands the launcher the bare frontend and the link beside it', async () => {
+    invoke.mockResolvedValue(undefined);
+
+    await openAppFrontend('https://drive.example/', 'Drive', undefined, {
+      applicationId: 'app-1',
+      deepLink: LINK,
+    });
+
+    // Never baked into the launcher: its app.json outlives this open.
+    expect(invoke).toHaveBeenCalledWith(
+      'open_app_launcher',
+      expect.objectContaining({ frontendUrl: 'https://drive.example/', deepLink: LINK.raw }),
+    );
+  });
+
+  it('puts the params on the URL of a window opened now', async () => {
+    await openAppFrontend('https://drive.example/', 'Drive', undefined, {
+      applicationId: 'app-1',
+      deepLink: LINK,
+    });
+
+    expect(new URL(openedUrl()).searchParams.get('invitation')).toBe('abc');
+    // ...and the session stays in the fragment, which never reaches a server.
+    expect(new URL(openedUrl()).searchParams.has('access_token')).toBe(false);
+  });
+
+  it('hands the link to an app that is already open, instead of only focusing it', async () => {
+    getByLabel.mockResolvedValue(focusableWindow());
+
+    await openAppFrontend('https://drive.example/', 'Drive', undefined, {
+      applicationId: 'app-1',
+      deepLink: LINK,
+    });
+
+    expect(invoke).toHaveBeenCalledWith('deliver_app_deep_link', {
+      windowLabel: 'app-app-1',
+      deepLink: LINK.raw,
+    });
+    expect(invoke).not.toHaveBeenCalledWith('create_app_window', expect.anything());
+  });
+
+  it('says so when the open window could not take the link', async () => {
+    getByLabel.mockResolvedValue(focusableWindow());
+    invoke.mockImplementation((cmd: string) =>
+      cmd === 'open_app_launcher'
+        ? Promise.reject(new Error('no launcher in test env'))
+        : cmd === 'deliver_app_deep_link'
+          ? Promise.reject(new Error('the window has left its app'))
+          : Promise.resolve(undefined),
+    );
+    const onError = vi.fn();
+
+    await openAppFrontend('https://drive.example/', 'Drive', onError, {
+      applicationId: 'app-1',
+      deepLink: LINK,
+    });
+
+    expect(onError).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringContaining('left its app') }));
+  });
+
+  it('delivers nothing when there is no link', async () => {
+    getByLabel.mockResolvedValue(focusableWindow());
+
+    await openAppFrontend('https://drive.example/', 'Drive', undefined, { applicationId: 'app-1' });
+
+    expect(invoke).not.toHaveBeenCalledWith('deliver_app_deep_link', expect.anything());
+  });
+});

@@ -3,7 +3,6 @@ import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { apiClient } from '../lib/mero-client';
 import {
-  appendParamsToUrl,
   decodeMetadata,
   isAllowedAppFrontendUrl,
   openAppFrontend,
@@ -188,6 +187,14 @@ export interface AppDeepLink {
 }
 
 /**
+ * The link as an app's launcher bridge delivers it, and as mero-platform parses
+ * it: `calimero://<package>/<action>?<params>`.
+ */
+export function deepLinkRaw(dl: AppDeepLink): string {
+  return `calimero://${dl.slug}/${dl.action}${dl.params ? `?${dl.params}` : ''}`;
+}
+
+/**
  * Outcome of trying to resolve + open a deep-link:
  *   - `opened`: the target app was opened — done.
  *   - `forget`: terminal — no installed app for this slug, or it has no
@@ -300,9 +307,6 @@ export async function resolveAndOpen(
     }
   }
 
-  // Append the deep-link params to the frontend URL so the app reads them on
-  // load (e.g. mero-chat's extractInvitationFromUrl reads ?invitation=...).
-  const urlWithParams = appendParamsToUrl(frontendUrl, dl.params);
 
   // `join` is the action every app's invite builder emits. Naming it is the
   // difference between "a window will appear shortly" and "did my click do
@@ -313,19 +317,57 @@ export async function resolveAndOpen(
       : `Opening ${appName}\u2026`,
   ));
   try {
+    // The link travels beside the URL, not in it: an app window opened now
+    // reads the params from its URL (`?invitation=…`), but one already open —
+    // in-process or a per-app launcher — only gets focused, and has to be
+    // handed the link through the launcher bridge instead.
     await openAppFrontend(
-      urlWithParams,
+      frontendUrl,
       appName,
       (err) => {
         console.error('[deep-link] failed to open app:', err);
         report.failed(`Could not open ${appName}: ${err instanceof Error ? err.message : String(err)}`);
       },
-      { applicationId: match.id },
+      { applicationId: match.id, deepLink: { raw: deepLinkRaw(dl), params: dl.params } },
     );
   } finally {
     clear();
   }
   return 'opened';
+}
+
+/** How long a handled link keeps a second delivery of it from acting again. */
+export const LINK_DEDUP_MS = 15_000;
+
+/**
+ * Dedups the live event against the cold drain, which can both deliver the
+ * same link moments apart. Keyed by the whole link, so distinct links are
+ * treated separately.
+ *
+ * Only for a moment, though. Kept for the life of the listener, it swallowed
+ * the user following the same invite again — the first thing anyone does when
+ * an invite seemed not to work — with no window, no message, nothing, until
+ * the desktop was restarted.
+ */
+export function createLinkDedup(now: () => number = Date.now) {
+  /** Link key → until when a delivery of it is a duplicate. */
+  const until = new Map<string, number>();
+  const keyOf = (dl: AppDeepLink) => `${dl.slug}/${dl.action}?${dl.params}`;
+  return {
+    /** False when this link is being or was just handled. */
+    claim(dl: AppDeepLink): boolean {
+      const key = keyOf(dl);
+      if ((until.get(key) ?? 0) > now()) return false;
+      until.set(key, Infinity); // in flight
+      return true;
+    },
+    /** A retry may be claimed again at once; anything else after a moment. */
+    settle(dl: AppDeepLink, outcome: OpenOutcome): void {
+      const key = keyOf(dl);
+      if (outcome === 'retry') until.delete(key);
+      else until.set(key, now() + LINK_DEDUP_MS);
+    },
+  };
 }
 
 /**
@@ -398,16 +440,11 @@ export function useAppDeepLink(enabled: boolean, consent: Consent): void {
       },
     };
 
-    // Dedup the live event and the cold drain so the same link isn't handled
-    // twice. Key includes params so distinct links are treated separately.
-    const handled = new Set<string>();
-    const keyOf = (dl: AppDeepLink) => `${dl.slug}/${dl.action}?${dl.params}`;
+    const dedup = createLinkDedup();
     const handle = async (dl: AppDeepLink, using: Reporter = report): Promise<OpenOutcome> => {
-      const key = keyOf(dl);
-      if (handled.has(key)) return 'opened'; // another path already took it
-      handled.add(key);
+      if (!dedup.claim(dl)) return 'opened'; // another path already took it
       const outcome = await resolveAndOpen(dl, using, (req) => consentRef.current(req));
-      if (outcome === 'retry') handled.delete(key); // allow a later attempt
+      dedup.settle(dl, outcome);
       return outcome;
     };
 

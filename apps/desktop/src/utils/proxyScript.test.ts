@@ -491,3 +491,105 @@ describe("refresh brokering", () => {
     expect((await res.json()).data.access_token).toBe("fresh-access-token");
   });
 });
+
+// The launcher bridge apps read with mero-platform's `getBridge()`. An app that
+// is already open takes an invitation from its `deep-link` event; before this
+// bridge existed nothing in the desktop could reach an open app, so following an
+// invite with the app open only focused it.
+describe("proxy_script launcher bridge", () => {
+  /** mero-platform 0.1.0 `getBridge()`: what an app accepts as a launcher bridge. */
+  function getBridge(win: any) {
+    const b = win.__calimero_platform__;
+    if (!b || typeof b !== "object") return null;
+    if (
+      typeof b.version !== "number" ||
+      !Array.isArray(b.capabilities) ||
+      typeof b.invoke !== "function" ||
+      typeof b.on !== "function"
+    ) {
+      return null;
+    }
+    return b;
+  }
+
+  /** A window that dispatches DOM events, as the webview's does. */
+  function eventWindow() {
+    const win = makeMockWindow();
+    const target = new EventTarget();
+    win.addEventListener = target.addEventListener.bind(target);
+    win.dispatchEvent = target.dispatchEvent.bind(target);
+    return win;
+  }
+
+  /** What the host and the shell evaluate in the window (src/deep_link.rs dispatch_script). */
+  function hostDelivers(win: any, raw: string) {
+    win.dispatchEvent(new CustomEvent("calimero-deep-link", { detail: { raw } }));
+  }
+
+  const LINK = "calimero://com.calimero.mero-chat/join?invitation=abc";
+
+  it("is a bridge mero-platform accepts, advertising deep links", () => {
+    const win = eventWindow();
+    injectProxy(win);
+    const bridge = getBridge(win);
+    expect(bridge).not.toBeNull();
+    expect(bridge.capabilities).toEqual(["deepLink"]);
+  });
+
+  it("hands a link to the app's deep-link subscribers as { raw }", () => {
+    const win = eventWindow();
+    injectProxy(win);
+    const seen: unknown[] = [];
+    const off = getBridge(win).on("deep-link", (p: unknown) => seen.push(p));
+
+    hostDelivers(win, LINK);
+    expect(seen).toEqual([{ raw: LINK }]);
+
+    off();
+    hostDelivers(win, LINK);
+    expect(seen).toHaveLength(1);
+  });
+
+  it("holds a link that lands before the app subscribes", () => {
+    const win = eventWindow();
+    injectProxy(win);
+    hostDelivers(win, LINK);
+
+    const seen: unknown[] = [];
+    getBridge(win).on("deep-link", (p: unknown) => seen.push(p));
+    expect(seen).toEqual([{ raw: LINK }]);
+
+    // Delivered once, not to every later subscriber.
+    const late: unknown[] = [];
+    getBridge(win).on("deep-link", (p: unknown) => late.push(p));
+    expect(late).toEqual([]);
+  });
+
+  it("ignores events that carry no link", () => {
+    const win = eventWindow();
+    injectProxy(win);
+    const seen: unknown[] = [];
+    getBridge(win).on("deep-link", (p: unknown) => seen.push(p));
+    win.dispatchEvent(new CustomEvent("calimero-deep-link", { detail: { raw: 42 } }));
+    win.dispatchEvent(new CustomEvent("calimero-deep-link"));
+    expect(seen).toEqual([]);
+  });
+
+  it("rejects native methods it does not offer, as the contract says", async () => {
+    const win = eventWindow();
+    injectProxy(win);
+    await expect(getBridge(win).invoke("setBadge", { count: 1 })).rejects.toThrow("setBadge");
+  });
+
+  it("cannot be replaced by the page", () => {
+    const win = eventWindow();
+    injectProxy(win);
+    const bridge = win.__calimero_platform__;
+    try {
+      win.__calimero_platform__ = { version: 1 };
+    } catch {
+      /* strict-mode assignment to a read-only property */
+    }
+    expect(win.__calimero_platform__).toBe(bridge);
+  });
+});

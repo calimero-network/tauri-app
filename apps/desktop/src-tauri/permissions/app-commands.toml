@@ -66,4 +66,5 @@ commands.allow = [
   "get_pending_app_deep_link",
   "clear_pending_app_deep_link",
   "get_current_app_deep_link",
+  "deliver_app_deep_link",
 ]

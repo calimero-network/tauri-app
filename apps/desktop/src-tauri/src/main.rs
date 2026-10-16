@@ -30,6 +30,7 @@ use merod_versions::{
 // with the `calimero-shell` binary via the crate's lib target.
 #[cfg(target_os = "macos")]
 use calimero_tauri_app::{app_registry, host_socket_path, launcher, token_broker_ipc};
+use calimero_tauri_app::deep_link::{parse_app_deep_link, AppDeepLink};
 use calimero_tauri_app::errors::{TauriError, TauriErrorCode};
 use calimero_tauri_app::node_discovery::resolved;
 use calimero_tauri_app::proxy::{self, http_client};
@@ -114,78 +115,10 @@ fn parse_deep_link_arg() -> Option<String> {
     None
 }
 
-/// An app deep-link parsed from a shared link, shaped
-/// `<scheme-or-host>/<slug>/<action>?<params>`. Emitted to the frontend as the
-/// `app-deep-link` event; the frontend resolves `slug` → an installed app and
-/// opens it with `params` appended to the app's frontend URL.
-#[derive(Clone, serde::Serialize)]
-pub struct AppDeepLink {
-    pub slug: String,
-    pub action: String,
-    /// The raw query string (without the leading `?`), e.g. `invitation=X`.
-    pub params: String,
-}
-
 /// State for a pending app deep-link (cold-launch case: the OS launched the app
 /// with the deep-link URL before any listener was set up). Read by the frontend
 /// via `get_pending_app_deep_link`. Mirrors `PendingCloudAuth`.
 pub struct PendingAppDeepLink(pub std::sync::Mutex<Option<AppDeepLink>>);
-
-/// Parse an app deep-link from either the custom scheme or the Universal Link
-/// host. Returns `None` for anything that is not an app deep-link — crucially
-/// the OAuth callback (`calimero://cloud-callback?…`), which the caller keeps
-/// routing through the existing cloud-auth path.
-///
-/// Accepted shapes:
-///   - `calimero://<slug>/<action>?<params>`          (host=slug, path=/action)
-///   - `https://links.calimero.network/<slug>/<action>?<params>`
-fn parse_app_deep_link(raw: &str) -> Option<AppDeepLink> {
-    let parsed = url::Url::parse(raw).ok()?;
-
-    let (slug, action) = match parsed.scheme() {
-        "calimero" => {
-            // `calimero://<slug>/<action>` → host is the slug, first path
-            // segment is the action.
-            let host = parsed.host_str()?;
-            // Reserve the OAuth callback host: it is NOT an app deep-link.
-            if host == "cloud-callback" {
-                return None;
-            }
-            let action = parsed
-                .path_segments()
-                .and_then(|mut segs| segs.next())
-                .filter(|s| !s.is_empty())?;
-            (host.to_string(), action.to_string())
-        }
-        "https" if parsed.host_str() == Some("links.calimero.network") => {
-            // `https://links.calimero.network/<slug>/<action>`
-            let mut segs = parsed.path_segments()?.filter(|s| !s.is_empty());
-            let slug = segs.next()?;
-            let action = segs.next()?;
-            (slug.to_string(), action.to_string())
-        }
-        _ => return None,
-    };
-
-    // Light shape validation. The slug is the app PACKAGE — reverse-DNS with
-    // dots (e.g. `com.calimero.curb`) — so `.` must be allowed alongside `-`/`_`.
-    // Keep permissive (the frontend does the real resolve against installed apps
-    // and simply warns on no match), but reject obviously bogus segments.
-    let is_token = |s: &str| {
-        !s.is_empty()
-            && s.len() <= 128
-            && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
-    };
-    if !is_token(&slug) || !is_token(&action) {
-        return None;
-    }
-
-    Some(AppDeepLink {
-        slug,
-        action,
-        params: parsed.query().unwrap_or("").to_string(),
-    })
-}
 
 /// True when a per-app shell auto-booted this host headless (`--headless-host`)
 /// solely to serve the token broker; the tray host runs window-less in that case.
@@ -952,13 +885,29 @@ async fn open_app_launcher(
     app_id: String,
     icon: Option<String>,
     node_url: String,
+    deep_link: Option<String>,
 ) -> Result<String, TauriError> {
     // The launcher's shell hands this URL the node session, so check it here,
     // before a bundle pointing at it is ever written.
     calimero_tauri_app::webview::validate_app_frontend_url(&frontend_url)
         .map_err(|e| TauriError::new(TauriErrorCode::InvalidUrl, e))?;
+    let deep_link = deep_link
+        .map(|raw| {
+            parse_app_deep_link(&raw).ok_or_else(|| {
+                TauriError::new(TauriErrorCode::InvalidUrl, "Not an app deep-link")
+            })
+        })
+        .transpose()?;
     tokio::task::spawn_blocking(move || {
-        open_app_launcher_blocking(app_handle, app_name, frontend_url, app_id, icon, node_url)
+        open_app_launcher_blocking(
+            app_handle,
+            app_name,
+            frontend_url,
+            app_id,
+            icon,
+            node_url,
+            deep_link,
+        )
     })
     .await
     .map_err(|e| {
@@ -978,6 +927,7 @@ fn open_app_launcher_blocking(
     app_id: String,
     icon: Option<String>,
     node_url: String,
+    deep_link: Option<AppDeepLink>,
 ) -> Result<String, TauriError> {
     #[cfg(target_os = "macos")]
     {
@@ -1003,6 +953,28 @@ fn open_app_launcher_blocking(
             &node_url,
             &dest_dir,
         )?;
+        // The link is left for the shell to collect, never baked into the
+        // bundle: `app.json` outlives this open, and an invitation in it would
+        // be replayed every time the app is started from the Dock. A shell that
+        // starts now puts it on the page URL; one that is already running hands
+        // it to the open page when poked below.
+        let handoff = calimero_tauri_app::shell_link_path(&app_id);
+        if let Some(link) = deep_link.as_ref() {
+            calimero_tauri_app::deep_link::write_handoff(&handoff, link).map_err(|e| {
+                TauriError::with_details(
+                    TauriErrorCode::ShortcutCreationFailed,
+                    "Could not hand the link to the app",
+                    e.to_string(),
+                )
+            })?;
+        }
+        // Not collected by anyone if this open fails: the caller falls back to
+        // an in-process window, and the next Dock start must not replay it.
+        let drop_handoff = || {
+            if deep_link.is_some() {
+                let _ = std::fs::remove_file(&handoff);
+            }
+        };
         // Wait for `open` rather than spawning it: spawn only reports that the
         // helper started, so a LaunchServices failure left the caller with no
         // window and no error instead of falling back to an in-process one.
@@ -1010,6 +982,7 @@ fn open_app_launcher_blocking(
             .arg(&bundle)
             .output()
             .map_err(|e| {
+                drop_handoff();
                 TauriError::with_details(
                     TauriErrorCode::ShortcutCreationFailed,
                     "Failed to open launcher",
@@ -1017,6 +990,7 @@ fn open_app_launcher_blocking(
                 )
             })?;
         if !out.status.success() {
+            drop_handoff();
             let detail = String::from_utf8_lossy(&out.stderr).trim().to_string();
             return Err(TauriError::with_details(
                 TauriErrorCode::ShortcutCreationFailed,
@@ -1027,6 +1001,14 @@ fn open_app_launcher_blocking(
                     detail
                 },
             ));
+        }
+        // An app that is already open is only activated by `open`; its shell
+        // learns of the link from a connection to its instance socket. No
+        // listener means the shell is starting, and it collects the link itself.
+        if deep_link.is_some() {
+            let _ = std::os::unix::net::UnixStream::connect(
+                calimero_tauri_app::shell_instance_socket_path(&app_id),
+            );
         }
         Ok(bundle.to_string_lossy().into_owned())
     }
@@ -1301,6 +1283,48 @@ fn create_desktop_shortcut_blocking(
     }
 }
 
+
+/// Hand a deep-link to an app window that is already open, through the
+/// launcher bridge its page subscribes to (`deep-link`), so the app takes an
+/// invitation without a reload. Re-opening the window would only focus it, and
+/// the link would be dropped.
+///
+/// Delivered only while the window shows the origin it was opened for: the link
+/// can carry an invitation, and the page may have navigated elsewhere. Only the
+/// desktop window may call this.
+#[tauri::command]
+fn deliver_app_deep_link(
+    app_handle: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    window_label: String,
+    deep_link: String,
+) -> Result<(), TauriError> {
+    if window.label() != "main" {
+        return Err(TauriError::new(
+            TauriErrorCode::PathNotAllowed,
+            "Only the desktop window hands links to apps",
+        ));
+    }
+    let link = parse_app_deep_link(&deep_link)
+        .ok_or_else(|| TauriError::new(TauriErrorCode::InvalidUrl, "Not an app deep-link"))?;
+    let target = app_handle.get_webview_window(&window_label).ok_or_else(|| {
+        TauriError::new(
+            TauriErrorCode::WindowCreationFailed,
+            format!("No window labelled '{}' is open", window_label),
+        )
+    })?;
+    calimero_tauri_app::app_window::authorize_webview(target.as_ref())
+        .map_err(|reason| TauriError::new(TauriErrorCode::PathNotAllowed, reason))?;
+    target
+        .eval(calimero_tauri_app::deep_link::dispatch_script(&link))
+        .map_err(|e| {
+            TauriError::with_details(
+                TauriErrorCode::InternalError,
+                "Could not hand the link to the app",
+                e.to_string(),
+            )
+        })
+}
 
 #[tauri::command]
 async fn create_app_window(
@@ -4115,6 +4139,9 @@ fn main() {
         // Single-instance must be registered first so a second launch is routed
         // to the running host (which focuses the dashboard) instead of spawning a
         // rival process that would fight over the merod node + broker socket.
+        // On Windows/Linux a link opened while the desktop runs IS such a second
+        // launch, its URL in argv; the `deep-link` feature hands that URL to the
+        // deep-link plugin, so it reaches `on_open_url` below like any other.
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             if let Some(w) = app.get_webview_window("main") {
                 let _ = w.show();
@@ -4415,7 +4442,8 @@ fn main() {
             clear_pending_cloud_auth,
             get_pending_app_deep_link,
             clear_pending_app_deep_link,
-            get_current_app_deep_link
+            get_current_app_deep_link,
+            deliver_app_deep_link
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -4498,8 +4526,7 @@ mod tests {
     }
 
     use super::{
-        is_browser_openable_url, launcher_bundle_is_removable, parse_app_deep_link,
-        parse_node_ports, replace_multiaddr_port, update_menu_label, validate_shortcut_inputs,
+        is_browser_openable_url, launcher_bundle_is_removable, parse_node_ports, replace_multiaddr_port, update_menu_label, validate_shortcut_inputs,
         DEFAULT_NODE_PORTS,
     };
     use crate::merod_versions::{merod_target_triple, score_merod_asset};
@@ -4793,45 +4820,6 @@ listen = ["/ip4/0.0.0.0/udp/4001/quic-v1", "/ip4/0.0.0.0/tcp/4002"]
         // Empty / relative paths.
         assert!(!launcher_bundle_is_removable(Path::new(""), home));
         assert!(!launcher_bundle_is_removable(Path::new("MeroDrive.app"), home));
-    }
-
-    #[test]
-    fn app_deep_link_custom_scheme() {
-        let dl = parse_app_deep_link("calimero://mero-chat/join?invitation=TESTTOKEN")
-            .expect("should parse app deep-link");
-        assert_eq!(dl.slug, "mero-chat");
-        assert_eq!(dl.action, "join");
-        assert_eq!(dl.params, "invitation=TESTTOKEN");
-    }
-
-    #[test]
-    fn app_deep_link_universal_link() {
-        let dl = parse_app_deep_link(
-            "https://links.calimero.network/mero-chat/join?invitation=TESTTOKEN",
-        )
-        .expect("should parse universal link");
-        assert_eq!(dl.slug, "mero-chat");
-        assert_eq!(dl.action, "join");
-        assert_eq!(dl.params, "invitation=TESTTOKEN");
-    }
-
-    #[test]
-    fn oauth_callback_is_not_an_app_deep_link() {
-        // The OAuth callback MUST fall through to the cloud-auth path.
-        assert!(parse_app_deep_link(
-            "calimero://cloud-callback?state=ABC#id_token=eyJ"
-        )
-        .is_none());
-    }
-
-    #[test]
-    fn app_deep_link_rejects_unrelated_urls() {
-        // Missing action segment.
-        assert!(parse_app_deep_link("calimero://mero-chat").is_none());
-        // Wrong https host.
-        assert!(parse_app_deep_link("https://example.com/mero-chat/join").is_none());
-        // Non-deep-link scheme.
-        assert!(parse_app_deep_link("http://localhost:2528/api").is_none());
     }
 
     #[test]

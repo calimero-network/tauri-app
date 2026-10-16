@@ -24,6 +24,7 @@ impl<T> LockUnpoisoned<T> for std::sync::Mutex<T> {
 }
 
 pub mod app_window;
+pub mod deep_link;
 pub mod errors;
 pub mod node_discovery;
 pub mod proxy;
@@ -45,7 +46,9 @@ pub mod app_registry;
 pub mod host_ipc;
 
 #[cfg(target_os = "macos")]
-pub use host_ipc::{ensure_host_running, host_socket_path, shell_instance_socket_path};
+pub use host_ipc::{
+    ensure_host_running, host_socket_path, shell_instance_socket_path, shell_link_path,
+};
 
 #[cfg(test)]
 mod tests {

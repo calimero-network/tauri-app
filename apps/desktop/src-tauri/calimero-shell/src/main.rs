@@ -8,8 +8,8 @@
 #[cfg(target_os = "macos")]
 mod shell {
     use calimero_tauri_app::{
-        app_window, ensure_host_running, host_socket_path, proxy, shell_config,
-        shell_instance_socket_path, token_broker_ipc, webview,
+        app_window, deep_link, ensure_host_running, host_socket_path, proxy, shell_config,
+        shell_instance_socket_path, shell_link_path, token_broker_ipc, webview,
     };
     use tauri::Manager;
 
@@ -217,6 +217,19 @@ mod shell {
         }
     }
 
+    /// Hand `link` to the open page through the launcher bridge, if the page
+    /// is still the app this shell was opened for: the link can carry an
+    /// invitation, and the page may have navigated elsewhere.
+    fn deliver_link(window: &tauri::WebviewWindow, link: &deep_link::AppDeepLink) {
+        if let Err(reason) = app_window::authorize_webview(window.as_ref()) {
+            eprintln!("[shell] not handing a link to this page: {reason}");
+            return;
+        }
+        if let Err(e) = window.eval(deep_link::dispatch_script(link)) {
+            eprintln!("[shell] could not hand the link to the page: {e}");
+        }
+    }
+
     pub fn run() {
         let args: Vec<String> = std::env::args().collect();
         let cfg = shell_config::parse_app_config_arg(&args)
@@ -248,13 +261,27 @@ mod shell {
             )))
             .manage(app_window::AppWindowBindings::default())
             .setup(move |app| {
-                // A relaunch of this app connects here; show the existing window.
+                // A link the host left for this start goes on the page URL
+                // below. Collected before the listener runs, so a poke that
+                // lands while the page is still being opened cannot take it.
+                let link_path = shell_link_path(&cfg_for_setup.id);
+                let launch_link = deep_link::take_handoff(&link_path, deep_link::HANDOFF_MAX_AGE);
+
+                // A relaunch of this app connects here, and so does the host
+                // when it opens a link in it: show the existing window, and hand
+                // the page any link the host left.
                 let handle = app.handle().clone();
                 std::thread::spawn(move || {
                     for _conn in listener.incoming().flatten() {
-                        if let Some(w) = handle.get_webview_window("app") {
-                            let _ = w.show();
-                            let _ = w.set_focus();
+                        let Some(w) = handle.get_webview_window("app") else {
+                            continue;
+                        };
+                        let _ = w.show();
+                        let _ = w.set_focus();
+                        if let Some(link) =
+                            deep_link::take_handoff(&link_path, deep_link::HANDOFF_MAX_AGE)
+                        {
+                            deliver_link(&w, &link);
                         }
                     }
                 });
@@ -279,6 +306,14 @@ mod shell {
                     &frontend,
                     &cfg_for_setup.node_url,
                 );
+                // The page opens with the link's params (`?invitation=…`) on its
+                // URL, where the app reads them on load. The frontend the host
+                // answers with is the app's bare `links.frontend`, so they have
+                // to be put back here or the invitation never reaches the app.
+                let frontend = match launch_link.as_ref() {
+                    Some(link) => deep_link::with_link_params(&frontend, &link.params),
+                    None => frontend,
+                };
                 // Inject SSO (node_url + brokered token) like the desktop's "Open".
                 let url = build_app_url(
                     &cfg_for_setup,

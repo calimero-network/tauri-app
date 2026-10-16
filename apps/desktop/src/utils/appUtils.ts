@@ -138,6 +138,13 @@ export interface OpenAppFrontendContext {
   /** Node this app should run against. Defaults to the one the desktop is on;
    * anything else opens an isolated window that logs in for itself. */
   targetNodeUrl?: string;
+  /**
+   * A deep-link the app is being opened for (e.g. an invitation). A window
+   * opened now gets `params` on its URL; an app that is already open gets
+   * `raw` through the launcher bridge's `deep-link` event, because re-opening
+   * it only focuses it. Never baked into a per-app launcher.
+   */
+  deepLink?: { raw: string; params: string };
 }
 
 /** Canonical form for comparing two node URLs: scheme, host case, port and
@@ -204,6 +211,7 @@ export async function openAppFrontend(
           appId: context.applicationId,
           icon: context.iconData ?? null,
           nodeUrl: settings.nodeUrl,
+          deepLink: context.deepLink?.raw ?? null,
         });
         return;
       } catch (e) {
@@ -283,12 +291,13 @@ export async function openAppFrontend(
     // of a stale cached index.html pointing at an old bundle. Query param, not the
     // SSO hash; auth is per-origin so SSO/localStorage are unaffected.
     let urlToOpen: string;
+    const pageUrl = context?.deepLink ? appendParamsToUrl(frontendUrl, context.deepLink.params) : frontendUrl;
     try {
-      const u = new URL(frontendUrl);
+      const u = new URL(pageUrl);
       u.searchParams.set('_cb', String(Date.now()));
       urlToOpen = `${u.toString()}#${hashParams.toString()}`;
     } catch {
-      urlToOpen = `${frontendUrl}#${hashParams.toString()}`;
+      urlToOpen = `${pageUrl}#${hashParams.toString()}`;
     }
 
 
@@ -301,6 +310,7 @@ export async function openAppFrontend(
     // v2: WebviewWindow.getByLabel is async and resolves to null when absent.
     const existing = await WebviewWindow.getByLabel(windowLabel);
     if (existing) {
+      let focused = false;
       try {
         if (await existing.isMinimized()) await existing.unminimize();
         await existing.show();
@@ -313,10 +323,18 @@ export async function openAppFrontend(
         await existing
           .emit('calimero:auth-refresh', { dev_mode: settings.developerMode ? '1' : '0' })
           .catch(() => {});
-        return windowLabel;
+        focused = true;
       } catch (e) {
         // window was closed between getByLabel and restore/focus; fall through to create a new one
         console.warn('focus existing window failed, opening new one:', e);
+      }
+      if (focused) {
+        // The open app would otherwise never see the link: focusing it does
+        // not reload it. Fails, and says why, if the window has left its app.
+        if (context?.deepLink) {
+          await invoke('deliver_app_deep_link', { windowLabel, deepLink: context.deepLink.raw });
+        }
+        return windowLabel;
       }
     }
 

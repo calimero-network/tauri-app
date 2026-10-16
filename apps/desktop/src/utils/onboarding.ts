@@ -1,6 +1,10 @@
 import { apiClient } from "../lib/mero-client";
+import { getSettings } from "./settings";
+
+const DEFAULT_NODE_URLS = ["http://localhost:2528", "http://localhost:8080"]; // probed at first launch, before any node exists
 
 export interface OnboardingState {
+  nodeUrl: string; // the node this state was probed on
   authAvailable: boolean;
   providersAvailable: boolean;
   hasConfiguredProviders: boolean;
@@ -13,6 +17,7 @@ export interface OnboardingState {
  */
 export async function checkOnboardingState(): Promise<OnboardingState> {
   const state: OnboardingState = {
+    nodeUrl: getSettings().nodeUrl,
     authAvailable: false,
     providersAvailable: false,
     hasConfiguredProviders: false,
@@ -65,6 +70,12 @@ export async function checkOnboardingState(): Promise<OnboardingState> {
     state.error = error instanceof Error ? error.message : "Unknown error";
     return state;
   }
+}
+
+/** Whether `state` shows auth failing on `nodeUrl`, the node onboarding now uses. */
+export function authFailedOn(state: OnboardingState, nodeUrl: string): boolean {
+  if (state.nodeUrl !== nodeUrl || DEFAULT_NODE_URLS.includes(nodeUrl)) return false;
+  return !state.authAvailable || !state.providersAvailable;
 }
 
 /**

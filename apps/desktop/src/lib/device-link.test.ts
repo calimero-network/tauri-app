@@ -75,7 +75,7 @@ function json(body: unknown, init?: ResponseInit): Response {
 
 const HEX_64 = 'a'.repeat(64);
 const ACCOUNT_NS = '9'.repeat(64);
-const HEX_128 = 'b'.repeat(128);
+const STATEMENT = 'b'.repeat(144);
 
 /** A pair-init result as the other device would read it out. */
 function validPayload(overrides: Record<string, unknown> = {}) {
@@ -83,7 +83,7 @@ function validPayload(overrides: Record<string, unknown> = {}) {
     deviceId: HEX_64,
     kemPublicKey: 'c'.repeat(64),
     signPublicKey: 'd'.repeat(64),
-    statement: HEX_128,
+    statement: STATEMENT,
     confirmationCode: '7BC0-DAAC-CCB4-84A4',
     ...overrides,
   };
@@ -189,30 +189,36 @@ describe('validatePairPayload', () => {
   });
 
   it('rejects a statement of the wrong width', () => {
-    expect(validatePairPayload(validPayload({ statement: 'b'.repeat(127) }))).toBe(
-      'statement must be 128 hex characters',
+    expect(validatePairPayload(validPayload({ statement: 'b'.repeat(143) }))).toBe(
+      'statement must be 144 hex characters',
     );
-    expect(validatePairPayload(validPayload({ statement: 'b'.repeat(129) }))).toBe(
-      'statement must be 128 hex characters',
+    expect(validatePairPayload(validPayload({ statement: 'b'.repeat(145) }))).toBe(
+      'statement must be 144 hex characters',
+    );
+  });
+
+  it('rejects a bare signature, which lacks the issue time core dates it by', () => {
+    expect(validatePairPayload(validPayload({ statement: 'b'.repeat(128) }))).toBe(
+      'statement must be 144 hex characters',
     );
   });
 
   it('rejects a statement that is a key rather than a signature', () => {
     // 64 hex is the width of the fields around it, so this is the likely mis-paste.
     expect(validatePairPayload(validPayload({ statement: HEX_64 }))).toBe(
-      'statement must be 128 hex characters',
+      'statement must be 144 hex characters',
     );
   });
 
   it('rejects a statement of the right width that is not hex', () => {
-    expect(validatePairPayload(validPayload({ statement: `${'b'.repeat(127)}z` }))).toBe(
-      'statement must be 128 hex characters',
+    expect(validatePairPayload(validPayload({ statement: `${'b'.repeat(143)}z` }))).toBe(
+      'statement must be 144 hex characters',
     );
   });
 
   it('rejects an absent statement', () => {
     expect(validatePairPayload(validPayload({ statement: undefined }))).toBe(
-      'statement must be 128 hex characters',
+      'statement must be 144 hex characters',
     );
   });
 

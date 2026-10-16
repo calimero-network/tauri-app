@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo, memo } from "react";
-import { checkOnboardingState, getOnboardingMessage, type OnboardingState } from "../utils/onboarding";
+import { authFailedOn, checkOnboardingState, getOnboardingMessage, type OnboardingState } from "../utils/onboarding";
 import { apiClient, createClientAsync } from "../lib/mero-client";
 import { LoginView } from "../components/LoginView";
 import { initMerodNode, startMerod, listMerodNodes, detectRunningMerodNodes, waitForNodeHealthy } from "../utils/merod";
@@ -658,29 +658,26 @@ function Onboarding({ onComplete, onSettings }: OnboardingProps) {
 
   // Only show error state if we have a configured node but auth is failing
   // For first-time users with no node, let them go through the welcome flow
-  if (state && (!state.authAvailable || !state.providersAvailable)) {
-    const settings = getSettings();
-    // Only show error if we have a properly configured node (not default localhost)
-    if (settings.nodeUrl && settings.nodeUrl !== 'http://localhost:2528' && settings.nodeUrl !== 'http://localhost:8080') {
-      const handleBackToNodeSetup = () => {
-        // Clear the saved nodeUrl so the error condition no longer triggers,
-        // then go back to node-setup so the user can reconfigure.
-        saveSettings({
-          ...getSettings(),
-          nodeUrl: 'http://localhost:2528',
-          useEmbeddedNode: undefined,
-          embeddedNodeName: undefined,
-          embeddedNodePort: undefined,
-          embeddedNodeSwarmPort: undefined,
-          embeddedNodeDataDir: undefined,
-        });
-        setState(null);
-        setNodeCreated(false);
-        setNodeStarted(false);
-        setNodeSetupMode('choose');
-        hasAttemptedAutoContinue.current = false;
-        setCurrentStep('node-setup');
-      };
+  if (state && authFailedOn(state, getSettings().nodeUrl)) {
+    const handleBackToNodeSetup = () => {
+      // Clear the saved nodeUrl so the error condition no longer triggers,
+      // then go back to node-setup so the user can reconfigure.
+      saveSettings({
+        ...getSettings(),
+        nodeUrl: 'http://localhost:2528',
+        useEmbeddedNode: undefined,
+        embeddedNodeName: undefined,
+        embeddedNodePort: undefined,
+        embeddedNodeSwarmPort: undefined,
+        embeddedNodeDataDir: undefined,
+      });
+      setState(null);
+      setNodeCreated(false);
+      setNodeStarted(false);
+      setNodeSetupMode('choose');
+      hasAttemptedAutoContinue.current = false;
+      setCurrentStep('node-setup');
+    };
 
     return (
       <div className="onboarding-page" data-testid="onboarding-page">
@@ -722,8 +719,6 @@ function Onboarding({ onComplete, onSettings }: OnboardingProps) {
         </div>
       </div>
     );
-  }
-    // If no node configured, just continue with normal flow (welcome screen)
   }
 
   // Welcome screen

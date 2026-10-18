@@ -1,4 +1,4 @@
-import { apiClient } from "../lib/mero-client";
+import { Client } from "../lib/mero-client";
 import { getSettings } from "./settings";
 
 const DEFAULT_NODE_URLS = ["http://localhost:2528", "http://localhost:8080"]; // probed at first launch, before any node exists
@@ -16,8 +16,11 @@ export interface OnboardingState {
  * Returns information about whether this is first-time setup
  */
 export async function checkOnboardingState(): Promise<OnboardingState> {
+  const nodeUrl = getSettings().nodeUrl;
+  // A client of its own, so the probe hits the node it records even before the shared client follows settings.
+  const client = new Client({ baseUrl: nodeUrl.replace(/\/$/, "") });
   const state: OnboardingState = {
-    nodeUrl: getSettings().nodeUrl,
+    nodeUrl,
     authAvailable: false,
     providersAvailable: false,
     hasConfiguredProviders: false,
@@ -26,7 +29,7 @@ export async function checkOnboardingState(): Promise<OnboardingState> {
   try {
     // Check if auth service is available with timeout
     const healthResponse = await Promise.race([
-      apiClient.auth.getHealth(),
+      client.auth.getHealth(),
       new Promise<{ error: { message: string; code?: string } }>((resolve) =>
         setTimeout(() => resolve({ error: { message: 'Connection timeout - is the node running?' } }), 5000)
       ),
@@ -42,7 +45,7 @@ export async function checkOnboardingState(): Promise<OnboardingState> {
 
     // Check providers with timeout
     const providersResponse = await Promise.race([
-      apiClient.auth.getProviders(),
+      client.auth.getProviders(),
       new Promise<{ error: { message: string; code?: string } }>((resolve) =>
         setTimeout(() => resolve({ error: { message: 'Connection timeout - is the node running?' } }), 5000)
       ),

@@ -26,7 +26,7 @@ if (typeof (globalThis as any).ProgressEvent === "undefined") {
  * still resolved from the Node 18+ global scope.
  */
 function injectProxy(mockWindow: any, nodeUrl = "http://localhost:2428") {
-  const src = RAW_PROXY_SCRIPT.replace("__CONFIGURED_NODE_URL__", nodeUrl);
+  const src = RAW_PROXY_SCRIPT.replace("__CONFIGURED_NODE_URL__", JSON.stringify(nodeUrl));
   new Function("window", src)(mockWindow);
 }
 

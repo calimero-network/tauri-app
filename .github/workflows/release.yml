@@ -11,6 +11,9 @@ on:
         required: true
         type: string
 
+permissions:
+  contents: read
+
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
@@ -25,12 +28,16 @@ jobs:
     steps:
       - name: Get version from tag or input
         id: version
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            VERSION="${{ inputs.version }}"
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            VERSION="$INPUT_VERSION"
           else
             VERSION="${GITHUB_REF_NAME#v}"
           fi
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo "invalid version: $VERSION" >&2; exit 1; }
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Release version: $VERSION"
 
@@ -81,65 +88,73 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Download macOS artifacts
         if: needs.build-macos.result == 'success'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: macos-build
           path: release-assets/
 
       - name: Download Windows artifacts
         if: needs.build-windows.result == 'success'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: windows-build
           path: release-assets/
 
       - name: Download Linux artifacts
         if: needs.build-linux.result == 'success'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: linux-build
           path: release-assets/
 
       - name: Download Chromebook artifacts
         if: needs.build-chromebook.result == 'success'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: chromebook-build
           path: release-assets/
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: package.json
 
       - name: Generate latest.json and release.json
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          REPO: ${{ github.repository }}
         run: |
           node scripts/release/generate-manifests.cjs \
-            --version "${{ needs.prepare.outputs.version }}" \
-            --repo "${{ github.repository }}" \
+            --version "$VERSION" \
+            --repo "$REPO" \
             --assets release-assets/
 
       - name: Build release notes
         id: notes
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          MACOS_RESULT: ${{ needs.build-macos.result }}
+          WINDOWS_RESULT: ${{ needs.build-windows.result }}
+          LINUX_RESULT: ${{ needs.build-linux.result }}
+          CHROMEBOOK_RESULT: ${{ needs.build-chromebook.result }}
         run: |
-          VERSION="${{ needs.prepare.outputs.version }}"
 
           # Build platform list with actual newlines
           PLATFORMS=""
-          if [ "${{ needs.build-macos.result }}" = "success" ]; then
+          if [ "$MACOS_RESULT" = "success" ]; then
             PLATFORMS="${PLATFORMS}"$'\n'"- **macOS** (Universal): Download the DMG file"
           fi
-          if [ "${{ needs.build-windows.result }}" = "success" ]; then
+          if [ "$WINDOWS_RESULT" = "success" ]; then
             PLATFORMS="${PLATFORMS}"$'\n'"- **Windows** (64-bit): Download the installer"
           fi
-          if [ "${{ needs.build-linux.result }}" = "success" ]; then
+          if [ "$LINUX_RESULT" = "success" ]; then
             PLATFORMS="${PLATFORMS}"$'\n'"- **Linux** (64-bit): Download AppImage, deb, or rpm"
           fi
-          if [ "${{ needs.build-chromebook.result }}" = "success" ]; then
+          if [ "$CHROMEBOOK_RESULT" = "success" ]; then
             PLATFORMS="${PLATFORMS}"$'\n'"- **Chromebook** (ARM64): Download the deb (install via the Files app) or AppImage"
           fi
 
@@ -161,8 +176,9 @@ jobs:
       - name: Create GitHub Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          REPO: ${{ github.repository }}
         run: |
-          VERSION="${{ needs.prepare.outputs.version }}"
 
           # Rerun-safe: a partial rerun (e.g. one platform job re-ran after
           # a flaky bundling failure) re-runs this job too, and the release
@@ -170,10 +186,10 @@ jobs:
           # 422s (tag_name already exists) BEFORE any assets upload, leaving
           # the release missing the very platform the rerun fixed. Reuse the
           # existing release and let `--clobber` refresh the assets instead.
-          if gh release view "v$VERSION" --repo "${{ github.repository }}" > /dev/null 2>&1; then
+          if gh release view "v$VERSION" --repo "$REPO" > /dev/null 2>&1; then
             echo "Release v$VERSION already exists — refreshing assets only (rerun)"
             gh release edit "v$VERSION" \
-              --repo "${{ github.repository }}" \
+              --repo "$REPO" \
               --notes-file release-notes.md
           else
             # As a DRAFT: installed apps poll releases/latest/download/latest.json,
@@ -185,7 +201,7 @@ jobs:
             # the tag lands on master's head when this job runs, which may be
             # past the commit the platform jobs built. GITHUB_SHA is that commit.
             gh release create "v$VERSION" \
-              --repo "${{ github.repository }}" \
+              --repo "$REPO" \
               --target "$GITHUB_SHA" \
               --title "v$VERSION" \
               --notes-file release-notes.md \
@@ -204,7 +220,7 @@ jobs:
           upload() {
             filename=$(basename "$1")
             echo "Uploading: $filename"
-            gh release upload "v$VERSION" "$1" --repo "${{ github.repository }}" --clobber
+            gh release upload "v$VERSION" "$1" --repo "$REPO" --clobber
             echo "- \`$filename\` ($(ls -lh "$1" | awk '{print $5}'))" >> $GITHUB_STEP_SUMMARY
           }
           for file in release-assets/*; do
@@ -218,15 +234,15 @@ jobs:
           # Publish and mark latest only while it is still a draft (this run's, or
           # one a failed first attempt left) — a rerun of an old, already public
           # release must not snatch "latest" back from a newer one.
-          IS_DRAFT=$(gh release view "v$VERSION" --repo "${{ github.repository }}" --json isDraft -q .isDraft)
+          IS_DRAFT=$(gh release view "v$VERSION" --repo "$REPO" --json isDraft -q .isDraft)
           if [ "$IS_DRAFT" = "true" ]; then
             gh release edit "v$VERSION" \
-              --repo "${{ github.repository }}" \
+              --repo "$REPO" \
               --draft=false \
               --latest
           fi
 
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Links" >> $GITHUB_STEP_SUMMARY
-          echo "- [Release Page](https://github.com/${{ github.repository }}/releases/tag/v$VERSION)" >> $GITHUB_STEP_SUMMARY
+          echo "- [Release Page](https://github.com/$REPO/releases/tag/v$VERSION)" >> $GITHUB_STEP_SUMMARY
           echo "- [Download Page](https://calimero.network/download)" >> $GITHUB_STEP_SUMMARY

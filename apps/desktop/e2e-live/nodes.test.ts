@@ -15,6 +15,20 @@ vi.mock("node:net", async (importOriginal) => {
   return { ...net, createServer, default: { ...net, createServer } };
 });
 
+const opened: { closed: boolean }[] = []; // every UDP socket freePorts creates, and whether it was closed
+
+vi.mock("node:dgram", async (importOriginal) => {
+  const dgram = await importOriginal<typeof import("node:dgram")>();
+  const createSocket = ((...args: Parameters<typeof dgram.createSocket>) => {
+    const socket = dgram.createSocket(...args);
+    const entry = { closed: false };
+    opened.push(entry);
+    socket.once("close", () => (entry.closed = true));
+    return socket;
+  }) as typeof dgram.createSocket;
+  return { ...dgram, createSocket, default: { ...dgram, createSocket } };
+});
+
 const { freePorts } = await import("./nodes");
 
 function bindUdp(port = 0): Promise<Socket> {
@@ -37,9 +51,11 @@ describe("freePorts", () => {
     held.push(taken);
     forced.push(taken.address().port);
 
+    opened.length = 0;
     const [port] = await freePorts(1);
 
     expect(port).not.toBe(taken.address().port);
+    expect(opened.filter((s) => !s.closed)).toHaveLength(0); // the failed bind's socket too
     held.push(await bindUdp(port));
   });
 });

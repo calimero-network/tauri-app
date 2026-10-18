@@ -140,7 +140,8 @@ async function removeOtherMember(page: Page) {
   }).toPass({ timeout: CONVERGE_MS });
   await other.getByTitle("Remove member").click();
   await page.getByRole("button", { name: "Remove", exact: true }).click();
-  await expect(other).toHaveCount(0, { timeout: CONVERGE_MS });
+  // The count, unlike the rows, is absent while the list reloads, so it proves the removal landed.
+  await expect(page.getByRole("heading", { name: "Members (1)" })).toBeVisible({ timeout: CONVERGE_MS });
 }
 
 /** A DM: no screen creates a subgroup, adds to one, makes a context in one or writes to a context. */

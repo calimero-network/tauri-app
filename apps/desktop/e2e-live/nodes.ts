@@ -135,7 +135,6 @@ export function spawnMerod(merod: string, n: Pick<LiveNode, "home" | "name" | "l
   return proc.pid;
 }
 
-/** Ports the OS hands out as free, all held at once so no two are the same. */
 /** Ports free on both TCP and UDP: a swarm port also listens on QUIC, and the OS only vouches for the TCP side. */
 export async function freePorts(count: number): Promise<number[]> {
   const held: { close(cb: () => void): unknown }[] = []; // kept open until the end so the OS never hands a port out twice
@@ -147,7 +146,7 @@ export async function freePorts(count: number): Promise<number[]> {
     const port = (server.address() as AddressInfo).port;
     const udp = createSocket("udp4");
     const bound = await new Promise<boolean>((resolve) => {
-      udp.once("error", () => resolve(false));
+      udp.once("error", () => udp.close(() => resolve(false))); // a failed bind still holds a handle
       udp.bind(port, () => resolve(true));
     });
     if (bound) {

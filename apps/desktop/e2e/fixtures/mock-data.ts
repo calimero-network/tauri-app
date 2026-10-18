@@ -360,7 +360,7 @@ export const MOCK_PAIR_INIT = {
   deviceId: "b".repeat(64),
   kemPublicKey: "c".repeat(64),
   signPublicKey: "d".repeat(64),
-  statement: "e".repeat(128),
+  statement: "e".repeat(144),
   confirmationCode: "7BC0-DAAC",
 };
 

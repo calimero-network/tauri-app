@@ -499,9 +499,10 @@ test.describe("Installed Applications – listing", () => {
     // text-based locator never found it and this test never clicked anything.
     const refreshBtn = page.locator(".installed-refresh-btn");
     await expect(refreshBtn).toBeVisible();
-    const requestPromise = page.waitForRequest(API_ROUTES.listApplications);
+    // The response, not the request: a request event can fire before the route handler counts it.
+    const responsePromise = page.waitForResponse(API_ROUTES.listApplications);
     await refreshBtn.click();
-    await requestPromise;
+    await responsePromise;
     expect(listCallCount).toBeGreaterThanOrEqual(1);
   });
 });

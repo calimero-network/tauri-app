@@ -81,6 +81,32 @@ export interface UninstallStep {
   action: NamespaceAction;
 }
 
+/** A failed uninstall, with the steps that had already taken effect. */
+export interface UninstallError {
+  message: string;
+  code?: string;
+  completed: UninstallStep[];
+}
+
+export interface UninstallResult {
+  data?: { applicationId: string };
+  error?: UninstallError;
+}
+
+export function describeDone(ns: AppNamespace, action: NamespaceAction): string {
+  const did = {
+    leave: 'was left',
+    remove: 'was removed from this device',
+    'delete-for-everyone': 'was deleted for everyone',
+  }[action as 'leave' | 'remove' | 'delete-for-everyone'];
+  return `${ns.name} ${did}`;
+}
+
+export function uninstallFailureMessage(appName: string, error: UninstallError): string {
+  const parts = [...error.completed.map((s) => describeDone(s.ns, s.action)), error.message];
+  return `"${appName}" was not uninstalled: ${parts.join('; ')}`;
+}
+
 /** The app's namespaces on this device, each with our role and member count. */
 export function loadAppNamespaces(
   meroJs: MeroJs,
@@ -126,14 +152,16 @@ function runStep(meroJs: MeroJs, { ns, action }: UninstallStep): Promise<unknown
 
 /**
  * Apply each namespace's step in order, then uninstall the app. The first
- * failure stops it with the app still installed, and names the namespace.
+ * failure stops it with the app still installed, names the namespace, and
+ * returns the steps that had already taken effect.
  */
-export function uninstallApp(
+export async function uninstallApp(
   meroJs: MeroJs,
   applicationId: string,
   steps: readonly UninstallStep[],
-): Promise<ApiResponse<{ applicationId: string }>> {
-  return wrap('Failed to uninstall application', async () => {
+): Promise<UninstallResult> {
+  const completed: UninstallStep[] = [];
+  const response = await wrap('Failed to uninstall application', async () => {
     const waiting = steps.find((s) => isBlocked([s.action]));
     if (waiting) throw new Error(describeStep(waiting.ns, waiting.action));
     for (const step of steps) {
@@ -142,14 +170,16 @@ export function uninstallApp(
       } catch (e) {
         throw failedAt(step.ns, e);
       }
+      if (step.action !== 'keep') completed.push(step);
     }
     await meroJs.admin.uninstallApplication(applicationId);
     return { applicationId };
   });
+  return response.error ? { error: { ...response.error, completed } } : { data: response.data };
 }
 
 /** Names the namespace in the message, keeping a sign-in failure as is so `wrap` still reads it. */
 function failedAt(ns: AppNamespace, e: unknown): unknown {
   if (e instanceof AuthRevokedError || (e instanceof HTTPError && e.status === 401)) return e;
-  return new Error(nodeErrorMessage(e, ns.name));
+  return new Error(nodeErrorMessage(e, `${ns.name} failed`));
 }

@@ -1,11 +1,13 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { MemoryTokenStore, MeroJs } from '@calimero-network/mero-js';
 import {
+  describeDone,
   describeStep,
   isBlocked,
   loadAppNamespaces,
   planNamespace,
   uninstallApp,
+  uninstallFailureMessage,
   type AppNamespace,
   type UninstallChoice,
 } from './uninstall';
@@ -162,9 +164,32 @@ describe('uninstalling an application', () => {
       { ns: ns('b'), action: 'remove' },
     ]);
 
-    expect(response.error?.message).toBe('name-a: the owner cannot leave');
+    expect(response.error?.message).toBe('name-a failed: the owner cannot leave');
+    expect(response.error?.completed).toEqual([]);
     expect(response.error?.code).toBeUndefined();
     expect(calls.map((c) => c.call)).toEqual(['POST /admin-api/namespaces/a/leave']);
+  });
+
+  it('reports the steps already done when a later one fails', async () => {
+    const calls = fakeNode({
+      'DELETE /admin-api/namespaces/b': () =>
+        new Response(JSON.stringify({ error: 'disk full' }), { status: 500 }),
+    });
+    const done = { ns: ns('a'), action: 'delete-for-everyone' } as const;
+
+    const response = await uninstallApp(node(), 'app-1', [
+      done,
+      { ns: ns('k'), action: 'keep' },
+      { ns: ns('b'), action: 'remove' },
+      { ns: ns('c'), action: 'leave' },
+    ]);
+
+    expect(response.error?.message).toBe('name-b failed: disk full');
+    expect(response.error?.completed).toEqual([done]);
+    expect(calls.map((c) => c.call)).toEqual([
+      'POST /admin-api/groups/a/owner-delete',
+      'DELETE /admin-api/namespaces/b',
+    ]);
   });
 
   it('aborts on a revoked session with the code that sends the user to sign in', async () => {
@@ -175,7 +200,7 @@ describe('uninstalling an application', () => {
 
     const response = await uninstallApp(node(), 'app-1', [{ ns: ns('b'), action: 'remove' }]);
 
-    expect(response.error).toEqual({ message: 'Session revoked', code: '401' });
+    expect(response.error).toEqual({ message: 'Session revoked', code: '401', completed: [] });
     expect(calls.map((c) => c.call)).not.toContain(UNINSTALL);
   });
 
@@ -196,6 +221,31 @@ describe('uninstalling an application', () => {
 
     expect(await uninstallApp(node(), 'app-1', [])).toEqual({ data: { applicationId: 'app-1' } });
     expect(calls.map((c) => c.call)).toEqual([UNINSTALL]);
+  });
+});
+
+describe('what a half-finished uninstall tells the user', () => {
+  const notes = { id: 'n', name: 'Notes', others: 0 };
+
+  it('says what each finished step did', () => {
+    expect(describeDone(notes, 'leave')).toBe('Notes was left');
+    expect(describeDone(notes, 'remove')).toBe('Notes was removed from this device');
+    expect(describeDone(notes, 'delete-for-everyone')).toBe('Notes was deleted for everyone');
+  });
+
+  it('lists the finished steps ahead of the failure', () => {
+    expect(
+      uninstallFailureMessage('Drive', {
+        message: 'Team failed: not allowed',
+        completed: [{ ns: notes, action: 'delete-for-everyone' }],
+      }),
+    ).toBe('"Drive" was not uninstalled: Notes was deleted for everyone; Team failed: not allowed');
+  });
+
+  it('gives only the failure when nothing finished', () => {
+    expect(uninstallFailureMessage('Drive', { message: 'Team failed: no', completed: [] })).toBe(
+      '"Drive" was not uninstalled: Team failed: no',
+    );
   });
 });
 

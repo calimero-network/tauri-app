@@ -223,8 +223,24 @@ test.describe("Uninstall dialog", () => {
 
     await uninstallButton(page).click();
 
-    await expect(toast(page)).toHaveText('"Blockchain Demo" was not uninstalled: Team: the last admin cannot leave');
+    await expect(toast(page)).toHaveText('"Blockchain Demo" was not uninstalled: Team failed: the last admin cannot leave');
     expect(writes).toEqual([{ method: "POST", path: "/namespaces/ns-joined/leave", body: { purge: true } }]);
+  });
+
+  test("a failure after a finished step lists what already happened", async ({ page }) => {
+    const writes = await setup(page, [JOINED, ALONE], {
+      refuse: { "POST /groups/ns-alone/owner-delete": { status: 500, error: "disk full" } },
+    });
+
+    await uninstallButton(page).click();
+
+    await expect(toast(page)).toHaveText(
+      '"Blockchain Demo" was not uninstalled: Team was left; Notes failed: disk full',
+    );
+    expect(writes).toEqual([
+      { method: "POST", path: "/namespaces/ns-joined/leave", body: { purge: true } },
+      { method: "POST", path: "/groups/ns-alone/owner-delete", body: {} },
+    ]);
   });
 
   test("a revoked session aborts the uninstall and asks to sign in again", async ({ page }) => {

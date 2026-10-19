@@ -105,6 +105,36 @@ describe('appAccessToken', () => {
     expect(mod.APP_TOKEN_PERMISSIONS).toEqual(expect.arrayContaining(['blob:add', 'blob:get', 'blob:remove']));
   });
 
+  // Every admin-api route an app reaches with this token, and the grant core's
+  // `PermissionValidator` (crates/auth/src/auth/permissions/validator.rs) asks
+  // for it. A grant missing here is a 403 in the app, not a failing test.
+  it.each([
+    ['GET /admin-api/contexts', 'context:list'],
+    ['POST /admin-api/contexts', 'context:create'],
+    ['DELETE /admin-api/contexts/:id', 'context:delete'],
+    ['POST /jsonrpc', 'context:execute'],
+    ['GET /sse, /ws', 'context:subscribe'],
+    ['GET /admin-api/applications', 'application:list'],
+    ['/admin-api/alias/*/context', 'context:alias'],
+  ])('lets an app call %s (%s)', (_route, grant) => {
+    expect(mod.APP_TOKEN_PERMISSIONS).toContain(grant);
+  });
+
+  it('mints again for a pair bound to its application but stored without a grant', async () => {
+    // Minted before the grant was recorded, so it cannot hold context:delete;
+    // rotating it would keep the old permissions for the life of the family.
+    localStorage.setItem(
+      'calimero_app_token_slots',
+      JSON.stringify({ 'app-x': { access_token: jwt('old', 3600), refresh_token: 'r0', application_id: APP } }),
+    );
+    fetchMock.mockResolvedValueOnce(ok({ access_token: jwt('a1', 3600), refresh_token: 'r1' }));
+
+    await expect(mod.appAccessToken('app-x', APP)).resolves.not.toBe(jwt('old', 3600));
+    const [, init] = calls('/admin/client-key')[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string).permissions).toContain('context:delete');
+    expect(calls('/auth/refresh')).toHaveLength(0);
+  });
+
   it('binds a launcher slot to the application it names', async () => {
     fetchMock.mockResolvedValueOnce(ok({ access_token: jwt('l1', 3600), refresh_token: 'rl' }));
     await mod.appAccessToken(`launcher-${APP}`);

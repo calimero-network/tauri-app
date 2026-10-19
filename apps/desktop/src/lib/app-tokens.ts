@@ -28,6 +28,9 @@ import { brokerAccessToken, unpatchedFetch } from './token-broker';
  */
 export const APP_TOKEN_PERMISSIONS: readonly string[] = [
   'context:create',
+  // `DELETE /admin-api/contexts/:id` requires it; without it an app can create
+  // a context but deleting it answers 403.
+  'context:delete',
   'context:list',
   'context:execute',
   'context:subscribe',
@@ -123,7 +126,7 @@ interface AppTokenPair {
 
 interface SlotEntry extends AppTokenPair {
   application_id: string;
-  /** The grant it was minted with (`grantKey`); absent on pairs from before trusted apps. */
+  /** The grant it was minted with (`grantKey`); absent on pairs from before trusted apps, which are minted again. */
   grant?: string;
 }
 
@@ -310,7 +313,7 @@ export function appAccessToken(slot: string, applicationId?: string): Promise<st
     const grant = grantKey(permissions);
     const found = readSlots()[slot];
     const stored =
-      found?.application_id === application && (found.grant ?? grantKey(APP_TOKEN_PERMISSIONS)) === grant
+      found?.application_id === application && found.grant === grant
         ? found
         : undefined;
     if (stored && isFresh(stored)) return stored.access_token;

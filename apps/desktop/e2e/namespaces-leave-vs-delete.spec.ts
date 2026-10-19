@@ -98,7 +98,7 @@ test.describe("Namespace root – Delete vs Leave", () => {
 
     const menu = page.locator(".ns-actions-menu");
     await expect(menu.getByText("Leave", { exact: true })).toBeVisible();
-    await expect(menu.getByText("Delete", { exact: true })).toHaveCount(0);
+    await expect(menu.getByText("Remove from this device", { exact: true })).toHaveCount(0);
 
     await menu.getByText("Leave", { exact: true }).click();
     await expect(page.locator(".ns-modal h2")).toHaveText("Leave Namespace");
@@ -114,19 +114,20 @@ test.describe("Namespace root – Delete vs Leave", () => {
     expect(mock.pathsFor("DELETE")).not.toContain(`/admin-api/namespaces/${NS_ID}`);
   });
 
-  test("an admin is offered Delete, and it uses the DELETE route", async ({ page }) => {
+  test("an admin is offered Remove from this device, and it uses the DELETE route", async ({ page }) => {
     const mock = await openNamespace(page, graph("Admin", "Admin"));
     await openActionsMenu(page);
 
     const menu = page.locator(".ns-actions-menu");
-    await expect(menu.getByText("Delete", { exact: true })).toBeVisible();
+    await expect(menu.getByText("Remove from this device", { exact: true })).toBeVisible();
     await expect(menu.getByText("Leave", { exact: true })).toHaveCount(0);
 
-    await menu.getByText("Delete", { exact: true }).click();
-    await expect(page.locator(".ns-modal h2")).toHaveText("Delete Namespace");
+    await menu.getByText("Remove from this device", { exact: true }).click();
+    await expect(page.locator(".ns-modal h2")).toHaveText("Remove From This Device");
+    await expect(page.locator(".ns-modal")).toContainText("You stay a member");
     await page.locator(".ns-delete-confirm-btn").click();
 
-    await expect(page.getByText("Namespace deleted")).toBeVisible();
+    await expect(page.getByText("Namespace removed from this device")).toBeVisible();
     expect(mock.pathsFor("DELETE")).toContain(`/admin-api/namespaces/${NS_ID}`);
   });
 
@@ -138,13 +139,13 @@ test.describe("Namespace root – Delete vs Leave", () => {
     ).toBeVisible();
   });
 
-  test("a node with no member row at the root keeps Delete — an unknown role is not a licence to guess", async ({
+  test("a node with no member row at the root keeps Remove from this device - an unknown role is not a licence to guess", async ({
     page,
   }) => {
     await openNamespace(page, graph(undefined, "Member"));
     await openActionsMenu(page);
     await expect(
-      page.locator(".ns-actions-menu").getByText("Delete", { exact: true }),
+      page.locator(".ns-actions-menu").getByText("Remove from this device", { exact: true }),
     ).toBeVisible();
   });
 });
@@ -182,7 +183,7 @@ test.describe("Subgroup – Delete vs Leave", () => {
   // The decision is per group, not per namespace: subgroup admin-ship is not
   // inherited from the root's member list, so a root Admin can be a plain
   // Member of a subgroup somebody else created under it.
-  test("a root admin who is only a member of the subgroup gets Delete at the root and Leave on the subgroup", async ({
+  test("a root admin who is only a member of the subgroup gets Remove from this device at the root and Leave on the subgroup", async ({
     page,
   }) => {
     await openNamespace(page, graph("Admin", "Member"));
@@ -193,7 +194,7 @@ test.describe("Subgroup – Delete vs Leave", () => {
 
     await openActionsMenu(page);
     await expect(
-      page.locator(".ns-actions-menu").getByText("Delete", { exact: true }),
+      page.locator(".ns-actions-menu").getByText("Remove from this device", { exact: true }),
     ).toBeVisible();
   });
 
@@ -281,11 +282,11 @@ test.describe("A refused delete names the way out", () => {
   test("a 403 that says 'not an admin' is reported as exactly that", async ({ page }) => {
     await openNamespace(page, graph("Admin", "Admin"), { deleteNamespace: NOT_ADMIN_403 });
     await openActionsMenu(page);
-    await page.locator(".ns-actions-menu").getByText("Delete", { exact: true }).click();
+    await page.locator(".ns-actions-menu").getByText("Remove from this device", { exact: true }).click();
     await page.locator(".ns-delete-confirm-btn").click();
 
     await expect(
-      page.getByText(/not an admin of this namespace — you can only leave it/),
+      page.getByText(/not an admin of this namespace - you can only leave it, not remove it/),
     ).toBeVisible();
   });
 
@@ -327,10 +328,10 @@ test.describe("A refused delete names the way out", () => {
   }) => {
     await openNamespace(page, graph("Admin", "Admin"), { deleteNamespace: GENUINE_FAULT });
     await openActionsMenu(page);
-    await page.locator(".ns-actions-menu").getByText("Delete", { exact: true }).click();
+    await page.locator(".ns-actions-menu").getByText("Remove from this device", { exact: true }).click();
     await page.locator(".ns-delete-confirm-btn").click();
 
-    await expect(page.getByText(/Failed to delete namespace/)).toBeVisible();
+    await expect(page.getByText(/Failed to remove namespace/)).toBeVisible();
     await expect(page.getByText(/namespace not found/)).toBeVisible();
     await expect(page.getByText(/not an admin/)).toHaveCount(0);
   });

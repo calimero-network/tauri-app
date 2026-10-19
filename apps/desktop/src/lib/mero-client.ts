@@ -237,55 +237,6 @@ class NodeApi {
     }));
   }
 
-  /**
-   * Remove every context this node holds for the application, ahead of an
-   * uninstall that should take the app's data with it.
-   *
-   * Delete tears a context down for its group and is gated on admin-ship of
-   * the owning group, so a context this node is only a member of is left
-   * instead: that is node-local and still drops it from this node.
-   */
-  deleteApplicationData(applicationId: string): Promise<ApiResponse<{ removed: number; failed: number }>> {
-    return wrap('Failed to delete application data', async () => {
-      let removed = 0;
-      let failed = 0;
-      // The namespaces first. Deleting only the contexts left every namespace
-      // behind, with its groups, members and stored state, listed under an
-      // "Unknown application" once the app itself was gone. Deleting one takes
-      // its contexts with it; one we do not administer can only be left.
-      const namespaces = await this.meroJs.admin.listNamespacesForApplication(applicationId);
-      for (const ns of namespaces ?? []) {
-        try {
-          await this.meroJs.admin.deleteNamespace(ns.namespaceId);
-          removed++;
-        } catch {
-          try {
-            await this.meroJs.admin.leaveNamespace(ns.namespaceId);
-            removed++;
-          } catch {
-            failed++;
-          }
-        }
-      }
-      // Then whatever context of the app no namespace took with it.
-      const { contexts } = await this.meroJs.admin.getContextsForApplication(applicationId);
-      for (const ctx of contexts ?? []) {
-        try {
-          await this.meroJs.admin.deleteContext(ctx.id);
-          removed++;
-        } catch {
-          try {
-            await this.meroJs.admin.leaveContext(ctx.id);
-            removed++;
-          } catch {
-            failed++;
-          }
-        }
-      }
-      return { removed, failed };
-    });
-  }
-
   uninstallApplication(applicationId: string): Promise<ApiResponse<{ applicationId: string }>> {
     return wrap('Failed to uninstall application', async () => {
       await this.meroJs.admin.uninstallApplication(applicationId);

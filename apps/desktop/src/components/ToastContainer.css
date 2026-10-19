@@ -68,6 +68,7 @@
   color: var(--text-primary);
   word-break: break-word;
   overflow-wrap: anywhere;
+  white-space: pre-line;
   max-height: 120px;
   overflow-y: auto;
 }

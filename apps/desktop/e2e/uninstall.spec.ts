@@ -195,12 +195,15 @@ test.describe("Uninstall dialog", () => {
     await expect(outcomes(page).nth(1)).toHaveText(
       /^Family: you own it and 2 others are members; transfer ownership first/,
     );
-    await expect(page.getByRole("link", { name: "Transfer ownership" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Transfer ownership" })).toBeVisible();
     await expect(uninstallButton(page)).toBeDisabled();
+    await expect(uninstallButton(page)).toHaveAttribute("aria-describedby", "uninstall-row-ns-shared");
+    await expect(page.getByTestId("uninstall-outcomes")).toHaveAttribute("aria-live", "polite");
 
     await leave(page).uncheck();
 
-    await expect(page.getByRole("link", { name: "Transfer ownership" })).toHaveCount(0);
+    await expect(uninstallButton(page)).not.toHaveAttribute("aria-describedby");
+    await expect(page.getByRole("button", { name: "Transfer ownership" })).toHaveCount(0);
     await expect(uninstallButton(page)).toBeEnabled();
     expect(writes).toEqual([]);
   });
@@ -215,7 +218,7 @@ test.describe("Uninstall dialog", () => {
     await expect(uninstallButton(page)).toBeDisabled();
     await typed.fill("family");
     await expect(uninstallButton(page)).toBeDisabled();
-    await typed.fill("Family");
+    await typed.fill(" Family ");
 
     await expect(outcomes(page).nth(1)).toHaveText(/^Family: deleted for all 3 members/);
     await uninstallButton(page).click();
@@ -302,7 +305,7 @@ test.describe("Uninstall dialog", () => {
     await navigateVia(page, "Applications");
     await openDialog(page);
 
-    await page.getByRole("link", { name: "Transfer ownership" }).click();
+    await page.getByRole("button", { name: "Transfer ownership" }).click();
 
     await expect(page.locator(".ns-page-top h1")).toHaveText("Family");
     await expect(page.locator(".ns-modal h2")).toHaveText("Transfer Ownership");

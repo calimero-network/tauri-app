@@ -133,7 +133,7 @@ describe('uninstalling an application', () => {
   }
 
   it('makes the call each step names, then uninstalls', async () => {
-        const calls = fakeNode();
+    const calls = fakeNode();
 
     const response = await uninstallApp(node(), 'app-1', [
       { ns: ns('a'), action: 'leave' },
@@ -152,7 +152,7 @@ describe('uninstalling an application', () => {
   });
 
   it('stops at the first failure, before the uninstall, and names the namespace', async () => {
-        const calls = fakeNode({
+    const calls = fakeNode({
       'POST /admin-api/namespaces/a/leave': () =>
         new Response(JSON.stringify({ error: 'the owner cannot leave' }), { status: 403 }),
     });
@@ -168,7 +168,7 @@ describe('uninstalling an application', () => {
   });
 
   it('aborts on a revoked session with the code that sends the user to sign in', async () => {
-        const calls = fakeNode({
+    const calls = fakeNode({
       'DELETE /admin-api/namespaces/b': () =>
         new Response('{}', { status: 401, headers: { 'x-auth-error': 'token_revoked' } }),
     });
@@ -180,7 +180,7 @@ describe('uninstalling an application', () => {
   });
 
   it('refuses a plan still waiting on the user, without touching anything', async () => {
-        const calls = fakeNode();
+    const calls = fakeNode();
 
     const response = await uninstallApp(node(), 'app-1', [
       { ns: ns('a'), action: 'leave' },
@@ -192,7 +192,7 @@ describe('uninstalling an application', () => {
   });
 
   it('uninstalls alone when no step is given', async () => {
-        const calls = fakeNode();
+    const calls = fakeNode();
 
     expect(await uninstallApp(node(), 'app-1', [])).toEqual({ data: { applicationId: 'app-1' } });
     expect(calls.map((c) => c.call)).toEqual([UNINSTALL]);

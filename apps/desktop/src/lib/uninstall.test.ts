@@ -216,6 +216,58 @@ describe('uninstalling an application', () => {
     expect(calls).toEqual([]);
   });
 
+  describe('sweeping contexts no namespace took with it', () => {
+    const CONTEXTS = 'GET /admin-api/contexts/for-application/app-1';
+    const listing = (ids: string[]) => () =>
+      new Response(JSON.stringify({ data: { contexts: ids.map((id) => ({ id })) } }), { status: 200 });
+
+    it('leaves each remaining context on this node, then uninstalls', async () => {
+      const calls = fakeNode({ [CONTEXTS]: listing(['ctx-1', 'ctx-2']) });
+
+      const response = await uninstallApp(node(), 'app-1', [{ ns: ns('a'), action: 'remove' }], true);
+
+      expect(response).toEqual({ data: { applicationId: 'app-1' } });
+      expect(calls.map((c) => c.call)).toEqual([
+        'DELETE /admin-api/namespaces/a',
+        CONTEXTS,
+        'POST /admin-api/contexts/ctx-1/leave',
+        'POST /admin-api/contexts/ctx-2/leave',
+        UNINSTALL,
+      ]);
+    });
+
+    it('sweeps even when the app has no namespace on this device', async () => {
+      const calls = fakeNode({ [CONTEXTS]: listing(['ctx-1']) });
+
+      await uninstallApp(node(), 'app-1', [], true);
+
+      expect(calls.map((c) => c.call)).toEqual([CONTEXTS, 'POST /admin-api/contexts/ctx-1/leave', UNINSTALL]);
+    });
+
+    it('leaves contexts alone when the data is kept', async () => {
+      const calls = fakeNode({ [CONTEXTS]: listing(['ctx-1']) });
+
+      await uninstallApp(node(), 'app-1', [{ ns: ns('a'), action: 'keep' }], false);
+
+      expect(calls.map((c) => c.call)).toEqual([UNINSTALL]);
+    });
+
+    it('stops before the uninstall when a context cannot be left, keeping the finished steps', async () => {
+      const done = { ns: ns('a'), action: 'remove' } as const;
+      const calls = fakeNode({
+        [CONTEXTS]: listing(['ctx-1']),
+        'POST /admin-api/contexts/ctx-1/leave': () =>
+          new Response(JSON.stringify({ error: 'busy' }), { status: 500 }),
+      });
+
+      const response = await uninstallApp(node(), 'app-1', [done], true);
+
+      expect(response.error?.message).toBe('Context ctx-1 failed: busy');
+      expect(response.error?.completed).toEqual([done]);
+      expect(calls.map((c) => c.call)).not.toContain(UNINSTALL);
+    });
+  });
+
   it('uninstalls alone when no step is given', async () => {
     const calls = fakeNode();
 

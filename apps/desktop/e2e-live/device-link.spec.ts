@@ -20,6 +20,7 @@ const KEY = "note";
 const MEMBERS_OPEN_SUBGROUPS = 36; // join open subgroups (4) and create subgroups (32); no screen sets it
 const DEVICE_NAME = "second-laptop";
 const CONVERGE_MS = 120_000;
+const NODE_TIMEOUT_MS = 30_000; // a governance call can wait out a peer's ack, ~10s, which is mero-js's default timeout
 const PROOF_DIR = process.env["PROOF_DIR"]; // when set, a full-page screenshot of each step lands here
 
 type Launch = (label: string) => Promise<Page>;
@@ -42,14 +43,14 @@ const test = base.extend<{ bridge: NodeBridge; launch: Launch }>({
       return page;
     });
     if (testInfo.status !== testInfo.expectedStatus) {
-      for (const [label, page] of pages) await proof(page, `10-failed-on-${label}`);
+      for (const [label, page] of pages) await proof(page, `99-failed-on-${label}`);
     }
   },
 });
 
 /** The node behind a desktop, signed in with the account its onboarding created. */
 async function admin(url: string): Promise<MeroJs> {
-  const mero = new MeroJs({ baseUrl: url, credentials: { username: ADMIN_USER, password: ADMIN_PASSWORD } });
+  const mero = new MeroJs({ baseUrl: url, timeoutMs: NODE_TIMEOUT_MS, credentials: { username: ADMIN_USER, password: ADMIN_PASSWORD } });
   await mero.authenticate();
   return mero;
 }
@@ -180,6 +181,16 @@ async function linkDevice(holder: Page, device: Page) {
   await proof(holder, "05-a-lists-b-as-linked");
 }
 
+/** Withdraws the linked device from the holder's Account screen. */
+async function revokeDevice(holder: Page) {
+  await go(holder, "Account");
+  const row = holder.locator(".account-device-row", { hasText: DEVICE_NAME });
+  await row.locator("[id^=device-revoke-]").click();
+  await row.locator("[id^=device-revoke-confirm-]").click();
+  await expect(row.locator("[id^=device-note-]")).toHaveText(/^Withdrawn from \d+ namespaces?\.$/, { timeout: CONVERGE_MS });
+  await expect(row.locator(".status-badge.revoked")).toBeVisible({ timeout: CONVERGE_MS });
+}
+
 /** The subgroup and its one context in the namespace tree on `page`, found by id: only the creator's node knows the name. */
 async function expectSubgroupInTree(page: Page, dm: { groupId: string; contextId: string }) {
   const row = page.locator(".ns-tree-subgroup", { hasText: dm.groupId.slice(0, 8) });
@@ -203,7 +214,7 @@ async function joinAndRead(device: MeroJs, contextId: string, expected: string) 
   await waitFor(`the device to read "${expected}"`, async () => (await read(device, contextId)) === expected, CONVERGE_MS, 1_000);
 }
 
-test("a device linked from the desktop reads and writes private subgroups made after a key rotation", async ({ bridge, launch }) => {
+test("a device linked from the desktop reads and writes private subgroups made after a key rotation, and loses them once revoked", async ({ bridge, launch }) => {
   test.setTimeout(900_000);
   const pageF = await launch("founder");
   const pageR = await launch("removed");
@@ -245,4 +256,26 @@ test("a device linked from the desktop reads and writes private subgroups made a
   await expectSubgroupInTree(pageB, after);
   await joinAndRead(b, after.contextId, "after-link, from A");
   await proof(pageB, "09-b-sees-after-link-subgroup");
+
+  // Revoked from A's Account screen, B drops the namespace while A and the founder carry on in it.
+  await revokeDevice(pageA);
+  await proof(pageA, "10-a-lists-b-as-revoked");
+  const revoked = await privateSubgroup(a, namespaceId, targetApplicationId, founderAccount, "after-revoke");
+  await expectSubgroupInTree(pageA, revoked);
+  await expectSubgroupInTree(pageF, revoked);
+  await proof(pageF, "11-founder-sees-after-revoke-subgroup");
+
+  // The empty state, not just a missing card, proves B's list loaded.
+  await expect(async () => {
+    await pageB.reload();
+    await go(pageB, "Namespaces");
+    await pageB.getByTestId("ns-app-card").filter({ hasText: APP_PACKAGE }).click();
+    await expect(pageB.getByText("No namespaces for this application yet")).toBeVisible({ timeout: 5_000 });
+  }).toPass({ timeout: CONVERGE_MS });
+  await expect(pageB.locator(".ns-card", { hasText: NS_NAME })).toHaveCount(0);
+  await proof(pageB, "12-b-lost-the-namespace");
+  await go(pageB, "Account");
+  await proof(pageB, "13-b-account-after-revoke");
+  await expect(b.admin.joinContext(revoked.contextId).then(() => read(b, revoked.contextId))).rejects.toThrow();
+  expect(await read(a, revoked.contextId)).toBe("after-revoke, from A");
 });

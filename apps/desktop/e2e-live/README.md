@@ -19,6 +19,7 @@ The nodes issue 5-second access tokens so this happens within one test.
 2. A joins after the rotation and opens a Restricted subgroup with a context.
 3. A links a second computer B into its account through the Account screens.
 4. B sees the subgroup, joins its context and reads A's write, A reads B's write, and a subgroup opened after the link reaches B too.
+5. A revokes B from its Account screen; B drops the namespace, and a subgroup A opens afterwards reaches the founder but B can neither see nor read it.
 
 In the browser, `e2e-live/bridge.ts` answers the shell's node commands (`init_merod_node`, `start_merod` and the like) with the same `merod init` and `merod run`, and refuses any data directory outside the test's own.
 Set `PROOF_DIR` to save a full-page screenshot of each step there.

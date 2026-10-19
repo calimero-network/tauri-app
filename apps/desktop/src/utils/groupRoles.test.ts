@@ -6,8 +6,10 @@ import {
   isPermissionError,
   isReasonlessRefusal,
   resolveGroupAction,
+  roleColor,
   roleLabel,
   roleOf,
+  transferCandidates,
 } from './groupRoles';
 
 // The account this node writes as. 64 hex since rc.27 — same length and
@@ -194,5 +196,37 @@ describe('isReasonlessRefusal', () => {
     ]) {
       expect(isPermissionError(m) && isReasonlessRefusal(m)).toBe(false);
     }
+  });
+});
+
+describe('transferCandidates', () => {
+  const CAROL = 'c'.repeat(64);
+  const DAVE = 'd'.repeat(64);
+
+  it('lists everyone but us, admins first', () => {
+    const members = [
+      { identity: ME, role: 'Admin' },
+      { identity: SOMEONE_ELSE, role: 'Member' },
+      { identity: CAROL, role: 'ReadOnly' },
+      { identity: DAVE, role: 'Admin' },
+    ];
+    expect(transferCandidates(members, ME).map((m) => m.identity)).toEqual([DAVE, SOMEONE_ELSE, CAROL]);
+  });
+
+  it('leaves out the fleet nodes, which cannot own a namespace', () => {
+    const members = [
+      { identity: SOMEONE_ELSE, role: 'RelayTee' },
+      { identity: CAROL, role: 'ReadOnlyTee' },
+      { identity: DAVE, role: 'Member' },
+    ];
+    expect(transferCandidates(members, ME).map((m) => m.identity)).toEqual([DAVE]);
+  });
+});
+
+describe('roleColor', () => {
+  it('marks admins, mutes read-only, and leaves the rest neutral', () => {
+    expect(roleColor('Admin')).toBe('var(--accent-primary)');
+    expect(roleColor('ReadOnly')).toBe('var(--text-tertiary)');
+    expect(roleColor('Member')).toBe('var(--text-secondary)');
   });
 });

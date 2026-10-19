@@ -22,6 +22,7 @@ import {
   namespaceFollowState,
   nextScope,
   relinkSummary,
+  restoreSummary,
   rescopeSummary,
   accountAppRows,
   scopeHint,
@@ -121,6 +122,19 @@ describe("relinkSummary", () => {
     expect(relinkSummary({ linkedIn: [], skipped: ["ns-2"], pending: ["ns-2"] })).toBe(
       "1 namespace not reachable yet. Try again shortly.",
     );
+  });
+});
+
+describe("restoreSummary", () => {
+  it("names what an install brought back", () => {
+    expect(restoreSummary("Installed Drive", ["Team", "Family"])).toBe(
+      "Installed Drive\nRestored 2 namespaces: Team, Family",
+    );
+    expect(restoreSummary("Installed Drive", ["Team"])).toBe("Installed Drive\nRestored 1 namespace: Team");
+  });
+
+  it("says only the install when nothing came back", () => {
+    expect(restoreSummary("Installed Drive", [])).toBe("Installed Drive");
   });
 });
 

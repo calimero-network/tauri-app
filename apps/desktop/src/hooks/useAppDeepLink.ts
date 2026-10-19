@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { apiClient } from '../lib/mero-client';
+import { restoreSummary } from '../lib/account';
 import {
   decodeMetadata,
   isAllowedAppFrontendUrl,
@@ -143,11 +144,15 @@ async function lookupRegistryBundle(pkg: string, report: Reporter): Promise<AppS
 }
 
 /**
- * Install `pkg@version` on the node. Returns the new applicationId, or null on
- * failure. Empty metadata — the node reads the bundle manifest's own metadata
- * (name, links.frontend, package, etc.).
+ * Install `pkg@version` on the node. Returns the new applicationId and the
+ * namespaces the install restored, or null on failure. Empty metadata: the node
+ * reads the bundle manifest's own (name, links.frontend, package, etc.).
  */
-async function installBundle(pkg: string, version: string, report: Reporter): Promise<string | null> {
+async function installBundle(
+  pkg: string,
+  version: string,
+  report: Reporter,
+): Promise<{ applicationId: string; restored: string[]; restoreFailed: string[] } | null> {
   console.log(`[deep-link] installing ${pkg}@${version}`);
   // Downloading and installing a bundle is the slowest step in the whole
   // path, and the only step with no window open to show for it.
@@ -161,7 +166,7 @@ async function installBundle(pkg: string, version: string, report: Reporter): Pr
       return null;
     }
     invalidateInstalledApps();
-    return res.data.applicationId;
+    return res.data;
   } catch (e) {
     console.warn(`[deep-link] install-on-demand error for ${pkg}:`, e);
     report.failed(
@@ -255,21 +260,23 @@ export async function resolveAndOpen(
       return 'forget';
     }
     consentedOrigin = bundleOrigin;
-    const installedId = await installBundle(dl.slug, bundle.latest_version, report);
-    if (!installedId) {
+    const installed = await installBundle(dl.slug, bundle.latest_version, report);
+    if (!installed) {
       // installBundle has already said why.
       console.warn(`[deep-link] could not install "${dl.slug}" — forgetting link`);
       return 'forget';
     }
     const relist = await listInstalledApps();
     const apps = Array.isArray(relist.data) ? relist.data : [];
-    match = apps.find((a: any) => a.id === installedId) ?? byPackage(apps);
+    match = apps.find((a: any) => a.id === installed.applicationId) ?? byPackage(apps);
     if (!match) {
       console.warn(`[deep-link] installed "${dl.slug}" but could not find it to open`);
       report.failed(`Installed ${dl.slug}, but the node did not list it. Try the link again.`);
       return 'forget';
     }
-    report.done(`Installed ${dl.slug}`);
+    const { restored, restoreFailed } = installed;
+    report.done(restoreSummary(`Installed ${dl.slug}`, restored));
+    if (restoreFailed.length) report.failed(`Could not restore: ${restoreFailed.join('; ')}`);
   }
 
   const metadata = decodeMetadata(match.metadata);

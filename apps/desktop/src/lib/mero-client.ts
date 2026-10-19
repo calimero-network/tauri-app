@@ -227,14 +227,17 @@ class NodeApi {
   }
 
   /** By coordinates: the node resolves them against its own registry and takes
-   *  no URL, so a body carrying one is refused outright. */
+   *  no URL, so a body carrying one is refused outright. A reinstall also
+   *  rejoins the namespaces this device was removed from; that never fails the install. */
   installApplication(request: {
     package: string;
     version: string;
-  }): Promise<ApiResponse<{ applicationId: string }>> {
-    return wrap('Failed to install application', async () => ({
-      applicationId: (await this.meroJs.admin.installApplication(request)).applicationId,
-    }));
+  }): Promise<ApiResponse<{ applicationId: string; restored: string[]; restoreFailed: string[] }>> {
+    return wrap('Failed to install application', async () => {
+      const { applicationId } = await this.meroJs.admin.installApplication(request);
+      const { restored, failed } = await restoreForgottenNamespaces(this.meroJs, applicationId);
+      return { applicationId, restored, restoreFailed: failed };
+    });
   }
 
   uninstallApplication(applicationId: string): Promise<ApiResponse<{ applicationId: string }>> {

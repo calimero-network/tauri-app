@@ -6,7 +6,7 @@
  */
 import type { Page } from "@playwright/test";
 import { test, expect } from "./fixtures/test";
-import { setupAuthenticatedPage, navigateVia } from "./fixtures/helpers";
+import { setupAuthenticatedPage, navigateVia, mockRegistryAPIs } from "./fixtures/helpers";
 import { MOCK_ACCOUNT_ID, mockNamespaceGraph } from "./fixtures/namespace-graph";
 
 const APP_ID = "installed-app-2";
@@ -264,5 +264,41 @@ test.describe("Uninstall dialog", () => {
 
     await expect(page.locator(".ns-page-top h1")).toHaveText("Family");
     await expect(page.locator(".ns-modal h2")).toHaveText("Transfer Ownership");
+  });
+});
+
+test.describe("Reinstalling an app", () => {
+  test("rejoins the namespaces this device was removed from, and says which", async ({ page }) => {
+    await mockRegistryAPIs(page);
+    await setupAuthenticatedPage(page);
+    const writes: Call[] = [];
+    await page.route("**/admin-api/**", (route) => {
+      const method = route.request().method();
+      const path = new URL(route.request().url()).pathname.replace(/^\/admin-api/, "");
+      const ok = (data: unknown) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ data }) });
+      if (method === "GET" && path === "/namespaces/for-application/installed-app-1") {
+        return ok([
+          { namespaceId: "ns-here", name: "Still here" },
+          { namespaceId: "ns-team", name: "Team", forgotten: true },
+          { namespaceId: "ns-family", name: "Family", forgotten: true },
+        ]);
+      }
+      if (method === "GET") return route.fallback();
+      const raw = route.request().postData();
+      writes.push({ method, path, ...(raw ? { body: JSON.parse(raw) } : {}) });
+      if (path === "/install-application") return ok({ applicationId: "installed-app-1" });
+      return ok({});
+    });
+    await navigateVia(page, "Marketplace");
+    await page.locator("[data-testid='app-card']", { hasText: "Only Peers Chat" }).click();
+
+    await page.getByTestId("detail-install").click();
+
+    await expect(toast(page)).toHaveText(/installed successfully!\nRestored 2 namespaces: Team, Family$/);
+    expect(writes.map(({ method, path, body }) => ({ method, path, body }))).toEqual([
+      { method: "POST", path: "/install-application", body: expect.anything() },
+      { method: "POST", path: "/namespaces/ns-team/join", body: {} },
+      { method: "POST", path: "/namespaces/ns-family/join", body: {} },
+    ]);
   });
 });

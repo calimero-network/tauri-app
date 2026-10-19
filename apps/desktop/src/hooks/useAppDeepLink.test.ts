@@ -111,7 +111,7 @@ describe("a deep link always tells the user what happened", () => {
       .mockResolvedValueOnce({ data: [] })
       .mockResolvedValueOnce({ data: [INSTALLED] });
     fetchAppsFromRegistry.mockResolvedValue([{ id: "com.calimero.drive", latest_version: "1.2.3" }]);
-    installApplication.mockResolvedValue({ data: { applicationId: "app-1" } });
+    installApplication.mockResolvedValue({ data: { applicationId: "app-1", restored: [], restoreFailed: [] } });
     const r = recorder();
 
     expect(await resolveAndOpen(LINK, r.report, agree)).toBe("opened");
@@ -120,6 +120,22 @@ describe("a deep link always tells the user what happened", () => {
     expect(r.done.some((m) => m.includes("Installed"))).toBe(true);
     expect(r.cleared).toEqual(r.shown);
     expect(r.failures).toEqual([]);
+  });
+
+  it("says which namespaces an install brought back, and which it could not", async () => {
+    listInstalledApps
+      .mockResolvedValueOnce({ data: [] })
+      .mockResolvedValueOnce({ data: [INSTALLED] });
+    fetchAppsFromRegistry.mockResolvedValue([{ id: "com.calimero.drive", latest_version: "1.2.3" }]);
+    installApplication.mockResolvedValue({
+      data: { applicationId: "app-1", restored: ["Team", "Family"], restoreFailed: ["Notes: not a member"] },
+    });
+    const r = recorder();
+
+    expect(await resolveAndOpen(LINK, r.report, agree)).toBe("opened");
+
+    expect(r.done).toContain("Installed com.calimero.drive\nRestored 2 namespaces: Team, Family");
+    expect(r.failures).toEqual(["Could not restore: Notes: not a member"]);
   });
 
   // The three terminal cases below all used to `return 'forget'` after a
@@ -176,7 +192,7 @@ describe("a deep link always tells the user what happened", () => {
       .mockResolvedValueOnce({ data: [] })
       .mockResolvedValueOnce({ data: [INSTALLED] });
     fetchAppsFromRegistry.mockResolvedValue([{ id: "com.calimero.drive", latest_version: "1.2.3" }]);
-    installApplication.mockResolvedValue({ data: { applicationId: "app-1" } });
+    installApplication.mockResolvedValue({ data: { applicationId: "app-1", restored: [], restoreFailed: [] } });
 
     const r = recorder();
     let waiting = false;
@@ -279,7 +295,7 @@ describe("a deep link never acts without the user's consent", () => {
         data: [{ ...INSTALLED, metadata: { name: "Mero Drive", links: { frontend: "https://drive.example/app" } } }],
       });
     fetchAppsFromRegistry.mockResolvedValue([PUBLISHED]);
-    installApplication.mockResolvedValue({ data: { applicationId: "app-1" } });
+    installApplication.mockResolvedValue({ data: { applicationId: "app-1", restored: [], restoreFailed: [] } });
 
     expect(await resolveAndOpen(LINK, recorder().report, agree)).toBe("opened");
     expect(agree).toHaveBeenCalledTimes(1);
@@ -293,7 +309,7 @@ describe("a deep link never acts without the user's consent", () => {
         data: [{ ...INSTALLED, metadata: { name: "Mero Drive", links: { frontend: "https://elsewhere.example" } } }],
       });
     fetchAppsFromRegistry.mockResolvedValue([PUBLISHED]);
-    installApplication.mockResolvedValue({ data: { applicationId: "app-1" } });
+    installApplication.mockResolvedValue({ data: { applicationId: "app-1", restored: [], restoreFailed: [] } });
     const consent = vi
       .fn(async (_req: DeepLinkConsentRequest) => false)
       .mockResolvedValueOnce(true);

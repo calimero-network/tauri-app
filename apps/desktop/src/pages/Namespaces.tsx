@@ -23,7 +23,7 @@ import { getNamespaceFleetStatus } from "../utils/cloudApi";
 import { getCloudIdToken } from "../utils/cloudAuth";
 import { groupVisibilityLabel } from "../utils/groupVisibility";
 import { apiClient, transferNamespaceOwnership } from "../lib/mero-client";
-import { canInviteDevices } from "../lib/account";
+import { canInviteDevices, restoreSummary } from "../lib/account";
 import { TransferOwnershipModal, type TransferTarget } from "./TransferOwnershipModal";
 import {
   fetchGroupMembers,
@@ -513,7 +513,9 @@ function Namespaces({ transferNamespaceId, onTransferHandled }: NamespacesProps)
       if (response.error) throw new Error(response.error.message);
       invalidateInstalledApps();
       setInstalledApps(await readInstalledApps());
-      toast.success(`Installed ${app.name}`);
+      const { restored, restoreFailed } = response.data!;
+      toast.success(restoreSummary(`Installed ${app.name}`, restored));
+      if (restoreFailed.length) toast.warning(`Could not restore: ${restoreFailed.join("; ")}`);
     } catch (e) {
       toast.error(parseTauriError(e, `Failed to install ${app.name}`));
     } finally {

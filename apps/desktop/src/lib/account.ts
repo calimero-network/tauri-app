@@ -283,6 +283,12 @@ export function devicesEmptyMessage(identity: NodeIdentity | null): string {
   return "No devices found for this account.";
 }
 
+/** An install's message, followed by the namespaces it rejoined. */
+export function restoreSummary(installed: string, restored: string[]): string {
+  if (!restored.length) return installed;
+  return `${installed}\nRestored ${restored.length} ${namespaceWord(restored.length)}: ${restored.join(", ")}`;
+}
+
 export function relinkSummary({ linkedIn, pending }: RelinkResult): string {
   if (!linkedIn.length) {
     if (!pending.length) return "Already up to date.";

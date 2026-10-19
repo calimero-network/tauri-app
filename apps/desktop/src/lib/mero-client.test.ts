@@ -26,7 +26,14 @@ globalThis.localStorage = {
   },
 } as Storage;
 
-const { createClientAsync, transferNamespaceOwnership } = await import('./mero-client');
+const {
+  createClientAsync,
+  leaveNamespacePurging,
+  listForgottenNamespaces,
+  rejoinNamespace,
+  restoreForgottenNamespaces,
+  transferNamespaceOwnership,
+} = await import('./mero-client');
 
 const realFetch = globalThis.fetch;
 
@@ -165,6 +172,89 @@ describe('deleting an application\'s data', () => {
     // Not an admin of it: it can only be left.
     expect(calls).toContain('POST /admin-api/namespaces/ns-joined/leave');
     expect(calls).toContain('DELETE /admin-api/contexts/ctx-loose');
+  });
+});
+
+describe('leaving a namespace as an account', () => {
+  it('asks every device of the account to purge it', async () => {
+    const { meroJs } = await createClientAsync({ baseUrl: 'http://node' });
+    const calls: { call: string; body: unknown }[] = [];
+    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
+      calls.push({ call: `${init?.method} ${url.pathname}`, body: JSON.parse(String(init?.body)) });
+      return new Response(JSON.stringify({ data: {} }), { status: 200 });
+    };
+
+    await leaveNamespacePurging(meroJs, 'ns-1');
+
+    expect(calls).toEqual([{ call: 'POST /admin-api/namespaces/ns-1/leave', body: { purge: true } }]);
+  });
+});
+
+describe('restoring forgotten namespaces', () => {
+  function fakeNode(entries: unknown[], refuseJoin: string[] = []) {
+    const calls: { call: string; body: unknown }[] = [];
+    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
+      const call = `${init?.method ?? 'GET'} ${url.pathname}`;
+      calls.push({ call, body: init?.body ? JSON.parse(String(init.body)) : undefined });
+      if (call === 'GET /admin-api/namespaces/for-application/app-1') {
+        return new Response(JSON.stringify({ data: entries }), { status: 200 });
+      }
+      if (refuseJoin.some((id) => call === `POST /admin-api/namespaces/${id}/join`)) {
+        return new Response(JSON.stringify({ error: 'not a member' }), { status: 403 });
+      }
+      return new Response(JSON.stringify({ data: {} }), { status: 200 });
+    };
+    return calls;
+  }
+
+  it('lists only the namespaces flagged forgotten', async () => {
+    const { meroJs } = await createClientAsync({ baseUrl: 'http://node' });
+    fakeNode([
+      { namespaceId: 'here', name: 'Here' },
+      { namespaceId: 'gone', name: 'Gone', forgotten: true },
+    ]);
+
+    expect((await listForgottenNamespaces(meroJs, 'app-1')).map((n) => n.namespaceId)).toEqual(['gone']);
+  });
+
+  it('rejoins a namespace without an invitation', async () => {
+    const { meroJs } = await createClientAsync({ baseUrl: 'http://node' });
+    const calls = fakeNode([]);
+
+    await rejoinNamespace(meroJs, 'gone');
+
+    expect(calls).toEqual([{ call: 'POST /admin-api/namespaces/gone/join', body: {} }]);
+  });
+
+  it('rejoins each forgotten namespace and says which came back and which did not', async () => {
+    const { meroJs } = await createClientAsync({ baseUrl: 'http://node' });
+    const calls = fakeNode(
+      [
+        { namespaceId: 'here', name: 'Here' },
+        { namespaceId: 'a', name: 'Team', forgotten: true },
+        { namespaceId: 'b', forgotten: true },
+      ],
+      ['b'],
+    );
+
+    expect(await restoreForgottenNamespaces(meroJs, 'app-1')).toEqual({
+      restored: ['Team'],
+      failed: ['b: not a member'],
+    });
+    expect(calls.map((c) => c.call)).toEqual([
+      'GET /admin-api/namespaces/for-application/app-1',
+      'POST /admin-api/namespaces/a/join',
+      'POST /admin-api/namespaces/b/join',
+    ]);
+  });
+
+  it('reports a listing it could not read as a failure, without throwing', async () => {
+    const { meroJs } = await createClientAsync({ baseUrl: 'http://node' });
+    globalThis.fetch = async () => new Response(JSON.stringify({ error: 'down' }), { status: 500 });
+
+    expect(await restoreForgottenNamespaces(meroJs, 'app-1')).toEqual({ restored: [], failed: ['down'] });
   });
 });
 

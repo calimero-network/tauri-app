@@ -15,6 +15,7 @@ import {
   type TokenStore,
   type TokenData,
   type Application,
+  type Namespace,
 } from '@calimero-network/mero-js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -77,7 +78,7 @@ export function nodeErrorMessage(error: unknown, action?: string): string {
  * one place turns a rejection into the shape a caller reads. `code` is what
  * distinguishes "sign in again" from any other failure.
  */
-async function wrap<T>(label: string, call: () => Promise<T>): Promise<ApiResponse<T>> {
+export async function wrap<T>(label: string, call: () => Promise<T>): Promise<ApiResponse<T>> {
   try {
     return { data: await call() };
   } catch (e) {
@@ -328,6 +329,65 @@ export async function transferNamespaceOwnership(
   } catch (e) {
     return { promoted, error: nodeErrorMessage(e) };
   }
+}
+
+// ─── Namespace membership on this device ────────────────────────────────────
+// mero-js does not wrap these route shapes yet; switch each to its SDK method
+// once one ships. They go through the SDK's own client, so auth and refresh apply.
+
+interface AdminHttp {
+  post<T>(path: string, body?: unknown): Promise<T>;
+}
+
+const adminHttp = (meroJs: MeroJs) => (meroJs.admin as unknown as { httpClient: AdminHttp }).httpClient;
+
+/** Leave as an account: every device of it purges the namespace when it applies the leave. */
+export async function leaveNamespacePurging(meroJs: MeroJs, namespaceId: string): Promise<void> {
+  await adminHttp(meroJs).post(`/admin-api/namespaces/${encodeURIComponent(namespaceId)}/leave`, {
+    purge: true,
+  });
+}
+
+/** Follow again a namespace this device was removed from; the account is still a member. */
+export async function rejoinNamespace(meroJs: MeroJs, namespaceId: string): Promise<void> {
+  await adminHttp(meroJs).post(`/admin-api/namespaces/${encodeURIComponent(namespaceId)}/join`, {});
+}
+
+/** Removed from this device while the account stayed a member, so a reinstall can restore it. */
+export const isForgotten = (ns: Namespace) => (ns as Namespace & { forgotten?: boolean }).forgotten === true;
+
+export async function listForgottenNamespaces(meroJs: MeroJs, applicationId: string): Promise<Namespace[]> {
+  return ((await meroJs.admin.listNamespacesForApplication(applicationId)) ?? []).filter(isForgotten);
+}
+
+/** How a namespace is named to the user; short enough to type when it has no name. */
+export const namespaceLabel = (ns: Namespace) => ns.name || ns.namespaceId.slice(0, 8);
+
+/**
+ * Rejoin every namespace of the app this device was removed from. Never throws:
+ * `restored` and `failed` say what came back, by name.
+ */
+export async function restoreForgottenNamespaces(
+  meroJs: MeroJs,
+  applicationId: string,
+): Promise<{ restored: string[]; failed: string[] }> {
+  const restored: string[] = [];
+  const failed: string[] = [];
+  let forgotten: Namespace[];
+  try {
+    forgotten = await listForgottenNamespaces(meroJs, applicationId);
+  } catch (e) {
+    return { restored, failed: [nodeErrorMessage(e)] };
+  }
+  for (const ns of forgotten) {
+    try {
+      await rejoinNamespace(meroJs, ns.namespaceId);
+      restored.push(namespaceLabel(ns));
+    } catch (e) {
+      failed.push(nodeErrorMessage(e, namespaceLabel(ns)));
+    }
+  }
+  return { restored, failed };
 }
 
 // ─── Client + singleton ─────────────────────────────────────────────────────

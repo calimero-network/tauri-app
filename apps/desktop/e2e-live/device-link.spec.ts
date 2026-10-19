@@ -58,7 +58,15 @@ async function admin(url: string): Promise<MeroJs> {
 async function proof(page: Page, name: string) {
   if (!PROOF_DIR) return;
   mkdirSync(PROOF_DIR, { recursive: true });
-  await page.screenshot({ path: path.join(PROOF_DIR, `${name}.png`), fullPage: true });
+  // The app scrolls `.main`, not the document, so fullPage alone captures only the window.
+  const original = page.viewportSize();
+  const hidden = await page.evaluate(() => {
+    const main = document.querySelector(".main");
+    return main ? main.scrollHeight - main.clientHeight : 0;
+  });
+  if (original && hidden > 0) await page.setViewportSize({ ...original, height: original.height + hidden });
+  await page.screenshot({ path: path.join(PROOF_DIR, `${name}.png`) });
+  if (original) await page.setViewportSize(original);
 }
 
 /** No screen shows a context's data, so a read's proof is the value the node returned. */
@@ -275,6 +283,7 @@ test("a device linked from the desktop reads and writes private subgroups made a
   await expect(pageB.locator(".ns-card", { hasText: NS_NAME })).toHaveCount(0);
   await proof(pageB, "12-b-lost-the-namespace");
   await go(pageB, "Account");
+  await expect(pageB.getByRole("heading", { name: "This device" })).toBeVisible();
   await proof(pageB, "13-b-account-after-revoke");
   await expect(b.admin.joinContext(revoked.contextId).then(() => read(b, revoked.contextId))).rejects.toThrow();
   expect(await read(a, revoked.contextId)).toBe("after-revoke, from A");

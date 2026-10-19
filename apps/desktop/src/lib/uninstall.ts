@@ -1,8 +1,17 @@
 /**
- * What uninstalling an app does to each of its namespaces, decided from the
- * dialog's two ticks. Pure, so every row of the outcome table is unit-tested.
+ * What uninstalling an app does to each of its namespaces: a pure decision from
+ * the dialog's two ticks, and the node calls that carry it out.
  */
-import { isAdminRole } from '../utils/groupRoles';
+import { AuthRevokedError, HTTPError, type MeroJs, type NodeIdentity } from '@calimero-network/mero-js';
+import { isAdminRole, roleOf, transferCandidates } from '../utils/groupRoles';
+import {
+  isForgotten,
+  leaveNamespacePurging,
+  namespaceLabel,
+  nodeErrorMessage,
+  wrap,
+  type ApiResponse,
+} from './mero-client';
 
 /** One of the app's namespaces as the uninstall dialog lists it. */
 export interface AppNamespace {
@@ -65,4 +74,82 @@ export function describeStep(ns: AppNamespace, action: NamespaceAction): string 
     'needs-primary-device': 'only your primary device can delete it',
   }[action];
   return `${ns.name}: ${what}`;
+}
+
+export interface UninstallStep {
+  ns: AppNamespace;
+  action: NamespaceAction;
+}
+
+/** The app's namespaces on this device, each with our role and member count. */
+export function loadAppNamespaces(
+  meroJs: MeroJs,
+  applicationId: string,
+): Promise<ApiResponse<{ namespaces: AppNamespace[]; linkedDevice: boolean }>> {
+  return wrap("Failed to read the app's namespaces", async () => {
+    const [all, identity] = await Promise.all([
+      meroJs.admin.listNamespacesForApplication(applicationId),
+      // A node that has taken part in nothing yet has no identity to answer with.
+      meroJs.admin.getNodeIdentity().catch((e): NodeIdentity | null => {
+        if (e instanceof HTTPError && e.status === 404) return null;
+        throw e;
+      }),
+    ]);
+    const accountId = identity?.accountId;
+    const namespaces = await Promise.all(
+      (all ?? []).filter((ns) => !isForgotten(ns)).map(async (ns) => {
+        const { members } = await meroJs.admin.listGroupMembers(ns.namespaceId);
+        return {
+          id: ns.namespaceId,
+          name: namespaceLabel(ns),
+          role: roleOf(members, accountId),
+          others: transferCandidates(members, accountId).length,
+        };
+      }),
+    );
+    return { namespaces, linkedDevice: identity?.holdsAccountRoot === false };
+  });
+}
+
+function runStep(meroJs: MeroJs, { ns, action }: UninstallStep): Promise<unknown> {
+  switch (action) {
+    case 'leave':
+      return leaveNamespacePurging(meroJs, ns.id);
+    case 'remove':
+      return meroJs.admin.deleteNamespace(ns.id);
+    case 'delete-for-everyone':
+      return meroJs.admin.ownerDeleteGroup(ns.id);
+    default:
+      return Promise.resolve();
+  }
+}
+
+/**
+ * Apply each namespace's step in order, then uninstall the app. The first
+ * failure stops it with the app still installed, and names the namespace.
+ */
+export function uninstallApp(
+  meroJs: MeroJs,
+  applicationId: string,
+  steps: readonly UninstallStep[],
+): Promise<ApiResponse<{ applicationId: string }>> {
+  return wrap('Failed to uninstall application', async () => {
+    const waiting = steps.find((s) => isBlocked([s.action]));
+    if (waiting) throw new Error(describeStep(waiting.ns, waiting.action));
+    for (const step of steps) {
+      try {
+        await runStep(meroJs, step);
+      } catch (e) {
+        throw failedAt(step.ns, e);
+      }
+    }
+    await meroJs.admin.uninstallApplication(applicationId);
+    return { applicationId };
+  });
+}
+
+/** Names the namespace in the message, keeping a sign-in failure as is so `wrap` still reads it. */
+function failedAt(ns: AppNamespace, e: unknown): unknown {
+  if (e instanceof AuthRevokedError || (e instanceof HTTPError && e.status === 401)) return e;
+  return new Error(nodeErrorMessage(e, ns.name));
 }

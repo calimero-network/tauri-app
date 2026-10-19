@@ -127,54 +127,6 @@ describe('unauthorized detection', () => {
   });
 });
 
-describe('deleting an application\'s data', () => {
-  /** A node holding two namespaces of the app: one we administer, one we don't. */
-  function fakeNode() {
-    const calls: string[] = [];
-    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
-      const call = `${init?.method ?? 'GET'} ${url.pathname}`;
-      calls.push(call);
-      const ok = (data: unknown) => new Response(JSON.stringify({ data }), { status: 200 });
-      switch (call) {
-        case 'GET /admin-api/namespaces/for-application/app-1':
-          return ok([
-            { namespaceId: 'ns-owned', targetApplicationId: 'app-1' },
-            { namespaceId: 'ns-joined', targetApplicationId: 'app-1' },
-          ]);
-        case 'DELETE /admin-api/namespaces/ns-owned':
-          return ok({ isDeleted: true });
-        case 'DELETE /admin-api/namespaces/ns-joined':
-          return new Response(JSON.stringify({ error: 'not an admin' }), { status: 403 });
-        case 'POST /admin-api/namespaces/ns-joined/leave':
-          return ok({ namespaceId: 'ns-joined', memberPublicKey: 'me' });
-        case 'GET /admin-api/contexts/for-application/app-1':
-          return ok({ contexts: [{ id: 'ctx-loose' }] });
-        case 'DELETE /admin-api/contexts/ctx-loose':
-          return ok({ isDeleted: true });
-        default:
-          return new Response('{}', { status: 404 });
-      }
-    };
-    return calls;
-  }
-
-  // Only the contexts used to go: the namespace, its groups, members and
-  // state stayed on the node under an "Unknown application".
-  it('removes the namespaces, not only the contexts', async () => {
-    const client = await createClientAsync({ baseUrl: 'http://node' });
-    const calls = fakeNode();
-
-    expect(await client.node.deleteApplicationData('app-1')).toEqual({
-      data: { removed: 3, failed: 0 },
-    });
-    expect(calls).toContain('DELETE /admin-api/namespaces/ns-owned');
-    // Not an admin of it: it can only be left.
-    expect(calls).toContain('POST /admin-api/namespaces/ns-joined/leave');
-    expect(calls).toContain('DELETE /admin-api/contexts/ctx-loose');
-  });
-});
-
 describe('leaving a namespace as an account', () => {
   it('asks every device of the account to purge it', async () => {
     const { meroJs } = await createClientAsync({ baseUrl: 'http://node' });

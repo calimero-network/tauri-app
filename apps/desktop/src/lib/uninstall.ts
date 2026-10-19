@@ -71,7 +71,7 @@ export function describeStep(ns: AppNamespace, action: NamespaceAction): string 
       ns.others === 1
         ? 'you own it and 1 other is a member; transfer ownership first'
         : `you own it and ${ns.others} others are members; transfer ownership first`,
-    'needs-primary-device': 'only your primary device can delete it',
+    'needs-primary-device': 'only the computer that holds the account can delete it',
   }[action];
   return `${ns.name}: ${what}`;
 }

@@ -102,7 +102,7 @@ describe('the line each namespace gets', () => {
       'Family: you own it and 2 others are members; transfer ownership first',
     );
     expect(describeStep(ownedAlone, 'needs-primary-device')).toBe(
-      'Notes: only your primary device can delete it',
+      'Notes: only the computer that holds the account can delete it',
     );
   });
 

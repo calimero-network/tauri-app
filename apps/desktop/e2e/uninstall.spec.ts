@@ -198,11 +198,11 @@ test.describe("Uninstall dialog", () => {
     expect(writes).toEqual([{ method: "POST", path: "/groups/ns-shared/owner-delete", body: {} }, UNINSTALL]);
   });
 
-  test("on a linked device, an owned namespace waits for the primary device", async ({ page }) => {
+  test("on a linked device, an owned namespace waits for the computer that holds the account", async ({ page }) => {
     const writes = await setup(page, [JOINED, ALONE], { holdsAccountRoot: false });
 
-    await expect(outcomes(page).nth(2)).toContainText("Notes: only your primary device can delete it");
-    await expect(page.getByText('Do this on your primary device, or untick "Also leave shared namespaces".')).toBeVisible();
+    await expect(outcomes(page).nth(2)).toContainText("Notes: only the computer that holds the account can delete it");
+    await expect(page.getByText('Do this on the computer that holds the account, or untick "Also leave shared namespaces".')).toBeVisible();
     await expect(uninstallButton(page)).toBeDisabled();
 
     await leave(page).uncheck();

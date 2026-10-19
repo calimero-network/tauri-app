@@ -156,7 +156,7 @@ const UninstallApp: React.FC<UninstallAppProps> = ({
                 {describeStep(ns, action)}
                 {action === "needs-primary-device" && (
                   <p className="uninstall-block-hint">
-                    Do this on your primary device, or untick "{LEAVE_LABEL}".
+                    Do this on the computer that holds the account, or untick "{LEAVE_LABEL}".
                   </p>
                 )}
                 {sharedAndOwned(ns) && (

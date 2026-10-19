@@ -14,7 +14,7 @@ export interface UninstallRequest {
   appName: string;
   namespaces: AppNamespace[];
   linkedDevice: boolean;
-  onConfirm: (steps: UninstallStep[]) => Promise<void>;
+  onConfirm: (steps: UninstallStep[], deleteData: boolean) => Promise<void>;
 }
 
 interface UninstallAppProps extends UninstallRequest {
@@ -66,7 +66,7 @@ const UninstallApp: React.FC<UninstallAppProps> = ({
   const confirm = async () => {
     setRunning(true);
     try {
-      await onConfirm(steps);
+      await onConfirm(steps, deleteData);
     } finally {
       setRunning(false);
     }

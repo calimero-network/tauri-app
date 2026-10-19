@@ -151,14 +151,33 @@ function runStep(meroJs: MeroJs, { ns, action }: UninstallStep): Promise<unknown
 }
 
 /**
- * Apply each namespace's step in order, then uninstall the app. The first
- * failure stops it with the app still installed, names the namespace, and
- * returns the steps that had already taken effect.
+ * Contexts of the app that outlived its namespaces' removal (a lazy upgrade
+ * leaves a context on the old application id inside a namespace that targets
+ * the new one). Leaving is node-local; a context delete would detach it for
+ * every member.
+ */
+async function leaveRemainingContexts(meroJs: MeroJs, applicationId: string): Promise<void> {
+  const { contexts } = await meroJs.admin.getContextsForApplication(applicationId);
+  for (const { id } of contexts ?? []) {
+    try {
+      await meroJs.admin.leaveContext(id);
+    } catch (e) {
+      throw new Error(nodeErrorMessage(e, `Context ${id.slice(0, 8)} failed`));
+    }
+  }
+}
+
+/**
+ * Apply each namespace's step in order, then (with `sweepContexts`) leave any
+ * context they left behind, then uninstall the app. The first failure stops it
+ * with the app still installed, names what failed, and returns the steps that
+ * had already taken effect.
  */
 export async function uninstallApp(
   meroJs: MeroJs,
   applicationId: string,
   steps: readonly UninstallStep[],
+  sweepContexts = false,
 ): Promise<UninstallResult> {
   const completed: UninstallStep[] = [];
   const response = await wrap('Failed to uninstall application', async () => {
@@ -172,6 +191,7 @@ export async function uninstallApp(
       }
       if (step.action !== 'keep') completed.push(step);
     }
+    if (sweepContexts) await leaveRemainingContexts(meroJs, applicationId);
     await meroJs.admin.uninstallApplication(applicationId);
     return { applicationId };
   });

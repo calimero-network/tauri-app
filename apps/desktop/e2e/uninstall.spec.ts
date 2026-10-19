@@ -34,7 +34,7 @@ interface Call {
 async function mockNode(
   page: Page,
   namespaces: MockNamespace[],
-  opts: { holdsAccountRoot?: boolean; refuse?: Record<string, { status: number; error: string }> } = {},
+  opts: { holdsAccountRoot?: boolean; contexts?: string[]; refuse?: Record<string, { status: number; error: string }> } = {},
 ) {
   const writes: Call[] = [];
   const json = (body: unknown, status = 200) => ({ status, contentType: "application/json", body: JSON.stringify(body) });
@@ -51,6 +51,9 @@ async function mockNode(
         return route.fulfill(
           json({ data: namespaces.map((ns) => ({ namespaceId: ns.id, name: ns.name, targetApplicationId: APP_ID })) }),
         );
+      }
+      if (path === `/contexts/for-application/${APP_ID}`) {
+        return route.fulfill(json({ data: { contexts: (opts.contexts ?? []).map((id) => ({ id })) } }));
       }
       const members = path.match(/^\/groups\/([^/]+)\/members$/);
       const ns = members && namespaces.find((n) => n.id === members[1]);
@@ -142,6 +145,29 @@ test.describe("Uninstall dialog", () => {
       { method: "DELETE", path: "/namespaces/ns-shared", body: {} },
       UNINSTALL,
     ]);
+  });
+
+  test("contexts no namespace took with it are left on this node before the app goes", async ({ page }) => {
+    const writes = await setup(page, [JOINED], { contexts: ["ctx-loose"] });
+
+    await uninstallButton(page).click();
+
+    await expect(toast(page)).toContainText('"Blockchain Demo" uninstalled');
+    expect(writes).toEqual([
+      { method: "POST", path: "/namespaces/ns-joined/leave", body: { purge: true } },
+      { method: "POST", path: "/contexts/ctx-loose/leave", body: {} },
+      UNINSTALL,
+    ]);
+  });
+
+  test("keeping the data leaves its contexts alone too", async ({ page }) => {
+    const writes = await setup(page, [JOINED], { contexts: ["ctx-loose"] });
+
+    await deleteData(page).uncheck();
+    await uninstallButton(page).click();
+
+    await expect(toast(page)).toContainText('"Blockchain Demo" uninstalled');
+    expect(writes).toEqual([UNINSTALL]);
   });
 
   test("keeping the data disables leaving and touches no namespace", async ({ page }) => {

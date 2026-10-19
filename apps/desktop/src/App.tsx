@@ -476,8 +476,8 @@ function App() {
   const handleConfirmUninstall = useCallback((request: UninstallRequest) => {
     setUninstallRequest({
       ...request,
-      onConfirm: async (steps) => {
-        await request.onConfirm(steps);
+      onConfirm: async (steps, deleteData) => {
+        await request.onConfirm(steps, deleteData);
         setCurrentPage('installed');
         setUninstallRequest(null);
       },

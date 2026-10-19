@@ -155,8 +155,8 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
     }
   };
 
-  const uninstall = async (appId: string, appName: string, steps: UninstallStep[]) => {
-    const response = await uninstallApp(apiClient.meroJs, appId, steps);
+  const uninstall = async (appId: string, appName: string, steps: UninstallStep[], deleteData: boolean) => {
+    const response = await uninstallApp(apiClient.meroJs, appId, steps, deleteData);
     if (response.error) {
       if (response.error.code === '401') onAuthRequired?.();
       else toast.error(uninstallFailureMessage(appName, response.error));
@@ -176,7 +176,7 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
       return;
     }
     const { namespaces, linkedDevice } = response.data;
-    onConfirmUninstall({ appName, namespaces, linkedDevice, onConfirm: (steps) => uninstall(appId, appName, steps) });
+    onConfirmUninstall({ appName, namespaces, linkedDevice, onConfirm: (steps, deleteData) => uninstall(appId, appName, steps, deleteData) });
   };
 
   const handleOpenFrontend = async (frontendUrl: string, appName?: string, applicationId?: string, iconData?: string) => {

@@ -202,6 +202,33 @@ describe('restoring forgotten namespaces', () => {
     ]);
   });
 
+  it('rejoins them as part of installing the app', async () => {
+    const client = await createClientAsync({ baseUrl: 'http://node' });
+    const calls = fakeNode([{ namespaceId: 'a', name: 'Team', forgotten: true }]);
+    const install = globalThis.fetch;
+    globalThis.fetch = async (input, init) =>
+      String(input).endsWith('/admin-api/install-application')
+        ? new Response(JSON.stringify({ data: { applicationId: 'app-1' } }), { status: 200 })
+        : install(input, init);
+
+    expect(await client.node.installApplication({ package: 'pkg', version: '1.0.0' })).toEqual({
+      data: { applicationId: 'app-1', restored: ['Team'], restoreFailed: [] },
+    });
+    expect(calls.map((c) => c.call)).toContain('POST /admin-api/namespaces/a/join');
+  });
+
+  it('still reports the install when the restore fails', async () => {
+    const client = await createClientAsync({ baseUrl: 'http://node' });
+    globalThis.fetch = async (input) =>
+      String(input).endsWith('/admin-api/install-application')
+        ? new Response(JSON.stringify({ data: { applicationId: 'app-1' } }), { status: 200 })
+        : new Response(JSON.stringify({ error: 'down' }), { status: 500 });
+
+    expect(await client.node.installApplication({ package: 'pkg', version: '1.0.0' })).toEqual({
+      data: { applicationId: 'app-1', restored: [], restoreFailed: ['down'] },
+    });
+  });
+
   it('reports a listing it could not read as a failure, without throwing', async () => {
     const { meroJs } = await createClientAsync({ baseUrl: 'http://node' });
     globalThis.fetch = async () => new Response(JSON.stringify({ error: 'down' }), { status: 500 });

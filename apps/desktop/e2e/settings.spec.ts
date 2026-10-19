@@ -1491,3 +1491,57 @@ test.describe("Settings toasts render", () => {
     );
   });
 });
+
+test.describe("Account page - revoked device notice", () => {
+  const REVOKED_FROM = { accountId: "a".repeat(64), deviceId: "d".repeat(32) };
+
+  async function openAccount(page: Page, revoked: boolean) {
+    let acknowledged = !revoked;
+    const requests: string[] = [];
+    await setupAuthenticatedPage(page);
+    await page.route(API_ROUTES.identity, (route) =>
+      route.fulfill(
+        json({
+          data: {
+            ...MOCK_NODE_IDENTITY,
+            ...(acknowledged ? {} : { revokedFrom: REVOKED_FROM }),
+          },
+        }),
+      ),
+    );
+    await page.route(API_ROUTES.acknowledgeRevokedFrom, (route) => {
+      requests.push(route.request().method());
+      acknowledged = true;
+      return route.fulfill(json({ data: null }));
+    });
+    await page.route(API_ROUTES.namespaces, (route) => route.fulfill(json({ data: [] })));
+    await page.route(API_ROUTES.accountDevices, (route) => route.fulfill(json({ devices: [] })));
+    await navigateVia(page, "Account");
+    return requests;
+  }
+
+  test("shows the notice while the node reports a revocation", async ({ page }) => {
+    await openAccount(page, true);
+
+    await expect(page.locator("#account-notice-revoked-from")).toContainText(
+      "This device was removed from your account.",
+    );
+    await page.screenshot({ path: "/tmp/revoked-banner.png" });
+  });
+
+  test("shows nothing without a revocation", async ({ page }) => {
+    await openAccount(page, false);
+
+    await expect(page.getByRole("heading", { name: "This device" })).toBeVisible();
+    await expect(page.locator("#account-notice-revoked-from")).toHaveCount(0);
+  });
+
+  test("dismissing sends the acknowledge request and hides the notice", async ({ page }) => {
+    const requests = await openAccount(page, true);
+
+    await page.locator("#account-notice-dismiss").click();
+
+    await expect(page.locator("#account-notice-revoked-from")).toHaveCount(0);
+    expect(requests).toEqual(["DELETE"]);
+  });
+});

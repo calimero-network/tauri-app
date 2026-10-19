@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
+import type { NodeIdentity } from "@calimero-network/mero-js";
 import type { AccountDevice } from "./device-link";
 
 vi.mock("./device-link", () => ({
@@ -27,6 +28,8 @@ import {
   scopeHint,
   scopeLockHint,
   scopeSwitches,
+  revokedFromNotice,
+  REVOKED_FROM_NOTICE,
   thisDeviceBanner,
 } from "./account";
 
@@ -486,6 +489,20 @@ describe("thisDeviceBanner", () => {
 
   it("says nothing while this device is still on the account", () => {
     expect(thisDeviceBanner([device({ isSelf: true })])).toBeNull();
+  });
+});
+
+describe("revokedFromNotice", () => {
+  const identity = { accountId: "a" } as NodeIdentity;
+
+  it("shows the notice while core reports a withdrawal", () => {
+    const revokedFrom = { accountId: "a", deviceId: "d" };
+    expect(revokedFromNotice({ ...identity, revokedFrom })).toBe(REVOKED_FROM_NOTICE);
+  });
+
+  it("says nothing without one", () => {
+    expect(revokedFromNotice(identity)).toBeNull();
+    expect(revokedFromNotice(null)).toBeNull();
   });
 });
 

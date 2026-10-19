@@ -37,6 +37,8 @@ interface AccountIdentityCardProps {
   loading: boolean;
   error: string;
   banner: string | null;
+  notice: string | null;
+  onDismissNotice: () => void;
   onRetry: () => void;
 }
 
@@ -66,6 +68,8 @@ export default function AccountIdentityCard({
   loading,
   error,
   banner,
+  notice,
+  onDismissNotice,
   onRetry,
 }: AccountIdentityCardProps) {
   const [showTechnical, setShowTechnical] = useState(false);
@@ -75,6 +79,19 @@ export default function AccountIdentityCard({
       {banner && (
         <p className="error-message" id="account-banner-revoked">
           {banner}
+        </p>
+      )}
+      {notice && (
+        <p className="error-message account-notice" id="account-notice-revoked-from">
+          <span>{notice}</span>
+          <button
+            type="button"
+            id="account-notice-dismiss"
+            className="button button-secondary button-small"
+            onClick={onDismissNotice}
+          >
+            Dismiss
+          </button>
         </p>
       )}
       <h2>This device</h2>

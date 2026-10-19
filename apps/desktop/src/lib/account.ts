@@ -226,11 +226,21 @@ export function accountAppRows(
 export function thisDeviceBanner(devices: AccountDevice[]): string | null {
   if (devices.some((device) => device.isSelf && device.revoked)) {
     return (
-      "This device was revoked from the account. It keeps its local copy but can no " +
-      "longer write, and it will not be carried into new namespaces."
+      "This device was revoked from the account. It can no longer write, and it will " +
+      "not be carried into new namespaces."
     );
   }
   return null;
+}
+
+/** Shown once after a revocation until dismissed. Says only what core enforces:
+ *  a revoked device is refused as an author, and re-pairing mints a new device. */
+export const REVOKED_FROM_NOTICE =
+  "This device was removed from your account. It can no longer make changes in the " +
+  "account's namespaces. To use the account here again, pair this device again.";
+
+export function revokedFromNotice(identity: NodeIdentity | null): string | null {
+  return identity?.revokedFrom ? REVOKED_FROM_NOTICE : null;
 }
 
 /** Relinking this node's own device is defined but can never publish anything, so

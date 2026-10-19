@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { apiClient } from "../lib/mero-client";
-import { describeStep, loadAppNamespaces, uninstallApp, type UninstallStep } from "../lib/uninstall";
+import { describeStep, loadAppNamespaces, uninstallApp, uninstallFailureMessage, type UninstallStep } from "../lib/uninstall";
 import type { UninstallRequest } from "./UninstallApp";
 import { useToast } from "../contexts/ToastContext";
 import ContextMenu from "../components/ContextMenu";
@@ -159,7 +159,7 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
     const response = await uninstallApp(apiClient.meroJs, appId, steps);
     if (response.error) {
       if (response.error.code === '401') onAuthRequired?.();
-      else toast.error(`"${appName}" was not uninstalled: ${response.error.message}`);
+      else toast.error(uninstallFailureMessage(appName, response.error));
       return;
     }
     const lines = steps.map((s) => describeStep(s.ns, s.action));

@@ -24,6 +24,7 @@ interface UninstallAppProps extends UninstallRequest {
   breadcrumbs: Array<{ label: string; onClick?: () => void }>;
 }
 
+const rowId = (ns: AppNamespace) => `uninstall-row-${ns.id}`;
 const LEAVE_LABEL = "Also leave shared namespaces";
 
 function whoElse(others: number): string {
@@ -47,10 +48,11 @@ const UninstallApp: React.FC<UninstallAppProps> = ({
   const [running, setRunning] = useState(false);
 
   const leaving = deleteData && leave;
-  const deleteForEveryone = new Set(namespaces.filter((ns) => forced.has(ns.id) && typed[ns.id] === ns.name).map((ns) => ns.id));
+  const deleteForEveryone = new Set(namespaces.filter((ns) => forced.has(ns.id) && typed[ns.id]?.trim() === ns.name).map((ns) => ns.id));
   const choice = { deleteData, leave, deleteForEveryone, linkedDevice };
   const steps: UninstallStep[] = namespaces.map((ns) => ({ ns, action: planNamespace(ns, choice) }));
   const blocked = isBlocked(steps.map((s) => s.action));
+  const blockedRows = steps.filter((s) => isBlocked([s.action])).map((s) => rowId(s.ns)).join(" ");
   // The force option belongs to a namespace the user owns and shares, whether or not it is ticked yet.
   const sharedAndOwned = (ns: AppNamespace) =>
     planNamespace(ns, { ...choice, deleteForEveryone: new Set() }) === "needs-transfer";
@@ -149,10 +151,10 @@ const UninstallApp: React.FC<UninstallAppProps> = ({
 
         <section className="uninstall-section" aria-labelledby="uninstall-outcome">
           <h2 id="uninstall-outcome" className="uninstall-section-title">What happens</h2>
-          <ul className="uninstall-outcomes" data-testid="uninstall-outcomes">
+          <ul className="uninstall-outcomes" data-testid="uninstall-outcomes" aria-live="polite">
             <li>The app is removed from this device.</li>
             {steps.map(({ ns, action }) => (
-              <li key={ns.id} className={isBlocked([action]) ? "is-blocked" : undefined}>
+              <li key={ns.id} id={rowId(ns)} className={isBlocked([action]) ? "is-blocked" : undefined}>
                 {describeStep(ns, action)}
                 {action === "needs-primary-device" && (
                   <p className="uninstall-block-hint">
@@ -162,15 +164,9 @@ const UninstallApp: React.FC<UninstallAppProps> = ({
                 {sharedAndOwned(ns) && (
                   <div className="uninstall-block">
                     <p className="uninstall-block-hint">
-                      <a
-                        href={`?transferNamespace=${encodeURIComponent(ns.id)}`}
-                        onClick={(e) => {
-                          e.preventDefault();
-                          onTransfer(ns.id);
-                        }}
-                      >
+                      <button type="button" className="uninstall-link" onClick={() => onTransfer(ns.id)}>
                         Transfer ownership
-                      </a>
+                      </button>
                       , or untick "{LEAVE_LABEL}".
                     </p>
                     <label className="confirm-option">
@@ -204,8 +200,14 @@ const UninstallApp: React.FC<UninstallAppProps> = ({
           <button onClick={onCancel} className="button button-secondary" type="button" disabled={running}>
             Cancel
           </button>
-          <button onClick={confirm} className="button button-danger" type="button" disabled={blocked || running}>
-            {running ? "Uninstalling…" : "Uninstall"}
+          <button
+            onClick={confirm}
+            className="button button-danger"
+            type="button"
+            disabled={blocked || running}
+            aria-describedby={blockedRows || undefined}
+          >
+            {running ? "Uninstalling..." : "Uninstall"}
           </button>
         </div>
       </div>

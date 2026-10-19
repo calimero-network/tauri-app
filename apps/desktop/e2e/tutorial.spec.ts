@@ -50,6 +50,8 @@ test.describe("Guided tour", () => {
   });
 
   test("shows on first reach of the shell and walks through every page and Settings tab", async ({ page }) => {
+    // Every page and Settings tab in one test: 16-20s alone, past the 30s default on a busy machine.
+    test.slow();
     const tour = page.getByTestId("tutorial");
     const next = page.getByTestId("tutorial-next");
     await expect(tour).toBeVisible();

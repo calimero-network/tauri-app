@@ -1198,6 +1198,33 @@
   cursor: not-allowed;
 }
 
+/* ─── Transfer ownership modal ─── */
+.ns-transfer-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 260px;
+  overflow: auto;
+}
+
+.ns-transfer-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border: 1px solid var(--border-color);
+  background: var(--surface-glass-soft);
+  cursor: pointer;
+}
+
+.ns-transfer-option input {
+  accent-color: var(--accent-primary);
+}
+
+.ns-transfer-option:has(input:checked) {
+  border-color: var(--accent-dim);
+}
+
 /* ─── Invite modal ─── */
 .ns-modal-wide {
   width: min(560px, calc(100vw - 32px));
@@ -1342,8 +1369,33 @@
   border-bottom: none;
 }
 
-.ns-actions-menu-item:hover {
+.ns-actions-menu-item:hover:not(:disabled) {
   background: var(--accent-light);
+}
+
+.ns-actions-menu-item:disabled {
+  cursor: not-allowed;
+  color: var(--text-tertiary);
+}
+
+.ns-actions-menu-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ns-actions-menu-item-hinted {
+  align-items: flex-start;
+}
+
+.ns-actions-menu-item-hinted svg {
+  margin-top: 2px;
+}
+
+.ns-actions-menu-hint {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  white-space: nowrap;
 }
 
 .ns-actions-menu-item-danger {

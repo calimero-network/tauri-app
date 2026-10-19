@@ -15,14 +15,16 @@ import type { GroupInfo, MetadataRecord } from "@calimero-network/mero-js";
 import { useToast } from "../contexts/ToastContext";
 import AppIcon from "../components/AppIcon";
 import NamespaceUpgradeCard from "../components/NamespaceUpgradeCard";
-import { ChevronLeft, Users, Box, Layers, Copy, ChevronRight, Shield, Globe, Plus, X, Trash2, UserMinus, Link, MoreHorizontal, LogIn, LogOut, HardDrive } from "lucide-react";
+import { ChevronLeft, Users, Box, Layers, Copy, ChevronRight, Shield, Globe, Plus, X, Trash2, UserMinus, Link, MoreHorizontal, LogIn, LogOut, HardDrive, ArrowRightLeft } from "lucide-react";
 import { parseTauriError } from "../utils/appUtils";
 import { invalidateInstalledApps } from "../utils/installedAppsCache";
 import { readInstalledApps, type InstalledApp } from "../utils/namespaceApps";
 import { getNamespaceFleetStatus } from "../utils/cloudApi";
 import { getCloudIdToken } from "../utils/cloudAuth";
 import { groupVisibilityLabel } from "../utils/groupVisibility";
-import { apiClient } from "../lib/mero-client";
+import { apiClient, transferNamespaceOwnership } from "../lib/mero-client";
+import { canInviteDevices } from "../lib/account";
+import { TransferOwnershipModal, type TransferTarget } from "./TransferOwnershipModal";
 import {
   fetchGroupMembers,
   isAdminRole,
@@ -30,8 +32,10 @@ import {
   isPermissionError,
   isReasonlessRefusal,
   resolveGroupAction,
+  roleColor,
   roleLabel,
   roleOf,
+  transferCandidates,
   type GroupAction,
 } from "../utils/groupRoles";
 import { describeFleetRelay, type FleetRelayStatus } from "../utils/fleetStatus";
@@ -186,7 +190,13 @@ function countTreeSubgroups(tree: NamespaceTree): number {
   return n;
 }
 
-function Namespaces() {
+interface NamespacesProps {
+  /** A namespace to open with its transfer-ownership picker showing. */
+  transferNamespaceId?: string | null;
+  onTransferHandled?: () => void;
+}
+
+function Namespaces({ transferNamespaceId, onTransferHandled }: NamespacesProps) {
   const toast = useToast();
   const { mero } = useMero();
   const cloudEnabled = useCloudEnabled();
@@ -239,11 +249,30 @@ function Namespaces() {
   // resolves to the same account: the route took a namespace and answered with
   // the node's account whichever one you passed.
   const { identity: myNodeIdentity } = useNodeIdentity();
+  const nsMembersKey = view.type === "namespace" ? activeNsRootId : null;
   const {
     members: nsMembers,
     loading: nsMembersLoading,
+    error: nsMembersError,
     refetch: refetchNsMembers,
-  } = useGroupMembers(view.type === "namespace" ? activeNsRootId : null);
+  } = useGroupMembers(nsMembersKey);
+  // mero-react drops the previous namespace's members a render after the id changes,
+  // so the list is only this namespace's once a fetch for its id has finished.
+  const [nsMembersFetchedKey, setNsMembersFetchedKey] = useState<string | null>(null);
+  const [nsMembersSeenKey, setNsMembersSeenKey] = useState(nsMembersKey);
+  if (nsMembersSeenKey !== nsMembersKey) {
+    // Left or switched namespace: a later visit must wait for its own fetch again.
+    setNsMembersSeenKey(nsMembersKey);
+    setNsMembersFetchedKey(null);
+  }
+  const nsMembersWasLoading = useRef(false);
+  useEffect(() => {
+    if (nsMembersLoading) nsMembersWasLoading.current = true;
+    else if (nsMembersWasLoading.current) {
+      nsMembersWasLoading.current = false;
+      setNsMembersFetchedKey(nsMembersKey);
+    }
+  }, [nsMembersLoading, nsMembersKey]);
 
   // My role on the active namespace, resolved from its member list, matched on
   // the ACCOUNT. rc.23 made the member listing answer with accounts (#3522) —
@@ -251,6 +280,16 @@ function Namespaces() {
   // against a device public key never matches and every row looks like
   // somebody else's.
   const myNsRole = roleOf(nsMembers, myNodeIdentity?.accountId);
+  const holdsAccountRoot = canInviteDevices(myNodeIdentity);
+  const isNsAdmin = !nsMembersLoading && isAdminRole(myNsRole);
+  // Core signs a transfer with the account root, which a linked device lacks, and
+  // takes it only from the owner, who is always an admin.
+  const transferBlockedReason = !holdsAccountRoot
+    ? "Do this on the computer that holds the account."
+    : !isAdminRole(myNsRole)
+      ? "Only an admin of this namespace can transfer it."
+      : undefined;
+  const canTransfer = !transferBlockedReason;
   // Delete (admin) vs Leave (plain member) for the namespace ROOT. `'delete'`
   // is also what an indeterminate answer yields — see `resolveGroupAction`.
   const nsAction: GroupAction = resolveGroupAction({
@@ -440,6 +479,10 @@ function Namespaces() {
   const [actionLoading, setActionLoading] = useState(false);
   const [deleteNsTarget, setDeleteNsTarget] = useState<Namespace | null>(null);
   const [leaveNsTarget, setLeaveNsTarget] = useState<Namespace | null>(null);
+  const [transferNsTarget, setTransferNsTarget] = useState<Namespace | null>(null);
+  const transferNsTargetRef = useRef(transferNsTarget);
+  transferNsTargetRef.current = transferNsTarget;
+  const [transferChoice, setTransferChoice] = useState<TransferTarget | null>(null);
   const [deleteGroupTarget, setDeleteGroupTarget] = useState<{ groupId: string; name: string } | null>(null);
   const [leaveGroupTarget, setLeaveGroupTarget] = useState<{ groupId: string; name: string } | null>(null);
   const [deleteContextTarget, setDeleteContextTarget] = useState<{ contextId: string; name: string; refetch: () => void } | null>(null);
@@ -675,6 +718,58 @@ function Namespaces() {
       setActionLoading(false);
     }
   };
+
+  // Whatever fails, the toast says why and both dialogs close; a promotion that
+  // went through shows up in the refetched member list.
+  const handleTransferOwnership = async (ns: Namespace, target: TransferTarget) => {
+    if (!mero) return;
+    setActionLoading(true);
+    const { promoted, error } = await transferNamespaceOwnership(
+      mero,
+      ns.namespaceId,
+      target.identity,
+      isAdminRole(target.role),
+    );
+    setActionLoading(false);
+    if (promoted) refetchNsMembers?.();
+    // A picker a link opened for another namespace meanwhile is not this transfer's to close.
+    if (transferNsTargetRef.current?.namespaceId === ns.namespaceId) {
+      setTransferChoice(null);
+      setTransferNsTarget(null);
+    }
+    if (error) {
+      toast.error(
+        promoted
+          ? `${target.label} is now an admin, but ownership was not transferred: ${error}`
+          : `Ownership was not transferred: ${error}`,
+      );
+      return;
+    }
+    toast.success(`Ownership transferred to ${target.label}`);
+  };
+
+  // `mero` can be replaced while the lookup is in flight; only the last run answers.
+  useEffect(() => {
+    if (!transferNamespaceId || !mero) return;
+    let stale = false;
+    (async () => {
+      try {
+        const ns = (await mero.admin.listNamespaces()).find((n) => n.namespaceId === transferNamespaceId);
+        if (stale) return;
+        if (ns) {
+          setView({ type: "namespace", ns });
+          setTransferChoice(null);
+          setTransferNsTarget(ns);
+        } else {
+          toast.error("This node does not have that namespace.");
+        }
+      } catch (e) {
+        if (!stale) toast.error(`Could not open the namespace: ${parseApiError(e)}`);
+      }
+      if (!stale) onTransferHandled?.();
+    })();
+    return () => { stale = true; };
+  }, [transferNamespaceId, mero]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /**
    * Leave = `POST /admin-api/namespaces/:id/leave`, merod's self-service exit.
@@ -931,14 +1026,6 @@ function Namespaces() {
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
     toast.success("Copied to clipboard");
-  };
-
-  const roleColor = (role: string) => {
-    switch (role.toLowerCase()) {
-      case "admin": return "var(--accent-primary)";
-      case "readonly": return "var(--text-tertiary)";
-      default: return "var(--text-secondary)";
-    }
   };
 
   // ── Context row helper ──
@@ -1290,6 +1377,45 @@ function Namespaces() {
           onConfirm={() => handleDeleteNamespace(deleteNsTarget)}
         />
       )}
+      {transferNsTarget && !transferChoice && (
+        <TransferOwnershipModal
+          key={transferNsTarget.namespaceId}
+          candidates={transferCandidates(nsMembers, myAccountId).map((m) => ({
+            identity: m.identity,
+            role: m.role,
+            name: m.name,
+            shortId: truncateId(m.identity),
+            label: m.name || truncateId(m.identity),
+          }))}
+          loading={
+            !myAccountId ||
+            nsMembersLoading ||
+            view.type !== "namespace" ||
+            view.ns.namespaceId !== transferNsTarget.namespaceId ||
+            nsMembersFetchedKey !== transferNsTarget.namespaceId
+          }
+          error={nsMembersError ? `Could not load the members: ${parseApiError(nsMembersError)}` : undefined}
+          blocked={transferBlockedReason}
+          onClose={() => setTransferNsTarget(null)}
+          onContinue={setTransferChoice}
+        />
+      )}
+      {transferNsTarget && transferChoice && (
+        <DeleteConfirmModal
+          title="Transfer Ownership"
+          warning={
+            isAdminRole(transferChoice.role)
+              ? `Transfer ownership of "${nsDisplayName(transferNsTarget)}" to ${transferChoice.label}?`
+              : `Make ${transferChoice.label} an admin and transfer ownership of "${nsDisplayName(transferNsTarget)}" to them?`
+          }
+          confirmLabel="Transfer"
+          busyLabel="Transferring..."
+          finalNote={null}
+          loading={actionLoading}
+          onClose={() => setTransferChoice(null)}
+          onConfirm={() => handleTransferOwnership(transferNsTarget, transferChoice)}
+        />
+      )}
       {leaveNsTarget && (
         <DeleteConfirmModal
           title="Leave Namespace"
@@ -1593,6 +1719,19 @@ function Namespaces() {
                   <button className="ns-actions-menu-item" onClick={() => { setActionsMenuOpen(false); setInviteModal({ groupId: ns.namespaceId, isNamespace: true }); }}>
                     <Link size={13} /> Invite
                   </button>
+                  {isNsAdmin && (
+                    <button
+                      className={`ns-actions-menu-item${canTransfer ? "" : " ns-actions-menu-item-hinted"}`}
+                      disabled={!canTransfer}
+                      onClick={() => { setActionsMenuOpen(false); setTransferNsTarget(ns); }}
+                    >
+                      <ArrowRightLeft size={13} />
+                      <span className="ns-actions-menu-text">
+                        Transfer Ownership
+                        {transferBlockedReason && <span className="ns-actions-menu-hint">{transferBlockedReason}</span>}
+                      </span>
+                    </button>
+                  )}
                   {nsAction === 'leave' ? (
                     <button className="ns-actions-menu-item ns-actions-menu-item-danger" onClick={() => { setActionsMenuOpen(false); setLeaveNsTarget(ns); }}>
                       <LogOut size={13} /> Leave
@@ -2238,7 +2377,7 @@ function CreateContextModal({ namespaceId, applicationId, loading, onClose, onSu
 interface DeleteConfirmModalProps {
   title: string;
   warning: string;
-  name: string;
+  name?: string;
   loading: boolean;
   confirmLabel?: string;
   /** Shown in place of "This action cannot be undone." — a leave that merod
@@ -2271,7 +2410,7 @@ function DeleteConfirmModal({
         </div>
         <div className="ns-modal-body">
           <div className="ns-delete-warning">
-            <p className="ns-delete-name">{name}</p>
+            {name && <p className="ns-delete-name">{name}</p>}
             <p className="ns-delete-msg">{warning}</p>
             {finalNote && <p className="ns-delete-final">{finalNote}</p>}
           </div>

@@ -47,7 +47,7 @@ const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? o
  */
 export default function Cloud() {
   const toast = useToast();
-  const { mero } = useMero();
+  const { mero, admin } = useMero();
   const session = useCloudSession();
   const connected = session === "connected";
   const ha = useHaStatus(!!mero);
@@ -67,8 +67,8 @@ export default function Cloud() {
   // Disk used per namespace on this node; `null` when the node cannot say.
   const [usage, setUsage] = useState<Map<string, NamespaceBytes> | null>(null);
   useVisiblePoll(() => {
-    if (!mero) return;
-    mero.admin.getUsage().then((raw) => setUsage(parseUsage(raw))).catch(() => setUsage(null));
+    if (!admin) return;
+    admin.getUsage().then((raw) => setUsage(parseUsage(raw))).catch(() => setUsage(null));
   }, 60000);
 
   // This node's role on each namespace root. Only the root's Admin can change

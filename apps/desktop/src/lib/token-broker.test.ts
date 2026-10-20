@@ -118,6 +118,13 @@ describe('rotateTokens', () => {
     expect(accessToken).toBe('access-2');
   });
 
+  it('leaves storage untouched when asked not to persist', async () => {
+    await broker.rotateTokens(false);
+
+    expect(storedRefreshToken).toBe('refresh-1');
+    expect(accessToken).toBe('access-1');
+  });
+
   // The core#3083 guard. A second concurrent POST would present the token the
   // first one just consumed; the node calls that theft and revokes the family.
   it('collapses concurrent rotations into exactly one /auth/refresh', async () => {

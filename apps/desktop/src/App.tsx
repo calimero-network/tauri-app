@@ -98,6 +98,11 @@ function App() {
     contextId: null,
     contextIdentity: null,
     connectToNode: () => {},
+    connectWithAccount: () => {},
+    isDelegated: false,
+    can: { createNamespace: true, createContext: true, invite: true, upgrade: true },
+    admin: clientReady ? apiClient.meroJs?.admin ?? null : null,
+    app: {},
     logout: () => { logOutOfNode().finally(() => window.location.reload()); },
     isLoading: checkingOnboarding,
     // eslint-disable-next-line react-hooks/exhaustive-deps

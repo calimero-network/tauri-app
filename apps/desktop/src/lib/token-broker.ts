@@ -138,7 +138,7 @@ function isRefreshRequest(url: string, method: string): boolean {
  * earlier rotation would otherwise present an already-consumed token and revoke
  * the family. Storage is the source of truth after the first rotation.
  */
-export function rotateTokens(): Promise<TokenPair> {
+export function rotateTokens(persist = true): Promise<TokenPair> {
   if (inflight) return inflight;
 
   const run = async (): Promise<TokenPair> => {
@@ -169,9 +169,11 @@ export function rotateTokens(): Promise<TokenPair> {
 
     // Persist before any caller can read the store again, so the consumed token
     // is never handed back out.
-    setAccessToken(rotated.access_token);
-    setRefreshToken(rotated.refresh_token);
-    setTokenExpiresAt(expiresAtFromJwt(rotated.access_token));
+    if (persist) {
+      setAccessToken(rotated.access_token);
+      setRefreshToken(rotated.refresh_token);
+      setTokenExpiresAt(expiresAtFromJwt(rotated.access_token));
+    }
 
     return rotated;
   };
@@ -210,7 +212,8 @@ export function installRefreshSingleFlight(): void {
     }
 
     try {
-      const rotated = await rotateTokens();
+      // MeroJs persists its own refresh; a store change underneath it reads as a sign-out.
+      const rotated = await rotateTokens(false);
       return new Response(JSON.stringify({ data: rotated }), {
         status: 200,
         headers: { 'content-type': 'application/json' },

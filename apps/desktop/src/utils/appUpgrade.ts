@@ -27,10 +27,11 @@ export type UpgradePlan =
   /** This node holds a release newer than the namespace runs. */
   | { kind: 'upgrade'; version: string }
   /**
-   * Core names no running version. On a member's node that is the normal state
-   * right after an upgrade: the node learns the new target at once but fetches
-   * the release, and so can name its version, only when a context is next used
-   * there.
+   * This node doesn't hold the release the namespace runs. On a member's node
+   * that is the normal state right after an upgrade: the node learns the new
+   * target at once but fetches the release only when a context is next used
+   * there. Core before rc.90 names no running version then; from rc.90
+   * (core#4607) it names the target's, which is newer than the one installed.
    */
   | { kind: 'unknown' };
 
@@ -50,7 +51,7 @@ export function planUpgrade(opts: {
   published?: string | null;
 }): UpgradePlan {
   const { running, installed, published } = opts;
-  if (!running) return { kind: 'unknown' };
+  if (!running || isNewer(running, installed)) return { kind: 'unknown' };
   // Install before anything else: the upgrade targets whatever this node holds,
   // so a newer published release has to land here first.
   if (published && isNewer(published, installed) && isNewer(published, running)) {

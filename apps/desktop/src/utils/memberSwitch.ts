@@ -37,18 +37,36 @@ export function behindContexts(
 const heldContexts = (contexts: ContextWithGroup[], groupIds: string[]) =>
   contexts.filter((c) => c.groupId && groupIds.includes(c.groupId));
 
-/** The release this node runs the namespace on, with the share still behind while mixed. */
+/** The release this node runs the namespace on; each release with its context count while mixed. */
 export function runningLabel(
   ns: Pick<SwitchTarget, 'appVersion'>,
   contexts: ContextWithGroup[],
   groupIds: string[],
 ): string {
   const held = heldContexts(contexts, groupIds);
-  const behind = behindContexts(ns, contexts, groupIds);
   if (held.length === 0) return 'not on this node yet';
-  if (behind.length === 0) return ns.appVersion ?? 'unknown';
-  const versions = [...new Set(behind.map((c) => c.applicationVersion))].join(', ');
-  return behind.length === held.length ? versions : `${versions} (${behind.length} of ${held.length} contexts)`;
+  const counts = new Map<string, number>();
+  for (const c of held) {
+    if (c.applicationVersion) counts.set(c.applicationVersion, (counts.get(c.applicationVersion) ?? 0) + 1);
+  }
+  if (counts.size === 0) return ns.appVersion ?? 'unknown';
+  if (counts.size === 1) return [...counts.keys()][0]!;
+  return [...counts]
+    .sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true }))
+    .map(([v, n]) => `${v} on ${n}`)
+    .join(', ');
+}
+
+/** How many of this node's contexts of the namespace still run an older release, as a sentence. */
+export function behindPhrase(
+  ns: Pick<SwitchTarget, 'appVersion'>,
+  contexts: ContextWithGroup[],
+  groupIds: string[],
+  subject: 'contexts' | 'of its contexts',
+): string {
+  const behind = behindContexts(ns, contexts, groupIds).length;
+  const held = heldContexts(contexts, groupIds).length;
+  return `${behind} of ${held} ${subject} on this node ${behind === 1 ? 'still runs' : 'still run'} an older release.`;
 }
 
 /**

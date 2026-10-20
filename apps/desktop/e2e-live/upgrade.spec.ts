@@ -88,11 +88,11 @@ test("an admin upgrades a namespace from the desktop, and a member's node follow
   await pageA.getByTestId("ns-upgrade-upgrade").click();
   await expect(pageA.getByTestId("ns-detail-version")).toContainText(`v${live.newer}`);
   await expect(pageA.getByTestId("ns-upgrade-target")).toHaveText(live.newer);
-  // The admin's own contexts move like anyone's: by switching.
-  await expect(pageA.getByTestId("ns-upgrade-running")).toHaveText(live.older);
-  await pageA.getByTestId("ns-upgrade-switch").click();
+  // The Upgrade also moved the admin's own contexts; no Switch click is needed.
   await expect(pageA.getByTestId("ns-upgrade-current")).toBeVisible({ timeout: 120_000 });
   await expect(pageA.getByTestId("ns-upgrade-running")).toHaveText(live.newer);
+  await expect(pageA.getByTestId("ns-upgrade-switch")).toHaveCount(0);
+  expect((await a.admin.getContext(contextId)).applicationVersion).toBe(live.newer);
   await a.rpc.execute({ contextId, method: "set", argsJson: { key: "who", value: "admin, upgraded" } });
 
   // ── Desktop B: the member's node has the op, and still runs the older release ──

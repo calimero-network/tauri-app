@@ -94,10 +94,12 @@ export default function UpgradeGateHost() {
           <h2>{title}</h2>
         </div>
         <div className="account-modal-body deep-link-consent">
-          {behind.length === 1 ? (
+          {busy ? (
+            <p data-testid="upgrade-gate-switching">Migrating your data. Keep Calimero open.</p>
+          ) : behind.length === 1 ? (
             <p>
-              The admin of {nsName(first)} moved it to {first.ns.appVersion}. This node runs {first.running}. Update to
-              keep using {req.appName}.
+              The admin of {nsName(first)} moved it to {first.ns.appVersion}. {first.summary} Update to keep using{" "}
+              {req.appName}.
             </p>
           ) : (
             <>
@@ -105,14 +107,13 @@ export default function UpgradeGateHost() {
               <ul>
                 {behind.map((b) => (
                   <li key={b.ns.namespaceId}>
-                    {nsName(b)}: the admin moved it to {b.ns.appVersion}, this node runs {b.running}.
+                    {nsName(b)}: the admin moved it to {b.ns.appVersion}. {b.summary}
                   </li>
                 ))}
               </ul>
             </>
           )}
 
-          {busy && <p data-testid="upgrade-gate-switching">Migrating your data. Keep Calimero open.</p>}
           {error && (
             <p className="deep-link-consent-warning" role="alert" data-testid="upgrade-gate-error">
               <AlertTriangle size={16} aria-hidden="true" />

@@ -165,12 +165,14 @@ const UninstallApp: React.FC<UninstallAppProps> = ({
                 )}
                 {sharedAndOwned(ns) && (
                   <div className="uninstall-block">
-                    <p className="uninstall-block-hint">
-                      <button type="button" className="uninstall-link" onClick={() => onTransfer(ns.id)}>
-                        Transfer ownership
-                      </button>
-                      , or untick "{LEAVE_LABEL}".
-                    </p>
+                    {!forced.has(ns.id) && (
+                      <p className="uninstall-block-hint">
+                        <button type="button" className="uninstall-link" onClick={() => onTransfer(ns.id)}>
+                          Transfer ownership
+                        </button>
+                        , or untick "{LEAVE_LABEL}".
+                      </p>
+                    )}
                     <label className="confirm-option">
                       <input
                         type="checkbox"

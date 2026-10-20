@@ -238,7 +238,9 @@ test.describe("Uninstall dialog", () => {
     const typed = page.getByRole("textbox", { name: "Type Family to confirm" });
 
     await expect(force).not.toBeChecked();
+    await expect(page.getByText('Transfer ownership, or untick "Also leave shared namespaces".')).toBeVisible();
     await force.check();
+    await expect(page.getByText('Transfer ownership, or untick "Also leave shared namespaces".')).toHaveCount(0);
     await expect(uninstallButton(page)).toBeDisabled();
     await typed.fill("family");
     await expect(uninstallButton(page)).toBeDisabled();

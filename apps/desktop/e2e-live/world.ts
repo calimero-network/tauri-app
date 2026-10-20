@@ -1,10 +1,10 @@
-import type { Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 import { MeroJs } from "@calimero-network/mero-js";
 import path from "node:path";
 import os from "node:os";
 import type { LiveState } from "./global-setup";
 import { openDesktop } from "./desktop";
-import { ADMIN_PASSWORD, ADMIN_USER, resolveMerod, startNodes, stopNodes, waitFor, type LiveNode } from "./nodes";
+import { ADMIN_PASSWORD, ADMIN_USER, resolveMerod, restartNode, startNodes, stopNodes, waitFor, type LiveNode } from "./nodes";
 
 export { openDesktop };
 
@@ -14,6 +14,23 @@ export async function admin(url: string): Promise<MeroJs> {
   const mero = new MeroJs({ baseUrl: url, credentials: { username: ADMIN_USER, password: ADMIN_PASSWORD } });
   await mero.authenticate();
   return mero;
+}
+
+/** The uninstall dialog for an app, opened from its card in the Applications page. */
+export async function openUninstall(page: Page, applicationId: string): Promise<void> {
+  await page.locator("aside.sidebar").getByTitle("Applications").click();
+  const card = page.locator(`[data-testid='installed-app-card'][data-app-id='${applicationId}']`);
+  await card.locator(".installed-app-more-btn").click();
+  await page.locator(".app-actions-dropdown .dropdown-item", { hasText: "Uninstall" }).click();
+  await expect(page.getByRole("heading", { name: "Uninstall Application" })).toBeVisible();
+  await expect(page.getByTestId("uninstall-namespaces")).toBeVisible();
+}
+
+/** In the open transfer picker: choose the first member and confirm. */
+export async function transferToFirstCandidate(page: Page): Promise<void> {
+  await page.locator(".ns-modal").getByRole("radio").first().check();
+  await page.locator(".ns-modal").getByRole("button", { name: "Continue" }).click();
+  await page.locator(".ns-delete-confirm-btn").click();
 }
 
 /** A full-page screenshot, written only when LIVE_SHOTS_DIR is set. */
@@ -32,18 +49,22 @@ export interface World {
   bobLinked: MeroJs;
   nodes: { alice: LiveNode; bob: LiveNode; bobLinked: LiveNode };
   applicationId: string;
+  /** What each account is called in the member lists. */
+  names: Map<MeroJs, string>;
+  /** Restarts one node on `merod`, same data dir, and replaces its client and entry in `nodes`. */
+  restart(who: "alice" | "bob", merod: string): Promise<void>;
   stop(): Promise<void>;
 }
 
 let slot = 0;
 
 /** Three nodes on ports the shared pair never uses, with the app installed on each. */
-export async function startWorld(): Promise<World> {
+export async function startWorld(merod: string = resolveMerod()): Promise<World> {
   const live = state();
   const base = (Number(process.env["LIVE_BASE_PORT"]) || 2840) + 20 + (slot++ % 4) * 8;
   const dataDir = path.join(process.env["LIVE_DATA_DIR"] ?? path.join(os.tmpdir(), "desktop-live-e2e"), `world-${slot}`);
   const nodes = await startNodes({
-    merod: resolveMerod(),
+    merod,
     dataDir,
     count: 3,
     basePort: base,
@@ -86,14 +107,27 @@ async function prepareWorld(nodes: LiveNode[]): Promise<World> {
     2_000,
   );
 
-  return {
+  const world: World = {
     alice: alice!,
     bob: bob!,
     bobLinked: bobLinked!,
     nodes: { alice: nodes[0]!, bob: nodes[1]!, bobLinked: nodes[2]! },
     applicationId,
-    stop: () => stopNodes(nodes.map((n) => n.pid)),
+    names: new Map([
+      [alice!, "Alice"],
+      [bob!, "Bob"],
+      [bobLinked!, "Bob"],
+    ]),
+    async restart(who, merod) {
+      const next = await restartNode(world.nodes[who], merod);
+      const client = await admin(next.url);
+      world.names.set(client, world.names.get(world[who])!);
+      world.nodes[who] = next;
+      world[who] = client;
+    },
+    stop: () => stopNodes(Object.values(world.nodes).map((n) => n.pid)),
   };
+  return world;
 }
 
 export interface Seeded {
@@ -136,10 +170,19 @@ export async function seedNamespace(
     }
   }
   const everyone = 1 + (opts.members ?? []).length;
-  for (const member of opts.members ?? []) {
+  const accounts = [owner, ...(opts.members ?? [])];
+  for (const account of accounts) {
+    const { accountId } = await account.admin.getNodeIdentity();
+    // Members cannot rename themselves by default, so the owner names everyone.
+    await owner.admin.setMemberMetadata(namespaceId, accountId, { name: w.names.get(account)! });
+  }
+  for (const member of accounts) {
     await waitFor(
-      `a member to list all ${everyone} members of ${name}`,
-      async () => (await member.admin.listGroupMembers(namespaceId)).members.length === everyone || undefined,
+      `a member to list all ${everyone} members of ${name}, by name`,
+      async () => {
+        const { members } = await member.admin.listGroupMembers(namespaceId);
+        return (members.length === everyone && members.every((m) => m.name)) || undefined;
+      },
       60_000,
     );
   }

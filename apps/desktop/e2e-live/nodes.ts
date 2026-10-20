@@ -162,6 +162,19 @@ export async function freePorts(count: number): Promise<number[]> {
   return ports;
 }
 
+/** Stops `node` and starts it again on `merod`, over the same data dir and ports. */
+export async function restartNode(node: LiveNode, merod: string): Promise<LiveNode> {
+  await stopNodes([node.pid]);
+  const next = { ...node, pid: spawnMerod(merod, node) };
+  try {
+    await waitFor(`${node.name} healthy on ${node.url}`, () => healthy(node.url), 60_000);
+  } catch (e) {
+    await stopNodes([next.pid]);
+    throw e;
+  }
+  return next;
+}
+
 export async function startNodes(opts: {
   merod: string;
   dataDir: string;

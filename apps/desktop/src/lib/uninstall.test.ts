@@ -128,7 +128,7 @@ describe('uninstalling an application', () => {
     globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
       const call = `${init?.method ?? 'GET'} ${url.pathname}`;
-      calls.push({ call, body: init?.body ? JSON.parse(String(init.body)) : undefined });
+      calls.push({ call: call + url.search, body: init?.body ? JSON.parse(String(init.body)) : undefined });
       return refuse[call]?.() ?? new Response(JSON.stringify({ data: {} }), { status: 200 });
     };
     return calls;
@@ -146,7 +146,7 @@ describe('uninstalling an application', () => {
 
     expect(response).toEqual({ data: { applicationId: 'app-1' } });
     expect(calls).toEqual([
-      { call: 'POST /admin-api/namespaces/a/leave', body: { purge: true } },
+      { call: 'POST /admin-api/namespaces/a/leave?purge=true', body: {} },
       { call: 'DELETE /admin-api/namespaces/b', body: {} },
       { call: 'POST /admin-api/groups/c/owner-delete', body: {} },
       { call: UNINSTALL, body: undefined },
@@ -167,7 +167,7 @@ describe('uninstalling an application', () => {
     expect(response.error?.message).toBe('name-a failed: the owner cannot leave');
     expect(response.error?.completed).toEqual([]);
     expect(response.error?.code).toBeUndefined();
-    expect(calls.map((c) => c.call)).toEqual(['POST /admin-api/namespaces/a/leave']);
+    expect(calls.map((c) => c.call)).toEqual(['POST /admin-api/namespaces/a/leave?purge=true']);
   });
 
   it('reports the steps already done when a later one fails', async () => {

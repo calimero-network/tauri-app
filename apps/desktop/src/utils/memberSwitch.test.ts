@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { HTTPError } from '@calimero-network/mero-js';
 
-import { behindContexts, runningLabel, switchNamespace } from './memberSwitch';
+import { behindContexts, behindPhrase, runningLabel, switchNamespace } from './memberSwitch';
 
 const NS = {
   namespaceId: 'ns-1',
@@ -43,21 +43,44 @@ describe('behindContexts', () => {
 describe('runningLabel', () => {
   const groups = ['ns-1'];
 
-  it('counts the contexts still on the old release while mixed', () => {
+  it('counts the contexts on each release while mixed', () => {
     const held = [ctx('a', 'ns-1', '1.0.0'), ctx('b', 'ns-1', '1.0.0'), ctx('c', 'ns-1', '2.0.0')];
-    expect(runningLabel(NS, held, groups)).toBe('1.0.0 (2 of 3 contexts)');
+    expect(runningLabel(NS, held, groups)).toBe('1.0.0 on 2, 2.0.0 on 1');
   });
 
-  it('is the bare version when every held context is behind', () => {
-    expect(runningLabel(NS, [ctx('a', 'ns-1', '1.0.0')], groups)).toBe('1.0.0');
+  it('is the bare version when every held context runs it', () => {
+    expect(runningLabel(NS, [ctx('a', 'ns-1', '1.0.0'), ctx('b', 'ns-1', '1.0.0')], groups)).toBe('1.0.0');
   });
 
-  it('is the namespace release when nothing is behind', () => {
-    expect(runningLabel(NS, [ctx('a', 'ns-1', '2.0.0')], groups)).toBe('2.0.0');
+  it('is the namespace release when no held context names its own', () => {
+    expect(runningLabel(NS, [ctx('a', 'ns-1')], groups)).toBe('2.0.0');
   });
 
   it('says so when this node holds nothing of the namespace yet', () => {
     expect(runningLabel(NS, [], groups)).toBe('not on this node yet');
+  });
+});
+
+describe('behindPhrase', () => {
+  const groups = ['ns-1'];
+  const held = [ctx('a', 'ns-1', '1.0.0'), ctx('b', 'ns-1', '1.0.0'), ctx('c', 'ns-1', '2.0.0')];
+
+  it('counts the contexts still behind out of those held', () => {
+    expect(behindPhrase(NS, held, groups, 'contexts')).toBe(
+      '2 of 3 contexts on this node still run an older release.',
+    );
+  });
+
+  it('reads in the singular for one context', () => {
+    expect(behindPhrase(NS, held.slice(1), groups, 'contexts')).toBe(
+      '1 of 2 contexts on this node still runs an older release.',
+    );
+  });
+
+  it('takes the subject the sentence needs', () => {
+    expect(behindPhrase(NS, held, groups, 'of its contexts')).toBe(
+      '2 of 3 of its contexts on this node still run an older release.',
+    );
   });
 });
 

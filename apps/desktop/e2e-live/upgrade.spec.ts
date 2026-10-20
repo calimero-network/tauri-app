@@ -15,8 +15,13 @@ import { ADMIN_PASSWORD, ADMIN_USER, waitFor } from "./nodes";
  *
  * What only real nodes show, and this pins:
  * - installing on A changes nothing for the namespace; the upgrade does;
- * - B learns the new target as soon as the op arrives, but fetches the release
- *   (and so can name its version) only when the app is next used on B.
+ * - B learns the new target as soon as the op arrives, while its contexts keep
+ *   running the older release until the member switches them;
+ * - the switch installs the release, moves B's contexts, and replays what the
+ *   admin wrote on the newer release meanwhile.
+ *
+ * The launch gate needs an app with a web frontend to open; the suite's app has
+ * none, so the gate is covered by the mocked specs only.
  */
 
 const NS_NAME = "Upgrade test";
@@ -68,6 +73,7 @@ test("an admin upgrades a namespace from the desktop, and a member's node follow
   // ── Desktop A: the admin installs the newer release, then upgrades ──
   const pageA = await openDesktop(browser, nodeA!.url, live.registryUrl);
   await openNamespace(pageA, applicationId, NS_NAME);
+  await expect(pageA.getByTestId("ns-upgrade-target")).toHaveText(live.older);
   await expect(pageA.getByTestId("ns-upgrade-running")).toHaveText(live.older);
   await expect(pageA.getByTestId("ns-upgrade-installed")).toHaveText(live.older);
   await expect(pageA.getByTestId("ns-upgrade-published")).toHaveText(live.newer);
@@ -76,15 +82,20 @@ test("an admin upgrades a namespace from the desktop, and a member's node follow
   await pageA.getByTestId("ns-upgrade-install").click();
   await expect(pageA.getByTestId("ns-upgrade-installed")).toHaveText(live.newer);
   // Installed here, and still not the namespace's release.
-  await expect(pageA.getByTestId("ns-upgrade-running")).toHaveText(live.older);
+  await expect(pageA.getByTestId("ns-upgrade-target")).toHaveText(live.older);
   expect((await b.admin.listNamespaces()).find((n) => n.namespaceId === namespaceId)?.appVersion).toBe(live.older);
 
   await pageA.getByTestId("ns-upgrade-upgrade").click();
   await expect(pageA.getByTestId("ns-detail-version")).toContainText(`v${live.newer}`);
+  await expect(pageA.getByTestId("ns-upgrade-target")).toHaveText(live.newer);
+  // The admin's own contexts move like anyone's: by switching.
+  await expect(pageA.getByTestId("ns-upgrade-running")).toHaveText(live.older);
+  await pageA.getByTestId("ns-upgrade-switch").click();
+  await expect(pageA.getByTestId("ns-upgrade-current")).toBeVisible({ timeout: 120_000 });
   await expect(pageA.getByTestId("ns-upgrade-running")).toHaveText(live.newer);
-  await expect(pageA.getByTestId("ns-upgrade-current")).toBeVisible();
+  await a.rpc.execute({ contextId, method: "set", argsJson: { key: "who", value: "admin, upgraded" } });
 
-  // ── Desktop B: the member's node has the op, not yet the release ──
+  // ── Desktop B: the member's node has the op, and still runs the older release ──
   await waitFor(
     "the upgrade to reach the member's node",
     async () => (await b.admin.listNamespaces()).find((n) => n.namespaceId === namespaceId)?.appVersion !== live.older,
@@ -92,24 +103,28 @@ test("an admin upgrades a namespace from the desktop, and a member's node follow
   );
   const pageB = await openDesktop(browser, nodeB!.url, live.registryUrl);
   await openNamespace(pageB, applicationId, NS_NAME);
-  await expect(pageB.getByTestId("ns-upgrade-unknown")).toBeVisible();
+  await expect(pageB.getByTestId("ns-upgrade-target")).toHaveText(live.newer);
+  await expect(pageB.getByTestId("ns-upgrade-running")).toHaveText(live.older);
   await expect(pageB.getByTestId("ns-upgrade-install")).toHaveCount(0);
   await expect(pageB.getByTestId("ns-upgrade-upgrade")).toHaveCount(0);
+  expect((await b.admin.getContext(contextId)).applicationVersion).toBe(live.older);
 
-  // The member uses the app: the node fetches the newer release from its own
-  // registry and switches the context, and the write still lands.
-  await b.rpc.execute({ contextId, method: "set", argsJson: { key: "who", value: "member, upgraded" } });
-  expect(await b.rpc.execute({ contextId, method: "get", argsJson: { key: "who" } })).toBe("member, upgraded");
-
-  await pageB.reload();
-  await openNamespace(pageB, applicationId, NS_NAME);
-  await expect(pageB.getByTestId("ns-detail-version")).toContainText(`v${live.newer}`);
+  // ── The member switches: the release is installed, the context moves ──
+  await pageB.getByTestId("ns-upgrade-switch").click();
+  await expect(pageB.getByTestId("ns-upgrade-current")).toBeVisible({ timeout: 120_000 });
   await expect(pageB.getByTestId("ns-upgrade-running")).toHaveText(live.newer);
   await expect(pageB.getByTestId("ns-upgrade-installed")).toHaveText(live.newer);
-  await expect(pageB.getByTestId("ns-upgrade-install")).toHaveCount(0);
-  await expect(pageB.getByTestId("ns-upgrade-upgrade")).toHaveCount(0);
+  await expect(pageB.getByTestId("ns-upgrade-switch")).toHaveCount(0);
+  expect((await b.admin.getContext(contextId)).applicationVersion).toBe(live.newer);
 
-  // The admin's node sees the member's write made on the newer release.
+  // What the admin wrote on the newer release reaches the member, and the member's write goes back.
+  await waitFor(
+    "the admin's upgraded write to reach the member's node",
+    async () => (await b.rpc.execute({ contextId, method: "get", argsJson: { key: "who" } })) === "admin, upgraded",
+    60_000,
+    1_000,
+  );
+  await b.rpc.execute({ contextId, method: "set", argsJson: { key: "who", value: "member, upgraded" } });
   await waitFor(
     "the member's upgraded write to reach the admin's node",
     async () => (await a.rpc.execute({ contextId, method: "get", argsJson: { key: "who" } })) === "member, upgraded",

@@ -4,6 +4,7 @@ name: Desktop E2E (live nodes)
 # upgrade reaching a member's node, and a device linked from the Account screens
 # reading a private subgroup. The mocked suite (e2e-desktop.yml) cannot see
 # either, because both cross nodes and governance ops.
+# The uninstall specs run on three more nodes per test.
 #
 # merod is the version merod-config.json pins, checked against its sha256 pin,
 # so this tests what the desktop ships. The two releases are the two newest

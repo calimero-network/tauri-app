@@ -697,9 +697,11 @@ test.describe("Account page - device listing", () => {
     const bodies = scopeRequests(page);
     await withPairedScope(page, [MOCK_APPLICATION_ID]);
 
+    const rescoped = page.waitForResponse(API_ROUTES.rescopeDevice);
     await page
       .locator(`#device-app-${MOCK_PAIR_INIT.deviceId}-${MOCK_OTHER_APPLICATION_ID}`)
       .click();
+    await rescoped;
 
     expect(bodies[0]).toEqual({
       scope: { only: [MOCK_APPLICATION_ID, MOCK_OTHER_APPLICATION_ID] },
@@ -712,7 +714,9 @@ test.describe("Account page - device listing", () => {
     const all = page.locator(`#device-scope-all-${MOCK_PAIR_INIT.deviceId}`);
 
     await expect(all).toBeChecked();
+    const rescoped = page.waitForResponse(API_ROUTES.rescopeDevice);
     await all.click();
+    await rescoped;
 
     const scope = bodies[0].scope as { only: string[] };
     expect(new Set(scope.only)).toEqual(
@@ -726,7 +730,9 @@ test.describe("Account page - device listing", () => {
     const bodies = scopeRequests(page);
     await withPairedScope(page, [MOCK_APPLICATION_ID]);
 
+    const rescoped = page.waitForResponse(API_ROUTES.rescopeDevice);
     await page.locator(`#device-scope-all-${MOCK_PAIR_INIT.deviceId}`).click();
+    await rescoped;
 
     expect(bodies[0]).toEqual({ scope: "all" });
   });

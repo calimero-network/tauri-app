@@ -7,7 +7,7 @@ import { nodeErrorMessage } from "../lib/mero-client";
 import { fetchAppVersions } from "../utils/registry";
 import { getSettings } from "../utils/settings";
 import { planUpgrade, readUpgradeProgress, type UpgradeStatusLike } from "../utils/appUpgrade";
-import { behindContexts, runningLabel, switchNamespace, type FailedContext } from "../utils/memberSwitch";
+import { behindContexts, behindPhrase, runningLabel, switchNamespace, type FailedContext } from "../utils/memberSwitch";
 import type { InstalledApp } from "../utils/namespaceApps";
 import "./NamespaceUpgradeCard.css";
 
@@ -164,7 +164,8 @@ export default function NamespaceUpgradeCard({ ns, app, groupIds, isAdmin, onIns
       });
       toast.success(`Upgrading ${ns.name || "namespace"} to ${version}`);
       await loadStatus();
-      await onUpgraded();
+      // The upgrade moves the namespace, not this node's own contexts: switch them onto the new target.
+      await applySwitch(await mero.admin.getNamespace(ns.namespaceId), true);
     } catch (e) {
       const msg = nodeErrorMessage(e, `Could not upgrade to ${version}`);
       setError(msg);
@@ -174,20 +175,18 @@ export default function NamespaceUpgradeCard({ ns, app, groupIds, isAdmin, onIns
     }
   };
 
-  const switchNow = async () => {
+  const applySwitch = async (target: Namespace, installedOnTarget: boolean) => {
     if (!mero) return;
     setBusy("switch");
     setError(null);
     setMoved(false);
     setSwitchFailed([]);
     try {
-      const out = await switchNamespace(mero, ns, installed !== null && installed === running, setSwitchStep);
+      const out = await switchNamespace(mero, target, installedOnTarget, setSwitchStep);
       if (out.kind === "error") {
         setError(out.message);
         toast.error(out.message);
-        return;
-      }
-      if (out.kind === "moved") setMoved(true);
+      } else if (out.kind === "moved") setMoved(true);
       else setSwitchFailed(out.failed);
       await Promise.all([loadContexts(), onInstalled(), onUpgraded()]);
     } finally {
@@ -195,6 +194,8 @@ export default function NamespaceUpgradeCard({ ns, app, groupIds, isAdmin, onIns
       setSwitchStep(null);
     }
   };
+
+  const switchNow = () => applySwitch(ns, installed !== null && installed === running);
 
   const retry = async () => {
     if (!mero) return;
@@ -276,11 +277,6 @@ export default function NamespaceUpgradeCard({ ns, app, groupIds, isAdmin, onIns
         </div>
       )}
 
-      {moved && (
-        <div className="ns-upgrade-note" data-testid="ns-upgrade-moved">
-          The admin moved this namespace to {running} meanwhile.
-        </div>
-      )}
       {switchFailed.length > 0 && (
         <div className="ns-upgrade-note ns-upgrade-note-warn" data-testid="ns-upgrade-switch-failed">
           <AlertTriangle size={14} />
@@ -297,16 +293,19 @@ export default function NamespaceUpgradeCard({ ns, app, groupIds, isAdmin, onIns
           )}
         </div>
       )}
-      {busy === "switch" && switchStep === "switching" && (
-        <div className="ns-upgrade-note" data-testid="ns-upgrade-switching">
-          Migrating your data. Keep Calimero open.
-        </div>
-      )}
       {showSwitch && switchFailed.length === 0 && (
         <div className="ns-upgrade-action">
-          <span>
-            The admin moved this namespace to {running}. This node still runs {runningLabel(ns, contexts, groupIds)}.
-          </span>
+          {busy === "switch" ? (
+            <span data-testid="ns-upgrade-switching">Migrating your data. Keep Calimero open.</span>
+          ) : moved ? (
+            <span data-testid="ns-upgrade-moved">
+              The admin moved this namespace to {running} while this node was switching.
+            </span>
+          ) : (
+            <span data-testid="ns-upgrade-behind">
+              The admin moved this namespace to {running}. {behindPhrase(ns, contexts, groupIds, "contexts")}
+            </span>
+          )}
           <button
             className="ns-action-btn ns-upgrade-primary"
             data-testid="ns-upgrade-switch"

@@ -1,5 +1,5 @@
 import type { AdminApiClient, Namespace } from '@calimero-network/mero-js';
-import { behindContexts, runningLabel } from './memberSwitch';
+import { behindContexts, behindPhrase } from './memberSwitch';
 
 type GateClient = {
   admin: Pick<
@@ -10,7 +10,7 @@ type GateClient = {
 
 export interface BehindNamespace {
   ns: Namespace;
-  running: string;
+  summary: string;
 }
 
 export interface GateRequest {
@@ -62,7 +62,7 @@ export async function behindNamespaces(mero: GateClient, appId: string): Promise
     for (const ns of mine) {
       const groupIds = await namespaceGroupIds(mero.admin, ns.namespaceId);
       if (behindContexts(ns, contexts, groupIds).length) {
-        out.push({ ns, running: runningLabel(ns, contexts, groupIds) });
+        out.push({ ns, summary: behindPhrase(ns, contexts, groupIds, 'of its contexts') });
       }
     }
     return out;

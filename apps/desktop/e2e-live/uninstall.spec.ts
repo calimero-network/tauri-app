@@ -49,6 +49,13 @@ async function openUninstallDialog(page: Page) {
   await expect(page.getByTestId("uninstall-namespaces")).toBeVisible();
 }
 
+/** What the node now lists, as the Namespaces page shows it. */
+async function shotNodeState(page: Page, name: string) {
+  await page.locator("aside.sidebar").getByTitle("Namespaces").click();
+  await expect(page.getByText("Loading namespaces")).toHaveCount(0);
+  await shot(page, name);
+}
+
 async function reinstallFromMarketplace(page: Page) {
   await page.locator("aside.sidebar").getByTitle("Marketplace").click();
   await page.locator("[data-testid='app-card']").first().click();
@@ -66,6 +73,7 @@ test("1. the default leaves the namespace on every device of the account, and a 
   await uninstallButton(page).click();
   await expect(toast(page)).toContainText("Family: you leave it, and all your devices remove it");
   await shot(page, "1-default-leave-after");
+  await shotNodeState(page, "1-default-leave-node-state");
 
   // Purged here, and on the account's other device; Alice no longer lists Bob.
   expect(await hasNamespace(w.bob, namespaceId)).toBe(false);
@@ -100,6 +108,7 @@ test("2. remove from this device only: purged here, still a member, and a reinst
   await uninstallButton(page).click();
   await expect(toast(page)).toContainText("Team: removed from this device; you stay a member");
   await shot(page, "2-remove-here-after");
+  await shotNodeState(page, "2-remove-here-node-state");
 
   // Gone from this device's disk, flagged for restore, and still Bob's in Alice's view.
   expect(await hasNamespace(w.bob, namespaceId)).toBe(false);
@@ -118,6 +127,7 @@ test("2. remove from this device only: purged here, still a member, and a reinst
     `Restored 1 namespace: ${namespaceId.slice(0, 8)}`,
   );
   await shot(page, "2-remove-here-restored");
+  await shotNodeState(page, "2-remove-here-restored-node-state");
 
   expect(await appNamespaces(w.bob, w.applicationId)).toEqual([{ id: namespaceId, forgotten: false }]);
   await waitFor("the data to sync back", async () => (await canRead(w.bob, contextId!)) || undefined, 60_000, 1_000);
@@ -136,6 +146,7 @@ test("3. leaving from a second device purges the account's primary device too", 
   await uninstallButton(page).click();
   await expect(toast(page)).toContainText("Club: you leave it, and all your devices remove it");
   await shot(page, "3-leave-on-second-device-after");
+  await shotNodeState(page, "3-leave-on-second-device-node-state");
 
   expect(await hasNamespace(w.bobLinked, namespaceId)).toBe(false);
   expect(await contextIds(w.bobLinked)).toEqual([]);
@@ -226,6 +237,7 @@ test("6. an owner deletes a shared namespace for everyone, after typing its name
   await uninstallButton(page).click();
   await expect(toast(page)).toContainText("Roadmap: deleted for both members");
   await shot(page, "6-delete-for-everyone-after");
+  await shotNodeState(page, "6-delete-for-everyone-node-state");
 
   expect(await hasNamespace(w.alice, namespaceId)).toBe(false);
   expect(await appInstalled(w.alice, w.applicationId)).toBe(false);

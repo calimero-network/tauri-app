@@ -24,6 +24,11 @@ The nodes issue 5-second access tokens so this happens within one test.
 In the browser, `e2e-live/bridge.ts` answers the shell's node commands (`init_merod_node`, `start_merod` and the like) with the same `merod init` and `merod run`, and refuses any data directory outside the test's own.
 Set `PROOF_DIR` to save a full-page screenshot of each step there.
 
+`uninstall.spec.ts` covers the uninstall dialog's outcomes on three fresh nodes per test:
+an owner, the desktop's account, and a second device paired into that account.
+Each test asserts what the nodes hold (namespaces, contexts, members, the forgotten marker), not only the dialog.
+It skips on a merod that does not keep a restorable marker for a namespace removed from a device, so it starts running when the pinned merod is bumped.
+
 ## Run it
 
 ```sh
@@ -56,11 +61,16 @@ Put exactly two `.mpk` releases of **one** package from **one** signer in this d
 
 The `LIVE_BUNDLES` variable takes comma-separated paths instead of a directory.
 
+### Screenshots
+
+Set `LIVE_SHOTS_DIR` to a directory to save a full-page screenshot at each key step of the uninstall spec.
+
 ### Ports and data
 
 - The nodes listen on ports the OS reports free, never on `2528`, and the pages are refused `2528`, so a running Calimero Desktop is neither touched nor seen.
 - The web UI runs on port `1420`, or on `LIVE_UI_PORT` if another checkout's Vite already holds it.
 - Data goes to a fresh `$TMPDIR/desktop-live-e2e-*`, or to `LIVE_DATA_DIR` if set.
 - Each node's log is `<data dir>/live-N.log`, or `<data dir>/device-link-*/<desktop>.log`.
+- The uninstall spec starts three fresh nodes per test, under `<data dir>/world-N`.
 
 CI runs this in `.github/workflows/e2e-live.yml`.

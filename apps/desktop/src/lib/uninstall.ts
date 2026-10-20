@@ -81,11 +81,23 @@ export interface UninstallStep {
   action: NamespaceAction;
 }
 
-/** A failed uninstall, with the steps that had already taken effect. */
+/** The steps that change something; `keep` and the blocked ones never complete. */
+export type DoneAction = 'leave' | 'remove' | 'delete-for-everyone';
+
+export interface DoneStep {
+  ns: AppNamespace;
+  action: DoneAction;
+}
+
+const isDone = (s: UninstallStep): s is DoneStep =>
+  s.action === 'leave' || s.action === 'remove' || s.action === 'delete-for-everyone';
+
+/** A failed uninstall, with what had already taken effect. */
 export interface UninstallError {
   message: string;
   code?: string;
-  completed: UninstallStep[];
+  completed: DoneStep[];
+  contextsLeft: string[];
 }
 
 export interface UninstallResult {
@@ -93,17 +105,21 @@ export interface UninstallResult {
   error?: UninstallError;
 }
 
-export function describeDone(ns: AppNamespace, action: NamespaceAction): string {
+export function describeDone(ns: AppNamespace, action: DoneAction): string {
   const did = {
     leave: 'was left',
     remove: 'was removed from this device',
     'delete-for-everyone': 'was deleted for everyone',
-  }[action as 'leave' | 'remove' | 'delete-for-everyone'];
+  }[action];
   return `${ns.name} ${did}`;
 }
 
 export function uninstallFailureMessage(appName: string, error: UninstallError): string {
-  const parts = [...error.completed.map((s) => describeDone(s.ns, s.action)), error.message];
+  const parts = [
+    ...error.completed.map((s) => describeDone(s.ns, s.action)),
+    ...error.contextsLeft.map((label) => `${label} was left`),
+    error.message,
+  ];
   return `"${appName}" was not uninstalled: ${parts.join('; ')}`;
 }
 
@@ -156,14 +172,20 @@ function runStep(meroJs: MeroJs, { ns, action }: UninstallStep): Promise<unknown
  * the new one). Leaving is node-local; a context delete would detach it for
  * every member.
  */
-async function leaveRemainingContexts(meroJs: MeroJs, applicationId: string): Promise<void> {
+async function leaveRemainingContexts(
+  meroJs: MeroJs,
+  applicationId: string,
+  left: string[],
+): Promise<void> {
   const { contexts } = await meroJs.admin.getContextsForApplication(applicationId);
   for (const { id } of contexts ?? []) {
+    const label = `Context ${id.slice(0, 8)}`;
     try {
       await meroJs.admin.leaveContext(id);
     } catch (e) {
-      throw failure(e, `Context ${id.slice(0, 8)} failed`);
+      throw failure(e, `${label} failed`);
     }
+    left.push(label);
   }
 }
 
@@ -179,7 +201,8 @@ export async function uninstallApp(
   steps: readonly UninstallStep[],
   sweepContexts = false,
 ): Promise<UninstallResult> {
-  const completed: UninstallStep[] = [];
+  const completed: DoneStep[] = [];
+  const contextsLeft: string[] = [];
   const response = await wrap('Failed to uninstall application', async () => {
     const waiting = steps.find((s) => isBlocked([s.action]));
     if (waiting) throw new Error(describeStep(waiting.ns, waiting.action));
@@ -189,13 +212,13 @@ export async function uninstallApp(
       } catch (e) {
         throw failure(e, `${step.ns.name} failed`);
       }
-      if (step.action !== 'keep') completed.push(step);
+      if (isDone(step)) completed.push(step);
     }
-    if (sweepContexts) await leaveRemainingContexts(meroJs, applicationId);
+    if (sweepContexts) await leaveRemainingContexts(meroJs, applicationId, contextsLeft);
     await meroJs.admin.uninstallApplication(applicationId);
     return { applicationId };
   });
-  return response.error ? { error: { ...response.error, completed } } : { data: response.data };
+  return response.error ? { error: { ...response.error, completed, contextsLeft } } : { data: response.data };
 }
 
 /** Names what failed, but keeps a sign-in failure as is so `wrap` still reads it. */

@@ -24,7 +24,8 @@ interface UninstallAppProps extends UninstallRequest {
   breadcrumbs: Array<{ label: string; onClick?: () => void }>;
 }
 
-const rowId = (ns: AppNamespace) => `uninstall-row-${ns.id}`;
+const reasonId = (ns: AppNamespace) => `uninstall-reason-${ns.id}`;
+const OLDER_CONTEXTS = "Contexts still on an older version of the app are left on this node, whether or not you leave.";
 const LEAVE_LABEL = "Also leave shared namespaces";
 
 function whoElse(others: number): string {
@@ -52,7 +53,8 @@ const UninstallApp: React.FC<UninstallAppProps> = ({
   const choice = { deleteData, leave, deleteForEveryone, linkedDevice };
   const steps: UninstallStep[] = namespaces.map((ns) => ({ ns, action: planNamespace(ns, choice) }));
   const blocked = isBlocked(steps.map((s) => s.action));
-  const blockedRows = steps.filter((s) => isBlocked([s.action])).map((s) => rowId(s.ns)).join(" ");
+  const blockedSteps = steps.filter((s) => isBlocked([s.action]));
+  const blockedReasons = blockedSteps.map((s) => reasonId(s.ns)).join(" ");
   // The force option belongs to a namespace the user owns and shares, whether or not it is ticked yet.
   const sharedAndOwned = (ns: AppNamespace) =>
     planNamespace(ns, { ...choice, deleteForEveryone: new Set() }) === "needs-transfer";
@@ -151,11 +153,11 @@ const UninstallApp: React.FC<UninstallAppProps> = ({
 
         <section className="uninstall-section" aria-labelledby="uninstall-outcome">
           <h2 id="uninstall-outcome" className="uninstall-section-title">What happens</h2>
-          <ul className="uninstall-outcomes" data-testid="uninstall-outcomes" aria-live="polite">
+          <ul className="uninstall-outcomes" data-testid="uninstall-outcomes">
             <li>The app is removed from this device.</li>
             {steps.map(({ ns, action }) => (
-              <li key={ns.id} id={rowId(ns)} className={isBlocked([action]) ? "is-blocked" : undefined}>
-                {describeStep(ns, action)}
+              <li key={ns.id} className={isBlocked([action]) ? "is-blocked" : undefined}>
+                <span id={isBlocked([action]) ? reasonId(ns) : undefined}>{describeStep(ns, action)}</span>
                 {action === "needs-primary-device" && (
                   <p className="uninstall-block-hint">
                     Do this on the computer that holds the account, or untick "{LEAVE_LABEL}".
@@ -193,7 +195,12 @@ const UninstallApp: React.FC<UninstallAppProps> = ({
                 )}
               </li>
             ))}
+            {deleteData && <li>{OLDER_CONTEXTS}</li>}
           </ul>
+          <p className="uninstall-summary" data-testid="uninstall-summary" aria-live="polite">
+            {blockedSteps.length > 0 &&
+              `Resolve ${blockedSteps.length} ${blockedSteps.length === 1 ? "namespace" : "namespaces"} above to continue.`}
+          </p>
         </section>
 
         <div className="confirm-actions">
@@ -205,7 +212,7 @@ const UninstallApp: React.FC<UninstallAppProps> = ({
             className="button button-danger"
             type="button"
             disabled={blocked || running}
-            aria-describedby={blockedRows || undefined}
+            aria-describedby={blockedReasons || undefined}
           >
             {running ? "Uninstalling..." : "Uninstall"}
           </button>

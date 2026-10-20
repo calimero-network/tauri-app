@@ -92,6 +92,7 @@ const uninstallButton = (page: Page) => page.locator(".confirm-actions").getByRo
 const outcomes = (page: Page) => page.getByTestId("uninstall-outcomes").locator("> li");
 const tag = (page: Page) => page.getByText("Affects all your devices");
 const toast = (page: Page) => page.locator(".toast-message");
+const OLDER_CONTEXTS = "Contexts still on an older version of the app are left on this node, whether or not you leave.";
 const UNINSTALL = { method: "DELETE", path: `/applications/${APP_ID}` };
 
 test.describe("Uninstall dialog", () => {
@@ -112,6 +113,7 @@ test.describe("Uninstall dialog", () => {
       "The app is removed from this device.",
       "Team: you leave it, and all your devices remove it",
       "Notes: deleted; you are its only member",
+      OLDER_CONTEXTS,
     ]);
 
     await uninstallButton(page).click();
@@ -136,6 +138,7 @@ test.describe("Uninstall dialog", () => {
       "The app is removed from this device.",
       "Team: removed from this device; you stay a member",
       "Family: removed from this device; you stay a member",
+      OLDER_CONTEXTS,
     ]);
     await uninstallButton(page).click();
 
@@ -215,12 +218,15 @@ test.describe("Uninstall dialog", () => {
     );
     await expect(page.getByRole("button", { name: "Transfer ownership" })).toBeVisible();
     await expect(uninstallButton(page)).toBeDisabled();
-    await expect(uninstallButton(page)).toHaveAttribute("aria-describedby", "uninstall-row-ns-shared");
-    await expect(page.getByTestId("uninstall-outcomes")).toHaveAttribute("aria-live", "polite");
+    await expect(uninstallButton(page)).toHaveAttribute("aria-describedby", "uninstall-reason-ns-shared");
+    await expect(page.locator("#uninstall-reason-ns-shared")).toContainText("transfer ownership first");
+    await expect(page.getByTestId("uninstall-summary")).toHaveAttribute("aria-live", "polite");
+    await expect(page.getByTestId("uninstall-summary")).toHaveText("Resolve 1 namespace above to continue.");
 
     await leave(page).uncheck();
 
     await expect(uninstallButton(page)).not.toHaveAttribute("aria-describedby");
+    await expect(page.getByTestId("uninstall-summary")).toBeEmpty();
     await expect(page.getByRole("button", { name: "Transfer ownership" })).toHaveCount(0);
     await expect(uninstallButton(page)).toBeEnabled();
     expect(writes).toEqual([]);

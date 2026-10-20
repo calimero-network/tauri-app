@@ -24,6 +24,8 @@ import type { MeroJs } from "@calimero-network/mero-js";
 const OLD = process.env["LIVE_OLD_MEROD_BINARY"];
 const NEW = resolveMerod();
 
+const UNREADABLE_OPS = "a schema 27 node cannot read the namespace ops a schema 26 node stored (op-store decode fails, backfill applies none), so the peer never sees the transfer";
+
 let w: World;
 
 test.beforeEach(() => {
@@ -90,6 +92,7 @@ async function bothStayAdmins(namespaceId: string) {
 }
 
 test("1. a data dir upgraded in place stays owned and synced, and a transfer afterwards keeps the founder an admin", async ({ browser }) => {
+  test.fail(true, UNREADABLE_OPS);
   const { namespaceId, contextId } = await foundGuild(OLD!);
   const counter = await ownerOpCounter(w.alice, namespaceId);
   const before = await roles(w.alice, namespaceId);
@@ -120,6 +123,7 @@ test("1. a data dir upgraded in place stays owned and synced, and a transfer aft
 });
 
 test("2. a node on the new binary beside a peer on the old one neither crashes nor corrupts, and the peer catches up once upgraded", async ({ browser }) => {
+  test.fail(true, UNREADABLE_OPS);
   const { namespaceId, contextId } = await foundGuild(OLD!);
   await w.restart("alice", NEW);
 

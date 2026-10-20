@@ -252,6 +252,19 @@ describe('uninstalling an application', () => {
       expect(calls.map((c) => c.call)).toEqual([UNINSTALL]);
     });
 
+    it('aborts on a revoked session during the sweep with the code that sends the user to sign in', async () => {
+      const calls = fakeNode({
+        [CONTEXTS]: listing(['ctx-1']),
+        'POST /admin-api/contexts/ctx-1/leave': () =>
+          new Response('{}', { status: 401, headers: { 'x-auth-error': 'token_revoked' } }),
+      });
+
+      const response = await uninstallApp(node(), 'app-1', [], true);
+
+      expect(response.error).toEqual({ message: 'Session revoked', code: '401', completed: [] });
+      expect(calls.map((c) => c.call)).not.toContain(UNINSTALL);
+    });
+
     it('stops before the uninstall when a context cannot be left, keeping the finished steps', async () => {
       const done = { ns: ns('a'), action: 'remove' } as const;
       const calls = fakeNode({

@@ -200,7 +200,7 @@ describe('uninstalling an application', () => {
 
     const response = await uninstallApp(node(), 'app-1', [{ ns: ns('b'), action: 'remove' }]);
 
-    expect(response.error).toEqual({ message: 'Session revoked', code: '401', completed: [] });
+    expect(response.error).toEqual({ message: 'Session revoked', code: '401', completed: [], contextsLeft: [] });
     expect(calls.map((c) => c.call)).not.toContain(UNINSTALL);
   });
 
@@ -261,8 +261,21 @@ describe('uninstalling an application', () => {
 
       const response = await uninstallApp(node(), 'app-1', [], true);
 
-      expect(response.error).toEqual({ message: 'Session revoked', code: '401', completed: [] });
+      expect(response.error).toEqual({ message: 'Session revoked', code: '401', completed: [], contextsLeft: [] });
       expect(calls.map((c) => c.call)).not.toContain(UNINSTALL);
+    });
+
+    it('reports the contexts already left when a later one fails', async () => {
+      fakeNode({
+        [CONTEXTS]: listing(['ctx-1', 'ctx-2']),
+        'POST /admin-api/contexts/ctx-2/leave': () =>
+          new Response(JSON.stringify({ error: 'busy' }), { status: 500 }),
+      });
+
+      const response = await uninstallApp(node(), 'app-1', [], true);
+
+      expect(response.error?.message).toBe('Context ctx-2 failed: busy');
+      expect(response.error?.contextsLeft).toEqual(['Context ctx-1']);
     });
 
     it('stops before the uninstall when a context cannot be left, keeping the finished steps', async () => {
@@ -277,6 +290,7 @@ describe('uninstalling an application', () => {
 
       expect(response.error?.message).toBe('Context ctx-1 failed: busy');
       expect(response.error?.completed).toEqual([done]);
+      expect(response.error?.contextsLeft).toEqual([]);
       expect(calls.map((c) => c.call)).not.toContain(UNINSTALL);
     });
   });
@@ -303,12 +317,25 @@ describe('what a half-finished uninstall tells the user', () => {
       uninstallFailureMessage('Drive', {
         message: 'Team failed: not allowed',
         completed: [{ ns: notes, action: 'delete-for-everyone' }],
+        contextsLeft: [],
       }),
     ).toBe('"Drive" was not uninstalled: Notes was deleted for everyone; Team failed: not allowed');
   });
 
+  it('lists the contexts already left between the steps and the failure', () => {
+    expect(
+      uninstallFailureMessage('Drive', {
+        message: 'Context ctx-2 failed: busy',
+        completed: [{ ns: notes, action: 'remove' }],
+        contextsLeft: ['Context ctx-1'],
+      }),
+    ).toBe(
+      '"Drive" was not uninstalled: Notes was removed from this device; Context ctx-1 was left; Context ctx-2 failed: busy',
+    );
+  });
+
   it('gives only the failure when nothing finished', () => {
-    expect(uninstallFailureMessage('Drive', { message: 'Team failed: no', completed: [] })).toBe(
+    expect(uninstallFailureMessage('Drive', { message: 'Team failed: no', completed: [], contextsLeft: [] })).toBe(
       '"Drive" was not uninstalled: Team failed: no',
     );
   });

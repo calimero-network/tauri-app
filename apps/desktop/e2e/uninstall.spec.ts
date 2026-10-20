@@ -160,6 +160,24 @@ test.describe("Uninstall dialog", () => {
     ]);
   });
 
+  test("a context failing mid-sweep lists the steps and contexts already done", async ({ page }) => {
+    const writes = await setup(page, [JOINED], {
+      contexts: ["ctx-one", "ctx-two"],
+      refuse: { "POST /contexts/ctx-two/leave": { status: 500, error: "busy" } },
+    });
+
+    await uninstallButton(page).click();
+
+    await expect(toast(page)).toHaveText(
+      '"Blockchain Demo" was not uninstalled: Team was left; Context ctx-one was left; Context ctx-two failed: busy',
+    );
+    expect(writes.map((w) => w.path)).toEqual([
+      "/namespaces/ns-joined/leave",
+      "/contexts/ctx-one/leave",
+      "/contexts/ctx-two/leave",
+    ]);
+  });
+
   test("keeping the data leaves its contexts alone too", async ({ page }) => {
     const writes = await setup(page, [JOINED], { contexts: ["ctx-loose"] });
 

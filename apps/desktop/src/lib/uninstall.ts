@@ -162,7 +162,7 @@ async function leaveRemainingContexts(meroJs: MeroJs, applicationId: string): Pr
     try {
       await meroJs.admin.leaveContext(id);
     } catch (e) {
-      throw new Error(nodeErrorMessage(e, `Context ${id.slice(0, 8)} failed`));
+      throw failure(e, `Context ${id.slice(0, 8)} failed`);
     }
   }
 }
@@ -187,7 +187,7 @@ export async function uninstallApp(
       try {
         await runStep(meroJs, step);
       } catch (e) {
-        throw failedAt(step.ns, e);
+        throw failure(e, `${step.ns.name} failed`);
       }
       if (step.action !== 'keep') completed.push(step);
     }
@@ -198,8 +198,8 @@ export async function uninstallApp(
   return response.error ? { error: { ...response.error, completed } } : { data: response.data };
 }
 
-/** Names the namespace in the message, keeping a sign-in failure as is so `wrap` still reads it. */
-function failedAt(ns: AppNamespace, e: unknown): unknown {
+/** Names what failed, but keeps a sign-in failure as is so `wrap` still reads it. */
+function failure(e: unknown, what: string): unknown {
   if (e instanceof AuthRevokedError || (e instanceof HTTPError && e.status === 401)) return e;
-  return new Error(nodeErrorMessage(e, `${ns.name} failed`));
+  return new Error(nodeErrorMessage(e, what));
 }

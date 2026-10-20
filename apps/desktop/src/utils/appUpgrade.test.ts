@@ -48,11 +48,19 @@ describe('planUpgrade', () => {
     });
   });
 
-  // Another admin upgraded the namespace from their node; this node fetches the
-  // release when a context is next used, so there is nothing to install here.
-  it('is current when the namespace is ahead of what this node installed', () => {
+  // Another admin upgraded the namespace from their node. From rc.90 core names
+  // the target's version here before this node holds it (core#4607); the node
+  // fetches the release when a context is next used, so it is not up to date
+  // and there is nothing to install or upgrade.
+  it('does not hold the release when the namespace is ahead of what this node installed', () => {
     expect(planUpgrade({ running: '3.1.37', installed: '3.1.36', published: '3.1.37' })).toEqual({
-      kind: 'current',
+      kind: 'unknown',
+    });
+  });
+
+  it('does not hold the release when its application is not installed here', () => {
+    expect(planUpgrade({ running: '3.1.37', installed: null, published: '3.1.38' })).toEqual({
+      kind: 'unknown',
     });
   });
 

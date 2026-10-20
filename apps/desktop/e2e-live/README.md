@@ -61,6 +61,11 @@ Put exactly two `.mpk` releases of **one** package from **one** signer in this d
 
 The `LIVE_BUNDLES` variable takes comma-separated paths instead of a directory.
 
+### `LIVE_OLD_MEROD_BINARY`
+
+`schema-rollout.spec.ts` restarts nodes between two merod builds: `MEROD_BINARY` is the newer one and this is a release from before namespace op schema 27.
+Download it into its own empty directory; the spec skips without it.
+
 ### Screenshots
 
 Set `LIVE_SHOTS_DIR` to a directory to save a full-page screenshot at each key step of the uninstall spec.

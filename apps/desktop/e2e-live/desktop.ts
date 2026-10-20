@@ -9,7 +9,7 @@ export async function openDesktop(
   tokens?: TokenPair,
 ): Promise<Page> {
   tokens ??= await mintTokens(nodeUrl);
-  const context = await browser.newContext();
+  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
   const page = await context.newPage();
   await page.goto("/");
   await page.evaluate(

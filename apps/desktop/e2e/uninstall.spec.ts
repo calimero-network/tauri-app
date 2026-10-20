@@ -361,7 +361,7 @@ test.describe("Uninstall dialog, namespaces holding data", () => {
     await expect(outcomes(page).nth(1)).toContainText(
       "Notes: you are its only member, and a namespace that holds data cannot be deleted",
     );
-    await expect(page.getByText('Untick "Also leave shared namespaces" to remove it from this device and stay its owner.')).toBeVisible();
+    await expect(page.getByText('Untick "Also leave shared namespaces" to remove it from this device only; reinstalling the app restores it.')).toBeVisible();
     await expect(page.getByRole("checkbox", { name: /Delete Notes for everyone/ })).toHaveCount(0);
     await expect(uninstallButton(page)).toBeDisabled();
     await page.screenshot({ path: `${SHOTS}/alone-owner-with-data.png` });

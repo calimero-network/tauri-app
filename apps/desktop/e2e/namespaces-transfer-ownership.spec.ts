@@ -91,7 +91,7 @@ test.describe("Transfer ownership", () => {
     await openPicker(page);
 
     await expect(picker(page).locator(".ns-transfer-hint")).toHaveText(
-      "The new owner can delete the namespace for everyone. You are removed from its members.",
+      "The new owner can delete the namespace for everyone. You stay an admin.",
     );
     await choose(page, "Bob");
     await next(page);

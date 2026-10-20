@@ -64,7 +64,7 @@ export function TransferOwnershipModal({ candidates, loading, error, blocked, on
           )}
           {!blocked && (
             <p className="ns-modal-hint ns-transfer-hint">
-              The new owner can delete the namespace for everyone. You are removed from its members.
+              The new owner can delete the namespace for everyone. You stay an admin.
             </p>
           )}
           <div className="ns-modal-actions">

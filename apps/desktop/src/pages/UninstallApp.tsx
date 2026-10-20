@@ -163,6 +163,11 @@ const UninstallApp: React.FC<UninstallAppProps> = ({
                     Do this on the computer that holds the account, or untick "{LEAVE_LABEL}".
                   </p>
                 )}
+                {action === "needs-removal-here" && (
+                  <p className="uninstall-block-hint">
+                    Untick "{LEAVE_LABEL}" to remove it from this device and stay its owner.
+                  </p>
+                )}
                 {sharedAndOwned(ns) && (
                   <div className="uninstall-block">
                     {!forced.has(ns.id) && (
@@ -173,15 +178,17 @@ const UninstallApp: React.FC<UninstallAppProps> = ({
                         , or untick "{LEAVE_LABEL}".
                       </p>
                     )}
-                    <label className="confirm-option">
-                      <input
-                        type="checkbox"
-                        checked={forced.has(ns.id)}
-                        onChange={(e) => toggleForced(ns.id, e.target.checked)}
-                      />
-                      <span className="confirm-option-label">Delete {ns.name} for everyone</span>
-                    </label>
-                    {forced.has(ns.id) && (
+                    {!ns.holdsData && (
+                      <label className="confirm-option">
+                        <input
+                          type="checkbox"
+                          checked={forced.has(ns.id)}
+                          onChange={(e) => toggleForced(ns.id, e.target.checked)}
+                        />
+                        <span className="confirm-option-label">Delete {ns.name} for everyone</span>
+                      </label>
+                    )}
+                    {!ns.holdsData && forced.has(ns.id) && (
                       <input
                         className="uninstall-typed"
                         type="text"

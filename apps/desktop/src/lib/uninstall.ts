@@ -21,6 +21,8 @@ export interface AppNamespace {
   role?: string;
   /** Members besides us who could take it over; fleet nodes are not counted. */
   others: number;
+  /** Core refuses to delete a subtree that holds contexts, and only direct counts are visible. */
+  holdsData: boolean;
 }
 
 export interface UninstallChoice {
@@ -38,7 +40,8 @@ export type NamespaceAction =
   | 'leave'
   | 'delete-for-everyone'
   | 'needs-transfer'
-  | 'needs-primary-device';
+  | 'needs-primary-device'
+  | 'needs-removal-here';
 
 export function planNamespace(ns: AppNamespace, choice: UninstallChoice): NamespaceAction {
   if (!choice.deleteData) return 'keep';
@@ -48,12 +51,13 @@ export function planNamespace(ns: AppNamespace, choice: UninstallChoice): Namesp
   if (!isAdminRole(ns.role)) return 'leave';
   // Owner-only ops need the account root, which a linked device does not hold.
   if (choice.linkedDevice) return 'needs-primary-device';
+  if (ns.holdsData) return ns.others === 0 ? 'needs-removal-here' : 'needs-transfer';
   if (ns.others === 0 || choice.deleteForEveryone.has(ns.id)) return 'delete-for-everyone';
   return 'needs-transfer';
 }
 
 export function isBlocked(actions: readonly NamespaceAction[]): boolean {
-  return actions.some((a) => a === 'needs-transfer' || a === 'needs-primary-device');
+  return actions.some((a) => a === 'needs-transfer' || a === 'needs-primary-device' || a === 'needs-removal-here');
 }
 
 function members(n: number): string {
@@ -72,6 +76,7 @@ export function describeStep(ns: AppNamespace, action: NamespaceAction): string 
         ? 'you own it and 1 other is a member; transfer ownership first'
         : `you own it and ${ns.others} others are members; transfer ownership first`,
     'needs-primary-device': 'only the computer that holds the account can delete it',
+    'needs-removal-here': 'you are its only member, and a namespace that holds data cannot be deleted',
   }[action];
   return `${ns.name}: ${what}`;
 }
@@ -146,6 +151,7 @@ export function loadAppNamespaces(
           name: namespaceLabel(ns),
           role: roleOf(members, accountId),
           others: transferCandidates(members, accountId).length,
+          holdsData: ns.contextCount > 0 || ns.subgroupCount > 0,
         };
       }),
     );

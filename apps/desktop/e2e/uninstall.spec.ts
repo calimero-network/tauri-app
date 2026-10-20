@@ -64,7 +64,7 @@ async function mockNode(
       return route.fallback();
     }
     const raw = route.request().postData();
-    writes.push({ method, path, ...(raw ? { body: JSON.parse(raw) } : {}) });
+    writes.push({ method, path: path + new URL(route.request().url()).search, ...(raw ? { body: JSON.parse(raw) } : {}) });
     const refusal = opts.refuse?.[`${method} ${path}`];
     if (refusal) return route.fulfill(json({ error: refusal.error }, refusal.status));
     return route.fulfill(json({ data: {} }));
@@ -122,7 +122,7 @@ test.describe("Uninstall dialog", () => {
       '"Blockchain Demo" uninstalled\nTeam: you leave it, and all your devices remove it\nNotes: deleted; you are its only member',
     );
     expect(writes).toEqual([
-      { method: "POST", path: "/namespaces/ns-joined/leave", body: { purge: true } },
+      { method: "POST", path: "/namespaces/ns-joined/leave?purge=true", body: {} },
       { method: "POST", path: "/groups/ns-alone/owner-delete", body: {} },
       UNINSTALL,
     ]);
@@ -157,7 +157,7 @@ test.describe("Uninstall dialog", () => {
 
     await expect(toast(page)).toContainText('"Blockchain Demo" uninstalled');
     expect(writes).toEqual([
-      { method: "POST", path: "/namespaces/ns-joined/leave", body: { purge: true } },
+      { method: "POST", path: "/namespaces/ns-joined/leave?purge=true", body: {} },
       { method: "POST", path: "/contexts/ctx-loose/leave", body: {} },
       UNINSTALL,
     ]);
@@ -175,7 +175,7 @@ test.describe("Uninstall dialog", () => {
       '"Blockchain Demo" was not uninstalled: Team was left; Context ctx-one was left; Context ctx-two failed: busy',
     );
     expect(writes.map((w) => w.path)).toEqual([
-      "/namespaces/ns-joined/leave",
+      "/namespaces/ns-joined/leave?purge=true",
       "/contexts/ctx-one/leave",
       "/contexts/ctx-two/leave",
     ]);
@@ -277,7 +277,7 @@ test.describe("Uninstall dialog", () => {
     await uninstallButton(page).click();
 
     await expect(toast(page)).toHaveText('"Blockchain Demo" was not uninstalled: Team failed: the last admin cannot leave');
-    expect(writes).toEqual([{ method: "POST", path: "/namespaces/ns-joined/leave", body: { purge: true } }]);
+    expect(writes).toEqual([{ method: "POST", path: "/namespaces/ns-joined/leave?purge=true", body: {} }]);
   });
 
   test("a failure after a finished step lists what already happened", async ({ page }) => {
@@ -291,14 +291,14 @@ test.describe("Uninstall dialog", () => {
       '"Blockchain Demo" was not uninstalled: Team was left; Notes failed: disk full',
     );
     expect(writes).toEqual([
-      { method: "POST", path: "/namespaces/ns-joined/leave", body: { purge: true } },
+      { method: "POST", path: "/namespaces/ns-joined/leave?purge=true", body: {} },
       { method: "POST", path: "/groups/ns-alone/owner-delete", body: {} },
     ]);
   });
 
   test("a revoked session aborts the uninstall and asks to sign in again", async ({ page }) => {
     const writes = await setup(page, [JOINED]);
-    await page.route("**/admin-api/namespaces/ns-joined/leave", (route) =>
+    await page.route("**/admin-api/namespaces/ns-joined/leave*", (route) =>
       route.fulfill({ status: 401, headers: { "x-auth-error": "token_revoked" }, body: "{}" }),
     );
 

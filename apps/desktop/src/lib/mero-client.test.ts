@@ -133,13 +133,13 @@ describe('leaving a namespace as an account', () => {
     const calls: { call: string; body: unknown }[] = [];
     globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
-      calls.push({ call: `${init?.method} ${url.pathname}`, body: JSON.parse(String(init?.body)) });
+      calls.push({ call: `${init?.method} ${url.pathname}${url.search}`, body: JSON.parse(String(init?.body)) });
       return new Response(JSON.stringify({ data: {} }), { status: 200 });
     };
 
     await leaveNamespacePurging(meroJs, 'ns-1');
 
-    expect(calls).toEqual([{ call: 'POST /admin-api/namespaces/ns-1/leave', body: { purge: true } }]);
+    expect(calls).toEqual([{ call: 'POST /admin-api/namespaces/ns-1/leave?purge=true', body: {} }]);
   });
 });
 

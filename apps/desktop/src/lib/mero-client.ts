@@ -295,11 +295,10 @@ interface AdminHttp {
 
 const adminHttp = (meroJs: MeroJs) => (meroJs.admin as unknown as { httpClient: AdminHttp }).httpClient;
 
-/** Leave as an account: every device of it purges the namespace when it applies the leave. */
+/** Leave as an account: every device of it purges the namespace when it applies the leave.
+ *  Core reads `purge` from the query string and ignores it in the body. */
 export async function leaveNamespacePurging(meroJs: MeroJs, namespaceId: string): Promise<void> {
-  await adminHttp(meroJs).post(`/admin-api/namespaces/${encodeURIComponent(namespaceId)}/leave`, {
-    purge: true,
-  });
+  await adminHttp(meroJs).post(`/admin-api/namespaces/${encodeURIComponent(namespaceId)}/leave?purge=true`, {});
 }
 
 /** Follow again a namespace this device was removed from; the account is still a member. */

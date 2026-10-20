@@ -326,7 +326,7 @@ test("7b. an owner who is alone in a namespace that holds a context is blocked, 
     "Journal: you are its only member, and a namespace that holds data cannot be deleted",
   );
   await expect(
-    page.getByText('Untick "Also leave shared namespaces" to remove it from this device and stay its owner.'),
+    page.getByText('Untick "Also leave shared namespaces" to remove it from this device only; reinstalling the app restores it.'),
   ).toBeVisible();
   await expect(page.getByRole("checkbox", { name: /Delete Journal for everyone/ })).toHaveCount(0);
   await expect(uninstallButton(page)).toBeDisabled();

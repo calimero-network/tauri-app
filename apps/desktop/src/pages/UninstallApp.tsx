@@ -165,7 +165,7 @@ const UninstallApp: React.FC<UninstallAppProps> = ({
                 )}
                 {action === "needs-removal-here" && (
                   <p className="uninstall-block-hint">
-                    Untick "{LEAVE_LABEL}" to remove it from this device and stay its owner.
+                    Untick "{LEAVE_LABEL}" to remove it from this device only; reinstalling the app restores it.
                   </p>
                 )}
                 {sharedAndOwned(ns) && (

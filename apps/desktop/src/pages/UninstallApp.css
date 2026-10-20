@@ -190,6 +190,16 @@
   color: var(--error);
 }
 
+.uninstall-summary {
+  margin: 10px 0 0 0;
+  color: var(--error);
+  font-size: 13px;
+}
+
+.uninstall-summary:empty {
+  margin: 0;
+}
+
 .uninstall-block {
   display: flex;
   flex-direction: column;

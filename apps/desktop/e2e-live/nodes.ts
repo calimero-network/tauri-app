@@ -141,7 +141,11 @@ export async function freePorts(count: number): Promise<number[]> {
   const ports: number[] = [];
   while (ports.length < count) {
     const server = createServer();
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const listening = await new Promise<boolean>((resolve) => {
+      server.once("error", () => server.close(() => resolve(false)));
+      server.listen(0, "127.0.0.1", () => resolve(true));
+    });
+    if (!listening) continue;
     held.push(server);
     const port = (server.address() as AddressInfo).port;
     const udp = createSocket("udp4");

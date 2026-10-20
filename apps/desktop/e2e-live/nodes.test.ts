@@ -1,4 +1,5 @@
 import { createSocket, type Socket } from "node:dgram";
+import { createServer, type Server } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const forced: number[] = []; // ports the next `listen(0)` calls get instead of an OS pick
@@ -57,5 +58,17 @@ describe("freePorts", () => {
     expect(port).not.toBe(taken.address().port);
     expect(opened.filter((s) => !s.closed)).toHaveLength(0); // the failed bind's socket too
     held.push(await bindUdp(port));
+  });
+
+  it("skips a port whose TCP side is taken", async () => {
+    const taken = createServer();
+    await new Promise<void>((resolve) => taken.listen(0, "127.0.0.1", resolve));
+    const takenPort = (taken.address() as { port: number }).port;
+    forced.push(takenPort);
+
+    const [port] = await freePorts(1);
+    await new Promise<void>((resolve) => (taken as Server).close(() => resolve()));
+
+    expect(port).not.toBe(takenPort);
   });
 });

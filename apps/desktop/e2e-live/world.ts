@@ -36,7 +36,12 @@ export async function transferToFirstCandidate(page: Page): Promise<void> {
 /** A full-page screenshot, written only when LIVE_SHOTS_DIR is set. */
 export async function shot(page: Page, name: string): Promise<void> {
   const dir = process.env["LIVE_SHOTS_DIR"];
-  if (dir) await page.screenshot({ path: path.join(dir, `${name}.png`), fullPage: true, animations: "disabled" });
+  if (!dir) return;
+  // A dialog still fading in would be captured half-dimmed.
+  await page.evaluate(() =>
+    Promise.all(document.getAnimations().filter((a) => a.effect?.getTiming().iterations !== Infinity).map((a) => a.finished)),
+  );
+  await page.screenshot({ path: path.join(dir, `${name}.png`), fullPage: true, animations: "disabled" });
 }
 
 /** The per-test world: fresh nodes, so no test inherits another's namespaces or forgotten markers. */

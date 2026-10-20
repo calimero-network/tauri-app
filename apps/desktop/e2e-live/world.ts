@@ -19,7 +19,7 @@ export async function admin(url: string): Promise<MeroJs> {
 /** A full-page screenshot, written only when LIVE_SHOTS_DIR is set. */
 export async function shot(page: Page, name: string): Promise<void> {
   const dir = process.env["LIVE_SHOTS_DIR"];
-  if (dir) await page.screenshot({ path: path.join(dir, `${name}.png`), fullPage: true });
+  if (dir) await page.screenshot({ path: path.join(dir, `${name}.png`), fullPage: true, animations: "disabled" });
 }
 
 /** The per-test world: fresh nodes, so no test inherits another's namespaces or forgotten markers. */
@@ -49,23 +49,42 @@ export async function startWorld(): Promise<World> {
     basePort: base,
     registryUrl: live.registryUrl,
   });
+  try {
+    return await prepareWorld(nodes);
+  } catch (e) {
+    await stopNodes(nodes.map((n) => n.pid));
+    throw e;
+  }
+}
+
+async function prepareWorld(nodes: LiveNode[]): Promise<World> {
+  const live = state();
   const [alice, bob, bobLinked] = await Promise.all(nodes.map((n) => admin(n.url)));
   const release = { package: live.package, version: live.older };
   const [{ applicationId }] = await Promise.all([alice!, bob!, bobLinked!].map((m) => m.admin.installApplication(release)));
 
   const identity = await bob!.admin.getNodeIdentity();
-  const init = await bobLinked!.admin.initAccountPairing({
-    accountRootPublicKey: identity.accountRootPublicKey!,
-    accountNamespace: identity.accountNamespaceId ?? undefined,
-    namespaces: [],
-  });
-  await bob!.admin.completeAccountPairing({
-    deviceId: init.deviceId,
-    kemPublicKey: init.kemPublicKey,
-    signPublicKey: init.signPublicKey,
-    statement: init.statement,
-    confirmationCode: init.confirmationCode,
-  });
+  // A fresh mesh can be too quiet to carry the certificate on the first try; each try mints a new device.
+  await waitFor(
+    "Bob's second device to pair",
+    async () => {
+      const init = await bobLinked!.admin.initAccountPairing({
+        accountRootPublicKey: identity.accountRootPublicKey!,
+        accountNamespace: identity.accountNamespaceId ?? undefined,
+        namespaces: [],
+      });
+      await bob!.admin.completeAccountPairing({
+        deviceId: init.deviceId,
+        kemPublicKey: init.kemPublicKey,
+        signPublicKey: init.signPublicKey,
+        statement: init.statement,
+        confirmationCode: init.confirmationCode,
+      });
+      return true;
+    },
+    120_000,
+    2_000,
+  );
 
   return {
     alice: alice!,
@@ -115,6 +134,14 @@ export async function seedNamespace(
         1_000,
       );
     }
+  }
+  const everyone = 1 + (opts.members ?? []).length;
+  for (const member of opts.members ?? []) {
+    await waitFor(
+      `a member to list all ${everyone} members of ${name}`,
+      async () => (await member.admin.listGroupMembers(namespaceId)).members.length === everyone || undefined,
+      60_000,
+    );
   }
   return { namespaceId, contextIds };
 }
@@ -168,4 +195,9 @@ export async function nodeSupportsUninstallOutcomes(): Promise<boolean> {
   } finally {
     await stopNodes([node!.pid]);
   }
+}
+
+export async function appInstalled(m: MeroJs, applicationId: string): Promise<boolean> {
+  const { apps } = await m.admin.listApplications();
+  return (apps ?? []).some((a) => ((a as { id?: string }).id ?? (a as { applicationId?: string }).applicationId) === applicationId);
 }

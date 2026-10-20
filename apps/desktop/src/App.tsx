@@ -22,6 +22,7 @@ import { checkOnboardingState } from "./utils/onboarding";
 import { openAppFrontend, parseTauriError } from "./utils/appUtils";
 import { canResolveDeepLinks, useAppDeepLink } from "./hooks/useAppDeepLink";
 import { useDeepLinkConsent } from "./components/DeepLinkConsentDialog";
+import UpgradeGateHost from "./components/UpgradeGateHost";
 import Sidebar from "./components/Sidebar";
 import { NodeStatusIndicator } from "./components/NodeStatusIndicator";
 import ToastContainer from "./components/ToastContainer";
@@ -801,6 +802,9 @@ function App() {
     <div className="app">
       <ToastContainer />
       {deepLinkConsentDialog}
+      <MeroContext.Provider value={meroContextValue}>
+        <UpgradeGateHost />
+      </MeroContext.Provider>
       {inShell && tutorialOverlay}
 
       <div className="app-layout">

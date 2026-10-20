@@ -12,6 +12,8 @@ import { readTomlString, setTomlKey } from "./toml";
 
 export const ADMIN_USER = "admin";
 export const ADMIN_PASSWORD = "adminadmin";
+export const ACCESS_TOKEN_TTL_S = 5; // short, so a session outlives its access token within one test
+export const JWT_LEEWAY_S = 60; // core accepts and refuses to refresh a token this long past its expiry
 
 export interface LiveNode {
   name: string;
@@ -171,6 +173,7 @@ export async function startNodes(opts: {
     // node resolves them from its own.
     toml = setTomlKey(toml, "registry", "mode", "http");
     toml = setTomlKey(toml, "registry", "base_url", opts.registryUrl);
+    toml = setTomlKey(toml, "server.embedded_auth.jwt", "access_token_expiry", ACCESS_TOKEN_TTL_S);
     writeFileSync(configPath(n), toml);
   });
 

@@ -18,6 +18,8 @@ interface MockNamespace {
   role: string;
   /** How many other people are members. */
   others: number;
+  /** Holds a context, which core refuses to delete. */
+  holdsData?: boolean;
 }
 
 const JOINED: MockNamespace = { id: "ns-joined", name: "Team", role: "Member", others: 3 };
@@ -49,7 +51,7 @@ async function mockNode(
       }
       if (path === `/namespaces/for-application/${APP_ID}`) {
         return route.fulfill(
-          json({ data: namespaces.map((ns) => ({ namespaceId: ns.id, name: ns.name, targetApplicationId: APP_ID })) }),
+          json({ data: namespaces.map((ns) => ({ namespaceId: ns.id, name: ns.name, targetApplicationId: APP_ID, contextCount: ns.holdsData ? 1 : 0, subgroupCount: 0 })) }),
         );
       }
       if (path === `/contexts/for-application/${APP_ID}`) {
@@ -335,6 +337,40 @@ test.describe("Uninstall dialog", () => {
 
     await expect(page.locator(".ns-page-top h1")).toHaveText("Family");
     await expect(page.locator(".ns-modal h2")).toHaveText("Transfer Ownership");
+  });
+});
+
+test.describe("Uninstall dialog, namespaces holding data", () => {
+  const SHARED_DATA = { ...SHARED, holdsData: true };
+  const ALONE_DATA = { ...ALONE, holdsData: true };
+  const SHOTS = "/tmp/live-uninstall/hide-delete-shots";
+
+  test("a shared owner is offered a transfer, not a delete for everyone", async ({ page }) => {
+    await setup(page, [SHARED_DATA]);
+
+    await expect(page.getByRole("button", { name: "Transfer ownership" })).toBeVisible();
+    await expect(page.getByText('Transfer ownership, or untick "Also leave shared namespaces".')).toBeVisible();
+    await expect(page.getByRole("checkbox", { name: "Delete Family for everyone" })).toHaveCount(0);
+    await expect(uninstallButton(page)).toBeDisabled();
+    await page.screenshot({ path: `${SHOTS}/shared-owner-with-data.png` });
+  });
+
+  test("an owner alone is told to remove it here, and unticking leave unblocks it", async ({ page }) => {
+    const writes = await setup(page, [ALONE_DATA]);
+
+    await expect(outcomes(page).nth(1)).toContainText(
+      "Notes: you are its only member, and a namespace that holds data cannot be deleted",
+    );
+    await expect(page.getByText('Untick "Also leave shared namespaces" to remove it from this device and stay its owner.')).toBeVisible();
+    await expect(page.getByRole("checkbox", { name: /Delete Notes for everyone/ })).toHaveCount(0);
+    await expect(uninstallButton(page)).toBeDisabled();
+    await page.screenshot({ path: `${SHOTS}/alone-owner-with-data.png` });
+
+    await leave(page).uncheck();
+    await expect(uninstallButton(page)).toBeEnabled();
+    await uninstallButton(page).click();
+    await expect(toast(page)).toContainText("Notes: removed from this device; you stay a member");
+    expect(writes).toEqual([{ method: "DELETE", path: "/namespaces/ns-alone", body: {} }, UNINSTALL]);
   });
 });
 

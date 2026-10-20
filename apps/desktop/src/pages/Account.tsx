@@ -26,6 +26,7 @@ import {
 import {
   accountAppRows,
   canInviteDevices,
+  canPairIntoAccount,
   deviceLabel,
   devicesEmptyMessage,
   namespaceWord,
@@ -365,13 +366,15 @@ export default function Account() {
           onInstall={install}
         />
 
-        <div className="settings-card" data-tutorial="account-pair">
-          <h2>Pair this computer into an account</h2>
-          <DevicePairResponder
-            enrolledDeviceId={identity?.deviceId ?? undefined}
-            onLinked={() => setReloads((n) => n + 1)}
-          />
-        </div>
+        {canPairIntoAccount(identity, catalog.namespaces) && (
+          <div className="settings-card" data-tutorial="account-pair">
+            <h2>Pair this computer into an account</h2>
+            <DevicePairResponder
+              enrolledDeviceId={identity?.deviceId ?? undefined}
+              onLinked={() => setReloads((n) => n + 1)}
+            />
+          </div>
+        )}
       </main>
     </div>
   );

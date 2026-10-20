@@ -530,6 +530,7 @@ test.describe("Account page - pairing needs no developer mode", () => {
   }) => {
     await setupAuthenticatedPage(page);
     await mockPairingAPIs(page);
+    await page.route(API_ROUTES.namespaces, (route) => route.fulfill(json({ data: [] })));
     await navigateVia(page, "Account");
 
     await expect(page.locator("#add-device")).toBeEnabled();
@@ -1335,7 +1336,19 @@ test.describe("Account page - pairing responder", () => {
   test.beforeEach(async ({ page }) => {
     await setupDeveloperPage(page);
     await mockPairingAPIs(page);
+    // A node with nothing on it yet, which is the one this card is for.
+    await page.route(API_ROUTES.namespaces, (route) => route.fulfill(json({ data: [] })));
     await navigateVia(page, "Account");
+  });
+
+  test("an account holder already in use is not offered pairing", async ({ page }) => {
+    await page.route(API_ROUTES.namespaces, (route) =>
+      route.fulfill(json({ data: MOCK_NAMESPACES })),
+    );
+    await page.reload();
+    await navigateVia(page, "Account");
+    await expect(page.locator("#add-device")).toBeVisible();
+    await expect(page.locator("[data-tutorial=account-pair]")).toHaveCount(0);
   });
 
   test("an invite yields a response blob and a spoken confirmation code", async ({

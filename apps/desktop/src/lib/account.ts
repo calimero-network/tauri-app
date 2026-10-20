@@ -261,6 +261,12 @@ export function canInviteDevices(identity: NodeIdentity | null): boolean {
   return identity?.holdsAccountRoot !== false;
 }
 
+/** Pairing is for a node with nothing on it yet; a holder already in namespaces
+ *  would be refused for everything it is part of. */
+export function canPairIntoAccount(identity: NodeIdentity | null, namespaces: NamespaceSummary[]) {
+  return !(canInviteDevices(identity) && namespaces.length > 0);
+}
+
 /** A device paired into an account holds a device id but may not have synced the
  *  account's roster, and "none found" would read as a pairing that never landed. */
 export function devicesEmptyMessage(identity: NodeIdentity | null): string {

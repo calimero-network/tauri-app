@@ -188,6 +188,7 @@ export const TUTORIAL_STEPS: readonly TutorialStep[] = [
     id: 'account-pair',
     at: page('account'),
     target: 'account-pair',
+    optional: true,
     title: 'Pair this computer',
     body: 'Already have an account on another device? Pair this computer into it from here instead of starting a new one.',
   },

@@ -5,9 +5,7 @@
  * The destructive admin-API calls the Namespaces page can make are gated on
  * merod's side against the ACCOUNT the caller's device key acts as:
  *
- *   • `DELETE /admin-api/namespaces/:id`  → any member: it removes the namespace
- *                                           from this node only (older nodes
- *                                           still require an admin)
+ *   • `DELETE /admin-api/namespaces/:id`  → any member; local to this node
  *   • `DELETE /admin-api/groups/:id`      → the subgroup's OWNER, an admin of the
  *                                           namespace root, or a member holding
  *                                           `CAN_DELETE_SUBGROUP`
@@ -17,8 +15,8 @@
  *                                           root-level context
  *
  * so offering a plain member Delete on a subgroup or context is a dead-end
- * button. The self-service counterparts — `POST /admin-api/{namespaces,groups,contexts}/:id/leave` —
- * carry no role gate at all, and are what that member actually needs.
+ * button. The self-service counterparts, `POST /admin-api/{namespaces,groups,contexts}/:id/leave`,
+ * carry no role gate at all and are what that member actually needs.
  *
  * The role read is a best guess, not the authority: the subgroup rule above
  * admits a non-admin capability holder the member list cannot distinguish. The

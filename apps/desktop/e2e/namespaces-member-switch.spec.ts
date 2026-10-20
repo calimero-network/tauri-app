@@ -25,9 +25,9 @@ test.describe("Member switch", () => {
     await openNamespace(page);
 
     await expect(page.getByTestId("ns-upgrade-target")).toHaveText("2.0.0");
-    await expect(page.getByTestId("ns-upgrade-running")).toHaveText("1.0.0 (2 of 3 contexts)");
-    await expect(page.getByTestId("ns-upgrade-card")).toContainText(
-      "The admin moved this namespace to 2.0.0. This node still runs 1.0.0 (2 of 3 contexts).",
+    await expect(page.getByTestId("ns-upgrade-running")).toHaveText("1.0.0 on 2, 2.0.0 on 1");
+    await expect(page.getByTestId("ns-upgrade-behind")).toHaveText(
+      "The admin moved this namespace to 2.0.0. 2 of 3 contexts on this node still run an older release.",
     );
     await expect(page.getByTestId("ns-upgrade-switch")).toHaveText("Switch now");
     await expect(page.getByTestId("ns-upgrade-current")).toHaveCount(0);
@@ -71,6 +71,7 @@ test.describe("Member switch", () => {
 
     await page.getByTestId("ns-upgrade-switch").click();
     await expect(page.getByTestId("ns-upgrade-switching")).toHaveText("Migrating your data. Keep Calimero open.");
+    await expect(page.getByTestId("ns-upgrade-behind")).toHaveCount(0);
     await expect(page.getByTestId("ns-upgrade-switch")).toBeDisabled();
     await expect(page.getByTestId("ns-upgrade-switch")).toHaveText("Switching...");
     await page.getByTestId("ns-upgrade-card").screenshot({ path: `${SHOTS}/card-switching.png` });
@@ -85,8 +86,9 @@ test.describe("Member switch", () => {
 
     await page.getByTestId("ns-upgrade-switch").click();
     await expect(page.getByTestId("ns-upgrade-moved")).toHaveText(
-      "The admin moved this namespace to 3.0.0 meanwhile.",
+      "The admin moved this namespace to 3.0.0 while this node was switching.",
     );
+    await expect(page.getByTestId("ns-upgrade-behind")).toHaveCount(0);
     await expect(page.getByTestId("ns-upgrade-target")).toHaveText("3.0.0");
     await expect(page.getByTestId("ns-upgrade-switch")).toHaveText("Switch to 3.0.0");
     expect(node.activations).toHaveLength(1);
@@ -117,5 +119,47 @@ test.describe("Member switch", () => {
     await expect(page.getByTestId("ns-upgrade-current")).toBeVisible();
     await expect(page.getByTestId("ns-upgrade-running")).toHaveText("2.0.0");
     await expect(page.getByTestId("ns-upgrade-switch")).toHaveCount(0);
+  });
+
+  test("an admin's Upgrade also switches the admin's own node onto the new release", async ({ page }) => {
+    await setupDeveloperPage(page);
+    const node = await mockMemberNode(
+      page,
+      {
+        target: "1.0.0",
+        installed: "2.0.0",
+        held: { "ctx-1": { groupId: NS_ID, version: "1.0.0" } },
+      },
+      "Admin",
+    );
+    await openNamespace(page);
+
+    await page.getByTestId("ns-upgrade-upgrade").click();
+    await expect(page.getByTestId("ns-upgrade-current")).toBeVisible();
+    expect(node.upgrades).toHaveLength(1);
+    expect(node.activations).toEqual([{ expectedApplicationId: APP.id, expectedVersion: "2.0.0" }]);
+    await expect(page.getByTestId("ns-upgrade-running")).toHaveText("2.0.0");
+    await expect(page.getByTestId("ns-upgrade-switch")).toHaveCount(0);
+  });
+
+  test("an admin's own switch that fails after Upgrade warns and retries like any member's", async ({ page }) => {
+    await setupDeveloperPage(page);
+    const node = await mockMemberNode(
+      page,
+      {
+        target: "1.0.0",
+        installed: "2.0.0",
+        activate: "partial",
+        held: { "ctx-1": { groupId: NS_ID, version: "1.0.0" } },
+      },
+      "Admin",
+    );
+    await openNamespace(page);
+
+    await page.getByTestId("ns-upgrade-upgrade").click();
+    await expect(page.getByTestId("ns-upgrade-switch-failed")).toContainText("1 context failed to switch on this node.");
+    await page.getByTestId("ns-upgrade-switch-retry").click();
+    await expect(page.getByTestId("ns-upgrade-current")).toBeVisible();
+    expect(node.activations).toHaveLength(2);
   });
 });

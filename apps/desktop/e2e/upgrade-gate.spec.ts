@@ -32,7 +32,7 @@ test.describe("Upgrade gate", () => {
     await expect(gate).toBeVisible();
     await expect(gate).toContainText("Only Peers Chat was updated");
     await expect(gate).toContainText(
-      "The admin of Workspace moved it to 2.0.0. This node runs 1.0.0 (2 of 3 contexts). Update to keep using Only Peers Chat.",
+      "The admin of Workspace moved it to 2.0.0. 2 of 3 of its contexts on this node still run an older release. Update to keep using Only Peers Chat.",
     );
     await gate.screenshot({ path: `${SHOTS}/gate-modal.png` });
 
@@ -77,6 +77,8 @@ test.describe("Upgrade gate", () => {
     await page.getByTestId("upgrade-gate-update").click();
     await expect(page.getByTestId("upgrade-gate")).toContainText("Migrating your data. Keep Calimero open.");
     await expect(page.getByRole("button", { name: "Cancel" })).toHaveCount(0);
+    // The standard inert primary (index.css), once its colour transition has settled.
+    await expect(page.getByTestId("upgrade-gate-update")).toHaveCSS("background-color", "rgb(33, 31, 35)");
     await page.getByTestId("upgrade-gate").screenshot({ path: `${SHOTS}/gate-updating.png` });
     release();
     await expect.poll(async () => (await launches(page)).length).toBe(1);

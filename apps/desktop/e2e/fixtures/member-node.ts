@@ -22,7 +22,10 @@ export interface MemberNode {
   /** What the next activate does. */
   activate: Activate;
   held: Record<string, { groupId: string; version: string }>;
+  /** What an admin's Upgrade moves the namespace to. */
+  upgradeTo: string;
   installs: unknown[];
+  upgrades: unknown[];
   activations: unknown[];
 }
 
@@ -32,7 +35,11 @@ const json = (body: unknown, status = 200) => ({
   body: JSON.stringify(body),
 });
 
-export async function mockMemberNode(page: Page, init: Partial<MemberNode> = {}): Promise<MemberNode> {
+export async function mockMemberNode(
+  page: Page,
+  init: Partial<MemberNode> = {},
+  role = "Member",
+): Promise<MemberNode> {
   const node: MemberNode = {
     target: "2.0.0",
     installed: "2.0.0",
@@ -43,7 +50,9 @@ export async function mockMemberNode(page: Page, init: Partial<MemberNode> = {})
       "ctx-2": { groupId: SUB_ID, version: "1.0.0" },
       "ctx-3": { groupId: SUB_ID, version: "2.0.0" },
     },
+    upgradeTo: "2.0.0",
     installs: [],
+    upgrades: [],
     activations: [],
     ...init,
   };
@@ -53,33 +62,36 @@ export async function mockMemberNode(page: Page, init: Partial<MemberNode> = {})
     name: "Workspace",
     applicationId: APP.id,
     appVersion: node.target,
-    role: "Member",
+    role,
     contexts: [{ contextId: "ctx-1", name: "general" }],
     subgroups: [{ groupId: SUB_ID, name: "Design", role: "Member", contexts: [{ contextId: "ctx-2", name: "chat" }] }],
   });
 
+  const namespace = () => ({
+    namespaceId: NS_ID,
+    appKey: "bytecode-1",
+    targetApplicationId: APP.id,
+    createdAt: 0,
+    name: "Workspace",
+    memberCount: 2,
+    contextCount: 1,
+    subgroupCount: 1,
+    appVersion: node.target,
+    appPackage: "only-peers-chat",
+  });
   await page.route(
     (url) => url.pathname === "/admin-api/namespaces",
-    (route) =>
-      route.fulfill(
-        json({
-          data: [
-            {
-              namespaceId: NS_ID,
-              appKey: "bytecode-1",
-              targetApplicationId: APP.id,
-              createdAt: 0,
-              name: "Workspace",
-              memberCount: 2,
-              contextCount: 1,
-              subgroupCount: 1,
-              appVersion: node.target,
-              appPackage: "only-peers-chat",
-            },
-          ],
-        }),
-      ),
+    (route) => route.fulfill(json({ data: [namespace()] })),
   );
+  await page.route(
+    (url) => url.pathname === `/admin-api/namespaces/${NS_ID}`,
+    (route) => (route.request().method() === "GET" ? route.fulfill(json({ data: namespace() })) : route.fallback()),
+  );
+  await page.route(`**/admin-api/groups/${NS_ID}/upgrade`, (route) => {
+    node.upgrades.push(JSON.parse(route.request().postData() ?? "{}"));
+    node.target = node.upgradeTo;
+    return route.fulfill(json({ data: { groupId: NS_ID, status: "completed" } }));
+  });
   await page.route(
     (url) => url.pathname.includes("/api/v2/bundles"),
     (route) =>

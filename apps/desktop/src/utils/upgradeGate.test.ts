@@ -28,7 +28,9 @@ function node(over: Record<string, unknown> = {}) {
 describe('behindNamespaces', () => {
   it('finds the namespaces of the app whose subgroup contexts run an older release', async () => {
     const out = await behindNamespaces(node().mero, 'app-1');
-    expect(out.map((b) => [b.ns.namespaceId, b.running])).toEqual([['n1', '1.0.0']]);
+    expect(out.map((b) => [b.ns.namespaceId, b.summary])).toEqual([
+      ['n1', '1 of 1 of its contexts on this node still runs an older release.'],
+    ]);
   });
 
   it('is empty when every held context is on the namespace release', async () => {

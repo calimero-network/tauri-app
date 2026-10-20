@@ -176,12 +176,9 @@ test("4. cancelling the dialog changes nothing on any node", async ({ browser })
 
 const outcomes = (page: Page) => page.getByTestId("uninstall-outcomes").locator("> li");
 
-const WITH_CONTEXT = "core refuses the owner's delete while a context is still registered (HasRegisteredContexts); it needs the cascade that purges the subtree";
-
 for (const contexts of [0, 1]) {
   const where = contexts ? " (holding a context)" : "";
   test(`5${contexts ? "b" : ""}. an owner is blocked, transfers ownership on the Namespaces page and stays an admin, and the new owner then deletes it${where}`, async ({ browser }) => {
-    test.fail(contexts > 0, WITH_CONTEXT);
     const { namespaceId } = await seedNamespace(w, "Studio", { members: [w.bob], contexts });
     const alicePage = await openDesktop(browser, w.nodes.alice.url, state().registryUrl);
 
@@ -222,6 +219,13 @@ for (const contexts of [0, 1]) {
 
     const bobPage = await openDesktop(browser, w.nodes.bob.url, state().registryUrl);
     await openUninstallDialog(bobPage);
+    if (contexts) {
+      await expect(bobPage.getByRole("checkbox", { name: "Delete Studio for everyone" })).toHaveCount(0);
+      await expect(bobPage.getByRole("button", { name: "Transfer ownership" })).toBeVisible();
+      await expect(uninstallButton(bobPage)).toBeDisabled();
+      await shot(bobPage, "5b-new-owner-no-delete-dialog");
+      return;
+    }
     await bobPage.getByRole("checkbox", { name: "Delete Studio for everyone" }).check();
     await bobPage.getByRole("textbox", { name: "Type Studio to confirm" }).fill("Studio");
     await expect(outcomes(bobPage).nth(1)).toHaveText(/^Studio: deleted for both members/);
@@ -240,12 +244,17 @@ for (const contexts of [0, 1]) {
 for (const contexts of [0, 1]) {
   const where = contexts ? " (holding a context)" : "";
   test(`6${contexts ? "b" : ""}. an owner deletes a shared namespace for everyone, after typing its name${where}`, async ({ browser }) => {
-    test.fail(contexts > 0, WITH_CONTEXT);
     const { namespaceId } = await seedNamespace(w, "Roadmap", { members: [w.bob], contexts });
     const page = await openDesktop(browser, w.nodes.alice.url, state().registryUrl);
 
     await openUninstallDialog(page);
     await expect(uninstallButton(page)).toBeDisabled();
+    if (contexts) {
+      await expect(page.getByRole("checkbox", { name: "Delete Roadmap for everyone" })).toHaveCount(0);
+      await expect(page.getByRole("button", { name: "Transfer ownership" })).toBeVisible();
+      await shot(page, "6b-owner-no-delete-dialog");
+      return;
+    }
     await page.getByRole("checkbox", { name: "Delete Roadmap for everyone" }).check();
     await expect(uninstallButton(page)).toBeDisabled();
     await page.getByRole("textbox", { name: "Type Roadmap to confirm" }).fill("Roadmap");
@@ -308,16 +317,27 @@ test("8. on a second device, what only the account's owner can do waits for the 
   expect(await hasNamespace(w.bob, namespaceId)).toBe(true);
 });
 
-test("7b. an owner who is alone in a namespace that holds a context deletes it with no prompt", async ({ browser }) => {
-  test.fail(true, WITH_CONTEXT);
+test("7b. an owner who is alone in a namespace that holds a context is blocked, and removes it from this device without leaving", async ({ browser }) => {
   const { namespaceId } = await seedNamespace(w, "Journal", { contexts: 1 });
   const page = await openDesktop(browser, w.nodes.alice.url, state().registryUrl);
 
   await openUninstallDialog(page);
+  await expect(outcomes(page).nth(1)).toContainText(
+    "Journal: you are its only member, and a namespace that holds data cannot be deleted",
+  );
+  await expect(
+    page.getByText('Untick "Also leave shared namespaces" to remove it from this device and stay its owner.'),
+  ).toBeVisible();
+  await expect(page.getByRole("checkbox", { name: /Delete Journal for everyone/ })).toHaveCount(0);
+  await expect(uninstallButton(page)).toBeDisabled();
+  await shot(page, "7b-owner-alone-with-context-blocked-dialog");
+
+  await page.getByRole("checkbox", { name: /Also leave shared namespaces/ }).uncheck();
+  await expect(uninstallButton(page)).toBeEnabled();
   await uninstallButton(page).click();
-  await expect(toast(page)).toContainText("Journal: deleted; you are its only member", { timeout: 15_000 });
+  await expect(toast(page)).toContainText("Journal: removed from this device; you stay a member", { timeout: 15_000 });
   await shot(page, "7b-owner-alone-with-context-after");
 
   expect(await hasNamespace(w.alice, namespaceId)).toBe(false);
-  expect(await contextIds(w.alice)).toEqual([]);
+  expect(await appNamespaces(w.alice, w.applicationId)).toEqual([{ id: namespaceId, forgotten: true }]);
 });

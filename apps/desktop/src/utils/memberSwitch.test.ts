@@ -11,8 +11,10 @@ const NS = {
   appPackage: 'chat',
 };
 
-const ctx = (contextId: string, groupId: string, applicationVersion?: string) => ({
-  contextId,
+const ctx = (id: string, groupId: string, applicationVersion?: string) => ({
+  id,
+  applicationId: 'app-1',
+  contextStateHash: '',
   groupId,
   applicationVersion,
 });
@@ -22,7 +24,7 @@ describe('behindContexts', () => {
 
   it('lists the held contexts that run another release than the namespace names', () => {
     const held = [ctx('a', 'ns-1', '1.0.0'), ctx('b', 'sub-1', '2.0.0'), ctx('c', 'sub-1', '1.0.0')];
-    expect(behindContexts(NS, held, groups).map((c) => c.contextId)).toEqual(['a', 'c']);
+    expect(behindContexts(NS, held, groups).map((c) => c.id)).toEqual(['a', 'c']);
   });
 
   it('ignores contexts of other namespaces', () => {

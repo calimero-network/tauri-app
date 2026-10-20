@@ -318,7 +318,7 @@ export const namespaceLabel = (ns: Namespace) => ns.name || ns.namespaceId.slice
 
 /**
  * Rejoin every namespace of the app this device was removed from. Never throws:
- * `restored` and `failed` say what came back, by name.
+ * `restored` holds the names that came back (empty when unnamed); `failed` the errors.
  */
 export async function restoreForgottenNamespaces(
   meroJs: MeroJs,
@@ -335,7 +335,7 @@ export async function restoreForgottenNamespaces(
   for (const ns of forgotten) {
     try {
       await rejoinNamespace(meroJs, ns.namespaceId);
-      restored.push(namespaceLabel(ns));
+      restored.push(ns.name ?? "");
     } catch (e) {
       failed.push(nodeErrorMessage(e, namespaceLabel(ns)));
     }

@@ -122,10 +122,8 @@ test("2. remove from this device only: purged here, still a member, and a reinst
   expect(await contextIds(w.bobLinked)).toHaveLength(1);
 
   await reinstallFromMarketplace(page);
-  // The marker keeps no name, so the toast names the namespace by its id.
-  await expect(toast(page).filter({ hasText: "installed successfully" })).toContainText(
-    `Restored 1 namespace: ${namespaceId.slice(0, 8)}`,
-  );
+  // The marker keeps no name, so the toast gives only the count.
+  await expect(toast(page).filter({ hasText: "installed successfully" })).toHaveText(/Restored 1 namespace$/);
   await shot(page, "2-remove-here-restored");
   await shotNodeState(page, "2-remove-here-restored-node-state");
 

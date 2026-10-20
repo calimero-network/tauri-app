@@ -293,10 +293,11 @@ export function devicesEmptyMessage(identity: NodeIdentity | null): string {
   return "No devices found for this account.";
 }
 
-/** An install's message, followed by the namespaces it rejoined. */
+/** An install's message, followed by the namespaces it rejoined; names only when every one has one. */
 export function restoreSummary(installed: string, restored: string[]): string {
   if (!restored.length) return installed;
-  return `${installed}\nRestored ${restored.length} ${namespaceWord(restored.length)}: ${restored.join(", ")}`;
+  const count = `Restored ${restored.length} ${namespaceWord(restored.length)}`;
+  return `${installed}\n${restored.every(Boolean) ? `${count}: ${restored.join(", ")}` : count}`;
 }
 
 export function relinkSummary({ linkedIn, pending }: RelinkResult): string {

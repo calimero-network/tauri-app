@@ -10,6 +10,9 @@ sessions (one browser context per node) through flows that cross nodes.
 2. A member's node receives the upgrade at once, but fetches the release only when the app is next used there.
 3. After that use, the member's write on the new release reaches the admin's node.
 
+`token-refresh.spec.ts` opens the desktop with an access token the node already refuses, and checks that the desktop rotates it once and stays signed in.
+The nodes issue 5-second access tokens so this happens within one test.
+
 ## Run it
 
 ```sh

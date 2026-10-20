@@ -225,6 +225,27 @@ test.describe("Marketplace – install flow", () => {
     await expect(page.locator("[data-testid='app-card']").first()).toBeVisible();
   });
 
+  test("Install is disabled from the first frame until the version list loads", async ({ page }) => {
+    await mockRegistryAPIs(page);
+    await setupAuthenticatedPage(page);
+    await navigateVia(page, "Marketplace");
+    // Read at the first DOM commit, before effects run: a click there would be swallowed.
+    const firstDisabled = page.evaluate(
+      () =>
+        new Promise<boolean>((resolve) => {
+          new MutationObserver((_, observer) => {
+            const button = document.querySelector<HTMLButtonElement>("[data-testid='detail-install']");
+            if (!button) return;
+            observer.disconnect();
+            resolve(button.disabled);
+          }).observe(document.body, { childList: true, subtree: true });
+        }),
+    );
+    await page.locator("[data-testid='app-card']", { hasText: "Only Peers Chat" }).click();
+    expect(await firstDisabled).toBe(true);
+    await expect(page.getByTestId("detail-install")).toBeEnabled();
+  });
+
   test("the version picker is our own control, and works by mouse and keyboard", async ({ page }) => {
     // ⚠️ NOT A NATIVE <select>: in a Tauri webview that renders the OS's own
     // menu, with its own font, metrics and highlight, inside a window that is

@@ -1,5 +1,8 @@
 import { defineConfig, devices } from "@playwright/test";
 
+const UI_PORT = Number(process.env["LIVE_UI_PORT"]) || 1420; // another checkout's Vite may already hold 1420
+const UI_URL = `http://localhost:${UI_PORT}`;
+
 /**
  * The live suite: the desktop UI against REAL merod nodes, two of them, so a
  * flow that needs a second member (an upgrade reaching a peer) is tested end to
@@ -22,14 +25,14 @@ export default defineConfig({
   forbidOnly: !!process.env.CI,
   reporter: process.env.CI ? [["html", { open: "never" }], ["github"]] : "list",
   use: {
-    baseURL: "http://localhost:1420",
+    baseURL: UI_URL,
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
   webServer: {
-    command: "pnpm dev",
-    url: "http://localhost:1420",
+    command: `pnpm dev --port ${UI_PORT}`,
+    url: UI_URL,
     reuseExistingServer: process.env.GITHUB_ACTIONS !== "true",
     timeout: 120_000,
   },

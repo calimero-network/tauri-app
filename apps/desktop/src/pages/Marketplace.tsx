@@ -570,7 +570,11 @@ function Marketplace({ clientReady = true }: MarketplaceProps) {
               <AppCard
                 key={`${app.registry}-${app.id}-${index}`}
                 app={app}
-                onOpen={(a) => setSelectedApp(a as MarketplaceApp)}
+                onOpen={(a) => {
+                  // In the same render as the page, so Install is never enabled before the version fetch starts.
+                  setVersionsLoading(true);
+                  setSelectedApp(a as MarketplaceApp);
+                }}
               />
             ))}
           </div>

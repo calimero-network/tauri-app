@@ -19,9 +19,9 @@ afterEach(() => {
 
 const node = () => new MeroJs({ baseUrl: 'http://node', tokenStore: new MemoryTokenStore() });
 
-const joined: AppNamespace = { id: 'ns-joined', name: 'Team', role: 'Member', others: 3 };
-const ownedAlone: AppNamespace = { id: 'ns-alone', name: 'Notes', role: 'Admin', others: 0 };
-const ownedShared: AppNamespace = { id: 'ns-shared', name: 'Family', role: 'Admin', others: 2 };
+const joined: AppNamespace = { id: 'ns-joined', name: 'Team', role: 'Member', others: 3, holdsData: false };
+const ownedAlone: AppNamespace = { id: 'ns-alone', name: 'Notes', role: 'Admin', others: 0, holdsData: false };
+const ownedShared: AppNamespace = { id: 'ns-shared', name: 'Family', role: 'Admin', others: 2, holdsData: false };
 
 function choice(overrides: Partial<UninstallChoice> = {}): UninstallChoice {
   return { deleteData: true, leave: true, deleteForEveryone: new Set(), linkedDevice: false, ...overrides };
@@ -43,6 +43,25 @@ describe('what an uninstall does to each namespace', () => {
   it('deletes an owned namespace for everyone once the user confirmed it', () => {
     expect(planNamespace(ownedShared, choice({ deleteForEveryone: new Set(['ns-shared']) }))).toBe(
       'delete-for-everyone',
+    );
+  });
+
+  it('blocks a shared owner with data on a transfer, even when delete for everyone was confirmed', () => {
+    const shared = { ...ownedShared, holdsData: true };
+    expect(planNamespace(shared, choice())).toBe('needs-transfer');
+    expect(planNamespace(shared, choice({ deleteForEveryone: new Set(['ns-shared']) }))).toBe('needs-transfer');
+  });
+
+  it('blocks an owner alone with data, since core refuses to delete it', () => {
+    const action = planNamespace({ ...ownedAlone, holdsData: true }, choice());
+    expect(action).toBe('needs-removal-here');
+    expect(isBlocked([action])).toBe(true);
+  });
+
+  it('still lets a member with data leave, and a primary-device wait win on a linked device', () => {
+    expect(planNamespace({ ...joined, holdsData: true }, choice())).toBe('leave');
+    expect(planNamespace({ ...ownedAlone, holdsData: true }, choice({ linkedDevice: true }))).toBe(
+      'needs-primary-device',
     );
   });
 
@@ -108,6 +127,12 @@ describe('the line each namespace gets', () => {
     );
   });
 
+  it('says an owner alone with data can only remove it here', () => {
+    expect(describeStep({ ...ownedAlone, holdsData: true }, 'needs-removal-here')).toBe(
+      'Notes: you are its only member, and a namespace that holds data cannot be deleted',
+    );
+  });
+
   it('counts a single other member in the singular', () => {
     expect(describeStep({ ...ownedShared, others: 1 }, 'needs-transfer')).toBe(
       'Family: you own it and 1 other is a member; transfer ownership first',
@@ -119,7 +144,7 @@ describe('the line each namespace gets', () => {
 });
 
 describe('uninstalling an application', () => {
-  const ns = (id: string, others = 0) => ({ id, name: `name-${id}`, role: 'Member', others });
+  const ns = (id: string, others = 0) => ({ id, name: `name-${id}`, role: 'Member', others, holdsData: false });
   const UNINSTALL = 'DELETE /admin-api/applications/app-1';
 
   /** Answers every call, except those in `refuse`, which fail with the given response. */
@@ -304,7 +329,7 @@ describe('uninstalling an application', () => {
 });
 
 describe('what a half-finished uninstall tells the user', () => {
-  const notes = { id: 'n', name: 'Notes', others: 0 };
+  const notes = { id: 'n', name: 'Notes', others: 0, holdsData: false };
 
   it('says what each finished step did', () => {
     expect(describeDone(notes, 'leave')).toBe('Notes was left');
@@ -357,8 +382,9 @@ describe('reading what the dialog lists', () => {
           return identity.clone();
         case '/admin-api/namespaces/for-application/app-1':
           return ok([
-            { namespaceId: 'ns-team', name: 'Team' },
-            { namespaceId: '0123456789abcdef', name: '' },
+            { namespaceId: 'ns-team', name: 'Team', contextCount: 1, subgroupCount: 0 },
+            { namespaceId: '0123456789abcdef', name: '', contextCount: 0, subgroupCount: 0 },
+            { namespaceId: 'ns-sub', name: 'Sub', contextCount: 0, subgroupCount: 2 },
             { namespaceId: 'ns-gone', name: 'Gone', forgotten: true },
           ]);
         case '/admin-api/groups/ns-team/members':
@@ -367,6 +393,8 @@ describe('reading what the dialog lists', () => {
             { identity: BOB, role: 'Member' },
             { identity: RELAY, role: 'RelayTee' },
           ]);
+        case '/admin-api/groups/ns-sub/members':
+          return members([{ identity: ME, role: 'Admin' }]);
         case '/admin-api/groups/0123456789abcdef/members':
           return members([{ identity: ME, role: 'Member' }]);
         default:
@@ -383,8 +411,9 @@ describe('reading what the dialog lists', () => {
     expect((await loadAppNamespaces(node(), 'app-1')).data).toEqual({
       linkedDevice: false,
       namespaces: [
-        { id: 'ns-team', name: 'Team', role: 'Admin', others: 1 },
-        { id: '0123456789abcdef', name: '01234567', role: 'Member', others: 0 },
+        { id: 'ns-team', name: 'Team', role: 'Admin', others: 1, holdsData: true },
+        { id: '0123456789abcdef', name: '01234567', role: 'Member', others: 0, holdsData: false },
+        { id: 'ns-sub', name: 'Sub', role: 'Admin', others: 0, holdsData: true },
       ],
     });
   });
@@ -401,7 +430,7 @@ describe('reading what the dialog lists', () => {
     const { linkedDevice, namespaces } = (await loadAppNamespaces(node(), 'app-1')).data!;
 
     expect(linkedDevice).toBe(false);
-    expect(namespaces.map((n) => n.role)).toEqual([undefined, undefined]);
+    expect(namespaces.map((n) => n.role)).toEqual([undefined, undefined, undefined]);
   });
 
   it('answers a revoked session with the code that sends the user to sign in', async () => {

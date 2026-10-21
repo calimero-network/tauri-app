@@ -54,6 +54,10 @@ type Page = 'home' | 'marketplace' | 'installed' | 'namespaces' | 'cloud' | 'acc
 // 'confirm' takes over the whole window rather than rendering inside the shell.
 type ShellPage = Exclude<Page, 'confirm'>;
 
+function readTransferLink(): string | null {
+  return new URLSearchParams(window.location.search).get('transferNamespace');
+}
+
 function App() {
   const toast = useToast();
   const { theme } = useTheme();
@@ -64,7 +68,31 @@ function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [showLogin, setShowLogin] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
-  const [currentPage, setCurrentPage] = useState<Page>('home');
+  // A link to the Namespaces page names the namespace in `?transferNamespace=`,
+  // and opens its transfer-ownership picker.
+  const [transferNamespaceId, setTransferNamespaceId] = useState<string | null>(readTransferLink);
+  const [currentPage, setCurrentPage] = useState<Page>(() => (transferNamespaceId ? 'namespaces' : 'home'));
+  // In-app, the link is followed with `history.pushState` and a `popstate`.
+  useEffect(() => {
+    const follow = () => {
+      const id = readTransferLink();
+      if (!id) return;
+      setTransferNamespaceId(id);
+      setCurrentPage('namespaces');
+    };
+    window.addEventListener('popstate', follow);
+    return () => window.removeEventListener('popstate', follow);
+  }, []);
+  const clearTransferLink = useCallback(() => {
+    setTransferNamespaceId(null);
+    const url = new URL(window.location.href);
+    url.searchParams.delete('transferNamespace');
+    window.history.replaceState(null, '', url);
+  }, []);
+  // Leaving the page before the lookup answers must not let the link fire on a later visit.
+  useEffect(() => {
+    if (transferNamespaceId && currentPage !== 'namespaces') clearTransferLink();
+  }, [transferNamespaceId, currentPage, clearTransferLink]);
   const [checkingOnboarding, setCheckingOnboarding] = useState(true);
   const [clientReady, setClientReady] = useState(false);
   const [clientVersion, setClientVersion] = useState(0);
@@ -744,7 +772,10 @@ function App() {
       title: 'Namespaces',
       element: (
         <MeroContext.Provider value={meroContextValue}>
-          <Namespaces />
+          <Namespaces
+            transferNamespaceId={transferNamespaceId}
+            onTransferHandled={clearTransferLink}
+          />
         </MeroContext.Provider>
       ),
     },

@@ -11,6 +11,7 @@ import {
 import { listInstalledApps, invalidateInstalledApps } from '../utils/installedAppsCache';
 import { fetchAppsFromRegistry, type AppSummary } from '../utils/registry';
 import { useToast } from '../contexts/ToastContext';
+import { decodeInvitation, invitationNamespaceId } from '../utils/invitation';
 
 const DEEP_LINK_REGISTRY = 'https://apps.calimero.network';
 
@@ -174,6 +175,68 @@ async function installBundle(pkg: string, version: string, report: Reporter): Pr
 }
 
 /**
+ * Join the namespace an invite link names, as the desktop, before the app opens.
+ *
+ * The app cannot do this itself. Its window holds a client key bound to its own
+ * application, and core lets a bound key join only a namespace this node
+ * already holds — before the join, the namespace's application is no more than
+ * the invitation's unsigned hint. So every invite to a namespace this node had
+ * never seen (one made on a TEE, or on another person's node) was refused with
+ * "This key is not permitted to act on this group", and the app showed "You
+ * can't join this workspace with this invitation".
+ *
+ * Joined here with the desktop's own session, the namespace is held by the time
+ * the app reads `?invitation=…`; its own join then lands as `already-member`.
+ *
+ * Never blocks the open: a link whose params are not a namespace invitation is
+ * the app's business, and a failed join still opens the app, which keeps the
+ * invitation and can retry it (no member online yet, say).
+ */
+export async function joinInvitedNamespace(
+  params: string,
+  appName: string,
+  report: Reporter,
+): Promise<void> {
+  const token = new URLSearchParams(params).get('invitation');
+  if (!token) return;
+  let namespaceId: string;
+  let decoded: Record<string, unknown>;
+  try {
+    decoded = await decodeInvitation(token);
+    namespaceId = invitationNamespaceId(decoded);
+  } catch {
+    return; // not a namespace invitation — leave it to the app
+  }
+  const teamName =
+    typeof decoded.groupAlias === 'string' && decoded.groupAlias.trim()
+      ? decoded.groupAlias.trim()
+      : undefined;
+  const where = teamName ? `“${teamName}”` : 'the workspace';
+
+  const clear = once(report.progress(`Joining ${where}…`));
+  try {
+    const outcome = await apiClient.meroJs.admin.redeemInvitation(
+      namespaceId,
+      decoded.invitation as Parameters<typeof apiClient.meroJs.admin.redeemInvitation>[1],
+      { teamName },
+    );
+    if (outcome.status === 'joined') {
+      report.done(`Joined ${where}`);
+    } else if (outcome.status === 'failed') {
+      console.warn(`[deep-link] join of ${namespaceId} failed:`, outcome.reason, outcome.message);
+      report.failed(`Could not join ${where}: ${outcome.message.replace(/\.$/, '')}. Opening ${appName} anyway.`);
+    }
+  } catch (e) {
+    console.warn('[deep-link] join error:', e);
+    report.failed(
+      `Could not join ${where}: ${e instanceof Error ? e.message : String(e)}. Opening ${appName} anyway.`,
+    );
+  } finally {
+    clear();
+  }
+}
+
+/**
  * Payload emitted by the host's `on_open_url` handler for an app deep-link
  * shaped `<slug>/<action>?<params>` (custom scheme `calimero://…` or the
  * Universal Link host `https://links.calimero.network/…`). The OAuth callback
@@ -307,6 +370,8 @@ export async function resolveAndOpen(
     }
   }
 
+
+  if (dl.action === 'join') await joinInvitedNamespace(dl.params, appName, report);
 
   // `join` is the action every app's invite builder emits. Naming it is the
   // difference between "a window will appear shortly" and "did my click do

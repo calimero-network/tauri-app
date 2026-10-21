@@ -293,6 +293,43 @@ class NodeApi {
   }
 }
 
+// ─── Namespace ownership ────────────────────────────────────────────────────
+
+export interface TransferOwnershipResult {
+  /** The new owner was made an admin on the way, and stays one if the transfer failed. */
+  promoted: boolean;
+  /** Set when the transfer did not complete. */
+  error?: string;
+}
+
+/**
+ * Hand a namespace to `newOwner`, promoting them on a 409 (core checks ownership first,
+ * then that the successor is an admin). Never throws; `promoted` says how far it got.
+ */
+export async function transferNamespaceOwnership(
+  meroJs: Pick<MeroJs, 'admin'>,
+  namespaceId: string,
+  newOwner: string,
+  targetIsAdmin = false,
+): Promise<TransferOwnershipResult> {
+  const transfer = () => meroJs.admin.transferOwnership(namespaceId, { newOwner });
+  let promoted = false;
+  try {
+    try {
+      await transfer();
+    } catch (e) {
+      // Core's refusals carry only a message, so the 409 status is the one stable signal.
+      if (targetIsAdmin || !(e instanceof HTTPError && e.status === 409)) throw e;
+      await meroJs.admin.updateMemberRole(namespaceId, newOwner, { role: 'Admin' });
+      promoted = true;
+      await transfer();
+    }
+    return { promoted };
+  } catch (e) {
+    return { promoted, error: nodeErrorMessage(e) };
+  }
+}
+
 // ─── Client + singleton ─────────────────────────────────────────────────────
 
 export class Client {

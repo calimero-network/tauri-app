@@ -49,6 +49,12 @@ export interface NamespaceGraph {
   appVersion?: string;
   /** This node's role at the namespace ROOT. */
   role?: string;
+  /** The root's other members, in place of the single admin every graph gets. */
+  otherMembers?: { identity: string; role: string; name?: string }[];
+  /** More namespaces of the same app, listed after this one. */
+  siblings?: NamespaceGraph[];
+  /** What `GET /admin-api/identity` says about the account's root key; absent means the node does not say. */
+  holdsAccountRoot?: boolean;
   contexts?: GraphContext[];
   subgroups?: GraphGroup[];
 }
@@ -57,6 +63,8 @@ export interface RecordedCall {
   method: string;
   /** Path only, e.g. `/admin-api/namespaces/ns-1/leave`. */
   path: string;
+  /** The parsed JSON body, when the request carried one. */
+  body?: unknown;
 }
 
 export interface GraphMock {
@@ -89,6 +97,13 @@ export interface GraphFailures {
   leaveGroup?: GraphFailure;
   deleteContext?: GraphFailure;
   leaveContext?: GraphFailure;
+  /** Refuses every member listing. */
+  listMembers?: GraphFailure;
+  updateMemberRole?: GraphFailure;
+  /** Refuses every transfer, as core does a caller who is not the owner. */
+  transferOwnership?: GraphFailure;
+  /** Refuses the transfer that follows a promotion made through this mock. */
+  transferAfterPromotion?: GraphFailure;
 }
 
 /**
@@ -150,7 +165,10 @@ export async function mockNamespaceGraph(
   graph: NamespaceGraph,
   failures: GraphFailures = {},
 ): Promise<GraphMock> {
-  const groups = flatten(graph);
+  const roots = [graph, ...(graph.siblings ?? [])];
+  const groups = new Map(roots.flatMap((r) => [...flatten(r)]));
+  // Accounts a spec promoted to admin through `PUT .../role`.
+  const promoted = new Set<string>();
   const applicationId = graph.applicationId ?? "installed-app-1";
   const calls: RecordedCall[] = [];
 
@@ -167,7 +185,7 @@ export async function mockNamespaceGraph(
   const membersOf = (groupId: string) => {
     const g = groups.get(groupId);
     const members: { identity: string; role: string; name?: string }[] = [
-      { identity: OTHER_ACCOUNT_ID, role: "Admin", name: "someone else" },
+      ...(roots.find((r) => r.namespaceId === groupId)?.otherMembers ?? [{ identity: OTHER_ACCOUNT_ID, role: "Admin", name: "someone else" }]),
     ];
     if (g?.role) members.push({ identity: MOCK_ACCOUNT_ID, role: g.role });
     return { members };
@@ -177,14 +195,24 @@ export async function mockNamespaceGraph(
     const url = new URL(route.request().url());
     const path = url.pathname;
     const method = route.request().method();
-    calls.push({ method, path });
+    const raw = route.request().postData();
+    calls.push({ method, path, ...(raw ? { body: JSON.parse(raw) } : {}) });
 
     const seg = path.replace(/^\/admin-api\//, "").split("/");
 
     // GET /admin-api/identity
     if (path.endsWith("/admin-api/identity") && method === "GET") {
       return route.fulfill(
-        json({ data: { accountId: MOCK_ACCOUNT_ID, deviceId: "dev-1", publicKey: "pk-1" } }),
+        json({
+          data: {
+            accountId: MOCK_ACCOUNT_ID,
+            deviceId: "dev-1",
+            publicKey: "pk-1",
+            ...(graph.holdsAccountRoot === undefined
+              ? {}
+              : { holdsAccountRoot: graph.holdsAccountRoot }),
+          },
+        }),
       );
     }
 
@@ -194,19 +222,17 @@ export async function mockNamespaceGraph(
       if (seg.length === 1 && method === "GET") {
         return route.fulfill(
           json({
-            data: [
-              {
-                namespaceId: graph.namespaceId,
-                bytecodeId: "bytecode-1",
-                targetApplicationId: applicationId,
-                createdAt: 0,
-                name: graph.name,
-                memberCount: 2,
-                contextCount: (graph.contexts ?? []).length,
-                subgroupCount: (graph.subgroups ?? []).length,
-                ...(graph.appVersion ? { appVersion: graph.appVersion } : {}),
-              },
-            ],
+            data: roots.map((r) => ({
+              namespaceId: r.namespaceId,
+              bytecodeId: "bytecode-1",
+              targetApplicationId: applicationId,
+              createdAt: 0,
+              name: r.name,
+              memberCount: 2,
+              contextCount: (r.contexts ?? []).length,
+              subgroupCount: (r.subgroups ?? []).length,
+              ...(r.appVersion ? { appVersion: r.appVersion } : {}),
+            })),
           }),
         );
       }
@@ -240,7 +266,28 @@ export async function mockNamespaceGraph(
       const groupId = seg[1];
       // GET /admin-api/groups/:id/members
       if (seg.length === 3 && seg[2] === "members" && method === "GET") {
+        if (failures.listMembers) return route.fulfill(failure(failures.listMembers));
         return route.fulfill(json(membersOf(groupId)));
+      }
+      // PUT /admin-api/groups/:id/members/:identity/role
+      if (seg.length === 5 && seg[2] === "members" && seg[4] === "role" && method === "PUT") {
+        if (failures.updateMemberRole) return route.fulfill(failure(failures.updateMemberRole));
+        promoted.add(seg[3]);
+        return route.fulfill(json({ data: {} }));
+      }
+      // POST /admin-api/groups/:id/transfer-ownership
+      if (seg.length === 3 && seg[2] === "transfer-ownership" && method === "POST") {
+        // Core checks ownership first, then that the successor is an admin (409).
+        if (failures.transferOwnership) return route.fulfill(failure(failures.transferOwnership));
+        const target = JSON.parse(route.request().postData() ?? "{}").newOwner as string;
+        const isAdmin =
+          promoted.has(target) ||
+          membersOf(groupId).members.some((m) => m.identity === target && m.role === "Admin");
+        if (!isAdmin) return route.fulfill(json({ error: "the new owner is not an admin" }, 409));
+        if (failures.transferAfterPromotion && promoted.has(target)) {
+          return route.fulfill(failure(failures.transferAfterPromotion));
+        }
+        return route.fulfill(json({ data: {} }));
       }
       // GET /admin-api/groups/:id/contexts
       if (seg.length === 3 && seg[2] === "contexts" && method === "GET") {

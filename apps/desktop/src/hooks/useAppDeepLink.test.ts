@@ -7,6 +7,7 @@ const invalidateInstalledApps = vi.fn();
 const openAppFrontend = vi.fn();
 const installApplication = vi.fn();
 const fetchAppsFromRegistry = vi.fn();
+const redeemInvitation = vi.fn();
 
 vi.mock("../utils/installedAppsCache", () => ({
   listInstalledApps: (...a: unknown[]) => listInstalledApps(...a),
@@ -16,7 +17,10 @@ vi.mock("../utils/registry", () => ({
   fetchAppsFromRegistry: (...a: unknown[]) => fetchAppsFromRegistry(...a),
 }));
 vi.mock("../lib/mero-client", () => ({
-  apiClient: { node: { installApplication: (...a: unknown[]) => installApplication(...a) } },
+  apiClient: {
+    node: { installApplication: (...a: unknown[]) => installApplication(...a) },
+    meroJs: { admin: { redeemInvitation: (...a: unknown[]) => redeemInvitation(...a) } },
+  },
 }));
 vi.mock("../utils/appUtils", () => ({
   openAppFrontend: (...a: unknown[]) => openAppFrontend(...a),
@@ -32,6 +36,7 @@ import {
   canResolveDeepLinks,
   createLinkDedup,
   deepLinkRaw,
+  joinInvitedNamespace,
   resolveAndOpen,
   supersede,
   type DeepLinkConsentRequest,
@@ -381,5 +386,74 @@ describe("the same link delivered twice", () => {
     expect(dedup.claim({ ...LINK, params: "invitation=other" })).toBe(true);
     dedup.settle(LINK, "retry");
     expect(dedup.claim(LINK)).toBe(true);
+  });
+});
+
+describe("an invite link joins the namespace as the desktop", () => {
+  // The app's own client key cannot join a namespace this node has never held,
+  // so the desktop joins first and the app finds itself already a member.
+  const NS = "dda0bfa125cdffc453bd5474bdeb45db828f24197c667bf03e88df8d7a86437d";
+  const payload = { invitation: { invitation: { group_id: NS }, sig: "s" }, groupAlias: "Team" };
+  const INVITE = `invitation=${encodeURIComponent(JSON.stringify(payload))}`;
+
+  it("joins before opening the app", async () => {
+    listInstalledApps.mockResolvedValue({ data: [INSTALLED] });
+    const order: string[] = [];
+    redeemInvitation.mockImplementation(async () => {
+      order.push("join");
+      return { status: "joined", namespaceId: NS };
+    });
+    openAppFrontend.mockImplementation(async () => {
+      order.push("open");
+    });
+    const r = recorder();
+
+    await resolveAndOpen({ ...LINK, params: INVITE }, r.report, agree);
+
+    expect(redeemInvitation).toHaveBeenCalledWith(NS, payload.invitation, { teamName: "Team" });
+    expect(order).toEqual(["join", "open"]);
+    expect(r.done).toContain("Joined “Team”");
+  });
+
+  it("still opens the app when the join fails, and says why", async () => {
+    redeemInvitation.mockResolvedValue({
+      status: "failed",
+      namespaceId: NS,
+      message: "invitation expired.",
+      reason: "expired",
+      retryable: false,
+    });
+    const r = recorder();
+
+    await joinInvitedNamespace(INVITE, "Mero Chat", r.report);
+
+    expect(r.failures).toEqual([
+      "Could not join “Team”: invitation expired. Opening Mero Chat anyway.",
+    ]);
+    expect(r.cleared).toEqual(r.shown);
+  });
+
+  it("says nothing extra for an already-member", async () => {
+    redeemInvitation.mockResolvedValue({ status: "already-member", namespaceId: NS });
+    const r = recorder();
+
+    await joinInvitedNamespace(INVITE, "Mero Chat", r.report);
+
+    expect(r.failures).toEqual([]);
+    expect(r.done).toEqual([]);
+  });
+
+  it("leaves params that are not a namespace invitation to the app", async () => {
+    const r = recorder();
+    await joinInvitedNamespace("invitation=abc", "Mero Chat", r.report);
+    await joinInvitedNamespace("room=42", "Mero Chat", r.report);
+    expect(redeemInvitation).not.toHaveBeenCalled();
+    expect(r.shown).toEqual([]);
+  });
+
+  it("does not join for an action other than join", async () => {
+    listInstalledApps.mockResolvedValue({ data: [INSTALLED] });
+    await resolveAndOpen({ ...LINK, action: "open", params: INVITE }, recorder().report, agree);
+    expect(redeemInvitation).not.toHaveBeenCalled();
   });
 });

@@ -460,6 +460,7 @@ export const API_ROUTES = {
   installApplication: "**/admin-api/install-application",
   uninstallApplication: "**/admin-api/applications/*",
   identity: "**/admin-api/identity",
+  acknowledgeRevokedFrom: "**/admin-api/identity/revoked-from",
   // Trailing `*` for the explicit `?limit=`; `*` stops at `/`, so this still
   // does not swallow the namespace-scoped routes below it.
   namespaces: "**/admin-api/namespaces*",

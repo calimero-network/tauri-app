@@ -134,7 +134,9 @@ async function invite(page: Page): Promise<string> {
 async function joinNamespace(page: Page, payload: string) {
   await go(page, "Namespaces");
   await page.getByTitle("Join an existing namespace using an invitation").first().click();
-  await page.getByPlaceholder("Paste invitation payload here...").fill(payload);
+  // By label: the placeholder is copy, and changing it (#410) left this waiting
+  // out the whole 15-minute test.
+  await page.getByRole("dialog").getByLabel("Invitation").fill(payload);
   await page.getByRole("dialog").getByRole("button", { name: "Join Namespace" }).click();
   await expect(page.getByText("Joined namespace")).toBeVisible({ timeout: CONVERGE_MS });
 }

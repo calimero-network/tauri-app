@@ -61,6 +61,8 @@ function DeepLinkConsentDialog({
   const installing = request.kind === "install";
   const unverified = installing && !request.verified;
   const params = [...new URLSearchParams(request.params).entries()];
+  // The desktop joins for the app (see `joinInvitedNamespace`).
+  const joining = request.action === "join" && params.some(([k]) => k === "invitation");
   const title = installing ? "Install app from link?" : "Open app from link?";
 
   return createPortal(
@@ -86,8 +88,9 @@ function DeepLinkConsentDialog({
         <div className="account-modal-body deep-link-consent">
           <p>
             A link wants to {installing ? "install and open" : "open"}{" "}
-            <strong>{request.appName}</strong>. The app will be signed in to your node
-            with full access to it.
+            <strong>{request.appName}</strong>
+            {joining ? ", joining the workspace its invitation names" : ""}. The app will
+            be signed in to your node with full access to it.
           </p>
 
           <dl className="deep-link-consent-facts">

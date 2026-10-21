@@ -22,6 +22,7 @@ import { readInstalledApps, type InstalledApp } from "../utils/namespaceApps";
 import { getNamespaceFleetStatus } from "../utils/cloudApi";
 import { getCloudIdToken } from "../utils/cloudAuth";
 import { groupVisibilityLabel } from "../utils/groupVisibility";
+import { decodeInvitation, invitationNamespaceId } from "../utils/invitation";
 import { apiClient, transferNamespaceOwnership } from "../lib/mero-client";
 import { canInviteDevices } from "../lib/account";
 import { TransferOwnershipModal, type TransferTarget } from "./TransferOwnershipModal";
@@ -928,10 +929,9 @@ function Namespaces({ transferNamespaceId, onTransferHandled }: NamespacesProps)
     if (!mero) return;
     setActionLoading(true);
     try {
-      const decoded = JSON.parse(atob(invitationText.trim()));
-      const namespaceId = (decoded.invitation.invitation.group_id as number[])
-        .map((b: number) => b.toString(16).padStart(2, '0')).join('');
-      await mero.admin.joinNamespace(namespaceId, decoded);
+      const decoded = await decodeInvitation(invitationText);
+      const namespaceId = invitationNamespaceId(decoded);
+      await mero.admin.joinNamespace(namespaceId, decoded as any);
       toast.success('Joined namespace');
       setJoinNsModal(false);
       await refetchNamespaces();
@@ -946,8 +946,8 @@ function Namespaces({ transferNamespaceId, onTransferHandled }: NamespacesProps)
     if (!mero) return;
     setActionLoading(true);
     try {
-      const decoded = JSON.parse(atob(invitationText.trim()));
-      await mero.admin.joinGroup(decoded);
+      const decoded = await decodeInvitation(invitationText);
+      await mero.admin.joinGroup(decoded as any);
       toast.success('Joined context');
       setJoinCtxModal(null);
       refetch();
@@ -2446,14 +2446,14 @@ function JoinNamespaceModal({ loading, onClose, onSubmit }: JoinNamespaceModalPr
           className="ns-modal-body"
           onSubmit={(e) => { e.preventDefault(); if (!payload.trim()) return; onSubmit(payload.trim()); }}
         >
-          <p className="ns-modal-hint">Paste the invitation payload you received from a namespace admin.</p>
+          <p className="ns-modal-hint">Paste the invite link or payload you received from a namespace admin.</p>
           <label className="ns-modal-field">
-            <span>Invitation Payload</span>
+            <span>Invitation</span>
             <textarea
               className="ns-invite-payload"
               value={payload}
               onChange={(e) => setPayload(e.target.value)}
-              placeholder="Paste invitation payload here..."
+              placeholder="https://links.calimero.network/…/join?invitation=… or payload"
               rows={4}
               spellCheck={false}
               autoFocus
@@ -2491,14 +2491,14 @@ function JoinContextModal({ loading, onClose, onSubmit }: JoinContextModalProps)
           className="ns-modal-body"
           onSubmit={(e) => { e.preventDefault(); if (!payload.trim()) return; onSubmit(payload.trim()); }}
         >
-          <p className="ns-modal-hint">Paste the invitation payload you received from a context admin.</p>
+          <p className="ns-modal-hint">Paste the invite link or payload you received from a context admin.</p>
           <label className="ns-modal-field">
-            <span>Invitation Payload</span>
+            <span>Invitation</span>
             <textarea
               className="ns-invite-payload"
               value={payload}
               onChange={(e) => setPayload(e.target.value)}
-              placeholder="Paste invitation payload here..."
+              placeholder="https://links.calimero.network/…/join?invitation=… or payload"
               rows={4}
               spellCheck={false}
               autoFocus

@@ -32,6 +32,7 @@ function graph(role: string, appVersion = "0.3.0"): NamespaceGraph {
 interface UpgradeMock {
   installs: unknown[];
   upgrades: unknown[];
+  activations: unknown[];
 }
 
 /**
@@ -43,7 +44,7 @@ async function mockUpgrade(
   page: Page,
   opts: { published: string[]; installed: string; upgradeStatus?: "completed" | "in_progress" },
 ): Promise<UpgradeMock> {
-  const mock: UpgradeMock = { installs: [], upgrades: [] };
+  const mock: UpgradeMock = { installs: [], upgrades: [], activations: [] };
   let installed = opts.installed;
   let upgraded = false;
 
@@ -82,6 +83,38 @@ async function mockUpgrade(
       status: 200,
       contentType: "application/json",
       body: JSON.stringify({ data: { groupId: NS_ID, status: opts.upgradeStatus ?? "completed" } }),
+    });
+  });
+  // The re-read after Upgrade names the release the node now holds.
+  await page.route(
+    (url) => url.pathname === `/admin-api/namespaces/${NS_ID}`,
+    (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          data: {
+            namespaceId: NS_ID,
+            appKey: "bytecode-1",
+            targetApplicationId: APP.id,
+            createdAt: 0,
+            memberCount: 2,
+            contextCount: 1,
+            subgroupCount: 0,
+            appVersion: installed,
+            appPackage: "only-peers-chat",
+          },
+        }),
+      }),
+  );
+  await page.route(`**/admin-api/groups/${NS_ID}/upgrade/activate`, (route) => {
+    mock.activations.push(JSON.parse(route.request().postData() ?? "{}"));
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        data: { targetApplicationId: APP.id, switchedContexts: 1, replayedDeltas: 0, failedContexts: [] },
+      }),
     });
   });
   await page.route(`**/admin-api/groups/${NS_ID}/upgrade/status`, (route) =>
@@ -143,6 +176,8 @@ test.describe("Namespace upgrades", () => {
     await expect
       .poll(() => mock.upgrades)
       .toEqual([{ targetApplicationId: APP.id, cascade: true }]);
+    await expect.poll(() => mock.activations).toHaveLength(1);
+    await expect(page.getByTestId("ns-upgrade-error")).toHaveCount(0);
   });
 
   test("a running cascade shows its progress on this node", async ({ page }) => {
@@ -153,6 +188,7 @@ test.describe("Namespace upgrades", () => {
 
     await page.getByTestId("ns-upgrade-upgrade").click();
     await expect(page.getByTestId("ns-upgrade-progress")).toContainText("1 of 3 contexts");
+    await expect(page.getByTestId("ns-upgrade-error")).toHaveCount(0);
   });
 
   test("a plain member sees the newer release but is offered no action", async ({ page }) => {

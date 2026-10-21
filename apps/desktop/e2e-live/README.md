@@ -7,8 +7,9 @@ sessions (one browser context per node) through flows that cross nodes.
 `upgrade.spec.ts` covers this flow:
 
 1. An admin installs a newer release of an app and upgrades a namespace from the desktop.
-2. A member's node receives the upgrade at once, but fetches the release only when the app is next used there.
-3. After that use, the member's write on the new release reaches the admin's node.
+2. A member's node receives the upgrade at once, but its contexts keep running the older release.
+3. The member switches from the namespace page: the release is installed, the contexts move, and the admin's write made meanwhile arrives.
+4. The member's write on the new release reaches the admin's node.
 
 `token-refresh.spec.ts` opens the desktop with an access token the node already refuses, and checks that the desktop rotates it once and stays signed in.
 The nodes issue 5-second access tokens so this happens within one test.

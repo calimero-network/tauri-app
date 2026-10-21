@@ -307,7 +307,7 @@ export interface TransferOwnershipResult {
  * then that the successor is an admin). Never throws; `promoted` says how far it got.
  */
 export async function transferNamespaceOwnership(
-  meroJs: MeroJs,
+  meroJs: Pick<MeroJs, 'admin'>,
   namespaceId: string,
   newOwner: string,
   targetIsAdmin = false,

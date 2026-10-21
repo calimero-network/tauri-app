@@ -11,7 +11,6 @@ import {
   useCreateNamespace,
   type Namespace,
 } from "@calimero-network/mero-react";
-import type { GroupInfo, MetadataRecord } from "@calimero-network/mero-js";
 import { useToast } from "../contexts/ToastContext";
 import AppIcon from "../components/AppIcon";
 import NamespaceUpgradeCard from "../components/NamespaceUpgradeCard";
@@ -104,27 +103,6 @@ type View =
   | { type: "app"; applicationId: string }
   | { type: "namespace"; ns: Namespace }
   | { type: "group"; ns: Namespace; groupId: string };
-
-// The merod admin group-info response (core's GroupInfoApiResponseData,
-// crates/server/primitives/src/admin/mod.rs, #[serde(rename_all =
-// "camelCase")]) carries `groupStateHash` — a governance-convergence hash —
-// that the bundled mero-js `GroupInfo` type still omits. `subgroupVisibility`
-// and `metadata` are already present on the SDK type (and we keep the SDK's
-// `MetadataRecord` shape verbatim via Omit, so the cast at the use sites is a
-// sound widening of the stale SDK type rather than a redeclaration).
-//
-// We re-add `metadata` through Omit (instead of `extends`) because declaring
-// it again on a subtype clashes with the SDK's `metadata?: MetadataRecord |
-// null` (TS2430) — Omit-then-restore keeps the field wire-accurate without the
-// conflict. Drop the whole alias once mero-js exposes `groupStateHash`.
-//
-// `effectiveVisibility` (core#4640) is on mero-js master but in no published
-// release yet; drop it here once the bundled SDK carries it.
-type GroupInfoExt = Omit<GroupInfo, "metadata"> & {
-  metadata?: MetadataRecord | null;
-  groupStateHash?: string;
-  effectiveVisibility?: "open" | "restricted";
-};
 
 // ─── Namespace structure tree ───
 // A namespace owns root-level contexts and subgroups; each subgroup owns its
@@ -226,14 +204,8 @@ function Namespaces({ transferNamespaceId, onTransferHandled }: NamespacesProps)
   }, [mero]);
   useVisiblePoll(() => { void fetchUsage(); }, 60000);
   const { groups: nsGroups, loading: nsLoadingGroups, refetch: refetchNsGroups } = useNamespaceGroups(activeNsId) as any;
-  const { groupInfo: groupInfoRaw, loading: groupInfoLoading } = useGroupInfo(activeGroupId);
-  const { groupInfo: nsRootGroupInfoRaw } = useGroupInfo(activeNsRootId);
-  // The SDK's `GroupInfo` is stale vs core's API (skew): it lacks
-  // `groupStateHash` that the live merod response carries. We narrow to the
-  // wire-accurate `GroupInfoExt` (a sound widening — see its definition).
-  // Remove this cast once mero-js is bumped to expose the field.
-  const groupInfo = groupInfoRaw as GroupInfoExt | null;
-  const nsRootGroupInfo = nsRootGroupInfoRaw as GroupInfoExt | null;
+  const { groupInfo, loading: groupInfoLoading } = useGroupInfo(activeGroupId);
+  const { groupInfo: nsRootGroupInfo } = useGroupInfo(activeNsRootId);
   const groupVisibility = groupInfo ? groupVisibilityLabel(groupInfo) : null;
   // One listing per open group: this feeds the Group Detail Members list AND the
   // Delete-vs-Leave decision for that subgroup and the contexts it owns.

@@ -21,6 +21,7 @@ import { invalidateInstalledApps } from "../utils/installedAppsCache";
 import { readInstalledApps, type InstalledApp } from "../utils/namespaceApps";
 import { getNamespaceFleetStatus } from "../utils/cloudApi";
 import { getCloudIdToken } from "../utils/cloudAuth";
+import { groupVisibilityLabel } from "../utils/groupVisibility";
 import { apiClient } from "../lib/mero-client";
 import {
   fetchGroupMembers,
@@ -111,9 +112,13 @@ type View =
 // it again on a subtype clashes with the SDK's `metadata?: MetadataRecord |
 // null` (TS2430) — Omit-then-restore keeps the field wire-accurate without the
 // conflict. Drop the whole alias once mero-js exposes `groupStateHash`.
+//
+// `effectiveVisibility` (core#4640) is on mero-js master but in no published
+// release yet; drop it here once the bundled SDK carries it.
 type GroupInfoExt = Omit<GroupInfo, "metadata"> & {
   metadata?: MetadataRecord | null;
   groupStateHash?: string;
+  effectiveVisibility?: "open" | "restricted";
 };
 
 // ─── Namespace structure tree ───
@@ -218,6 +223,7 @@ function Namespaces() {
   // Remove this cast once mero-js is bumped to expose the field.
   const groupInfo = groupInfoRaw as GroupInfoExt | null;
   const nsRootGroupInfo = nsRootGroupInfoRaw as GroupInfoExt | null;
+  const groupVisibility = groupInfo ? groupVisibilityLabel(groupInfo) : null;
   // One listing per open group: this feeds the Group Detail Members list AND the
   // Delete-vs-Leave decision for that subgroup and the contexts it owns.
   const {
@@ -1937,8 +1943,8 @@ function Namespaces() {
                     <div className="stat-value">{groupInfo.contextCount ?? 0}</div>
                     <div className="stat-label">Contexts</div>
                   </div>
-                  <div className="stat-card">
-                    <div className="stat-value" style={{ fontSize: "0.85rem" }}>{groupInfo.subgroupVisibility || "—"}</div>
+                  <div className="stat-card" title={groupVisibility?.hint}>
+                    <div className="stat-value" style={{ fontSize: "0.85rem" }}>{groupVisibility?.value}</div>
                     <div className="stat-label">Visibility</div>
                   </div>
                 </div>

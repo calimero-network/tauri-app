@@ -63,16 +63,14 @@ export interface World {
 
 let slot = 0;
 
-/** Three nodes on ports the shared pair never uses, with the app installed on each. */
+/** Three fresh nodes, with the app installed on each. */
 export async function startWorld(merod: string = resolveMerod()): Promise<World> {
   const live = state();
-  const base = (Number(process.env["LIVE_BASE_PORT"]) || 2840) + 20 + (slot++ % 4) * 8;
-  const dataDir = path.join(process.env["LIVE_DATA_DIR"] ?? path.join(os.tmpdir(), "desktop-live-e2e"), `world-${slot}`);
+  const dataDir = path.join(process.env["LIVE_DATA_DIR"] ?? path.join(os.tmpdir(), "desktop-live-e2e"), `world-${++slot}`);
   const nodes = await startNodes({
     merod,
     dataDir,
     count: 3,
-    basePort: base,
     registryUrl: live.registryUrl,
   });
   try {
@@ -231,7 +229,6 @@ export async function nodeSupportsUninstallOutcomes(): Promise<boolean> {
     merod: resolveMerod(),
     dataDir: path.join(process.env["LIVE_DATA_DIR"] ?? path.join(os.tmpdir(), "desktop-live-e2e"), "probe"),
     count: 1,
-    basePort: (Number(process.env["LIVE_BASE_PORT"]) || 2840) + 60,
     registryUrl: live.registryUrl,
   });
   try {

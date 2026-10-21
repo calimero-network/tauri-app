@@ -116,3 +116,28 @@ export function invitationNamespaceId(decoded: Record<string, unknown>): string 
   if (typeof raw === 'string' && raw) return raw;
   throw new Error('This invitation does not name a namespace.');
 }
+
+/**
+ * The body `POST /admin-api/namespaces/{id}/join` takes: the signed `invitation` and an optional
+ * `groupName`, nothing else, because the node rejects unknown fields. Apps wrap the invitation in
+ * an envelope of their own (mero-tag sends `contextId`, `namespaceId` and `spaceName` alongside
+ * it), so only those two are taken from what was decoded. `groupName` is a display-name hint the
+ * node uses until the namespace's own metadata syncs, so an app's space name serves for it.
+ */
+export function namespaceJoinRequest(decoded: Record<string, unknown>): {
+  invitation: Record<string, unknown>;
+  groupName?: string;
+} {
+  const invitation = decoded.invitation;
+  if (!invitation || typeof invitation !== 'object' || Array.isArray(invitation)) {
+    throw new Error('This invitation carries no signed invitation.');
+  }
+  const name = [decoded.groupName, decoded.spaceName, decoded.name].find(
+    (v): v is string => typeof v === 'string' && v.trim().length > 0,
+  );
+  const request: { invitation: Record<string, unknown>; groupName?: string } = {
+    invitation: invitation as Record<string, unknown>,
+  };
+  if (name) request.groupName = name.trim();
+  return request;
+}

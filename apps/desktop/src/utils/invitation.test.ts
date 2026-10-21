@@ -1,6 +1,12 @@
 import { describe, it, expect } from 'vitest';
 
-import { base58Decode, decodeInvitation, invitationNamespaceId, invitationToken } from './invitation';
+import {
+  base58Decode,
+  decodeInvitation,
+  invitationNamespaceId,
+  invitationToken,
+  namespaceJoinRequest,
+} from './invitation';
 
 // A real mero-chat namespace invite: invitation JSON, raw-DEFLATE, base58.
 const CHAT_TOKEN =
@@ -75,3 +81,32 @@ describe('invitationNamespaceId', () => {
     expect(invitationNamespaceId({ invitation: { invitation: { groupId: 'ff' } } })).toBe('ff');
   });
 });
+
+describe('namespaceJoinRequest', () => {
+  it("sends only what the node's join route takes, out of an app's envelope", () => {
+    // mero-tag's invitation link: the signed invitation inside the app's own envelope. The node
+    // rejected the whole envelope with "unknown field `contextId`".
+    const meroTag = {
+      contextId: 'e7'.repeat(32),
+      invitation: PAYLOAD.invitation,
+      namespaceId: 'f4'.repeat(32),
+      spaceName: 'nova',
+    };
+    const request = namespaceJoinRequest(meroTag);
+    expect(Object.keys(request).sort()).toEqual(['groupName', 'invitation']);
+    expect(request).toEqual({ invitation: PAYLOAD.invitation, groupName: 'nova' });
+  });
+
+  it('passes a bare invitation through, with a group name when one is given', () => {
+    expect(namespaceJoinRequest(PAYLOAD)).toEqual({ invitation: PAYLOAD.invitation });
+    expect(namespaceJoinRequest({ ...PAYLOAD, groupName: ' Team ' })).toEqual({
+      invitation: PAYLOAD.invitation,
+      groupName: 'Team',
+    });
+  });
+
+  it('says so when there is no signed invitation to send', () => {
+    expect(() => namespaceJoinRequest({ contextId: 'x' })).toThrow(/no signed invitation/);
+  });
+});
+

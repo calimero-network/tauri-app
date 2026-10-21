@@ -10,6 +10,7 @@ import { useCloudEnabled } from "../hooks/useCloudEnabled";
 import { useVisiblePoll } from "../hooks/useVisiblePoll";
 import type { DeviceScope, NodeIdentity } from "@calimero-network/mero-js";
 import {
+  acknowledgeRevokedFrom,
   aliasFromInput,
   createDeviceAlias,
   deleteDeviceAlias,
@@ -32,6 +33,7 @@ import {
   namespaceWord,
   relinkSummary,
   rescopeSummary,
+  revokedFromNotice,
   thisDeviceBanner,
   type AccountAppRow,
   type AccountCatalog,
@@ -255,6 +257,14 @@ export default function Account() {
     }
   };
 
+  const dismissRevokedNotice = () => {
+    acknowledgeRevokedFrom()
+      .then(() => setReloads((n) => n + 1))
+      .catch((err: unknown) =>
+        setIdentityError(parseTauriError(err, "Could not dismiss this notice")),
+      );
+  };
+
   const isHolder = canInviteDevices(identity);
   const cloudEnabled = useCloudEnabled();
 
@@ -271,6 +281,8 @@ export default function Account() {
           loading={identityLoading}
           error={identityError}
           banner={thisDeviceBanner(devices)}
+          notice={revokedFromNotice(identity)}
+          onDismissNotice={dismissRevokedNotice}
           onRetry={() => setReloads((n) => n + 1)}
         />
 

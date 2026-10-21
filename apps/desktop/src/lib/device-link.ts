@@ -98,16 +98,20 @@ export async function nodeIdentity(): Promise<NodeIdentity | null> {
 }
 
 /**
- * The one call still made by hand: `listNamespaces()` sends no `limit` and core
- * defaults to 100, which would silently narrow an invite.
+ * Calls made by hand: `listNamespaces()` sends no `limit` and core defaults to
+ * 100, which would silently narrow an invite, and mero-js has no method for
+ * acknowledging a revoked device.
  */
-export async function listNamespaces(signal?: AbortSignal): Promise<NamespaceSummary[]> {
+async function nodeFetch(
+  path: string,
+  init: { method?: string; signal?: AbortSignal } = {},
+): Promise<Response> {
   const nodeUrl = (getSettings().nodeUrl ?? '').replace(/\/$/, '');
   // Rotates only if ours has expired, and through the broker's single flight.
   const accessToken = await brokerAccessToken();
 
-  const response = await fetch(`${nodeUrl}/admin-api/namespaces?limit=${LIST_LIMIT}`, {
-    signal,
+  const response = await fetch(`${nodeUrl}${path}`, {
+    ...init,
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${accessToken}`,
@@ -125,10 +129,19 @@ export async function listNamespaces(signal?: AbortSignal): Promise<NamespaceSum
     error.status = response.status;
     throw error;
   }
+  return response;
+}
 
+export async function listNamespaces(signal?: AbortSignal): Promise<NamespaceSummary[]> {
+  const response = await nodeFetch(`/admin-api/namespaces?limit=${LIST_LIMIT}`, { signal });
   const body = await response.json().catch(() => null);
   const namespaces = body?.data ?? body;
   return Array.isArray(namespaces) ? namespaces : [];
+}
+
+/** Clears `revokedFrom` from this node's identity. Idempotent on the node. */
+export async function acknowledgeRevokedFrom(): Promise<void> {
+  await nodeFetch('/admin-api/identity/revoked-from', { method: 'DELETE' });
 }
 
 export async function listAccountDevices(): Promise<AccountDevice[]> {

@@ -26,7 +26,7 @@ globalThis.localStorage = {
   },
 } as Storage;
 
-const { createClientAsync } = await import('./mero-client');
+const { createClientAsync, transferNamespaceOwnership } = await import('./mero-client');
 
 const realFetch = globalThis.fetch;
 
@@ -165,5 +165,102 @@ describe('deleting an application\'s data', () => {
     // Not an admin of it: it can only be left.
     expect(calls).toContain('POST /admin-api/namespaces/ns-joined/leave');
     expect(calls).toContain('DELETE /admin-api/contexts/ctx-loose');
+  });
+});
+
+describe('transferring a namespace', () => {
+  const NS = 'ns-1';
+  const BOB = 'b'.repeat(64);
+  const TRANSFER = `POST /admin-api/groups/${NS}/transfer-ownership`;
+  const PROMOTE = `PUT /admin-api/groups/${NS}/members/${BOB}/role`;
+
+  /** Core's order: the owner check first (403), then the successor must be an admin (409). */
+  function fakeNode(
+    opts: { admin?: boolean; conflict?: boolean; notOwner?: boolean; roleRefused?: boolean; secondTransferRefused?: boolean } = {},
+  ) {
+    let admin = opts.admin ?? false;
+    const calls: { call: string; body: unknown }[] = [];
+    const refuse = (status: number, error: string) => new Response(JSON.stringify({ error }), { status });
+    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
+      const call = `${init?.method ?? 'GET'} ${url.pathname}`;
+      calls.push({ call, body: init?.body ? JSON.parse(String(init.body)) : undefined });
+      if (call === TRANSFER) {
+        if (opts.notOwner || (opts.secondTransferRefused && admin)) {
+          return refuse(403, 'only the owner can transfer this group');
+        }
+        return admin && !opts.conflict ? new Response(JSON.stringify({ data: {} }), { status: 200 }) : refuse(409, 'the new owner is not an admin');
+      }
+      if (call === PROMOTE) {
+        if (opts.roleRefused) return refuse(403, 'not allowed');
+        admin = true;
+        return new Response(JSON.stringify({ data: {} }), { status: 200 });
+      }
+      return new Response('{}', { status: 404 });
+    };
+    return calls;
+  }
+
+  it('hands the namespace straight to an admin', async () => {
+    const { meroJs } = await createClientAsync({ baseUrl: 'http://node' });
+    const calls = fakeNode({ admin: true });
+
+    expect(await transferNamespaceOwnership(meroJs, NS, BOB)).toEqual({ promoted: false });
+    expect(calls).toEqual([{ call: TRANSFER, body: { newOwner: BOB } }]);
+  });
+
+  it('makes a plain member an admin when the node says they are not one, then transfers', async () => {
+    const { meroJs } = await createClientAsync({ baseUrl: 'http://node' });
+    const calls = fakeNode();
+
+    expect(await transferNamespaceOwnership(meroJs, NS, BOB)).toEqual({ promoted: true });
+    expect(calls).toEqual([
+      { call: TRANSFER, body: { newOwner: BOB } },
+      { call: PROMOTE, body: { role: 'Admin' } },
+      { call: TRANSFER, body: { newOwner: BOB } },
+    ]);
+  });
+
+  it('does not promote a target who is already an admin, whatever the 409 says', async () => {
+    const { meroJs } = await createClientAsync({ baseUrl: 'http://node' });
+    const calls = fakeNode({ admin: true, conflict: true });
+
+    const result = await transferNamespaceOwnership(meroJs, NS, BOB, true);
+
+    expect(result).toEqual({ promoted: false, error: expect.stringContaining('not an admin') });
+    expect(calls.map((c) => c.call)).toEqual([TRANSFER]);
+  });
+
+  it('changes nothing when the caller is not the owner', async () => {
+    const { meroJs } = await createClientAsync({ baseUrl: 'http://node' });
+    const calls = fakeNode({ notOwner: true });
+
+    const result = await transferNamespaceOwnership(meroJs, NS, BOB);
+
+    expect(result.promoted).toBe(false);
+    expect(result.error).toContain('only the owner can transfer this group');
+    expect(calls.map((c) => c.call)).toEqual([TRANSFER]);
+  });
+
+  it('stops when the promotion is refused, without a second transfer', async () => {
+    const { meroJs } = await createClientAsync({ baseUrl: 'http://node' });
+    const calls = fakeNode({ roleRefused: true });
+
+    const result = await transferNamespaceOwnership(meroJs, NS, BOB);
+
+    expect(result.promoted).toBe(false);
+    expect(result.error).toContain('not allowed');
+    expect(calls.map((c) => c.call)).toEqual([TRANSFER, PROMOTE]);
+  });
+
+  it('reports a refused second transfer, and that the member was promoted', async () => {
+    const { meroJs } = await createClientAsync({ baseUrl: 'http://node' });
+    const calls = fakeNode({ secondTransferRefused: true });
+
+    const result = await transferNamespaceOwnership(meroJs, NS, BOB);
+
+    expect(result.promoted).toBe(true);
+    expect(result.error).toContain('only the owner can transfer this group');
+    expect(calls.map((c) => c.call)).toEqual([TRANSFER, PROMOTE, TRANSFER]);
   });
 });

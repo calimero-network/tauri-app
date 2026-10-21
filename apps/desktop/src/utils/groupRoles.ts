@@ -28,6 +28,8 @@
  */
 import { apiClient } from '../lib/mero-client';
 
+const FLEET_ROLES = new Set(['RelayTee', 'ReadOnlyTee']); // attested nodes, never people
+
 interface GroupMember {
   /** The ACCOUNT, 64 hex. rc.23 (#3522) made the member listing answer with
    *  accounts, not the base58 device key — comparing against a device key
@@ -73,6 +75,24 @@ export function roleLabel(role: string): string {
       return 'TEE replica';
     default:
       return role;
+  }
+}
+
+/** Who a namespace can be handed to: everyone but us and the fleet nodes, admins first. */
+export function transferCandidates<T extends { identity: string; role?: string }>(
+  members: readonly T[],
+  accountId: string | undefined,
+): T[] {
+  return members
+    .filter((m) => m.identity !== accountId && !FLEET_ROLES.has(m.role ?? ''))
+    .sort((a, b) => Number(isAdminRole(b.role)) - Number(isAdminRole(a.role)));
+}
+
+export function roleColor(role: string): string {
+  switch (role.toLowerCase()) {
+    case 'admin': return 'var(--accent-primary)';
+    case 'readonly': return 'var(--text-tertiary)';
+    default: return 'var(--text-secondary)';
   }
 }
 

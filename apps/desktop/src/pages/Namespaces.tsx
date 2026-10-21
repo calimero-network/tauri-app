@@ -21,7 +21,7 @@ import { readInstalledApps, type InstalledApp } from "../utils/namespaceApps";
 import { getNamespaceFleetStatus } from "../utils/cloudApi";
 import { getCloudIdToken } from "../utils/cloudAuth";
 import { groupVisibilityLabel } from "../utils/groupVisibility";
-import { decodeInvitation, invitationNamespaceId } from "../utils/invitation";
+import { decodeInvitation, invitationNamespaceId, namespaceJoinRequest } from "../utils/invitation";
 import { apiClient, transferNamespaceOwnership } from "../lib/mero-client";
 import { canInviteDevices } from "../lib/account";
 import { TransferOwnershipModal, type TransferTarget } from "./TransferOwnershipModal";
@@ -903,7 +903,7 @@ function Namespaces({ transferNamespaceId, onTransferHandled }: NamespacesProps)
     try {
       const decoded = await decodeInvitation(invitationText);
       const namespaceId = invitationNamespaceId(decoded);
-      await mero.admin.joinNamespace(namespaceId, decoded as any);
+      await mero.admin.joinNamespace(namespaceId, namespaceJoinRequest(decoded) as any);
       toast.success('Joined namespace');
       setJoinNsModal(false);
       await refetchNamespaces();

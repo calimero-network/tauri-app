@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { computePopoverPosition, POPOVER_GAP, VIEWPORT_MARGIN, TUTORIAL_STEPS, tutorialSteps } from './tutorial';
+import { computePopoverPosition, POPOVER_GAP, VIEWPORT_MARGIN, TUTORIAL_STEPS, tutorialSteps, spotlightRect } from './tutorial';
 
 const viewport = { width: 1200, height: 800 };
 const popover = { width: 320, height: 180 };
@@ -46,6 +46,41 @@ describe('computePopoverPosition', () => {
     const pos = computePopoverPosition({ top: 0, left: 0, width: 300, height: 150 }, popover, tiny);
     expect(pos.top).toBe(VIEWPORT_MARGIN);
     expect(pos.left).toBe(VIEWPORT_MARGIN);
+  });
+});
+
+describe('spotlightRect', () => {
+  const pane = { top: 56, left: 240, width: 960, height: 744 };
+
+  it('pads a target that sits well inside its pane', () => {
+    expect(spotlightRect({ top: 200, left: 300, width: 400, height: 100 }, pane, 6)).toEqual({
+      top: 194,
+      left: 294,
+      width: 412,
+      height: 112,
+    });
+  });
+
+  it('stops at the pane edge instead of spilling under the header or the sidebar', () => {
+    expect(spotlightRect({ top: 40, left: 240, width: 400, height: 100 }, pane, 6)).toEqual({
+      top: 56,
+      left: 240,
+      width: 406,
+      height: 90,
+    });
+  });
+
+  it('shows only the visible part of a target taller than its pane', () => {
+    expect(spotlightRect({ top: 100, left: 300, width: 400, height: 2000 }, pane, 6)).toEqual({
+      top: 94,
+      left: 294,
+      width: 412,
+      height: 800 - 94,
+    });
+  });
+
+  it('is null when the target is scrolled out of its pane', () => {
+    expect(spotlightRect({ top: 900, left: 300, width: 400, height: 100 }, pane, 6)).toBeNull();
   });
 });
 

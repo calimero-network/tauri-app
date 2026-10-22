@@ -354,6 +354,21 @@ export interface Rect {
   height: number;
 }
 
+/**
+ * The spotlight for a target: its rect grown by `padding`, cut down to `bounds` -
+ * the part of the viewport the target can be seen in once its scroll containers
+ * clip it. So the highlight never spills under the header, past the edge of the
+ * pane the target scrolls in, or out of the window. Null when none of it shows.
+ */
+export function spotlightRect(target: Rect, bounds: Rect, padding: number): Rect | null {
+  const top = Math.max(target.top - padding, bounds.top);
+  const left = Math.max(target.left - padding, bounds.left);
+  const bottom = Math.min(target.top + target.height + padding, bounds.top + bounds.height);
+  const right = Math.min(target.left + target.width + padding, bounds.left + bounds.width);
+  if (bottom <= top || right <= left) return null;
+  return { top, left, width: right - left, height: bottom - top };
+}
+
 export type Placement = 'right' | 'left' | 'bottom' | 'top' | 'corner' | 'center';
 
 /** Gap between the spotlight and the popover, and the popover and the viewport edge. */

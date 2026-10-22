@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { apiClient } from "../lib/mero-client";
+import { describeStep, loadAppNamespaces, uninstallApp, uninstallFailureMessage, type UninstallStep } from "../lib/uninstall";
+import type { UninstallRequest } from "./UninstallApp";
 import { useToast } from "../contexts/ToastContext";
 import ContextMenu from "../components/ContextMenu";
 import InstalledAppCard from "../components/InstalledAppCard";
@@ -31,7 +33,7 @@ interface InstalledApplication {
 
 export interface InstalledAppsProps {
   onAuthRequired?: () => void;
-  onConfirmUninstall?: (appId: string, appName: string, onConfirm: (deleteData: boolean) => Promise<void>) => void;
+  onConfirmUninstall: (request: UninstallRequest) => void;
   clientReady?: boolean;
   onNavigate?: (page: 'marketplace') => void;
 }
@@ -153,40 +155,28 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
     }
   };
 
-  const uninstall = async (appId: string, appName: string, deleteData: boolean) => {
-    try {
-      if (deleteData) {
-        const cleared = await apiClient.node.deleteApplicationData(appId);
-        if (cleared.error) {
-          toast.error(`Failed to delete application data: ${cleared.error.message}`);
-          return;
-        }
-        // Uninstalling past a context we could not remove would orphan it
-        // behind an app that is gone, so stop and let the user retry or
-        // uninstall without the data.
-        if (cleared.data && cleared.data.failed > 0) {
-          toast.error(`Could not remove ${cleared.data.failed} namespace(s) or context(s) of "${appName}"; it was not uninstalled`);
-          return;
-        }
-      }
-      const response = await apiClient.node.uninstallApplication(appId);
-      if (response.error) {
-        toast.error(`Failed to uninstall: ${response.error.message}`);
-        return;
-      }
-      toast.success(deleteData ? `"${appName}" and its data uninstalled` : `"${appName}" uninstalled`);
-      await loadInstalledApps(true);
-    } catch (err) {
-      toast.error(`Failed to uninstall: ${parseTauriError(err, "Unknown error")}`);
+  const uninstall = async (appId: string, appName: string, steps: UninstallStep[], deleteData: boolean) => {
+    const response = await uninstallApp(apiClient.meroJs, appId, steps, deleteData);
+    if (response.error) {
+      if (response.error.code === '401') onAuthRequired?.();
+      else toast.error(uninstallFailureMessage(appName, response.error));
+      return;
     }
+    const lines = steps.map((s) => describeStep(s.ns, s.action));
+    toast.success([`"${appName}" uninstalled`, ...lines].join('\n'), lines.length ? 10000 : undefined);
+    await loadInstalledApps(true);
   };
 
+  // The dialog lists the app's namespaces with our role in each, so it opens once they are read.
   const handleUninstall = async (appId: string, appName: string) => {
-    if (onConfirmUninstall) {
-      onConfirmUninstall(appId, appName, (deleteData) => uninstall(appId, appName, deleteData));
-    } else {
-      await uninstall(appId, appName, false);
+    const response = await loadAppNamespaces(apiClient.meroJs, appId);
+    if (!response.data) {
+      if (response.error?.code === '401') onAuthRequired?.();
+      else toast.error(`Could not read "${appName}"'s namespaces: ${response.error?.message}`);
+      return;
     }
+    const { namespaces, linkedDevice } = response.data;
+    onConfirmUninstall({ appName, namespaces, linkedDevice, onConfirm: (steps, deleteData) => uninstall(appId, appName, steps, deleteData) });
   };
 
   const handleOpenFrontend = async (frontendUrl: string, appName?: string, applicationId?: string, iconData?: string) => {

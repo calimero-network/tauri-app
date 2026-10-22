@@ -1,8 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { MeroJs } from "@calimero-network/mero-js";
-import type { LiveState } from "./global-setup";
-import { openDesktop } from "./desktop";
-import { ADMIN_PASSWORD, ADMIN_USER, waitFor } from "./nodes";
+import { waitFor } from "./nodes";
+import { admin, openDesktop, state } from "./world";
 
 /**
  * Two desktops, two real nodes: an admin upgrades a namespace and a member's
@@ -20,14 +19,6 @@ import { ADMIN_PASSWORD, ADMIN_USER, waitFor } from "./nodes";
  */
 
 const NS_NAME = "Upgrade test";
-
-const state = (): LiveState => JSON.parse(process.env["LIVE_STATE"] ?? "null") as LiveState;
-
-async function admin(url: string): Promise<MeroJs> {
-  const mero = new MeroJs({ baseUrl: url, credentials: { username: ADMIN_USER, password: ADMIN_PASSWORD } });
-  await mero.authenticate();
-  return mero;
-}
 
 async function openNamespace(page: Page, applicationId: string, name: string) {
   await page.locator("aside.sidebar").getByTitle("Namespaces").click();

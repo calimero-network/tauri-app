@@ -499,9 +499,10 @@ test.describe("Installed Applications – listing", () => {
     // text-based locator never found it and this test never clicked anything.
     const refreshBtn = page.locator(".installed-refresh-btn");
     await expect(refreshBtn).toBeVisible();
-    const requestPromise = page.waitForRequest(API_ROUTES.listApplications);
+    // The response, not the request: a request event can fire before the route handler counts it.
+    const responsePromise = page.waitForResponse(API_ROUTES.listApplications);
     await refreshBtn.click();
-    await requestPromise;
+    await responsePromise;
     expect(listCallCount).toBeGreaterThanOrEqual(1);
   });
 });
@@ -529,8 +530,6 @@ test.describe("Installed Applications – empty state", () => {
 });
 
 // ─── Row-level UI (cap ≥ 4.5) ────────────────────────────────────────────────
-// Uninstall → confirm → API is exercised manually; the in-app confirm screen and
-// real client make that flow brittle in e2e. We instead assert metadata-driven actions.
 
 test.describe("Installed Applications – row variants", () => {
   test("app without frontend URL shows Uninstall but not Open or Shortcut", async ({
@@ -549,92 +548,6 @@ test.describe("Installed Applications – row variants", () => {
     // Uninstall lives inside the More dropdown
     await demoRow.locator('.installed-app-more-btn').click();
     await expect(page.locator('.app-actions-dropdown .dropdown-item', { hasText: "Uninstall" })).toBeVisible();
-  });
-});
-
-// ─── Uninstall confirm: delete application data ──────────────────────────────
-
-test.describe("Installed Applications – uninstall data option", () => {
-  /** Serve one context for the app and record every call the uninstall makes. */
-  async function mockUninstall(page: import("@playwright/test").Page) {
-    const calls: string[] = [];
-    await page.route("**/admin-api/namespaces/for-application/*", (route) => {
-      calls.push(`GET ${new URL(route.request().url()).pathname}`);
-      return route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({ data: [{ namespaceId: "ns-1", targetApplicationId: "installed-app-2" }] }),
-      });
-    });
-    await page.route("**/admin-api/namespaces/ns-1", (route) => {
-      calls.push(`${route.request().method()} ${new URL(route.request().url()).pathname}`);
-      return route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({ data: { isDeleted: true } }),
-      });
-    });
-    await page.route("**/admin-api/contexts/for-application/*", (route) => {
-      calls.push(`GET ${new URL(route.request().url()).pathname}`);
-      return route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({ data: { contexts: [{ id: "ctx-1", applicationId: "installed-app-2" }] } }),
-      });
-    });
-    await page.route("**/admin-api/contexts/ctx-1", (route) => {
-      calls.push(`${route.request().method()} ${new URL(route.request().url()).pathname}`);
-      return route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({ data: { isDeleted: true } }),
-      });
-    });
-    await page.route(API_ROUTES.uninstallApplication, (route) => {
-      if (route.request().method() !== "DELETE") return route.fallback();
-      calls.push(`DELETE ${new URL(route.request().url()).pathname}`);
-      return route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({ data: { applicationId: "installed-app-2" } }),
-      });
-    });
-    return calls;
-  }
-
-  async function openUninstallConfirm(page: import("@playwright/test").Page) {
-    await setupAuthenticatedPage(page);
-    await navigateVia(page, "Applications");
-    const row = page.locator("[data-testid='installed-app-card']", { hasText: "Blockchain Demo" });
-    await row.locator(".installed-app-more-btn").click();
-    await page.locator(".app-actions-dropdown .dropdown-item", { hasText: "Uninstall" }).click();
-    await expect(page.getByRole("heading", { name: "Uninstall Application" })).toBeVisible();
-  }
-
-  test("delete-data checkbox is on by default and removes the app's namespaces and contexts first", async ({ page }) => {
-    const calls = await mockUninstall(page);
-    await openUninstallConfirm(page);
-
-    const option = page.getByTestId("confirm-option").getByRole("checkbox");
-    await expect(option).toBeChecked();
-
-    await page.locator(".confirm-actions .button-danger").click();
-    await expect.poll(() => calls.length).toBe(5);
-    expect(calls[0]).toMatch(/^GET .*\/namespaces\/for-application\/installed-app-2$/);
-    expect(calls[1]).toMatch(/^DELETE .*\/namespaces\/ns-1$/);
-    expect(calls[2]).toMatch(/^GET .*\/contexts\/for-application\/installed-app-2$/);
-    expect(calls[3]).toMatch(/^DELETE .*\/contexts\/ctx-1$/);
-    expect(calls[4]).toMatch(/^DELETE .*\/applications\/installed-app-2$/);
-  });
-
-  test("unchecking the box uninstalls without touching contexts", async ({ page }) => {
-    const calls = await mockUninstall(page);
-    await openUninstallConfirm(page);
-
-    await page.getByTestId("confirm-option").getByRole("checkbox").uncheck();
-    await page.locator(".confirm-actions .button-danger").click();
-    await expect.poll(() => calls.length).toBe(1);
-    expect(calls[0]).toMatch(/^DELETE .*\/applications\/installed-app-2$/);
   });
 });
 

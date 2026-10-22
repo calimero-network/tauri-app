@@ -1361,6 +1361,7 @@
   font-size: 13px;
   color: var(--text-primary);
   text-align: left;
+  white-space: nowrap;
   transition: background 0.12s;
   box-sizing: border-box;
 }

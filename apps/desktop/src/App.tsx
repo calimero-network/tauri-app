@@ -35,6 +35,7 @@ import { Settings as SettingsIcon } from "lucide-react";
 import calimeroLogo from "./assets/brand/calimero-wordmark.svg";
 import { useTheme } from "./contexts/ThemeContext";
 import { useNodeVersions } from "./contexts/NodeVersionsContext";
+import type { UninstallRequest } from "./pages/UninstallApp";
 import "./App.css";
 
 // Only one page renders at a time, so keep them out of the initial bundle.
@@ -47,7 +48,7 @@ const Namespaces = lazy(() => import("./pages/Namespaces"));
 const Cloud = lazy(() => import("./pages/Cloud"));
 const Account = lazy(() => import("./pages/Account"));
 const NodeManagement = lazy(() => import("./pages/NodeManagement"));
-const ConfirmAction = lazy(() => import("./pages/ConfirmAction"));
+const UninstallApp = lazy(() => import("./pages/UninstallApp"));
 
 type Page = 'home' | 'marketplace' | 'installed' | 'namespaces' | 'cloud' | 'account' | 'nodes' | 'confirm';
 
@@ -97,15 +98,7 @@ function App() {
   const [clientReady, setClientReady] = useState(false);
   const [clientVersion, setClientVersion] = useState(0);
   const [needsNodeConfig, setNeedsNodeConfig] = useState(false);
-  const [confirmAction, setConfirmAction] = useState<{
-    title: string;
-    message: string;
-    itemName: string;
-    actionLabel: string;
-    onConfirm: (optionChecked: boolean) => void;
-    option?: { label: string; hint?: string; defaultChecked: boolean };
-    breadcrumbs: Array<{ label: string; onClick?: () => void }>;
-  } | null>(null);
+  const [uninstallRequest, setUninstallRequest] = useState<UninstallRequest | null>(null);
   const [appVersion, setAppVersion] = useState<string>("");
   const [runningNodes, setRunningNodes] = useState<RunningMerodNode[]>([]);
   // The guided tour in progress. `forward` is the direction of the last move, so a
@@ -480,40 +473,27 @@ function App() {
 
   const handleOpenSettings = useCallback(() => setShowSettings(true), []);
 
-  const handleConfirmUninstall = useCallback((_appId: string, appName: string, onConfirm: (deleteData: boolean) => Promise<void>) => {
-    setConfirmAction({
-      title: "Uninstall Application",
-      message: "Are you sure you want to uninstall this application? This action cannot be undone.",
-      itemName: appName,
-      actionLabel: "Uninstall",
-      option: {
-        label: "Also delete all application data",
-        hint: "Removes every namespace and context this node holds for the app. Namespaces you administer are deleted from this node; the rest are left, which their members will see.",
-        defaultChecked: true,
-      },
-      onConfirm: async (deleteData) => {
-        await onConfirm(deleteData);
+  const handleConfirmUninstall = useCallback((request: UninstallRequest) => {
+    setUninstallRequest({
+      ...request,
+      onConfirm: async (steps, deleteData) => {
+        await request.onConfirm(steps, deleteData);
         setCurrentPage('installed');
-        setConfirmAction(null);
+        setUninstallRequest(null);
       },
-      breadcrumbs: [
-        { label: "Home", onClick: () => setCurrentPage('home') },
-        { label: "Applications", onClick: () => setCurrentPage('installed') },
-        { label: "Uninstall Application" },
-      ],
     });
     setCurrentPage('confirm');
   }, []);
 
-  const handleConfirmCancel = useCallback(() => {
-    // Go back to the previous page (contexts or installed)
-    if (confirmAction?.breadcrumbs[1]?.onClick) {
-      confirmAction.breadcrumbs[1].onClick();
-    } else {
-      setCurrentPage('home');
-    }
-    setConfirmAction(null);
-  }, [confirmAction]);
+  const leaveUninstall = useCallback((page: Page) => {
+    setCurrentPage(page);
+    setUninstallRequest(null);
+  }, []);
+
+  const openTransfer = useCallback((namespaceId: string) => {
+    setTransferNamespaceId(namespaceId);
+    leaveUninstall('namespaces');
+  }, [leaveUninstall]);
 
   // Route incoming app deep-links (calimero://<slug>/<action>?<params> and the
   // https://links.calimero.network/... Universal Link) to the target app.
@@ -715,19 +695,19 @@ function App() {
   }
 
   // Show confirmation page
-  if (currentPage === 'confirm' && confirmAction) {
+  if (currentPage === 'confirm' && uninstallRequest) {
     return (
       <div className="app">
         <ToastContainer />
-        <ConfirmAction
-          title={confirmAction.title}
-          message={confirmAction.message}
-          itemName={confirmAction.itemName}
-          actionLabel={confirmAction.actionLabel}
-          onConfirm={confirmAction.onConfirm}
-          option={confirmAction.option}
-          onCancel={handleConfirmCancel}
-          breadcrumbs={confirmAction.breadcrumbs}
+        <UninstallApp
+          {...uninstallRequest}
+          onCancel={() => leaveUninstall('installed')}
+          onTransfer={openTransfer}
+          breadcrumbs={[
+            { label: "Home", onClick: () => leaveUninstall('home') },
+            { label: "Applications", onClick: () => leaveUninstall('installed') },
+            { label: "Uninstall Application" },
+          ]}
         />
       </div>
     );

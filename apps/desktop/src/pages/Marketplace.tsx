@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { getSettings } from "../utils/settings";
 import { fetchAppsFromAllRegistries, fetchAppVersions, recordDownload, type AppSummary, type VersionInfo } from "../utils/registry";
 import { apiClient } from "../lib/mero-client";
+import { restoreSummary } from "../lib/account";
 import { decodeMetadata } from "../utils/appUtils";
 import {
   getMarketplaceCache,
@@ -363,7 +364,9 @@ function Marketplace({ clientReady = true }: MarketplaceProps) {
       }
 
       invalidateInstalledApps();
-      toast.success(`${app.alias || app.name} installed successfully!`);
+      const { restored, restoreFailed } = response.data!;
+      toast.success(restoreSummary(`${app.alias || app.name} installed successfully!`, restored));
+      if (restoreFailed.length) toast.warning(`Could not restore: ${restoreFailed.join('; ')}`);
 
       // Record download with registry (fire-and-forget)
       recordDownload(app.registry, app.id, version);

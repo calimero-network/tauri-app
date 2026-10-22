@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
-import { computePopoverPosition, type Rect, type TutorialStep } from "../utils/tutorial";
+import { computePopoverPosition, spotlightRect, type Rect, type TutorialStep } from "../utils/tutorial";
 import "./Tutorial.css";
 
 /** Breathing room between the highlighted element and the edge of the spotlight. */
@@ -11,16 +11,41 @@ function findTarget(step: TutorialStep): Element | null {
   return step.target ? document.querySelector(`[data-tutorial="${step.target}"]`) : null;
 }
 
+/**
+ * The part of the window `el` can be seen in: the viewport, cut down by every
+ * ancestor that clips its overflow - the page's scroll pane, Settings' scroll
+ * area - to the inside of that ancestor's borders.
+ */
+function visibleBounds(el: Element): Rect {
+  let top = 0;
+  let left = 0;
+  let bottom = window.innerHeight;
+  let right = window.innerWidth;
+  for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
+    const style = getComputedStyle(p);
+    if (style.overflowX === "visible" && style.overflowY === "visible") continue;
+    const r = p.getBoundingClientRect();
+    top = Math.max(top, r.top + p.clientTop);
+    left = Math.max(left, r.left + p.clientLeft);
+    bottom = Math.min(bottom, r.top + p.clientTop + p.clientHeight);
+    right = Math.min(right, r.left + p.clientLeft + p.clientWidth);
+  }
+  return { top, left, width: Math.max(0, right - left), height: Math.max(0, bottom - top) };
+}
+
 function measure(el: Element | null): Rect | null {
   if (!el) return null;
   const r = el.getBoundingClientRect();
-  return {
-    top: r.top - SPOTLIGHT_PADDING,
-    left: r.left - SPOTLIGHT_PADDING,
-    width: r.width + SPOTLIGHT_PADDING * 2,
-    height: r.height + SPOTLIGHT_PADDING * 2,
-  };
+  return spotlightRect(
+    { top: r.top, left: r.left, width: r.width, height: r.height },
+    visibleBounds(el),
+    SPOTLIGHT_PADDING,
+  );
 }
+
+const sameRect = (a: Rect | null, b: Rect | null) =>
+  a === b ||
+  (!!a && !!b && a.top === b.top && a.left === b.left && a.width === b.width && a.height === b.height);
 
 /** How long a step waits for its target: pages load lazily and fetch their data first. */
 const TARGET_TIMEOUT_MS = 3000;
@@ -85,11 +110,17 @@ export function Tutorial({ steps, index, onIndexChange, onSkip, onClose }: Tutor
     return () => clearInterval(timer);
   }, [step]);
 
-  // Re-queried on every call: a page re-rendering replaces the element.
+  // Re-queried on every call: a page re-rendering replaces the element. Only
+  // sets state when something moved, so it is cheap to call every frame.
+  const lastRect = useRef<Rect | null>(null);
+  const lastPosition = useRef<{ top: number; left: number } | null>(null);
   const layout = useCallback(() => {
     if (!step || !ready) return;
     const rect = measure(findTarget(step));
-    setTargetRect(rect);
+    if (!sameRect(rect, lastRect.current)) {
+      lastRect.current = rect;
+      setTargetRect(rect);
+    }
     const pop = popoverRef.current;
     if (!pop) return;
     const { top, left } = computePopoverPosition(
@@ -97,31 +128,38 @@ export function Tutorial({ steps, index, onIndexChange, onSkip, onClose }: Tutor
       { width: pop.offsetWidth, height: pop.offsetHeight },
       { width: window.innerWidth, height: window.innerHeight },
     );
-    setPosition({ top, left });
+    const prev = lastPosition.current;
+    if (!prev || prev.top !== top || prev.left !== left) {
+      lastPosition.current = { top, left };
+      setPosition({ top, left });
+    }
   }, [step, ready]);
 
   // Layout effect so the popover never paints a frame at the previous step's spot.
   useLayoutEffect(() => {
     if (!ready) return;
-    findTarget(step)?.scrollIntoView({ block: "center" });
+    lastRect.current = null;
+    lastPosition.current = null;
+    const target = findTarget(step);
+    if (target) {
+      // A target taller than the pane it scrolls in is shown from its top, not cut in half.
+      const tall = target.getBoundingClientRect().height > visibleBounds(target).height;
+      target.scrollIntoView({ block: tall ? "start" : "center" });
+    }
     layout();
   }, [layout, ready, step]);
 
+  // Follow the target every frame. Pages and Settings tabs slide in with a CSS
+  // animation, which moves the target without any resize or scroll event, so
+  // measuring once - or on events - leaves the spotlight where it was mid-slide.
   useEffect(() => {
     if (!ready) return;
-    window.addEventListener("resize", layout);
-    // Capture: the pages scroll inside their own containers, not the window.
-    window.addEventListener("scroll", layout, true);
-    const observer = new ResizeObserver(layout);
-    observer.observe(document.body);
-    const target = findTarget(step);
-    if (target) observer.observe(target);
-    return () => {
-      window.removeEventListener("resize", layout);
-      window.removeEventListener("scroll", layout, true);
-      observer.disconnect();
-    };
-  }, [layout, ready, step]);
+    let frame = requestAnimationFrame(function tick() {
+      layout();
+      frame = requestAnimationFrame(tick);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [layout, ready]);
 
   const next = useCallback(() => {
     if (isLast) onClose();

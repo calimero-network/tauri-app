@@ -189,7 +189,7 @@ async fn proxy_http_request(
     webview: tauri::Webview,
     request: proxy::HttpRequest,
 ) -> Result<proxy::HttpResponse, TauriError> {
-    let node_url = proxy::node_url_for(&webview)?;
+    let (request, node_url) = proxy::authorize_request(&webview, request)?;
     let _guard = InFlightGuard::new();
     proxy::proxy_http_request_inner(request, Some(node_url)).await
 }
@@ -1326,6 +1326,15 @@ fn deliver_app_deep_link(
         })
 }
 
+/// `calimero-app://{label}/` when the node bundles this app's frontend.
+#[tauri::command]
+async fn app_bundled_frontend(app_id: String, node_url: String) -> Option<String> {
+    let label = calimero_tauri_app::app_scheme::label_for_app_id(&app_id)?;
+    calimero_tauri_app::app_scheme::probe_bundled(&label, &node_url)
+        .await
+        .then(|| format!("{}://{label}/", calimero_tauri_app::app_scheme::SCHEME))
+}
+
 #[tauri::command]
 async fn create_app_window(
     app_handle: tauri::AppHandle,
@@ -1340,7 +1349,11 @@ async fn create_app_window(
         .map_err(|e| TauriError::new(TauriErrorCode::InvalidUrl, e))?;
     // Bind and open where the frontend's server redirects to, or the page lands
     // on an origin the window is not bound to and loses the node.
-    let parsed_url = calimero_tauri_app::webview::resolve_frontend_landing(&parsed_url).await;
+    let parsed_url = if parsed_url.scheme() == calimero_tauri_app::app_scheme::SCHEME {
+        parsed_url
+    } else {
+        calimero_tauri_app::webview::resolve_frontend_landing(&parsed_url).await
+    };
 
     // A live window already owns this label and its bindings. Building would
     // fail on the duplicate label anyway, and the failure path below would then
@@ -4136,6 +4149,10 @@ fn main() {
         .init();
 
     tauri::Builder::default()
+        .register_asynchronous_uri_scheme_protocol(
+            calimero_tauri_app::app_scheme::SCHEME,
+            calimero_tauri_app::app_scheme::handle,
+        )
         // Single-instance must be registered first so a second launch is routed
         // to the running host (which focuses the dashboard) instead of spawning a
         // rival process that would fight over the merod node + broker socket.
@@ -4405,6 +4422,7 @@ fn main() {
             create_app_window,
             webview_isolation_supported,
             proxy_http_request,
+            app_bundled_frontend,
             proxy::proxy_sse_stream,
             proxy::cancel_sse_stream,
             broker_token_refresh,

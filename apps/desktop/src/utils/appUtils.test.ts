@@ -375,6 +375,7 @@ describe('app frontends that may receive the node session', () => {
       'http://localhost:5173/',
       'http://127.0.0.1:3000/',
       'http://[::1]:3000/',
+      `calimero-app://${'a'.repeat(51)}q/`,
     ]) {
       expect(isAllowedAppFrontendUrl(url), url).toBe(true);
     }
@@ -389,6 +390,10 @@ describe('app frontends that may receive the node session', () => {
       'javascript:alert(1)',
       'data:text/html,<script>alert(1)</script>',
       'calimero://com.evil.app/join',
+      'calimero-app://short/',
+      `calimero-app://${'A'.repeat(51)}Q/`,
+      `calimero-app://${'a'.repeat(51)}b/`,
+      `calimero-app://${'a'.repeat(52)}.evil.example/`,
       'not a url',
     ]) {
       expect(isAllowedAppFrontendUrl(url), url).toBe(false);

@@ -22,7 +22,7 @@
     "test:e2e:live": "playwright test -c playwright.live.config.ts"
   },
   "dependencies": {
-    "@calimero-network/mero-js": "^26.7.0",
+    "@calimero-network/mero-js": "^26.9.0",
     "@calimero-network/mero-react": "^10.2.0",
     "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/plugin-process": "~2",

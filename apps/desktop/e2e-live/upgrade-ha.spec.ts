@@ -12,7 +12,8 @@ import { admin, openDesktop, openNamespace } from "./desktop";
  * (as a TEE node does: nobody runs the app on it), node B a member. The admin
  * upgrades from the desktop and writes; then the laptop closes, and B, which was
  * offline throughout, comes back with H as its only peer. What the admin wrote
- * on the new release must reach B through H.
+ * on the new release must reach B through H. Neither H nor B runs the new
+ * release until it is switched: H as a sidecar does, B from its namespace card.
  */
 
 const NS_NAME = "Upgrade with an HA node";
@@ -99,8 +100,21 @@ test("what the admin writes after an upgrade reaches a member through the HA nod
 
     await write(a, contextId, "admin, after the upgrade");
 
-    // The HA node holds the write once its state matches the admin's; it never
-    // runs the app, so nothing here may execute on it.
+    // The HA node runs nothing until it is switched; that is the sidecar's step:
+    // install the target release, then activate it, guarded by id and version.
+    await waitFor(
+      "the upgrade to reach the HA node",
+      async () => (await h.admin.listNamespaces()).find((n) => n.namespaceId === namespaceId)?.appVersion === live.newer,
+      60_000,
+      1_000,
+    );
+    await h.admin.installApplication({ package: live.package, version: live.newer });
+    const switched = await h.admin.activateGroupUpgrade(namespaceId, {
+      expectedApplicationId: applicationId,
+      expectedVersion: live.newer,
+    });
+    expect(switched.failedContexts).toEqual([]);
+    expect((await h.admin.getContext(contextId)).applicationVersion).toBe(live.newer);
     const stateHash = async (mero: MeroJs) => (await mero.admin.getContext(contextId)).contextStateHash;
     await waitFor(
       "the HA node to take the admin's post-upgrade write",
@@ -112,6 +126,14 @@ test("what the admin writes after an upgrade reaches a member through the HA nod
     // ── The laptop closes; the member comes back with only the HA node to sync from ──
     await offline(nodeA!);
     const backB = await online(nodeB!);
+
+    // The member's desktop switches as a member does: Switch now on the namespace card.
+    const pageB = await openDesktop(browser, nodeB!.url, live.registryUrl);
+    await openNamespace(pageB, applicationId, NS_NAME);
+    await expect(pageB.getByTestId("ns-upgrade-target")).toHaveText(live.newer, { timeout: 90_000 });
+    await pageB.getByTestId("ns-upgrade-switch").click();
+    await expect(pageB.getByTestId("ns-upgrade-current")).toBeVisible({ timeout: 120_000 });
+    expect((await backB.admin.getContext(contextId)).applicationVersion).toBe(live.newer);
     await waitFor(
       "the member to read the admin's post-upgrade write",
       async () => (await read(backB, contextId)) === "admin, after the upgrade",

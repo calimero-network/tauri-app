@@ -20,8 +20,8 @@ importers:
   apps/desktop:
     dependencies:
       '@calimero-network/mero-js':
-        specifier: ^26.7.0
-        version: 26.7.0
+        specifier: ^26.9.1
+        version: 26.9.1
       '@calimero-network/mero-react':
         specifier: ^10.2.0
         version: 10.2.0(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
@@ -160,8 +160,8 @@ packages:
     resolution: {integrity: sha512-qQ5m48eI/MFLQ5PxQj4PFaprjyCTLI37ElWMmNs0K8Lk3dVeOdNpB3ks8jc7yM5CDmVC73eMVk/trk3fgmrUpA==}
     engines: {node: '>=6.9.0'}
 
-  '@calimero-network/mero-js@26.7.0':
-    resolution: {integrity: sha512-xrYyBDR2OkkEewRMOl5fA9qteQjRXAibUm98JqFENoxTPE7p9pq81fMsvrB6yKbGrj6tYQ1A1nNqq6o4fxSDTw==}
+  '@calimero-network/mero-js@26.9.1':
+    resolution: {integrity: sha512-0RkUqycr5+wGz3PKwCOAqsYDKdx0Eerinp6DlsDXpaJHdI3XmsKZfLlz5r14nlU1kuAbsWp2gMaIBVuOD7LHXA==}
     engines: {node: '>=18.0.0'}
 
   '@calimero-network/mero-react@10.2.0':
@@ -1197,7 +1197,7 @@ snapshots:
       '@babel/helper-string-parser': 7.27.1
       '@babel/helper-validator-identifier': 7.28.5
 
-  '@calimero-network/mero-js@26.7.0':
+  '@calimero-network/mero-js@26.9.1':
     dependencies:
       '@phala/dcap-qvl': 0.5.3
     transitivePeerDependencies:
@@ -1205,7 +1205,7 @@ snapshots:
 
   '@calimero-network/mero-react@10.2.0(react-dom@19.2.3(react@19.2.3))(react@19.2.3)':
     dependencies:
-      '@calimero-network/mero-js': 26.7.0
+      '@calimero-network/mero-js': 26.9.1
       react: 19.2.3
       react-dom: 19.2.3(react@19.2.3)
     transitivePeerDependencies:

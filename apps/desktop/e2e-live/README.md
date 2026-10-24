@@ -1,7 +1,7 @@
 # Live E2E: the desktop against real nodes
 
 `e2e/` mocks every node response and never reaches a node. This suite starts
-two real `merod` nodes and a local app registry, and drives two desktop
+three real `merod` nodes and a local app registry, and drives desktop
 sessions (one browser context per node) through flows that cross nodes.
 
 `upgrade.spec.ts` covers this flow:
@@ -10,6 +10,12 @@ sessions (one browser context per node) through flows that cross nodes.
 2. A member's node receives the upgrade at once, but its contexts keep running the older release.
 3. The member switches from the namespace page: the release is installed, the contexts move, and the admin's write made meanwhile arrives.
 4. The member's write on the new release reaches the admin's node.
+
+`upgrade-ha.spec.ts` covers what the high-availability node is for, a third node that only replicates:
+
+1. The member goes offline; the admin upgrades from the desktop and writes.
+2. The high-availability node is switched to the new release, as a sidecar does with an install and an activate, and takes the write.
+3. The admin goes offline; the member comes back with only that node to sync from, switches from the namespace card, and reads the admin's write.
 
 `token-refresh.spec.ts` opens the desktop with an access token the node already refuses, and checks that the desktop rotates it once and stays signed in.
 The nodes issue 5-second access tokens so this happens within one test.

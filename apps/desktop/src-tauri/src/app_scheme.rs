@@ -60,9 +60,12 @@ pub fn canonical_origin(url: &url::Url) -> url::Origin {
     }
 }
 
-/// The label for a base58 application id.
+/// The label for an application id, as the node lists it (64 hex digits) or base58.
 pub fn label_for_app_id(app_id: &str) -> Option<String> {
-    let id = bs58::decode(app_id).into_vec().ok().filter(|b| b.len() == 32)?;
+    let id = hex::decode(app_id)
+        .ok()
+        .filter(|b| b.len() == 32)
+        .or_else(|| bs58::decode(app_id).into_vec().ok().filter(|b| b.len() == 32))?;
     let mut label = String::with_capacity(LABEL_LEN);
     let (mut acc, mut bits) = (0u16, 0u8);
     for byte in id {
@@ -310,6 +313,17 @@ mod tests {
         assert_eq!(label_for_app_id("not base58 0OIl"), None);
         assert_eq!(label_for_app_id(&bs58::encode([1u8; 31]).into_string()), None);
         assert!(is_valid_label(&label_for_app_id(&ones).unwrap()));
+    }
+
+    #[test]
+    fn app_id_to_label_from_the_nodes_hex_id() {
+        let hex = "ad61b1324e760fc4a8cb2beaeb1a799e4bac774b5f78bebe66f2cb863774926f";
+        assert_eq!(
+            label_for_app_id(hex).as_deref(),
+            Some("vvq3cmsooyh4jkglfpvowgtztzf2y52ll54l5ptg6lfymn3usjxq")
+        );
+        assert_eq!(label_for_app_id(&hex[1..]), None, "63 digits");
+        assert_eq!(label_for_app_id(&hex.to_uppercase()), label_for_app_id(hex));
     }
 
     #[test]

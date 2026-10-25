@@ -684,15 +684,19 @@ mod tests {
     #[test]
     fn own_origin_api_calls_go_to_the_node_as_the_app() {
         let binding = app_binding();
-        for url in [
-            format!("calimero-app://{LABEL}/jsonrpc"),
-            format!("http://calimero-app.{LABEL}/jsonrpc"),
-        ] {
-            let t = retarget_own_origin(&url, &binding).unwrap().unwrap();
-            assert_eq!(t.url, "http://127.0.0.1:2528/jsonrpc");
-            assert_eq!(t.host, format!("{LABEL}.localhost:2528"));
-            assert!(validate_allowed_url(&t.url, Some(&binding.node_url)).is_ok());
-        }
+        let t = retarget_own_origin(&format!("calimero-app://{LABEL}/jsonrpc"), &binding)
+            .unwrap()
+            .unwrap();
+        assert_eq!(t.url, "http://127.0.0.1:2528/jsonrpc");
+        assert_eq!(t.host, format!("{LABEL}.localhost:2528"));
+        assert!(validate_allowed_url(&t.url, Some(&binding.node_url)).is_ok());
+    }
+
+    #[test]
+    fn the_http_form_is_retargeted_only_on_windows() {
+        let url = format!("http://calimero-app.{LABEL}/jsonrpc");
+        let retargeted = retarget_own_origin(&url, &app_binding()).unwrap().is_some();
+        assert_eq!(retargeted, cfg!(windows));
     }
 
     #[test]

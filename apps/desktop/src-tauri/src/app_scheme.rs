@@ -36,12 +36,13 @@ pub fn is_valid_label(label: &str) -> bool {
         && matches!(bytes[LABEL_LEN - 1], b'a' | b'q')
 }
 
-/// The label of an app-origin URL, in the scheme form or the Windows form.
+/// The label of an app-origin URL: the scheme form, or on Windows also the http form.
+/// Elsewhere the http form is a real network host and must never pass as an app.
 pub fn label_from_url(url: &url::Url) -> Option<String> {
     let host = url.host_str()?;
     let label = match url.scheme() {
         SCHEME => host,
-        "http" | "https" => host.strip_prefix(WINDOWS_HOST_PREFIX)?,
+        "http" | "https" if cfg!(windows) => host.strip_prefix(WINDOWS_HOST_PREFIX)?,
         _ => return None,
     };
     is_valid_label(label).then(|| label.to_string())
@@ -267,12 +268,10 @@ mod tests {
     }
 
     #[test]
-    fn label_from_both_url_forms() {
+    fn label_from_the_scheme_url() {
         for u in [
             format!("calimero-app://{LABEL}/"),
             format!("calimero-app://{LABEL}/v1/index.html?x=1#h"),
-            format!("http://calimero-app.{LABEL}/v1/"),
-            format!("https://calimero-app.{LABEL}/"),
         ] {
             assert_eq!(label_from_url(&url(&u)).as_deref(), Some(LABEL), "{u}");
         }
@@ -289,10 +288,28 @@ mod tests {
         }
     }
 
+    #[cfg(windows)]
     #[test]
-    fn both_forms_share_one_origin_and_labels_differ() {
+    fn windows_accepts_the_http_form() {
+        for u in [format!("http://calimero-app.{LABEL}/v1/"), format!("https://calimero-app.{LABEL}/")] {
+            assert_eq!(label_from_url(&url(&u)).as_deref(), Some(LABEL), "{u}");
+        }
         let a = canonical_origin(&url(&format!("calimero-app://{LABEL}/x")));
         assert_eq!(a, canonical_origin(&url(&format!("http://calimero-app.{LABEL}/y"))));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn the_http_form_is_a_network_host_off_windows() {
+        for u in [format!("http://calimero-app.{LABEL}/v1/"), format!("https://calimero-app.{LABEL}/")] {
+            assert_eq!(label_from_url(&url(&u)), None, "{u}");
+            assert_eq!(canonical_origin(&url(&u)), url(&u).origin(), "{u}");
+        }
+    }
+
+    #[test]
+    fn origins_differ_by_label() {
+        let a = canonical_origin(&url(&format!("calimero-app://{LABEL}/x")));
         assert_ne!(a, canonical_origin(&url(&format!("calimero-app://{OTHER}/x"))));
         assert_eq!(
             canonical_origin(&url("https://drive.example/a")),

@@ -190,7 +190,7 @@ mod tests {
     }
 
     #[test]
-    fn binds_a_calimero_app_origin_in_either_form() {
+    fn binds_a_calimero_app_origin_and_the_http_form_only_on_windows() {
         let label = "a".repeat(52);
         let bindings = AppWindowBindings::default();
         bindings.bind(
@@ -199,13 +199,11 @@ mod tests {
             "http://localhost:2528",
         );
 
-        for own in [
-            format!("calimero-app://{label}/v1/index.html"),
-            format!("http://calimero-app.{label}/v1/"),
-        ] {
-            let b = bindings.authorize("app-1", Some(&url(&own))).unwrap();
-            assert_eq!(b.label.as_deref(), Some(label.as_str()));
-        }
+        let own = format!("calimero-app://{label}/v1/index.html");
+        let b = bindings.authorize("app-1", Some(&url(&own))).unwrap();
+        assert_eq!(b.label.as_deref(), Some(label.as_str()));
+        let http_form = url(&format!("http://calimero-app.{label}/v1/"));
+        assert_eq!(bindings.authorize("app-1", Some(&http_form)).is_ok(), cfg!(windows));
         for other in [
             format!("calimero-app://{}a/", "b".repeat(51)),
             "https://drive.example/".to_string(),

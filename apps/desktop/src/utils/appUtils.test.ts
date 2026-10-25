@@ -570,6 +570,16 @@ describe('node-bundled app frontends', () => {
     });
   });
 
+  it('refuses a bundled url the fresh probe no longer confirms, rather than hand it to the launcher', async () => {
+    probeAnswers(async () => null);
+    const onError = vi.fn();
+    await openAppFrontend(BUNDLED, 'Example', onError, { applicationId: 'app-1' });
+
+    expect(onError).toHaveBeenCalled();
+    expect(invoke.mock.calls.some((c) => c[0] === 'open_app_launcher')).toBe(false);
+    expect(invoke.mock.calls.some((c) => c[0] === 'create_app_window')).toBe(false);
+  });
+
   it('refuses a probe answer that is not an allowed frontend', async () => {
     probeAnswers(async () => 'calimero-app://short/');
     const onError = vi.fn();

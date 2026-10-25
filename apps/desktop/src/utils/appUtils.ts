@@ -212,8 +212,13 @@ export async function openAppFrontend(
 ): Promise<string | void> {
   try {
     // A frontend the node bundles is opened on its own origin in place of the link.
-    const bundled = context?.applicationId && (await bundledFrontendUrl(context));
-    if (bundled) frontendUrl = bundled;
+    const probed = context?.applicationId && (await bundledFrontendUrl(context));
+    if (probed) frontendUrl = probed;
+    // A scheme URL only a fresh probe vouches for: it may be stale, or for another node.
+    const bundled = frontendUrl.startsWith(`${APP_SCHEME}:`);
+    if (bundled && !probed) {
+      throw new Error('This app\'s bundled frontend is not available on the node right now.');
+    }
 
     // Checked before either path below, both of which hand the page a session.
     if (!isAllowedAppFrontendUrl(frontendUrl)) {

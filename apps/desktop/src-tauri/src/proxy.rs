@@ -148,7 +148,10 @@ pub fn validate_allowed_url(url: &str, configured_node_url: Option<&str>) -> Res
                     _ => None,
                 });
 
-                if node_host.as_ref().map(|h| h == &host_lower).unwrap_or(false)
+                if node_host
+                    .as_ref()
+                    .map(|h| h == &host_lower)
+                    .unwrap_or(false)
                     && node_port.map(|p| p == port).unwrap_or(false)
                     && node_parsed.scheme() == scheme
                 {
@@ -192,7 +195,9 @@ pub fn retarget_own_origin(
     url: &str,
     binding: &crate::app_window::AppWindowBinding,
 ) -> Result<Option<crate::app_scheme::NodeTarget>, String> {
-    let Some(parsed) = url::Url::parse(url).ok().filter(|u| crate::app_scheme::label_from_url(u).is_some())
+    let Some(parsed) = url::Url::parse(url)
+        .ok()
+        .filter(|u| crate::app_scheme::label_from_url(u).is_some())
     else {
         return Ok(None);
     };
@@ -212,7 +217,7 @@ pub fn retarget_own_origin(
 /// one the window was opened for, and only while it shows the app's own page.
 pub fn authorize_request<R: tauri::Runtime>(
     webview: &tauri::Webview<R>,
-    mut request: HttpRequest,
+    request: HttpRequest,
 ) -> Result<(HttpRequest, String), TauriError> {
     let denied = |reason| TauriError::new(TauriErrorCode::UrlNotAllowed, reason);
     let binding = crate::app_window::authorize_webview(webview).map_err(denied)?;
@@ -489,9 +494,7 @@ pub async fn proxy_sse_stream(
     let response = match result {
         Ok(r) => r,
         Err(e) => {
-            cancel_registry
-                .lock_unpoisoned()
-                .remove(&stream_id);
+            cancel_registry.lock_unpoisoned().remove(&stream_id);
             let _ = window.emit(&end_event, "");
             return Err(TauriError::with_details(
                 TauriErrorCode::HttpRequestFailed,
@@ -519,9 +522,7 @@ pub async fn proxy_sse_stream(
         }
     }
 
-    cancel_registry
-        .lock_unpoisoned()
-        .remove(&stream_id);
+    cancel_registry.lock_unpoisoned().remove(&stream_id);
     let _ = window.emit(&end_event, "");
     Ok(())
 }
@@ -538,7 +539,10 @@ pub fn cancel_sse_stream(stream_id: String, cancel_registry: tauri::State<'_, Ss
 
 #[cfg(test)]
 mod tests {
-    use super::{aim_at_node, is_textual_content_type, retarget_own_origin, validate_allowed_url, HttpRequest};
+    use super::{
+        aim_at_node, is_textual_content_type, retarget_own_origin, validate_allowed_url,
+        HttpRequest,
+    };
     use crate::app_window::AppWindowBindings;
 
     #[test]
@@ -554,8 +558,8 @@ mod tests {
             "application/x-www-form-urlencoded",
             "text/csv",
             "multipart/form-data; boundary=xyz",
-            "image/svg+xml",              // +xml suffix
-            "application/problem+json",   // +json suffix
+            "image/svg+xml",            // +xml suffix
+            "application/problem+json", // +json suffix
             "text/xml",
         ] {
             assert!(is_textual_content_type(ct), "should be textual: {ct}");
@@ -718,7 +722,12 @@ mod tests {
         HttpRequest {
             url,
             method: "GET".into(),
-            headers: Some(headers.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()),
+            headers: Some(
+                headers
+                    .iter()
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+                    .collect(),
+            ),
             body: None,
             body_base64: None,
         }
@@ -727,10 +736,19 @@ mod tests {
     #[test]
     fn a_page_cannot_choose_the_host_it_is_served_from() {
         let other = format!("{}.localhost:2528", "b".repeat(51) + "a");
-        for url in [format!("calimero-app://{LABEL}/x"), "http://127.0.0.1:2528/x".to_string()] {
-            let req = request_with(url, &[("host", &other), ("HOST", &other), ("accept", "*/*")]);
+        for url in [
+            format!("calimero-app://{LABEL}/x"),
+            "http://127.0.0.1:2528/x".to_string(),
+        ] {
+            let req = request_with(
+                url,
+                &[("host", &other), ("HOST", &other), ("accept", "*/*")],
+            );
             let headers = aim_at_node(req, &app_binding()).unwrap().headers.unwrap();
-            let hosts: Vec<_> = headers.iter().filter(|(k, _)| k.eq_ignore_ascii_case("host")).collect();
+            let hosts: Vec<_> = headers
+                .iter()
+                .filter(|(k, _)| k.eq_ignore_ascii_case("host"))
+                .collect();
             assert!(hosts.iter().all(|(_, v)| **v != other), "{hosts:?}");
             assert_eq!(headers.get("accept").map(String::as_str), Some("*/*"));
         }
@@ -738,7 +756,10 @@ mod tests {
 
     #[test]
     fn an_own_origin_call_carries_the_apps_host_alone() {
-        let req = request_with(format!("calimero-app://{LABEL}/x"), &[("hOsT", "evil.example")]);
+        let req = request_with(
+            format!("calimero-app://{LABEL}/x"),
+            &[("hOsT", "evil.example")],
+        );
         let headers = aim_at_node(req, &app_binding()).unwrap().headers.unwrap();
         assert_eq!(headers.len(), 1);
         assert_eq!(headers["Host"], format!("{LABEL}.localhost:2528"));
@@ -757,7 +778,10 @@ mod tests {
         let binding = app_binding();
         let other = format!("calimero-app://{}/jsonrpc", "b".repeat(51) + "a");
         assert!(retarget_own_origin(&other, &binding).is_err());
-        assert_eq!(retarget_own_origin("http://127.0.0.1:2528/jsonrpc", &binding), Ok(None));
+        assert_eq!(
+            retarget_own_origin("http://127.0.0.1:2528/jsonrpc", &binding),
+            Ok(None)
+        );
     }
 
     #[tokio::test]
@@ -769,7 +793,9 @@ mod tests {
             let (mut sock, _) = listener.accept().await.unwrap();
             let mut buf = [0u8; 2048];
             let n = sock.read(&mut buf).await.unwrap();
-            sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n").await.unwrap();
+            sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+                .await
+                .unwrap();
             String::from_utf8_lossy(&buf[..n]).to_string()
         });
         let host = format!("{LABEL}.localhost:{port}");

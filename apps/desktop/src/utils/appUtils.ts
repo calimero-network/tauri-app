@@ -204,6 +204,15 @@ export async function findBundledFrontends(
   return Object.fromEntries(unlinked.flatMap((app, i) => (urls[i] ? [[app.id, urls[i]]] : [])));
 }
 
+export type FrontendSlot = { kind: 'open'; url: string } | { kind: 'pending' } | { kind: 'none' };
+
+/** What a card offers: the link, else the bundled frontend, else pending while the probe is out. */
+export function frontendSlot(link: string | undefined, bundled: string | undefined, probing: boolean): FrontendSlot {
+  const url = link ?? bundled;
+  if (url) return { kind: 'open', url };
+  return { kind: probing ? 'pending' : 'none' };
+}
+
 export async function openAppFrontend(
   frontendUrl: string,
   appName?: string,

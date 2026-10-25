@@ -40,6 +40,7 @@ import {
   findBundledFrontends,
   isAllowedAppFrontendUrl,
   openAppFrontend,
+  frontendSlot,
   normalizeNodeUrl,
 } from './appUtils';
 import { BROKERED_REFRESH_TOKEN } from '../lib/token-broker';
@@ -601,5 +602,23 @@ describe('node-bundled app frontends', () => {
 
     expect(found).toEqual({ bundled: BUNDLED });
     expect(invoke.mock.calls.map((c) => c[1].appId).sort()).toEqual(['bundled', 'plain']);
+  });
+});
+
+describe('frontendSlot', () => {
+  it('opens the declared link without waiting for the probe', () => {
+    expect(frontendSlot('https://a.example/', undefined, true)).toEqual({ kind: 'open', url: 'https://a.example/' });
+  });
+
+  it('is pending, not absent, while the bundled probe is out', () => {
+    expect(frontendSlot(undefined, undefined, true)).toEqual({ kind: 'pending' });
+  });
+
+  it('opens the bundled url once the probe found one', () => {
+    expect(frontendSlot(undefined, 'calimero-app://x/', false)).toEqual({ kind: 'open', url: 'calimero-app://x/' });
+  });
+
+  it('reports no frontend only after the probe settled empty', () => {
+    expect(frontendSlot(undefined, undefined, false)).toEqual({ kind: 'none' });
   });
 });

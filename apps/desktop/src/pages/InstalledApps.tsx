@@ -42,7 +42,7 @@ const SKELETON_MIN_MS = 1000;
 const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirmUninstall, clientReady = true, onNavigate }) => {
   const toast = useToast();
   const [apps, setApps] = useState<InstalledApplication[]>([]);
-  const bundledFrontends = useBundledFrontends(apps);
+  const { frontends: bundledFrontends, probing: probingFrontends } = useBundledFrontends(apps);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; app: InstalledApplication } | null>(null);
@@ -302,6 +302,7 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
                   key={app.id || app.name || app.source || `installed-${index}`}
                   app={app}
                   bundledUrl={bundledFrontends[app.id]}
+                  probing={probingFrontends}
                   menuOpen={openMenuAppId === app.id}
                   onContextMenu={(e: React.MouseEvent) => handleRowContextMenu(e, app)}
                   onToggleMenu={(e: React.MouseEvent) => {

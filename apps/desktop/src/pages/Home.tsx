@@ -44,7 +44,7 @@ function Home({ connected, error, clientReady, onReconnect, onNavigate, onOpenSe
       .finally(() => setLoadingApps(false));
   }, [clientReady, onAuthRequired]);
 
-  const bundledFrontends = useBundledFrontends(installedApps);
+  const { frontends: bundledFrontends, probing: probingFrontends } = useBundledFrontends(installedApps);
 
   const handleOpenAppFrontend = useCallback(async (frontendUrl: string, appName?: string, applicationId?: string, iconData?: string) => {
     try {
@@ -108,6 +108,7 @@ function Home({ connected, error, clientReady, onReconnect, onNavigate, onOpenSe
                   key={app.id || app.name || app.source || `home-app-${index}`}
                   app={app}
                   bundledUrl={bundledFrontends[app.id]}
+                  probing={probingFrontends}
                   onOpen={(url: string) => handleOpenAppFrontend(url, appName, app.id, metadata?.icon)}
                 />
               );

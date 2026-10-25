@@ -175,6 +175,17 @@ interface NamespacesProps {
   onTransferHandled?: () => void;
 }
 
+// The namespace root plus every subgroup under it; just the root until the tree has loaded.
+function treeGroupIds(tree: NamespaceTree | null, namespaceId: string): string[] {
+  const ids = [namespaceId];
+  const walk = (sg: TreeSubgroup) => {
+    ids.push(sg.groupId);
+    sg.subgroups.forEach(walk);
+  };
+  tree?.subgroups.forEach(walk);
+  return ids;
+}
+
 function Namespaces({ transferNamespaceId, onTransferHandled }: NamespacesProps) {
   const toast = useToast();
   const { mero } = useMero();
@@ -1772,6 +1783,7 @@ function Namespaces({ transferNamespaceId, onTransferHandled }: NamespacesProps)
               key={ns.namespaceId}
               ns={ns}
               app={appById[ns.targetApplicationId]}
+              groupIds={treeGroupIds(tree, ns.namespaceId)}
               isAdmin={!nsMembersLoading && isAdminRole(myNsRole)}
               onInstalled={async () => {
                 invalidateInstalledApps();

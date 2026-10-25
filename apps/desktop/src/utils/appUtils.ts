@@ -4,6 +4,7 @@ import { getSettings } from "./settings";
 import { getAccessToken, getRefreshToken } from "../lib/token-storage";
 import { BROKERED_REFRESH_TOKEN } from "../lib/token-broker";
 import { appAccessToken, expiresAtFromJwt } from "../lib/app-tokens";
+import { confirmAppUpToDate } from "./upgradeGate";
 
 export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -190,6 +191,11 @@ export async function openAppFrontend(
       throw new Error(
         `Refusing to open ${frontendUrl}: app frontends must be served over HTTPS (or HTTP on localhost).`,
       );
+    }
+
+    // A namespace this node is behind on blocks only this app, until the user updates.
+    if (context?.applicationId && !(await confirmAppUpToDate(context.applicationId, appName ?? 'This app'))) {
+      return;
     }
 
     // Prefer opening the app as a first-class process via its per-app

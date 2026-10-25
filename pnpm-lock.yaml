@@ -7,7 +7,7 @@ settings:
 overrides:
   postcss: '>=8.5.18'
   browserslist: '>=4.28.7'
-  '@calimero-network/mero-react>@calimero-network/mero-js': ^26.2.2
+  '@calimero-network/mero-react>@calimero-network/mero-js': ^26.4.0
 
 importers:
 

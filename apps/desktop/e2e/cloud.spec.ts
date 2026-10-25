@@ -91,6 +91,12 @@ async function setupCloudPage(
 
   const disabled: string[] = [];
   const updated: string[] = [];
+  let updateGate: Promise<void> = Promise.resolve();
+  const holdUpdates = () => {
+    let open!: () => void;
+    updateGate = new Promise<void>((r) => { open = r; });
+    return open;
+  };
   await page.route(`${CLOUD_API}/**`, async (route) => {
     const path = new URL(route.request().url()).pathname;
     const json = (body: unknown) =>
@@ -98,7 +104,7 @@ async function setupCloudPage(
     if (path === "/api/cloud/me/subscription") return json({ plan: "pro", status: "active", current_period_end: null });
     if (path === "/api/cloud/me/namespaces") {
       return json([
-        { namespace_id: NS_DESIGN, contexts: [], ha_status: "enabled", ha_enabled_at: null, fleet_replicas: { active: 2, assigned: 2, limit: 3 } },
+        { namespace_id: NS_DESIGN, contexts: [], ha_status: "enabled", ha_enabled_at: null, fleet_replicas: { active: 3, assigned: 3, limit: 3 } },
         { namespace_id: NS_BOARD, contexts: [], ha_status: "enabled", ha_enabled_at: null, fleet_replicas: { active: 1, assigned: 1, limit: 3 } },
       ]);
     }
@@ -116,6 +122,7 @@ async function setupCloudPage(
       const [, ns, leaf] = release;
       if (leaf === "update-replicas") {
         updated.push(ns);
+        await updateGate;
         releases[ns] = releaseBody(["on_target", "switching", "queued"], INTENT);
       }
       const body = releases[ns] ?? null;
@@ -131,7 +138,7 @@ async function setupCloudPage(
   await page.reload();
   await waitForAppShellReady(page);
   await navigateVia(page, "Cloud");
-  return { disabled, updated, releases };
+  return { disabled, updated, releases, holdUpdates };
 }
 
 const SIGNED_IN: Partial<AppSettings> = {
@@ -284,6 +291,20 @@ test.describe("Cloud – replica release", () => {
     // The 5 s poll picks up the finished rollout and the sub-line goes away.
     releases[NS_DESIGN] = releaseBody(["on_target", "on_target", "on_target"]);
     await expect(subline(page)).toHaveCount(0, { timeout: 15_000 });
+  });
+
+  test("while the update request is in flight the button is disabled and reads Updating", async ({ page }) => {
+    const { holdUpdates } = await setupCloudPage(page, SIGNED_IN, {
+      [NS_DESIGN]: releaseBody(["on_target", "behind", "behind"]),
+    });
+    const release = holdUpdates();
+
+    await subline(page).getByRole("button", { name: "Update replicas" }).click();
+    const pressed = subline(page).getByRole("button", { name: "Updating…" });
+    await expect(pressed).toBeDisabled();
+
+    release();
+    await expect(subline(page)).toContainText("Updating replicas, one at a time: 1 of 3 on 2.0.0");
   });
 
   test("failed: Retry update is offered", async ({ page }) => {

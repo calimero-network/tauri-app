@@ -191,7 +191,9 @@ pub fn redirect_response(
     let target = page
         .join(&local_location(label, location))
         .ok()
-        .filter(|t| label_from_url(t).as_deref() == Some(label));
+        .filter(|t| label_from_url(t).as_deref() == Some(label))
+        // The page emits the path alone, and a path starting `//` re-reads as another host.
+        .filter(|t| !t.path().starts_with("//"));
     let Some(target) = target else {
         return Some(refusal(502));
     };
@@ -657,6 +659,7 @@ mod tests {
             "http://evil.example/".to_string(),
             "https://evil.example/".to_string(),
             "//evil.example/x".to_string(),
+            "/.//evil.example/x".to_string(),
             format!("http://{OTHER}.localhost:2528/"),
             format!("calimero-app://{OTHER}/"),
             "javascript:alert(1)".to_string(),

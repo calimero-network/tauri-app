@@ -35,7 +35,13 @@ vi.mock('../lib/app-tokens', () => ({
   expiresAtFromJwt: () => 1_700_000_000_000,
 }));
 
-import { appInstalled, isAllowedAppFrontendUrl, openAppFrontend, normalizeNodeUrl } from './appUtils';
+import {
+  appInstalled,
+  findBundledFrontends,
+  isAllowedAppFrontendUrl,
+  openAppFrontend,
+  normalizeNodeUrl,
+} from './appUtils';
 import { BROKERED_REFRESH_TOKEN } from '../lib/token-broker';
 
 /** Args of the `create_app_window` invoke (may not be the first call — the app
@@ -494,5 +500,82 @@ describe('openAppFrontend with a deep link', () => {
     await openAppFrontend('https://drive.example/', 'Drive', undefined, { applicationId: 'app-1' });
 
     expect(invoke).not.toHaveBeenCalledWith('deliver_app_deep_link', expect.anything());
+  });
+});
+
+describe('node-bundled app frontends', () => {
+  const BUNDLED = `calimero-app://${'a'.repeat(51)}q/`;
+  const probeAnswers = (answer: () => Promise<unknown>) =>
+    invoke.mockImplementation((cmd: string) => {
+      if (cmd === 'app_bundled_frontend') return answer();
+      if (cmd === 'open_app_launcher') return Promise.reject(new Error('no launcher in test env'));
+      return Promise.resolve(undefined);
+    });
+
+  it('opens the bundled origin in place of the registry link, with the origin as node_url', async () => {
+    probeAnswers(async () => BUNDLED);
+    await openAppFrontend('https://app.example.com/', 'Example', undefined, { applicationId: 'app-1' });
+
+    expect(openedUrl().startsWith(BUNDLED)).toBe(true);
+    expect(openedHash().get('node_url')).toBe(BUNDLED.replace(/\/$/, ''));
+    expect(invoke.mock.calls.some((c) => c[0] === 'open_app_launcher')).toBe(false);
+  });
+
+  it('keeps the link and the launcher when the node bundles nothing', async () => {
+    probeAnswers(async () => null);
+    await openAppFrontend('https://app.example.com/', 'Example', undefined, { applicationId: 'app-1' });
+
+    expect(openedUrl().startsWith('https://app.example.com/')).toBe(true);
+    expect(openedHash().get('node_url')).toBe('http://localhost:2528');
+    expect(invoke.mock.calls.some((c) => c[0] === 'open_app_launcher')).toBe(true);
+  });
+
+  it('keeps the link when the probe itself fails', async () => {
+    probeAnswers(() => Promise.reject(new Error('node down')));
+    await openAppFrontend('https://app.example.com/', 'Example', undefined, { applicationId: 'app-1' });
+
+    expect(openedUrl().startsWith('https://app.example.com/')).toBe(true);
+  });
+
+  it('does not probe without an application id', async () => {
+    await openAppFrontend('https://app.example.com/', 'Example');
+
+    expect(invoke.mock.calls.some((c) => c[0] === 'app_bundled_frontend')).toBe(false);
+  });
+
+  it('probes the targeted node, without a trailing slash', async () => {
+    probeAnswers(async () => null);
+    await openAppFrontend('https://app.example.com/', 'Example', undefined, {
+      applicationId: 'app-1',
+      targetNodeUrl: 'http://127.0.0.1:2600/',
+    });
+
+    expect(invoke).toHaveBeenCalledWith('app_bundled_frontend', {
+      appId: 'app-1',
+      nodeUrl: 'http://127.0.0.1:2600',
+    });
+  });
+
+  it('refuses a probe answer that is not an allowed frontend', async () => {
+    probeAnswers(async () => 'calimero-app://short/');
+    const onError = vi.fn();
+    await openAppFrontend('https://app.example.com/', 'Example', onError, { applicationId: 'app-1' });
+
+    expect(onError).toHaveBeenCalled();
+    expect(invoke.mock.calls.some((c) => c[0] === 'create_app_window')).toBe(false);
+  });
+
+  it('lists the apps the node bundles a frontend for, skipping those with a link', async () => {
+    invoke.mockImplementation((_cmd: string, args: { appId: string }) =>
+      Promise.resolve(args.appId === 'bundled' ? BUNDLED : null),
+    );
+    const found = await findBundledFrontends([
+      { id: 'bundled', metadata: {} },
+      { id: 'plain', metadata: {} },
+      { id: 'linked', metadata: { links: { frontend: 'https://x.example/' } } },
+    ]);
+
+    expect(found).toEqual({ bundled: BUNDLED });
+    expect(invoke.mock.calls.map((c) => c[1].appId).sort()).toEqual(['bundled', 'plain']);
   });
 });

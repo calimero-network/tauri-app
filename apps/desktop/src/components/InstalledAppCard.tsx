@@ -45,6 +45,7 @@ export default function InstalledAppCard({
   onToggleMenu,
   onContextMenu,
   onOpen,
+  bundledUrl,
   nodeSelect,
 }: {
   app: InstalledApplicationRow;
@@ -53,12 +54,14 @@ export default function InstalledAppCard({
   onToggleMenu?: (e: React.MouseEvent) => void;
   onContextMenu?: (e: React.MouseEvent) => void;
   onOpen: (frontendUrl: string) => void;
+  /** The node-bundled frontend, opened when the bundle declares no link. */
+  bundledUrl?: string;
   /** The developer-mode "which node does this run against" picker, when shown. */
   nodeSelect?: React.ReactNode;
 }) {
   const metadata = decodeMetadata(app.metadata);
   const name = metadata?.name || app.name || app.id;
-  const frontendUrl = metadata?.links?.frontend;
+  const frontendUrl = metadata?.links?.frontend ?? bundledUrl;
   const version = metadata?.version ?? app.version ?? null;
   const size = formatBytes(app.size);
   // The bundle's own package id when it has one; the node's application id is a

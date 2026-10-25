@@ -118,20 +118,19 @@ pub fn static_target(
     node_target(bound_label, node_url, &path_and_query).map_err(|_| 502)
 }
 
-/// Whether the node serves a frontend for `label`: its root, redirects followed,
-/// answers 2xx with a `default-src 'self'` policy (the admin dashboard has none).
-pub async fn probe_bundled(label: &str, node_url: &str) -> bool {
-    let Ok(target) = node_target(label, node_url, "/") else {
-        return false;
-    };
-    let response = probe_client().head(&target.url).header("Host", &target.host).send().await;
-    response.is_ok_and(|r| {
-        r.status().is_success()
-            && r.headers()
-                .get("content-security-policy")
-                .and_then(|v| v.to_str().ok())
-                .is_some_and(|csp| csp.contains("default-src 'self'"))
-    })
+/// The path the node's frontend for `label` lands on: its root, redirects followed,
+/// when that answers 2xx with a `default-src 'self'` policy (the admin dashboard has
+/// none). The webview does not follow a redirect from a custom scheme, so the page
+/// is opened on the landing path.
+pub async fn probe_bundled(label: &str, node_url: &str) -> Option<String> {
+    let target = node_target(label, node_url, "/").ok()?;
+    let response = probe_client().head(&target.url).header("Host", &target.host).send().await.ok()?;
+    let has_policy = response
+        .headers()
+        .get("content-security-policy")
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|csp| csp.contains("default-src 'self'"));
+    (response.status().is_success() && has_policy).then(|| response.url().path().to_string())
 }
 
 fn probe_client() -> &'static reqwest::Client {
@@ -391,7 +390,7 @@ mod tests {
 
     async fn probes(reply: String) -> bool {
         let (port, _) = serve_once(reply).await;
-        probe_bundled(LABEL, &format!("http://127.0.0.1:{port}")).await
+        probe_bundled(LABEL, &format!("http://127.0.0.1:{port}")).await.is_some()
     }
 
     #[tokio::test]
@@ -423,7 +422,15 @@ mod tests {
                 sock.write_all(reply.as_bytes()).await.unwrap();
             }
         });
-        assert!(probe_bundled(LABEL, &format!("http://127.0.0.1:{port}")).await);
+        let landing = probe_bundled(LABEL, &format!("http://127.0.0.1:{port}")).await;
+        assert_eq!(landing.as_deref(), Some("/1.0.0/"));
+    }
+
+    #[tokio::test]
+    async fn probe_lands_on_the_root_when_nothing_redirects() {
+        let (port, _) = serve_once(ok_with("Content-Security-Policy: default-src 'self'\r\n")).await;
+        let landing = probe_bundled(LABEL, &format!("http://127.0.0.1:{port}")).await;
+        assert_eq!(landing.as_deref(), Some("/"));
     }
 
     async fn fetch_from(

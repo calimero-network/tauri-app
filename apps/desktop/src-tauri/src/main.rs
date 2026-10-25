@@ -1326,13 +1326,12 @@ fn deliver_app_deep_link(
         })
 }
 
-/// `calimero-app://{label}/` when the node bundles this app's frontend.
+/// `calimero-app://{label}{landing path}` when the node bundles this app's frontend.
 #[tauri::command]
 async fn app_bundled_frontend(app_id: String, node_url: String) -> Option<String> {
     let label = calimero_tauri_app::app_scheme::label_for_app_id(&app_id)?;
-    calimero_tauri_app::app_scheme::probe_bundled(&label, &node_url)
-        .await
-        .then(|| format!("{}://{label}/", calimero_tauri_app::app_scheme::SCHEME))
+    let landing = calimero_tauri_app::app_scheme::probe_bundled(&label, &node_url).await?;
+    Some(format!("{}://{label}{landing}", calimero_tauri_app::app_scheme::SCHEME))
 }
 
 #[tauri::command]

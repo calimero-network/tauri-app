@@ -199,13 +199,6 @@ pub fn is_signalable(pid: u32, running: &[DiscoveredNode]) -> bool {
 mod tests {
     use super::*;
 
-    fn discovered(listing: &str) -> Vec<(u32, String, String)> {
-        parse_node_listing(listing)
-            .into_iter()
-            .map(|n| (n.pid, n.home, n.node))
-            .collect()
-    }
-
     fn found(pid: u32, home: &Path, node: &str) -> DiscoveredNode {
         DiscoveredNode {
             pid,
@@ -230,150 +223,6 @@ mod tests {
         std::fs::create_dir_all(&a).unwrap();
         std::fs::create_dir_all(&b).unwrap();
         (Cleanup(base), a, b)
-    }
-
-    #[test]
-    fn reads_home_and_node_from_a_bundled_path() {
-        let listing = "36331 /Applications/Calimero Desktop.app/Contents/Resources/merod/merod \
-                       --home /Users/x/.calimero --node default run";
-        assert_eq!(
-            discovered(listing),
-            vec![(36331, "/Users/x/.calimero".into(), "default".into())]
-        );
-    }
-
-    /// `ps ax` right-aligns the PID column and emits a header row.
-    #[test]
-    fn tolerates_the_padded_pid_column_and_the_header() {
-        let listing = concat!(
-            "  PID COMMAND\n",
-            " 3680 /Applications/Calimero Desktop.app/Contents/Resources/merod/merod",
-            " --home /Users/x/.calimero --node default run\n"
-        );
-        assert_eq!(
-            discovered(listing),
-            vec![(3680, "/Users/x/.calimero".into(), "default".into())]
-        );
-    }
-
-    #[test]
-    fn reads_a_home_path_containing_a_space() {
-        let listing = "77 /usr/local/bin/merod --home /Users/x/My Nodes --node n1 run";
-        assert_eq!(
-            discovered(listing),
-            vec![(77, "/Users/x/My Nodes".into(), "n1".into())]
-        );
-    }
-
-    #[test]
-    fn finds_a_cargo_built_node() {
-        let listing = "4711 /Users/x/core/target/debug/merod --home /Users/x/dev --node alice run";
-        assert_eq!(
-            discovered(listing),
-            vec![(4711, "/Users/x/dev".into(), "alice".into())]
-        );
-    }
-
-    /// THE REGRESSION: this app starts every node it launches with
-    /// `run --exit-on-stdin-close` (main.rs), so the subcommand is not the final
-    /// token. A parser that demanded it saw none of its own nodes — the start
-    /// guard then put a second writer on a live store (RocksDB "LOCK: Resource
-    /// temporarily unavailable"), the Nodes list showed them as stopped, and the
-    /// delete guard would have wiped a running node's data directory.
-    #[test]
-    fn finds_a_node_started_with_exit_on_stdin_close() {
-        let listing = "75035 /Applications/Calimero Desktop.app/Contents/Resources/merod/merod \
-                       --home /Users/x/.calimero --node default run --exit-on-stdin-close";
-        assert_eq!(
-            discovered(listing),
-            vec![(75035, "/Users/x/.calimero".into(), "default".into())]
-        );
-    }
-
-    /// `run` also takes flags that carry a value, so the line can end in the
-    /// value rather than the flag - skipping trailing `--…` tokens is not enough.
-    #[test]
-    fn finds_a_node_whose_last_token_is_a_subcommand_flag_value() {
-        let listing = "77 /usr/local/bin/merod --home /Users/x/.calimero --node n1 run \
-                       --exit-on-eof 3";
-        assert_eq!(
-            discovered(listing),
-            vec![(77, "/Users/x/.calimero".into(), "n1".into())]
-        );
-    }
-
-    /// Several subcommand flags, and a root flag order the app does not use.
-    #[test]
-    fn finds_a_node_behind_several_subcommand_flags() {
-        let listing = "78 /usr/local/bin/merod --node n1 --home /Users/x/My Nodes run \
-                       --auth-mode embedded --exit-on-stdin-close";
-        assert_eq!(
-            discovered(listing),
-            vec![(78, "/Users/x/My Nodes".into(), "n1".into())]
-        );
-    }
-
-    /// A subcommand flag must not stop a home path ending in "run" from parsing:
-    /// the root flags say where the root command stops, the last token does not.
-    #[test]
-    fn a_home_ending_in_run_survives_a_subcommand_flag() {
-        let listing = "79 /usr/local/bin/merod --home /Users/x/last run --node n1 run \
-                       --exit-on-stdin-close";
-        assert_eq!(
-            discovered(listing),
-            vec![(79, "/Users/x/last run".into(), "n1".into())]
-        );
-    }
-
-    /// Still not a node: the subcommand is what it is however many flags follow.
-    #[test]
-    fn another_subcommand_is_not_a_node_even_with_trailing_flags() {
-        let listing = "80 /usr/local/bin/merod --home /Users/x/.calimero --node n1 init \
-                       --auth-mode embedded";
-        assert_eq!(discovered(listing), vec![]);
-    }
-
-    /// A home directory can end in a folder named "run", which is not a subcommand.
-    #[test]
-    fn a_run_inside_a_home_path_is_not_the_subcommand() {
-        let listing = "88 /usr/local/bin/merod --home /Users/x/last run --node n1 init";
-        assert_eq!(discovered(listing), vec![]);
-    }
-
-    #[test]
-    fn a_node_whose_home_ends_in_run_is_still_found() {
-        let listing = "89 /usr/local/bin/merod --home /Users/x/last run --node n1 run";
-        assert_eq!(
-            discovered(listing),
-            vec![(89, "/Users/x/last run".into(), "n1".into())]
-        );
-    }
-
-    /// The cargo parent's own command line mentions merod; only its child is a node.
-    #[test]
-    fn ignores_the_cargo_wrapper_process() {
-        let listing = "4710 cargo run -p merod -- --home /Users/x/dev --node alice run";
-        assert_eq!(discovered(listing), vec![]);
-    }
-
-    /// A substring match reported an unrelated `awk` as a running node.
-    #[test]
-    fn ignores_processes_that_merely_mention_merod() {
-        let listing = "91 grep --color=auto -r merod run\n\
-                       92 awk /merod/ && /run/\n\
-                       93 /bin/sh -c sleep 20; : merod --node w run";
-        assert_eq!(discovered(listing), vec![]);
-    }
-
-    /// A restart replaces the running binary with the node's pinned one, so the
-    /// warning can only name what changes if discovery keeps the path.
-    #[test]
-    fn keeps_the_executable_path() {
-        let listing = "4711 /Users/x/core/target/debug/merod --home /Users/x/dev --node alice run";
-        assert_eq!(
-            parse_node_listing(listing)[0].exe,
-            "/Users/x/core/target/debug/merod"
-        );
     }
 
     #[test]
@@ -454,102 +303,6 @@ mod tests {
         assert_eq!(nodes_under_path(&running, &node_dir).len(), 1);
     }
 
-    /// The installed shell lives under "Application Support" - a path with a space,
-    /// which is exactly what the old name-based match got wrong.
-    #[test]
-    fn shells_are_matched_by_install_path_including_spaces() {
-        let install =
-            Path::new("/Users/x/Library/Application Support/network.calimero.desktop/shell");
-        let listing = concat!(
-            "  PID COMMAND\n",
-            " 501 /Users/x/Library/Application Support/network.calimero.desktop/shell/CalimeroShell --app-id abc\n",
-        );
-        assert_eq!(parse_shell_pids(listing, install), vec![501]);
-    }
-
-    /// A developer's own shell build is not the app's to kill.
-    #[test]
-    fn a_shell_from_a_checkout_is_left_alone() {
-        let install =
-            Path::new("/Users/x/Library/Application Support/network.calimero.desktop/shell");
-        let listing = "502 /Users/x/code/tauri-app/target/debug/calimero-shell --app-id abc";
-        assert!(parse_shell_pids(listing, install).is_empty());
-    }
-
-    /// A sibling directory whose name merely starts the same way is not ours.
-    #[test]
-    fn a_shell_in_a_sibling_directory_is_not_ours() {
-        let install =
-            Path::new("/Users/x/Library/Application Support/network.calimero.desktop/shell");
-        let listing = concat!(
-            "504 /Users/x/Library/Application Support/network.calimero.desktop/shell-backup/CalimeroShell\n",
-            "505 /Users/x/Library/Application Support/network.calimero.desktop/shell2/CalimeroShell\n",
-        );
-        assert!(parse_shell_pids(listing, install).is_empty());
-    }
-
-    /// Same binary name, elsewhere on disk: still not ours.
-    #[test]
-    fn a_same_named_binary_elsewhere_is_not_ours() {
-        let install =
-            Path::new("/Users/x/Library/Application Support/network.calimero.desktop/shell");
-        let listing = "503 /tmp/evil/CalimeroShell";
-        assert!(parse_shell_pids(listing, install).is_empty());
-    }
-
-    /// Our own live node: the app may adopt it and stop it on quit.
-    #[test]
-    fn a_claim_naming_this_live_process_is_ours() {
-        let (_cleanup, home, _other) = two_homes("claim-ours");
-        std::fs::create_dir_all(home.join("n1")).unwrap();
-        let me = std::process::id();
-        write_claim(&home, "n1", me).unwrap();
-        assert!(claim_matches(&home, "n1", me));
-    }
-
-    /// A node nobody claimed - started from a terminal - is not the app's to manage.
-    #[test]
-    fn an_unclaimed_node_is_not_ours() {
-        let (_cleanup, home, _other) = two_homes("claim-none");
-        std::fs::create_dir_all(home.join("n1")).unwrap();
-        assert!(!claim_matches(&home, "n1", std::process::id()));
-    }
-
-    /// PIDs are recycled: the claim must name the same process, not just the number.
-    #[test]
-    fn a_claim_whose_start_time_disagrees_is_stale() {
-        let (_cleanup, home, _other) = two_homes("claim-stale");
-        std::fs::create_dir_all(home.join("n1")).unwrap();
-        let me = std::process::id();
-        std::fs::write(
-            claim_path(&home, "n1"),
-            format!("{me}\nWed Jan  1 00:00:00 2020\n"),
-        )
-        .unwrap();
-        assert!(
-            !claim_matches(&home, "n1", me),
-            "a recycled PID must not inherit the old claim"
-        );
-    }
-
-    #[test]
-    fn a_claim_for_a_different_pid_is_not_ours() {
-        let (_cleanup, home, _other) = two_homes("claim-other");
-        std::fs::create_dir_all(home.join("n1")).unwrap();
-        write_claim(&home, "n1", std::process::id()).unwrap();
-        assert!(!claim_matches(&home, "n1", 999_999));
-    }
-
-    #[test]
-    fn a_removed_claim_stops_being_ours() {
-        let (_cleanup, home, _other) = two_homes("claim-removed");
-        std::fs::create_dir_all(home.join("n1")).unwrap();
-        let me = std::process::id();
-        write_claim(&home, "n1", me).unwrap();
-        remove_claim(&home, "n1");
-        assert!(!claim_matches(&home, "n1", me));
-    }
-
     /// The webview asks for a PID by number; the backend must not take its word.
     #[test]
     fn a_pid_the_app_cannot_account_for_is_not_signalable() {
@@ -564,5 +317,262 @@ mod tests {
             !is_signalable(11, &[]),
             "a PID the process table no longer lists is dead, tracked or not"
         );
+    }
+
+    /// What reads `ps` output and claim files exists only on Unix.
+    #[cfg(unix)]
+    mod unix {
+        use super::*;
+
+        fn discovered(listing: &str) -> Vec<(u32, String, String)> {
+            parse_node_listing(listing)
+                .into_iter()
+                .map(|n| (n.pid, n.home, n.node))
+                .collect()
+        }
+
+        #[test]
+        fn reads_home_and_node_from_a_bundled_path() {
+            let listing =
+                "36331 /Applications/Calimero Desktop.app/Contents/Resources/merod/merod \
+                           --home /Users/x/.calimero --node default run";
+            assert_eq!(
+                discovered(listing),
+                vec![(36331, "/Users/x/.calimero".into(), "default".into())]
+            );
+        }
+
+        /// `ps ax` right-aligns the PID column and emits a header row.
+        #[test]
+        fn tolerates_the_padded_pid_column_and_the_header() {
+            let listing = concat!(
+                "  PID COMMAND\n",
+                " 3680 /Applications/Calimero Desktop.app/Contents/Resources/merod/merod",
+                " --home /Users/x/.calimero --node default run\n"
+            );
+            assert_eq!(
+                discovered(listing),
+                vec![(3680, "/Users/x/.calimero".into(), "default".into())]
+            );
+        }
+
+        #[test]
+        fn reads_a_home_path_containing_a_space() {
+            let listing = "77 /usr/local/bin/merod --home /Users/x/My Nodes --node n1 run";
+            assert_eq!(
+                discovered(listing),
+                vec![(77, "/Users/x/My Nodes".into(), "n1".into())]
+            );
+        }
+
+        #[test]
+        fn finds_a_cargo_built_node() {
+            let listing =
+                "4711 /Users/x/core/target/debug/merod --home /Users/x/dev --node alice run";
+            assert_eq!(
+                discovered(listing),
+                vec![(4711, "/Users/x/dev".into(), "alice".into())]
+            );
+        }
+
+        /// THE REGRESSION: this app starts every node it launches with
+        /// `run --exit-on-stdin-close` (main.rs), so the subcommand is not the final
+        /// token. A parser that demanded it saw none of its own nodes — the start
+        /// guard then put a second writer on a live store (RocksDB "LOCK: Resource
+        /// temporarily unavailable"), the Nodes list showed them as stopped, and the
+        /// delete guard would have wiped a running node's data directory.
+        #[test]
+        fn finds_a_node_started_with_exit_on_stdin_close() {
+            let listing =
+                "75035 /Applications/Calimero Desktop.app/Contents/Resources/merod/merod \
+                           --home /Users/x/.calimero --node default run --exit-on-stdin-close";
+            assert_eq!(
+                discovered(listing),
+                vec![(75035, "/Users/x/.calimero".into(), "default".into())]
+            );
+        }
+
+        /// `run` also takes flags that carry a value, so the line can end in the
+        /// value rather than the flag - skipping trailing `--…` tokens is not enough.
+        #[test]
+        fn finds_a_node_whose_last_token_is_a_subcommand_flag_value() {
+            let listing = "77 /usr/local/bin/merod --home /Users/x/.calimero --node n1 run \
+                           --exit-on-eof 3";
+            assert_eq!(
+                discovered(listing),
+                vec![(77, "/Users/x/.calimero".into(), "n1".into())]
+            );
+        }
+
+        /// Several subcommand flags, and a root flag order the app does not use.
+        #[test]
+        fn finds_a_node_behind_several_subcommand_flags() {
+            let listing = "78 /usr/local/bin/merod --node n1 --home /Users/x/My Nodes run \
+                           --auth-mode embedded --exit-on-stdin-close";
+            assert_eq!(
+                discovered(listing),
+                vec![(78, "/Users/x/My Nodes".into(), "n1".into())]
+            );
+        }
+
+        /// A subcommand flag must not stop a home path ending in "run" from parsing:
+        /// the root flags say where the root command stops, the last token does not.
+        #[test]
+        fn a_home_ending_in_run_survives_a_subcommand_flag() {
+            let listing = "79 /usr/local/bin/merod --home /Users/x/last run --node n1 run \
+                           --exit-on-stdin-close";
+            assert_eq!(
+                discovered(listing),
+                vec![(79, "/Users/x/last run".into(), "n1".into())]
+            );
+        }
+
+        /// Still not a node: the subcommand is what it is however many flags follow.
+        #[test]
+        fn another_subcommand_is_not_a_node_even_with_trailing_flags() {
+            let listing = "80 /usr/local/bin/merod --home /Users/x/.calimero --node n1 init \
+                           --auth-mode embedded";
+            assert_eq!(discovered(listing), vec![]);
+        }
+
+        /// A home directory can end in a folder named "run", which is not a subcommand.
+        #[test]
+        fn a_run_inside_a_home_path_is_not_the_subcommand() {
+            let listing = "88 /usr/local/bin/merod --home /Users/x/last run --node n1 init";
+            assert_eq!(discovered(listing), vec![]);
+        }
+
+        #[test]
+        fn a_node_whose_home_ends_in_run_is_still_found() {
+            let listing = "89 /usr/local/bin/merod --home /Users/x/last run --node n1 run";
+            assert_eq!(
+                discovered(listing),
+                vec![(89, "/Users/x/last run".into(), "n1".into())]
+            );
+        }
+
+        /// The cargo parent's own command line mentions merod; only its child is a node.
+        #[test]
+        fn ignores_the_cargo_wrapper_process() {
+            let listing = "4710 cargo run -p merod -- --home /Users/x/dev --node alice run";
+            assert_eq!(discovered(listing), vec![]);
+        }
+
+        /// A substring match reported an unrelated `awk` as a running node.
+        #[test]
+        fn ignores_processes_that_merely_mention_merod() {
+            let listing = "91 grep --color=auto -r merod run\n\
+                           92 awk /merod/ && /run/\n\
+                           93 /bin/sh -c sleep 20; : merod --node w run";
+            assert_eq!(discovered(listing), vec![]);
+        }
+
+        /// A restart replaces the running binary with the node's pinned one, so the
+        /// warning can only name what changes if discovery keeps the path.
+        #[test]
+        fn keeps_the_executable_path() {
+            let listing =
+                "4711 /Users/x/core/target/debug/merod --home /Users/x/dev --node alice run";
+            assert_eq!(
+                parse_node_listing(listing)[0].exe,
+                "/Users/x/core/target/debug/merod"
+            );
+        }
+
+        /// The installed shell lives under "Application Support" - a path with a space,
+        /// which is exactly what the old name-based match got wrong.
+        #[test]
+        fn shells_are_matched_by_install_path_including_spaces() {
+            let install =
+                Path::new("/Users/x/Library/Application Support/network.calimero.desktop/shell");
+            let listing = concat!(
+                "  PID COMMAND\n",
+                " 501 /Users/x/Library/Application Support/network.calimero.desktop/shell/CalimeroShell --app-id abc\n",
+            );
+            assert_eq!(parse_shell_pids(listing, install), vec![501]);
+        }
+
+        /// A developer's own shell build is not the app's to kill.
+        #[test]
+        fn a_shell_from_a_checkout_is_left_alone() {
+            let install =
+                Path::new("/Users/x/Library/Application Support/network.calimero.desktop/shell");
+            let listing = "502 /Users/x/code/tauri-app/target/debug/calimero-shell --app-id abc";
+            assert!(parse_shell_pids(listing, install).is_empty());
+        }
+
+        /// A sibling directory whose name merely starts the same way is not ours.
+        #[test]
+        fn a_shell_in_a_sibling_directory_is_not_ours() {
+            let install =
+                Path::new("/Users/x/Library/Application Support/network.calimero.desktop/shell");
+            let listing = concat!(
+                "504 /Users/x/Library/Application Support/network.calimero.desktop/shell-backup/CalimeroShell\n",
+                "505 /Users/x/Library/Application Support/network.calimero.desktop/shell2/CalimeroShell\n",
+            );
+            assert!(parse_shell_pids(listing, install).is_empty());
+        }
+
+        /// Same binary name, elsewhere on disk: still not ours.
+        #[test]
+        fn a_same_named_binary_elsewhere_is_not_ours() {
+            let install =
+                Path::new("/Users/x/Library/Application Support/network.calimero.desktop/shell");
+            let listing = "503 /tmp/evil/CalimeroShell";
+            assert!(parse_shell_pids(listing, install).is_empty());
+        }
+
+        /// Our own live node: the app may adopt it and stop it on quit.
+        #[test]
+        fn a_claim_naming_this_live_process_is_ours() {
+            let (_cleanup, home, _other) = two_homes("claim-ours");
+            std::fs::create_dir_all(home.join("n1")).unwrap();
+            let me = std::process::id();
+            write_claim(&home, "n1", me).unwrap();
+            assert!(claim_matches(&home, "n1", me));
+        }
+
+        /// A node nobody claimed - started from a terminal - is not the app's to manage.
+        #[test]
+        fn an_unclaimed_node_is_not_ours() {
+            let (_cleanup, home, _other) = two_homes("claim-none");
+            std::fs::create_dir_all(home.join("n1")).unwrap();
+            assert!(!claim_matches(&home, "n1", std::process::id()));
+        }
+
+        /// PIDs are recycled: the claim must name the same process, not just the number.
+        #[test]
+        fn a_claim_whose_start_time_disagrees_is_stale() {
+            let (_cleanup, home, _other) = two_homes("claim-stale");
+            std::fs::create_dir_all(home.join("n1")).unwrap();
+            let me = std::process::id();
+            std::fs::write(
+                claim_path(&home, "n1"),
+                format!("{me}\nWed Jan  1 00:00:00 2020\n"),
+            )
+            .unwrap();
+            assert!(
+                !claim_matches(&home, "n1", me),
+                "a recycled PID must not inherit the old claim"
+            );
+        }
+
+        #[test]
+        fn a_claim_for_a_different_pid_is_not_ours() {
+            let (_cleanup, home, _other) = two_homes("claim-other");
+            std::fs::create_dir_all(home.join("n1")).unwrap();
+            write_claim(&home, "n1", std::process::id()).unwrap();
+            assert!(!claim_matches(&home, "n1", 999_999));
+        }
+
+        #[test]
+        fn a_removed_claim_stops_being_ours() {
+            let (_cleanup, home, _other) = two_homes("claim-removed");
+            std::fs::create_dir_all(home.join("n1")).unwrap();
+            let me = std::process::id();
+            write_claim(&home, "n1", me).unwrap();
+            remove_claim(&home, "n1");
+            assert!(!claim_matches(&home, "n1", me));
+        }
     }
 }

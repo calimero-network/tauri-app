@@ -696,6 +696,14 @@ mod tests {
     }
 
     #[test]
+    fn own_origin_query_reaches_the_node() {
+        let t = retarget_own_origin(&format!("calimero-app://{LABEL}/sse?id=7"), &app_binding())
+            .unwrap()
+            .unwrap();
+        assert_eq!(t.url, "http://127.0.0.1:2528/sse?id=7");
+    }
+
+    #[test]
     fn other_apps_are_refused_and_plain_urls_untouched() {
         let binding = app_binding();
         let other = format!("calimero-app://{}/jsonrpc", "b".repeat(51) + "a");

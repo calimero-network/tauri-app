@@ -205,6 +205,13 @@ async fn fetch(
     }
 }
 
+fn forwarded_headers(headers: &tauri::http::HeaderMap) -> Vec<(String, String)> {
+    FORWARDED_REQUEST_HEADERS
+        .iter()
+        .filter_map(|n| Some((n.to_string(), headers.get(*n)?.to_str().ok()?.to_string())))
+        .collect()
+}
+
 /// Handler for the scheme: serves the window's own app from its node.
 pub fn handle<R: Runtime>(
     ctx: UriSchemeContext<'_, R>,
@@ -227,13 +234,7 @@ pub fn handle<R: Runtime>(
         Ok(t) => t,
         Err(status) => return responder.respond(refusal(status)),
     };
-    let headers: Vec<(String, String)> = FORWARDED_REQUEST_HEADERS
-        .iter()
-        .filter_map(|n| {
-            let v = request.headers().get(*n)?.to_str().ok()?;
-            Some((n.to_string(), v.to_string()))
-        })
-        .collect();
+    let headers = forwarded_headers(request.headers());
     tauri::async_runtime::spawn(async move {
         responder.respond(fetch(&method, target, &label, &headers).await);
     });
@@ -279,6 +280,8 @@ mod tests {
             format!("https://evil.example/calimero-app.{LABEL}"),
             format!("https://calimero-app.{LABEL}.evil.example/"),
             format!("ftp://calimero-app.{LABEL}/"),
+            format!("https://{LABEL}/"),
+            format!("ftp://{LABEL}/"),
         ] {
             assert_eq!(label_from_url(&url(&u)), None, "{u}");
         }
@@ -324,6 +327,17 @@ mod tests {
     }
 
     #[test]
+    fn node_target_keeps_the_nodes_scheme_and_default_port() {
+        let t = node_target(LABEL, "https://node.example", "/x?y=1").unwrap();
+        assert_eq!(t.url, "https://node.example/x?y=1");
+        assert_eq!(t.host, format!("{LABEL}.localhost"));
+        let t = node_target(LABEL, "https://node.example:8443", "/").unwrap();
+        assert_eq!(t.url, "https://node.example:8443/");
+        assert_eq!(t.host, format!("{LABEL}.localhost:8443"));
+        assert!(node_target(LABEL, "not a url", "/").is_err());
+    }
+
+    #[test]
     fn refuses_other_methods_and_other_apps() {
         let own = url(&format!("calimero-app://{LABEL}/"));
         for m in ["POST", "PUT", "DELETE", "PATCH", "OPTIONS"] {
@@ -342,28 +356,135 @@ mod tests {
         assert_eq!(local_location(LABEL, foreign), foreign);
     }
 
-    async fn serve_once(csp: Option<&'static str>) -> u16 {
+    /// Answers one request with `reply`; resolves to the raw request it saw.
+    async fn serve_once(reply: String) -> (u16, tokio::task::JoinHandle<String>) {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
-        tokio::spawn(async move {
+        let seen = tokio::spawn(async move {
             let (mut sock, _) = listener.accept().await.unwrap();
-            let mut buf = [0u8; 2048];
-            let _ = sock.read(&mut buf).await;
-            let header = csp.map(|c| format!("Content-Security-Policy: {c}\r\n")).unwrap_or_default();
-            let reply = format!("HTTP/1.1 200 OK\r\n{header}Content-Length: 0\r\n\r\n");
+            let mut buf = [0u8; 4096];
+            let n = sock.read(&mut buf).await.unwrap();
             sock.write_all(reply.as_bytes()).await.unwrap();
+            String::from_utf8_lossy(&buf[..n]).to_lowercase()
         });
-        port
+        (port, seen)
+    }
+
+    fn ok_with(headers: &str) -> String {
+        format!("HTTP/1.1 200 OK\r\n{headers}Content-Length: 0\r\n\r\n")
+    }
+
+    async fn probes(reply: String) -> bool {
+        let (port, _) = serve_once(reply).await;
+        probe_bundled(LABEL, &format!("http://127.0.0.1:{port}")).await
     }
 
     #[tokio::test]
     async fn probe_needs_the_apps_own_policy() {
-        let port = serve_once(Some("default-src 'self'; img-src data:")).await;
+        assert!(probes(ok_with("Content-Security-Policy: default-src 'self'; img-src data:\r\n")).await);
+        assert!(!probes(ok_with("Content-Security-Policy: script-src 'self'\r\n")).await);
+        assert!(!probes(ok_with("")).await);
+    }
+
+    #[tokio::test]
+    async fn probe_needs_a_success_status() {
+        let csp = "Content-Security-Policy: default-src 'self'\r\n";
+        assert!(!probes(format!("HTTP/1.1 404 Not Found\r\n{csp}Content-Length: 0\r\n\r\n")).await);
+    }
+
+    #[tokio::test]
+    async fn probe_follows_the_redirect_to_the_newest_version() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            for reply in [
+                "HTTP/1.1 302 Found\r\nLocation: /1.0.0/\r\nContent-Length: 0\r\n\r\n",
+                "HTTP/1.1 200 OK\r\nContent-Security-Policy: default-src 'self'\r\nContent-Length: 0\r\n\r\n",
+            ] {
+                let (mut sock, _) = listener.accept().await.unwrap();
+                let mut buf = [0u8; 2048];
+                let _ = sock.read(&mut buf).await;
+                sock.write_all(reply.as_bytes()).await.unwrap();
+            }
+        });
         assert!(probe_bundled(LABEL, &format!("http://127.0.0.1:{port}")).await);
-        let port = serve_once(Some("script-src 'self'")).await;
-        assert!(!probe_bundled(LABEL, &format!("http://127.0.0.1:{port}")).await);
-        let port = serve_once(None).await;
-        assert!(!probe_bundled(LABEL, &format!("http://127.0.0.1:{port}")).await);
+    }
+
+    async fn fetch_from(
+        method: &str,
+        reply: String,
+        request_headers: &[(String, String)],
+    ) -> (Response<Vec<u8>>, String) {
+        let (port, seen) = serve_once(reply).await;
+        let target = node_target(LABEL, &format!("http://127.0.0.1:{port}"), "/v1/app.js").unwrap();
+        let response = fetch(method, target, LABEL, request_headers).await;
+        (response, seen.await.unwrap())
+    }
+
+    #[tokio::test]
+    async fn fetch_relays_status_body_and_end_to_end_headers() {
+        let reply = "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nETag: \"x\"\r\nContent-Length: 2\r\n\r\nno".to_string();
+        let (res, _) = fetch_from("GET", reply, &[]).await;
+        assert_eq!(res.status(), 404);
+        assert_eq!(res.body(), b"no");
+        assert_eq!(res.headers()["content-type"], "text/plain");
+        assert_eq!(res.headers()["etag"], "\"x\"");
+    }
+
+    #[tokio::test]
+    async fn fetch_drops_headers_the_webview_recomputes() {
+        let reply = "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 2\r\n\r\nok".to_string();
+        let (res, _) = fetch_from("GET", reply, &[]).await;
+        assert!(res.headers().get("content-length").is_none());
+        assert!(res.headers().get("connection").is_none());
+    }
+
+    #[tokio::test]
+    async fn fetch_keeps_a_redirect_on_the_app_origin() {
+        let reply = format!(
+            "HTTP/1.1 307 Temporary Redirect\r\nLocation: http://{LABEL}.localhost:2528/1.0.0/?a=1\r\nContent-Length: 0\r\n\r\n"
+        );
+        let (res, _) = fetch_from("GET", reply, &[]).await;
+        assert_eq!(res.status(), 307, "the redirect is not followed");
+        assert_eq!(res.headers()["location"], "/1.0.0/?a=1");
+    }
+
+    #[tokio::test]
+    async fn fetch_addresses_the_app_and_forwards_caching_headers() {
+        let headers = vec![
+            ("range".to_string(), "bytes=0-9".to_string()),
+            ("if-none-match".to_string(), "\"x\"".to_string()),
+        ];
+        let (_, seen) = fetch_from("HEAD", ok_with(""), &headers).await;
+        assert!(seen.starts_with("head /v1/app.js "), "{seen}");
+        assert!(seen.contains(&format!("host: {LABEL}.localhost:")), "{seen}");
+        assert!(seen.contains("range: bytes=0-9"), "{seen}");
+        assert!(seen.contains("if-none-match: \"x\""), "{seen}");
+    }
+
+    #[test]
+    fn only_caching_and_range_headers_are_forwarded() {
+        let mut map = tauri::http::HeaderMap::new();
+        for (k, v) in [("range", "bytes=0-1"), ("accept", "*/*"), ("cookie", "s=1"), ("authorization", "Bearer x")] {
+            map.insert(k, v.parse().unwrap());
+        }
+        let mut got = forwarded_headers(&map);
+        got.sort();
+        assert_eq!(
+            got,
+            vec![("accept".into(), "*/*".into()), ("range".into(), "bytes=0-1".into())]
+        );
+    }
+
+    #[tokio::test]
+    async fn fetch_answers_502_when_the_node_is_down() {
+        let port = {
+            let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            l.local_addr().unwrap().port()
+        };
+        let target = node_target(LABEL, &format!("http://127.0.0.1:{port}"), "/").unwrap();
+        assert_eq!(fetch("GET", target, LABEL, &[]).await.status(), 502);
     }
 }

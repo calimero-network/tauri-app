@@ -521,6 +521,20 @@ describe('node-bundled app frontends', () => {
     expect(invoke.mock.calls.some((c) => c[0] === 'open_app_launcher')).toBe(false);
   });
 
+  it('names the application to a bundled page, which has no registry link to learn it from', async () => {
+    probeAnswers(async () => BUNDLED);
+    await openAppFrontend('https://app.example.com/', 'Example', undefined, { applicationId: 'app-1' });
+
+    expect(openedHash().get('application_id')).toBe('app-1');
+  });
+
+  it('does not add an application id to a page served elsewhere', async () => {
+    probeAnswers(async () => null);
+    await openAppFrontend('https://app.example.com/', 'Example', undefined, { applicationId: 'app-1' });
+
+    expect(openedHash().has('application_id')).toBe(false);
+  });
+
   it('keeps the link and the launcher when the node bundles nothing', async () => {
     probeAnswers(async () => null);
     await openAppFrontend('https://app.example.com/', 'Example', undefined, { applicationId: 'app-1' });

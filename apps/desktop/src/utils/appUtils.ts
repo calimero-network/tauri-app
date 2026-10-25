@@ -315,6 +315,8 @@ export async function openAppFrontend(
       }
     }
     if (context?.applicationId) hashParams.set('app-id', context.applicationId);
+    // mero-js reads this name; a bundled page has no registry link to learn its app from.
+    if (bundled && context?.applicationId) hashParams.set('application_id', context.applicationId);
     if (context?.contextId) hashParams.set('context_id', context.contextId);
     if (context?.executorPublicKey) hashParams.set('executor_public_key', context.executorPublicKey);
     // Propagate the desktop's developer-mode setting so apps can surface

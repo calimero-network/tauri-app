@@ -343,7 +343,6 @@ test.describe("Uninstall dialog", () => {
 test.describe("Uninstall dialog, namespaces holding data", () => {
   const SHARED_DATA = { ...SHARED, holdsData: true };
   const ALONE_DATA = { ...ALONE, holdsData: true };
-  const SHOTS = "/tmp/live-uninstall/hide-delete-shots";
 
   test("a shared owner is offered a transfer, not a delete for everyone", async ({ page }) => {
     await setup(page, [SHARED_DATA]);
@@ -352,7 +351,6 @@ test.describe("Uninstall dialog, namespaces holding data", () => {
     await expect(page.getByText('Transfer ownership, or untick "Also leave shared namespaces".')).toBeVisible();
     await expect(page.getByRole("checkbox", { name: "Delete Family for everyone" })).toHaveCount(0);
     await expect(uninstallButton(page)).toBeDisabled();
-    await page.screenshot({ path: `${SHOTS}/shared-owner-with-data.png` });
   });
 
   test("an owner alone is told to remove it here, and unticking leave unblocks it", async ({ page }) => {
@@ -364,7 +362,6 @@ test.describe("Uninstall dialog, namespaces holding data", () => {
     await expect(page.getByText('Untick "Also leave shared namespaces" to remove it from this device only; reinstalling the app restores it.')).toBeVisible();
     await expect(page.getByRole("checkbox", { name: /Delete Notes for everyone/ })).toHaveCount(0);
     await expect(uninstallButton(page)).toBeDisabled();
-    await page.screenshot({ path: `${SHOTS}/alone-owner-with-data.png` });
 
     await leave(page).uncheck();
     await expect(uninstallButton(page)).toBeEnabled();

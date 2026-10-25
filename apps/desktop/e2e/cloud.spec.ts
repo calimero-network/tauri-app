@@ -42,7 +42,33 @@ function mdmaToken(): string {
   return `${enc({ alg: "HS256", typ: "JWT" })}.${enc({ iss: "mdma", email: "alex@example.com", exp })}.sig`;
 }
 
-async function setupCloudPage(page: Page, settings: Partial<AppSettings>) {
+/** What the cloud answers for a namespace's replica release; `null` is a 404. */
+type ReleaseBody = Record<string, unknown> | null;
+
+const INTENT = { id: "intent-1", target_version: "2.0.0", state: "active" };
+
+function releaseBody(
+  states: string[],
+  intent: typeof INTENT | null = null,
+): ReleaseBody {
+  return {
+    target_version: "2.0.0",
+    replicas: states.map((state, i) => ({
+      peer_id: `peer-${i}`,
+      running_version: state === "on_target" ? "2.0.0" : "1.0.0",
+      state,
+    })),
+    on_target: states.filter((s) => s === "on_target").length,
+    total: states.length,
+    intent,
+  };
+}
+
+async function setupCloudPage(
+  page: Page,
+  settings: Partial<AppSettings>,
+  releases: Record<string, ReleaseBody> = {},
+) {
   await mockCoreAPIs(page);
   await page.route("**/admin-api/**", async (route) => {
     const url = new URL(route.request().url());
@@ -64,6 +90,7 @@ async function setupCloudPage(page: Page, settings: Partial<AppSettings>) {
   });
 
   const disabled: string[] = [];
+  const updated: string[] = [];
   await page.route(`${CLOUD_API}/**`, async (route) => {
     const path = new URL(route.request().url()).pathname;
     const json = (body: unknown) =>
@@ -84,6 +111,16 @@ async function setupCloudPage(page: Page, settings: Partial<AppSettings>) {
       disabled.push(disable[1]);
       return json({});
     }
+    const release = path.match(/^\/api\/cloud\/me\/namespaces\/([^/]+)\/(replica-release|update-replicas)$/);
+    if (release) {
+      const [, ns, leaf] = release;
+      if (leaf === "update-replicas") {
+        updated.push(ns);
+        releases[ns] = releaseBody(["on_target", "switching", "queued"], INTENT);
+      }
+      const body = releases[ns] ?? null;
+      return body ? json(body) : route.fulfill({ status: 404, body: "" });
+    }
     return route.fulfill({ status: 404, body: "" });
   });
 
@@ -94,7 +131,7 @@ async function setupCloudPage(page: Page, settings: Partial<AppSettings>) {
   await page.reload();
   await waitForAppShellReady(page);
   await navigateVia(page, "Cloud");
-  return { disabled };
+  return { disabled, updated, releases };
 }
 
 const SIGNED_IN: Partial<AppSettings> = {
@@ -225,5 +262,69 @@ test.describe("Cloud – signed in", () => {
     await expect(design.getByRole("switch")).toHaveAttribute("aria-checked", "false");
     await expect(design.locator(".cloud-pill")).toHaveText("Off");
     expect(disabled).toEqual([NS_DESIGN]);
+  });
+});
+
+test.describe("Cloud – replica release", () => {
+  const design = (page: Page) => page.locator(`[data-namespace-id="${NS_DESIGN}"]`);
+  const subline = (page: Page) => page.getByTestId("replica-release");
+
+  test("behind: Update replicas starts a rollout that settles on target", async ({ page }) => {
+    const { updated, releases } = await setupCloudPage(page, SIGNED_IN, {
+      [NS_DESIGN]: releaseBody(["on_target", "behind", "behind"]),
+    });
+
+    await expect(subline(page)).toContainText("1 of 3 replicas on 2.0.0 · 2 still run 1.0.0");
+    await subline(page).getByRole("button", { name: "Update replicas" }).click();
+
+    await expect(subline(page)).toContainText("Updating replicas, one at a time: 1 of 3 on 2.0.0");
+    await expect(subline(page).getByRole("button")).toHaveCount(0);
+    expect(updated).toEqual([NS_DESIGN]);
+
+    // The 5 s poll picks up the finished rollout and the sub-line goes away.
+    releases[NS_DESIGN] = releaseBody(["on_target", "on_target", "on_target"]);
+    await expect(subline(page)).toHaveCount(0, { timeout: 15_000 });
+  });
+
+  test("failed: Retry update is offered", async ({ page }) => {
+    await setupCloudPage(page, SIGNED_IN, {
+      [NS_DESIGN]: releaseBody(["on_target", "failed", "behind"]),
+    });
+    await expect(subline(page)).toContainText("1 of 3 replicas on 2.0.0 · 1 failed to update");
+    await expect(subline(page).getByRole("button", { name: "Retry update" })).toBeVisible();
+  });
+
+  test("a rejected update toasts the reason and keeps the control", async ({ page }) => {
+    await setupCloudPage(page, SIGNED_IN, {
+      [NS_DESIGN]: releaseBody(["on_target", "behind"]),
+    });
+    await page.route(`${CLOUD_API}/api/cloud/me/namespaces/*/update-replicas`, (route) =>
+      route.fulfill({
+        status: 409,
+        contentType: "application/json",
+        body: JSON.stringify({ detail: { error: "nothing_behind", message: "Every replica is current" } }),
+      }),
+    );
+    await subline(page).getByRole("button", { name: "Update replicas" }).click();
+    await expect(page.getByText("Every replica is current")).toBeVisible();
+    await expect(subline(page).getByRole("button", { name: "Update replicas" })).toBeEnabled();
+  });
+
+  test("shows nothing for a non-admin row, a 404, or an all-on-target namespace", async ({ page }) => {
+    await setupCloudPage(page, SIGNED_IN, {
+      // The non-admin row is behind, but the control is the admin's.
+      [NS_BOARD]: releaseBody(["behind"]),
+      [NS_DESIGN]: null,
+    });
+    await expect(design(page).locator(".cloud-pill")).toContainText("Always on");
+    await expect(subline(page)).toHaveCount(0);
+  });
+
+  test("shows nothing when every replica is on target", async ({ page }) => {
+    await setupCloudPage(page, SIGNED_IN, {
+      [NS_DESIGN]: releaseBody(["on_target", "on_target"]),
+    });
+    await expect(design(page).locator(".cloud-pill")).toContainText("Always on");
+    await expect(subline(page)).toHaveCount(0);
   });
 });

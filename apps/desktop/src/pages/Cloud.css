@@ -456,6 +456,31 @@
   color: var(--text-tertiary);
 }
 
+/* Spans the row under the columns; the button sits on the switch's edge. */
+.cloud-ns-release {
+  min-height: 30px; /* same height with or without the button */
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--text-tertiary);
+}
+
+.cloud-ns-release.failed {
+  color: var(--warning);
+}
+
+/* Keep the tree connector on the name line, not the middle of the taller row. */
+.cloud-ns-row.has-release::after {
+  top: 29px;
+}
+
+.cloud-ns-row.has-release:last-child::before {
+  bottom: auto;
+  height: 29px;
+}
+
 .cloud-ns-row.pending {
   background: var(--accent-light);
 }

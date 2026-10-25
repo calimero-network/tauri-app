@@ -175,6 +175,45 @@ pub fn local_location(label: &str, location: &str) -> String {
     }
 }
 
+/// For a document request the node answered with a redirect: a page that navigates there
+/// when it stays on the app origin (the webview does not follow redirects from a custom
+/// scheme), a refusal when it leaves it, `None` when the answer is not a redirect.
+pub fn redirect_response(
+    status: u16,
+    location: Option<&str>,
+    page: &url::Url,
+    label: &str,
+) -> Option<Response<Vec<u8>>> {
+    if !matches!(status, 301 | 302 | 303 | 307 | 308) {
+        return None;
+    }
+    let location = location?;
+    let target = page
+        .join(&local_location(label, location))
+        .ok()
+        .filter(|t| label_from_url(t).as_deref() == Some(label));
+    let Some(target) = target else {
+        return Some(refusal(502));
+    };
+    let to = match target.query() {
+        Some(q) => format!("{}?{q}", target.path()),
+        None => target.path().to_string(),
+    };
+    let to = to
+        .replace('&', "&amp;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;");
+    let html = format!("<!doctype html><meta http-equiv=\"refresh\" content=\"0;url={to}\">");
+    Response::builder()
+        .status(200)
+        .header("content-type", "text/html; charset=utf-8")
+        .header("cache-control", "no-store")
+        .body(html.into_bytes())
+        .ok()
+}
+
 fn client() -> &'static reqwest::Client {
     CLIENT.get_or_init(|| {
         reqwest::Client::builder()
@@ -196,6 +235,7 @@ async fn fetch(
     method: &str,
     target: NodeTarget,
     label: &str,
+    page: &url::Url,
     request_headers: &[(String, String)],
 ) -> Response<Vec<u8>> {
     let method = if method == "HEAD" {
@@ -216,6 +256,18 @@ async fn fetch(
             return refusal(502);
         }
     };
+    let is_document = request_headers
+        .iter()
+        .any(|(n, v)| n == "accept" && v.contains("text/html"));
+    if is_document {
+        let location = node
+            .headers()
+            .get(reqwest::header::LOCATION)
+            .and_then(|v| v.to_str().ok());
+        if let Some(res) = redirect_response(node.status().as_u16(), location, page, label) {
+            return res;
+        }
+    }
     let mut out = Response::builder().status(node.status().as_u16());
     for (name, value) in node.headers() {
         if DROPPED_RESPONSE_HEADERS.contains(&name.as_str()) {
@@ -272,9 +324,12 @@ pub fn handle<R: Runtime>(
         Ok(served) => served,
         Err(status) => return responder.respond(refusal(status)),
     };
+    let Ok(page) = uri.parse::<url::Url>() else {
+        return responder.respond(refusal(403));
+    };
     let headers = forwarded_headers(request.headers());
     tauri::async_runtime::spawn(async move {
-        responder.respond(fetch(&method, target, &label, &headers).await);
+        responder.respond(fetch(&method, target, &label, &page, &headers).await);
     });
 }
 
@@ -545,6 +600,84 @@ mod tests {
         assert_eq!(local_location(LABEL, foreign), foreign);
     }
 
+    fn page() -> url::Url {
+        url(&format!("calimero-app://{LABEL}/"))
+    }
+
+    fn redirect_body(status: u16, location: &str, page: &url::Url) -> Option<String> {
+        let res = redirect_response(status, Some(location), page, LABEL)?;
+        assert_eq!(res.status(), 200, "{location}");
+        assert_eq!(res.headers()["content-type"], "text/html; charset=utf-8");
+        assert_eq!(res.headers()["cache-control"], "no-store");
+        Some(String::from_utf8(res.into_body()).unwrap())
+    }
+
+    #[test]
+    fn a_same_origin_redirect_becomes_a_page_that_navigates() {
+        for (location, to) in [
+            ("/0.0.2/", "/0.0.2/"),
+            ("/0.0.2/?invitation=abc", "/0.0.2/?invitation=abc"),
+            (
+                &format!("http://{LABEL}.localhost:2528/0.0.2/?a=1"),
+                "/0.0.2/?a=1",
+            ),
+            (&format!("calimero-app://{LABEL}/0.0.2/"), "/0.0.2/"),
+            ("0.0.2/", "/0.0.2/"),
+        ] {
+            for status in [301, 302, 303, 307, 308] {
+                let body = redirect_body(status, location, &page()).unwrap();
+                assert!(
+                    body.contains(&format!(
+                        "<meta http-equiv=\"refresh\" content=\"0;url={to}\">"
+                    )),
+                    "{status} {location}: {body}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_relative_redirect_resolves_against_the_requested_page() {
+        let from = url(&format!("calimero-app://{LABEL}/0.0.1/index.html?x=1"));
+        let body = redirect_body(302, "../0.0.2/?x=1", &from).unwrap();
+        assert!(body.contains("content=\"0;url=/0.0.2/?x=1\""), "{body}");
+    }
+
+    #[test]
+    fn the_redirect_target_is_escaped() {
+        let body = redirect_body(302, "/a\"><script>alert(1)</script>&b='", &page()).unwrap();
+        assert!(!body.contains("<script>"), "{body}");
+        assert_eq!(body.matches('"').count(), 4, "{body}");
+        assert!(body.contains("&amp;b=&#39;"), "{body}");
+    }
+
+    #[test]
+    fn a_redirect_off_the_app_origin_is_refused() {
+        for location in [
+            "http://evil.example/".to_string(),
+            "https://evil.example/".to_string(),
+            "//evil.example/x".to_string(),
+            format!("http://{OTHER}.localhost:2528/"),
+            format!("calimero-app://{OTHER}/"),
+            "javascript:alert(1)".to_string(),
+        ] {
+            let res = redirect_response(302, Some(&location), &page(), LABEL).unwrap();
+            assert_eq!(res.status(), 502, "{location}");
+            assert!(res.headers().get("location").is_none(), "{location}");
+            assert!(res.body().is_empty(), "{location}");
+        }
+    }
+
+    #[test]
+    fn answers_that_are_not_redirects_pass_through() {
+        assert!(redirect_response(200, Some("/x"), &page(), LABEL).is_none());
+        assert!(redirect_response(304, None, &page(), LABEL).is_none());
+        assert!(
+            redirect_response(302, None, &page(), LABEL).is_none(),
+            "no Location"
+        );
+    }
+
     /// Answers one request with `reply`; resolves to the raw request it saw.
     async fn serve_once(reply: String) -> (u16, tokio::task::JoinHandle<String>) {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -629,7 +762,7 @@ mod tests {
     ) -> (Response<Vec<u8>>, String) {
         let (port, seen) = serve_once(reply).await;
         let target = node_target(LABEL, &format!("http://127.0.0.1:{port}"), "/v1/app.js").unwrap();
-        let response = fetch(method, target, LABEL, request_headers).await;
+        let response = fetch(method, target, LABEL, &page(), request_headers).await;
         (response, seen.await.unwrap())
     }
 
@@ -660,6 +793,32 @@ mod tests {
         let (res, _) = fetch_from("GET", reply, &[]).await;
         assert_eq!(res.status(), 307, "the redirect is not followed");
         assert_eq!(res.headers()["location"], "/1.0.0/?a=1");
+    }
+
+    #[tokio::test]
+    async fn fetch_turns_a_document_redirect_into_a_navigating_page() {
+        let reply =
+            "HTTP/1.1 302 Found\r\nLocation: /0.0.2/?invitation=abc\r\nContent-Length: 0\r\n\r\n"
+                .to_string();
+        let accept = [("accept".to_string(), "text/html,*/*".to_string())];
+        let (res, _) = fetch_from("GET", reply, &accept).await;
+        assert_eq!(res.status(), 200);
+        let body = String::from_utf8(res.into_body()).unwrap();
+        assert!(
+            body.contains("content=\"0;url=/0.0.2/?invitation=abc\""),
+            "{body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn fetch_refuses_a_document_redirect_off_the_app_origin() {
+        let reply =
+            "HTTP/1.1 302 Found\r\nLocation: http://evil.example/\r\nContent-Length: 0\r\n\r\n"
+                .to_string();
+        let accept = [("accept".to_string(), "text/html".to_string())];
+        let (res, _) = fetch_from("GET", reply, &accept).await;
+        assert_eq!(res.status(), 502);
+        assert!(res.headers().get("location").is_none());
     }
 
     #[tokio::test]
@@ -707,6 +866,9 @@ mod tests {
             l.local_addr().unwrap().port()
         };
         let target = node_target(LABEL, &format!("http://127.0.0.1:{port}"), "/").unwrap();
-        assert_eq!(fetch("GET", target, LABEL, &[]).await.status(), 502);
+        assert_eq!(
+            fetch("GET", target, LABEL, &page(), &[]).await.status(),
+            502
+        );
     }
 }

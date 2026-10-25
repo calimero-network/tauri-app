@@ -215,6 +215,21 @@ fn forwarded_headers(headers: &tauri::http::HeaderMap) -> Vec<(String, String)> 
         .collect()
 }
 
+/// The app label and node target for a request from webview `webview_label`, or
+/// the status that refuses it: only a window opened for this app is served.
+pub fn authorize_static(
+    bindings: &AppWindowBindings,
+    webview_label: &str,
+    method: &str,
+    uri: &str,
+) -> Result<(String, NodeTarget), u16> {
+    let url = uri.parse::<url::Url>().map_err(|_| 403u16)?;
+    let binding = bindings.authorize(webview_label, Some(&url)).map_err(|_| 403u16)?;
+    let label = binding.label.ok_or(403u16)?;
+    let target = static_target(method, &url, &label, &binding.node_url)?;
+    Ok((label, target))
+}
+
 /// Handler for the scheme: serves the window's own app from its node.
 pub fn handle<R: Runtime>(
     ctx: UriSchemeContext<'_, R>,
@@ -222,19 +237,10 @@ pub fn handle<R: Runtime>(
     responder: UriSchemeResponder,
 ) {
     let bindings = ctx.app_handle().state::<AppWindowBindings>();
-    let url = request.uri().to_string().parse::<url::Url>().ok();
-    let binding = url
-        .as_ref()
-        .and_then(|u| bindings.authorize(ctx.webview_label(), Some(u)).ok());
-    let (Some(url), Some(binding)) = (url, binding) else {
-        return responder.respond(refusal(403));
-    };
-    let Some(label) = binding.label.clone() else {
-        return responder.respond(refusal(403));
-    };
     let method = request.method().as_str().to_string();
-    let target = match static_target(&method, &url, &label, &binding.node_url) {
-        Ok(t) => t,
+    let uri = request.uri().to_string();
+    let (label, target) = match authorize_static(&bindings, ctx.webview_label(), &method, &uri) {
+        Ok(served) => served,
         Err(status) => return responder.respond(refusal(status)),
     };
     let headers = forwarded_headers(request.headers());
@@ -354,6 +360,47 @@ mod tests {
         assert_eq!(t.url, "http://127.0.0.1:2528/v1/app.js?x=1");
         assert_eq!(t.host, format!("{LABEL}.localhost:2528"));
         assert!(static_target("HEAD", &url(&format!("calimero-app://{LABEL}/")), LABEL, "http://localhost:2528").is_ok());
+    }
+
+    fn bound() -> AppWindowBindings {
+        let bindings = AppWindowBindings::default();
+        bindings.bind("app-1", &url(&format!("calimero-app://{LABEL}/")), "http://127.0.0.1:2528");
+        bindings.bind("app-2", &url(&format!("calimero-app://{OTHER}/")), "http://127.0.0.1:2528");
+        bindings.bind("app-remote", &url("https://drive.example/"), "http://127.0.0.1:2528");
+        bindings
+    }
+
+    #[test]
+    fn serves_a_window_its_own_app() {
+        let (label, t) = authorize_static(&bound(), "app-1", "GET", &format!("calimero-app://{LABEL}/v1/x.js")).unwrap();
+        assert_eq!(label, LABEL);
+        assert_eq!(t.url, "http://127.0.0.1:2528/v1/x.js");
+        assert!(authorize_static(&bound(), "app-1", "HEAD", &format!("calimero-app://{LABEL}/")).is_ok());
+    }
+
+    #[test]
+    fn refuses_a_window_asking_for_another_apps_origin() {
+        let own = format!("calimero-app://{LABEL}/");
+        assert_eq!(authorize_static(&bound(), "app-2", "GET", &own).unwrap_err(), 403);
+        let other = format!("calimero-app://{OTHER}/");
+        assert_eq!(authorize_static(&bound(), "app-1", "GET", &other).unwrap_err(), 403);
+    }
+
+    #[test]
+    fn refuses_windows_that_are_not_bound_to_an_app_origin() {
+        let own = format!("calimero-app://{LABEL}/");
+        assert_eq!(authorize_static(&bound(), "main", "GET", &own).unwrap_err(), 403);
+        assert_eq!(authorize_static(&bound(), "app-remote", "GET", &own).unwrap_err(), 403);
+        assert_eq!(authorize_static(&bound(), "app-remote", "GET", "https://drive.example/").unwrap_err(), 403);
+        assert_eq!(authorize_static(&bound(), "app-1", "GET", "not a url").unwrap_err(), 403);
+    }
+
+    #[test]
+    fn serves_only_get_and_head() {
+        let own = format!("calimero-app://{LABEL}/");
+        for method in ["POST", "PUT", "DELETE", "PATCH", "OPTIONS"] {
+            assert_eq!(authorize_static(&bound(), "app-1", method, &own).unwrap_err(), 405, "{method}");
+        }
     }
 
     #[test]

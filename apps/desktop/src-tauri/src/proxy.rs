@@ -216,14 +216,29 @@ pub fn authorize_request<R: tauri::Runtime>(
 ) -> Result<(HttpRequest, String), TauriError> {
     let denied = |reason| TauriError::new(TauriErrorCode::UrlNotAllowed, reason);
     let binding = crate::app_window::authorize_webview(webview).map_err(denied)?;
-    if let Some(target) = retarget_own_origin(&request.url, &binding).map_err(denied)? {
+    let request = aim_at_node(request, &binding)?;
+    Ok((request, binding.node_url))
+}
+
+/// `request` with its own-origin URL retargeted at the node. The page's `Host`
+/// is dropped: only the node address may choose which app's host is served.
+fn aim_at_node(
+    mut request: HttpRequest,
+    binding: &crate::app_window::AppWindowBinding,
+) -> Result<HttpRequest, TauriError> {
+    let denied = |reason| TauriError::new(TauriErrorCode::UrlNotAllowed, reason);
+    let target = retarget_own_origin(&request.url, binding).map_err(denied)?;
+    if let Some(headers) = request.headers.as_mut() {
+        headers.retain(|name, _| !name.eq_ignore_ascii_case("host"));
+    }
+    if let Some(target) = target {
         request.url = target.url;
         request
             .headers
             .get_or_insert_with(Default::default)
             .insert("Host".to_string(), target.host);
     }
-    Ok((request, binding.node_url))
+    Ok(request)
 }
 
 #[tauri::command]
@@ -523,7 +538,7 @@ pub fn cancel_sse_stream(stream_id: String, cancel_registry: tauri::State<'_, Ss
 
 #[cfg(test)]
 mod tests {
-    use super::{is_textual_content_type, retarget_own_origin, validate_allowed_url};
+    use super::{aim_at_node, is_textual_content_type, retarget_own_origin, validate_allowed_url, HttpRequest};
     use crate::app_window::AppWindowBindings;
 
     #[test]
@@ -697,6 +712,36 @@ mod tests {
         let url = format!("http://calimero-app.{LABEL}/jsonrpc");
         let retargeted = retarget_own_origin(&url, &app_binding()).unwrap().is_some();
         assert_eq!(retargeted, cfg!(windows));
+    }
+
+    fn request_with(url: String, headers: &[(&str, &str)]) -> HttpRequest {
+        HttpRequest {
+            url,
+            method: "GET".into(),
+            headers: Some(headers.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()),
+            body: None,
+            body_base64: None,
+        }
+    }
+
+    #[test]
+    fn a_page_cannot_choose_the_host_it_is_served_from() {
+        let other = format!("{}.localhost:2528", "b".repeat(51) + "a");
+        for url in [format!("calimero-app://{LABEL}/x"), "http://127.0.0.1:2528/x".to_string()] {
+            let req = request_with(url, &[("host", &other), ("HOST", &other), ("accept", "*/*")]);
+            let headers = aim_at_node(req, &app_binding()).unwrap().headers.unwrap();
+            let hosts: Vec<_> = headers.iter().filter(|(k, _)| k.eq_ignore_ascii_case("host")).collect();
+            assert!(hosts.iter().all(|(_, v)| **v != other), "{hosts:?}");
+            assert_eq!(headers.get("accept").map(String::as_str), Some("*/*"));
+        }
+    }
+
+    #[test]
+    fn an_own_origin_call_carries_the_apps_host_alone() {
+        let req = request_with(format!("calimero-app://{LABEL}/x"), &[("hOsT", "evil.example")]);
+        let headers = aim_at_node(req, &app_binding()).unwrap().headers.unwrap();
+        assert_eq!(headers.len(), 1);
+        assert_eq!(headers["Host"], format!("{LABEL}.localhost:2528"));
     }
 
     #[test]

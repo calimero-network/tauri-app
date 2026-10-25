@@ -216,6 +216,22 @@ pub fn redirect_response(
         .ok()
 }
 
+/// Whether an `Accept` value lists `text/html` itself with a nonzero `q` (RFC 9110 12.5.1).
+fn accepts_html(accept: &str) -> bool {
+    accept.split(',').any(|range| {
+        let mut parts = range.split(';').map(str::trim);
+        parts
+            .next()
+            .is_some_and(|media| media.eq_ignore_ascii_case("text/html"))
+            && parts.all(|param| match param.split_once('=') {
+                Some((name, q)) if name.trim().eq_ignore_ascii_case("q") => {
+                    q.trim().parse::<f32>().is_ok_and(|q| q > 0.0)
+                }
+                _ => true,
+            })
+    })
+}
+
 fn client() -> &'static reqwest::Client {
     CLIENT.get_or_init(|| {
         reqwest::Client::builder()
@@ -260,7 +276,7 @@ async fn fetch(
     };
     let is_document = request_headers
         .iter()
-        .any(|(n, v)| n == "accept" && v.contains("text/html"));
+        .any(|(n, v)| n == "accept" && accepts_html(v));
     if is_document {
         let location = node
             .headers()
@@ -651,6 +667,26 @@ mod tests {
         assert!(!body.contains("<script>"), "{body}");
         assert_eq!(body.matches('"').count(), 4, "{body}");
         assert!(body.contains("&amp;b=&#39;"), "{body}");
+    }
+
+    #[test]
+    fn only_an_accept_listing_html_as_acceptable_asks_for_a_page() {
+        for accept in [
+            "text/html,application/xhtml+xml,*/*;q=0.8",
+            "TEXT/HTML",
+            "text/html;q=0.5",
+        ] {
+            assert!(accepts_html(accept), "{accept}");
+        }
+        for accept in [
+            "*/*",
+            "application/json",
+            "text/html;q=0",
+            "text/htmlx",
+            "application/text/html",
+        ] {
+            assert!(!accepts_html(accept), "{accept}");
+        }
     }
 
     #[test]

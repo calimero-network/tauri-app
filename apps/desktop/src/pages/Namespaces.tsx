@@ -23,7 +23,7 @@ import { getCloudIdToken } from "../utils/cloudAuth";
 import { groupVisibilityLabel } from "../utils/groupVisibility";
 import { decodeInvitation, invitationNamespaceId, namespaceJoinRequest } from "../utils/invitation";
 import { apiClient, transferNamespaceOwnership } from "../lib/mero-client";
-import { canInviteDevices } from "../lib/account";
+import { canInviteDevices, restoreSummary } from "../lib/account";
 import { TransferOwnershipModal, type TransferTarget } from "./TransferOwnershipModal";
 import {
   fetchGroupMembers,
@@ -497,7 +497,9 @@ function Namespaces({ transferNamespaceId, onTransferHandled }: NamespacesProps)
       if (response.error) throw new Error(response.error.message);
       invalidateInstalledApps();
       setInstalledApps(await readInstalledApps());
-      toast.success(`Installed ${app.name}`);
+      const { restored, restoreFailed } = response.data!;
+      toast.success(restoreSummary(`Installed ${app.name}`, restored));
+      if (restoreFailed.length) toast.warning(`Could not restore: ${restoreFailed.join("; ")}`);
     } catch (e) {
       toast.error(parseTauriError(e, `Failed to install ${app.name}`));
     } finally {
@@ -674,13 +676,13 @@ function Namespaces({ transferNamespaceId, onTransferHandled }: NamespacesProps)
     const detail = parseApiError(e);
     if (isPermissionError(detail)) {
       toast.error(
-        `You are not an admin of this ${subject} — you can only leave it, not ${verb} it.`,
+        `You are not an admin of this ${subject} - you can only leave it, not ${verb} it.`,
       );
       return;
     }
     if (isReasonlessRefusal(detail)) {
       toast.error(
-        `The node refused to ${verb} this ${subject} without saying why. If you are not an admin of it, use Leave instead — the reason is only in the node log.`,
+        `The node refused to ${verb} this ${subject} without saying why. If you are not an admin of it, use Leave instead; the reason is only in the node log.`,
       );
       return;
     }
@@ -692,12 +694,12 @@ function Namespaces({ transferNamespaceId, onTransferHandled }: NamespacesProps)
     setActionLoading(true);
     try {
       await mero.admin.deleteNamespace(ns.namespaceId);
-      toast.success('Namespace deleted');
+      toast.success('Namespace removed from this device');
       setDeleteNsTarget(null);
       setView(viewAfterNamespaceGone(ns));
       await refetchNamespaces();
     } catch (e: any) {
-      reportActionError('delete', 'namespace', e);
+      reportActionError('remove', 'namespace', e);
     } finally {
       setActionLoading(false);
     }
@@ -1352,9 +1354,12 @@ function Namespaces({ transferNamespaceId, onTransferHandled }: NamespacesProps)
       )}
       {deleteNsTarget && (
         <DeleteConfirmModal
-          title="Delete Namespace"
-          warning="Deleting will also remove all subgroups, contexts and members."
+          title="Remove From This Device"
+          warning="Removes this namespace, its subgroups and contexts, and their data from this device. You stay a member, and reinstalling its app brings it back."
           name={nsDisplayName(deleteNsTarget)}
+          confirmLabel="Remove"
+          busyLabel="Removing..."
+          finalNote={null}
           loading={actionLoading}
           onClose={() => setDeleteNsTarget(null)}
           onConfirm={() => handleDeleteNamespace(deleteNsTarget)}
@@ -1720,8 +1725,12 @@ function Namespaces({ transferNamespaceId, onTransferHandled }: NamespacesProps)
                       <LogOut size={13} /> Leave
                     </button>
                   ) : (
-                    <button className="ns-actions-menu-item ns-actions-menu-item-danger" onClick={() => { setActionsMenuOpen(false); setDeleteNsTarget(ns); }}>
-                      <Trash2 size={13} /> Delete
+                    <button className="ns-actions-menu-item ns-actions-menu-item-danger ns-actions-menu-item-hinted" onClick={() => { setActionsMenuOpen(false); setDeleteNsTarget(ns); }}>
+                      <Trash2 size={13} />
+                      <span className="ns-actions-menu-text">
+                        <span>Remove from this device</span>
+                        <span className="ns-actions-menu-hint">You stay a member.</span>
+                      </span>
                     </button>
                   )}
                 </div>

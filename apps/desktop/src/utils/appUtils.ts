@@ -195,6 +195,10 @@ async function bundledFrontendUrl(context: OpenAppFrontendContext): Promise<stri
   }
 }
 
+/** The `calimero-app://` URL of the frontend the node bundles for an app, when it serves one. */
+export const bundledFrontendFor = (applicationId: string): Promise<string | null> =>
+  bundledFrontendUrl({ applicationId });
+
 /** The `calimero-app://` URL of each app the node bundles a frontend for, by app id. Apps with a link are skipped. */
 export async function findBundledFrontends(
   apps: { id: string; metadata?: unknown }[],

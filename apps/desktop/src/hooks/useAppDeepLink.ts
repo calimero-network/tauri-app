@@ -4,6 +4,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { apiClient } from '../lib/mero-client';
 import { restoreSummary } from '../lib/account';
 import {
+  bundledFrontendFor,
   decodeMetadata,
   isAllowedAppFrontendUrl,
   openAppFrontend,
@@ -72,7 +73,8 @@ export type Consent = (request: DeepLinkConsentRequest) => Promise<boolean>;
 function originOf(url: string | undefined): string | null {
   if (!url) return null;
   try {
-    return new URL(url).origin;
+    const u = new URL(url);
+    return u.protocol === 'calimero-app:' ? `calimero-app://${u.host}` : u.origin; // a custom scheme's own origin is "null"
   } catch {
     return null;
   }
@@ -344,10 +346,11 @@ export async function resolveAndOpen(
 
   const metadata = decodeMetadata(match.metadata);
   const appName: string = metadata?.name || metadata?.alias || 'Application';
-  const frontendUrl: string | undefined = metadata?.links?.frontend;
+  // The signed copy the node serves wins over the hosted one, as for the Open button.
+  const frontendUrl: string | undefined = (await bundledFrontendFor(match.id)) ?? metadata?.links?.frontend;
   if (!frontendUrl) {
     console.warn(`[deep-link] app "${appName}" has no frontend URL; cannot open`);
-    report.failed(`${appName} has no frontend to open. Its bundle declares no \u201clinks.frontend\u201d.`);
+    report.failed(`${appName} has no frontend to open. The node serves none and its bundle declares no \u201clinks.frontend\u201d.`);
     return 'forget';
   }
 

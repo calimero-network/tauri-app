@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { mkdtempSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -106,7 +107,8 @@ test("Open shows a bundled app in its own window on calimero-app://", async () =
     const where = await session.url().catch(() => "?");
     const seen = await session.text().catch(() => "?");
     const handles = await session.handles().catch(() => []);
-    throw new Error(`${String(e)}\nat ${where}, windows ${JSON.stringify(handles)}\n${seen.slice(0, 1500)}`);
+    const x = spawnSync("xwininfo", ["-root", "-tree"], { encoding: "utf8" }).stdout ?? "";
+    throw new Error(`${String(e)}\nat ${where}, windows ${JSON.stringify(handles)}\n${seen.slice(-1500)}\n${x}`);
   } finally {
     await session.end().catch(() => undefined);
     driver.kill();

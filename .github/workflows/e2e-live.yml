@@ -197,7 +197,7 @@ jobs:
           linux-deps: "true"
 
       - name: Install the WebDriver tooling
-        run: sudo apt-get install -y webkit2gtk-driver xvfb
+        run: sudo apt-get install -y webkit2gtk-driver xvfb x11-utils
 
       - name: Cache tauri-driver
         id: tauri-driver

@@ -1,20 +1,14 @@
 import { expect, type Page } from "@playwright/test";
-import { MeroJs } from "@calimero-network/mero-js";
+import type { MeroJs } from "@calimero-network/mero-js";
 import path from "node:path";
 import os from "node:os";
 import type { LiveState } from "./global-setup";
-import { openDesktop } from "./desktop";
-import { ADMIN_PASSWORD, ADMIN_USER, resolveMerod, restartNode, startNodes, stopNodes, waitFor, type LiveNode } from "./nodes";
+import { admin, openDesktop } from "./desktop";
+import { resolveMerod, restartNode, startNodes, stopNode, stopNodes, waitFor, type LiveNode } from "./nodes";
 
-export { openDesktop };
+export { admin, openDesktop };
 
 export const state = (): LiveState => JSON.parse(process.env["LIVE_STATE"] ?? "null") as LiveState;
-
-export async function admin(url: string): Promise<MeroJs> {
-  const mero = new MeroJs({ baseUrl: url, credentials: { username: ADMIN_USER, password: ADMIN_PASSWORD } });
-  await mero.authenticate();
-  return mero;
-}
 
 /** The uninstall dialog for an app, opened from its card in the Applications page. */
 export async function openUninstall(page: Page, applicationId: string): Promise<void> {
@@ -122,7 +116,8 @@ async function prepareWorld(nodes: LiveNode[]): Promise<World> {
       [bobLinked!, "Bob"],
     ]),
     async restart(who, merod) {
-      const next = await restartNode(world.nodes[who], merod);
+      await stopNode(world.nodes[who]);
+      const next = await restartNode(merod, world.nodes[who]);
       const client = await admin(next.url);
       world.names.set(client, world.names.get(world[who])!);
       world.nodes[who] = next;

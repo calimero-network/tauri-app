@@ -817,7 +817,7 @@ fn ensure_app_launcher(
     launcher::extract_shell(&src, &shell_dest)
         .map_err(|e| TauriError::new(TauriErrorCode::ShortcutCreationFailed, e.to_string()))?;
 
-    // Dedup by app id: keep a stable cap; drop any previous bundle elsewhere.
+    // Dedup by app id: keep a stable cap; the old bundle goes once the new one exists.
     let store = caps_store_path();
     let prev = app_registry::installed_apps(&store)
         .into_iter()
@@ -826,12 +826,6 @@ fn ensure_app_launcher(
         .as_ref()
         .map(|a| a.cap.clone())
         .unwrap_or_else(|| new_cap(app_id));
-    let target = dest_dir.join(format!("{}.app", safe));
-    if let Some(p) = prev.as_ref() {
-        if !p.bundle_path.is_empty() && std::path::Path::new(&p.bundle_path) != target {
-            let _ = std::fs::remove_dir_all(&p.bundle_path);
-        }
-    }
 
     // Best-effort real launcher icon: the bundled `metadata.icon` if the app
     // ships one, else the app's web favicon; None (generic exec icon) if neither
@@ -851,7 +845,11 @@ fn ensure_app_launcher(
             "bundled launcher trampoline missing",
         )
     })?;
-    let bundle = launcher::generate_launcher(dest_dir, &trampoline, &spec)
+    let previous = prev
+        .as_ref()
+        .filter(|p| !p.bundle_path.is_empty())
+        .map(|p| std::path::Path::new(&p.bundle_path));
+    let bundle = launcher::generate_launcher(dest_dir, &trampoline, &spec, previous)
         .map_err(|e| TauriError::new(TauriErrorCode::ShortcutCreationFailed, e.to_string()))?;
 
     app_registry::persist_app(
@@ -3919,10 +3917,13 @@ async fn remove_app_launchers(app_handle: tauri::AppHandle) -> Result<String, Ta
                 }
                 continue;
             }
-            match std::fs::remove_dir_all(&bundle) {
-                Ok(()) => removed += 1,
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                Err(e) => warn!("[Reset] Failed to remove {}: {}", bundle.display(), e),
+            if launcher::remove_own_launcher(&bundle, &app.id, &app.cap) {
+                removed += 1;
+            } else if bundle.exists() {
+                warn!(
+                    "[Reset] Did not remove {}: not ours or not removable",
+                    bundle.display()
+                );
             }
         }
 
@@ -4194,7 +4195,12 @@ fn main() {
                         for a in app_registry::installed_apps(&caps_store_path()) {
                             let bundle = std::path::PathBuf::from(&a.bundle_path);
                             if bundle.exists() {
-                                if let Err(e) = launcher::refresh_trampoline(&bundle, &trampoline) {
+                                if let Err(e) = launcher::refresh_trampoline(
+                                    &bundle,
+                                    &a.id,
+                                    &a.cap,
+                                    &trampoline,
+                                ) {
                                     warn!(
                                         "[Launcher] refresh trampoline failed for {}: {}",
                                         a.id, e

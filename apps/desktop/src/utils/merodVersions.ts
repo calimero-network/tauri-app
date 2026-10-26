@@ -52,6 +52,13 @@ function shortVersion(raw?: string | null): string {
   return tag === 'unknown' ? '' : tag;
 }
 
+/** The merod version a node pinned to `id` runs, or '' when it cannot be told. */
+export function runtimeVersion(id: string, bundledVersion: string, measuredVersion?: string | null): string {
+  if (id === BUNDLED_VERSION_ID) return shortVersion(bundledVersion);
+  if (id.startsWith(LOCAL_ID_PREFIX)) return shortVersion(measuredVersion);
+  return id;
+}
+
 export function formatVersionLabel(
   id: string,
   bundledVersion: string,

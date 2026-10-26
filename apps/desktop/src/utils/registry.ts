@@ -107,6 +107,8 @@ export interface VersionInfo {
    * or null when the bundle does not say.
    */
   nodeBuild: string | null;
+  /** The oldest node that will run this version, or null when the bundle does not say. */
+  minRuntimeVersion: string | null;
 }
 
 /**
@@ -347,9 +349,21 @@ export async function fetchAppVersions(
       semver,
       cid: `/artifacts/${bundle.package}/${semver}/${bundle.package}-${semver}.mpk`,
       nodeBuild: nodeBuildLabel(bundle.buildInfo),
+      minRuntimeVersion: typeof bundle.minRuntimeVersion === 'string' ? bundle.minRuntimeVersion : null,
     });
   }
   return versions.sort((a, b) => compareSemverDesc(a.semver, b.semver));
+}
+
+/**
+ * The newest of `versions` (newest first) a node on `runtime` will run. The
+ * newest outright when `runtime` is unknown or nothing fits, so the node names the refusal.
+ */
+export function newestRunnable(versions: VersionInfo[], runtime: string): VersionInfo | undefined {
+  const runnable = runtime
+    ? versions.find((v) => !v.minRuntimeVersion || compareSemverDesc(v.minRuntimeVersion, runtime) >= 0)
+    : undefined;
+  return runnable ?? versions[0];
 }
 
 /**

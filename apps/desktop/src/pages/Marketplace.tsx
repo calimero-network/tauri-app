@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef, useCallback, memo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getSettings } from "../utils/settings";
-import { fetchAppsFromAllRegistries, fetchAppVersions, recordDownload, type AppSummary, type VersionInfo } from "../utils/registry";
+import { fetchAppsFromAllRegistries, fetchAppVersions, newestRunnable, recordDownload, type AppSummary, type VersionInfo } from "../utils/registry";
 import { apiClient } from "../lib/mero-client";
 import { restoreSummary } from "../lib/account";
 import { decodeMetadata } from "../utils/appUtils";
@@ -15,6 +15,7 @@ import { listInstalledApps, invalidateInstalledApps } from "../utils/installedAp
 import { truncateText } from "../utils/string";
 import { categoryFacets, matchesFacets } from "../utils/appFilters";
 import { useToast } from "../contexts/ToastContext";
+import { useNodeRuntime } from "../contexts/NodeVersionsContext";
 import Skeleton from "../components/Skeleton";
 import AppCard from "../components/AppCard";
 import AppDetail from "./AppDetail";
@@ -52,6 +53,7 @@ function Marketplace({ clientReady = true }: MarketplaceProps) {
   const [availableVersions, setAvailableVersions] = useState<VersionInfo[]>([]);
   const [selectedVersion, setSelectedVersion] = useState<string>("");
   const [versionsLoading, setVersionsLoading] = useState(false);
+  const runtime = useNodeRuntime();
   const mountedRef = useRef(true);
 
   // Cleanup on unmount
@@ -68,7 +70,7 @@ function Marketplace({ clientReady = true }: MarketplaceProps) {
   }, [clientReady]);
 
   // Load the open app's published versions for the picker; default the
-  // selection to its latest. Cleared when the modal closes.
+  // selection to the newest this node runs. Cleared when the modal closes.
   // Depends on id+registry (not the full object) so patching installed:true
   // after an install doesn't re-run this and reset the user's version pick.
   // Registry is included so the same package id from a different registry
@@ -88,9 +90,8 @@ function Marketplace({ clientReady = true }: MarketplaceProps) {
       .then((vs) => {
         if (!cancelled) {
           setAvailableVersions(vs);
-          // Use the newest non-yanked version from the registry (may differ from
-          // the listing row's latest_version if that version is yanked).
-          setSelectedVersion(vs[0]?.semver ?? selectedApp.latest_version);
+          // Not the listing row's latest_version: that may be yanked, or need a newer node.
+          setSelectedVersion(newestRunnable(vs, runtime)?.semver ?? selectedApp.latest_version);
           setVersionsLoading(false);
         }
       })
@@ -103,7 +104,7 @@ function Marketplace({ clientReady = true }: MarketplaceProps) {
       });
     return () => { cancelled = true; };
     // toast.error is a stable useCallback ref; the whole `toast` object is not.
-  }, [selectedApp?.id, selectedApp?.registry, toast.error]);
+  }, [selectedApp?.id, selectedApp?.registry, runtime, toast.error]);
 
   // -----------------------------------------------------------------------
   // Helper: build MarketplaceApp[] from raw registry results + installed set

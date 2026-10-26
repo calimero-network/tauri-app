@@ -76,7 +76,7 @@ pub fn label_for_app_id(app_id: &str) -> Option<String> {
         bits += 8;
         while bits >= 5 {
             bits -= 5;
-            label.push(char::from(BASE32[usize::from((acc >> bits) & 31)]));
+            label.push(char::from(BASE32[usize::from(((acc >> bits) & 31) ^ 1)]));
         }
     }
     if bits > 0 {

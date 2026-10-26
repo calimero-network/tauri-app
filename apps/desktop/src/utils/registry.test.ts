@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { fetchAppVersions, fetchBundleDisplay, nodeBuildLabel } from './registry';
+import { fetchAppVersions, fetchBundleDisplay, newestRunnable, nodeBuildLabel, type VersionInfo } from './registry';
 
 const originalFetch = global.fetch;
 
@@ -91,7 +91,7 @@ describe('nodeBuildLabel', () => {
 });
 
 describe('fetchAppVersions', () => {
-  it('carries each version its own node build, and ignores minRuntimeVersion', async () => {
+  it('carries each version its own node build, not its minRuntimeVersion', async () => {
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => [
@@ -109,5 +109,53 @@ describe('fetchAppVersions', () => {
       ['0.0.11', '0.11.0-rc.42'],
       ['0.0.7', null],
     ]);
+  });
+
+  it('carries each version the runtime it declares it needs', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => [
+        { package: 'com.calimero.kv-store', appVersion: '0.0.72', minRuntimeVersion: '0.12.0-rc.1' },
+        { package: 'com.calimero.kv-store', appVersion: '0.0.70' },
+      ],
+    }) as unknown as typeof fetch;
+
+    const versions = await fetchAppVersions('https://registry.example', 'com.calimero.kv-store');
+
+    expect(versions.map((v) => [v.semver, v.minRuntimeVersion])).toEqual([
+      ['0.0.72', '0.12.0-rc.1'],
+      ['0.0.70', null],
+    ]);
+  });
+});
+
+describe('newestRunnable', () => {
+  const version = (semver: string, minRuntimeVersion: string | null): VersionInfo => ({
+    semver,
+    cid: '',
+    nodeBuild: null,
+    minRuntimeVersion,
+  });
+  const kvStore = [
+    version('0.0.72', '0.12.0-rc.1'),
+    version('0.0.71', '0.11.1'),
+    version('0.0.70', '0.11.0-rc.90'),
+    version('0.0.69', null),
+  ];
+
+  it('skips releases that need a newer node than the one installing', () => {
+    expect(newestRunnable(kvStore, '0.11.0')?.semver).toBe('0.0.70');
+    expect(newestRunnable(kvStore, '0.11.1')?.semver).toBe('0.0.71');
+    expect(newestRunnable(kvStore, '0.12.0-rc.1')?.semver).toBe('0.0.72');
+  });
+
+  it('counts a release with no declared floor as runnable', () => {
+    expect(newestRunnable([version('0.0.70', '0.99.0'), version('0.0.69', null)], '0.11.0')?.semver).toBe('0.0.69');
+  });
+
+  it('offers the newest when the node version is unknown or nothing fits', () => {
+    expect(newestRunnable(kvStore, '')?.semver).toBe('0.0.72');
+    expect(newestRunnable(kvStore.slice(0, 3), '0.10.0')?.semver).toBe('0.0.72');
+    expect(newestRunnable([], '0.11.0')).toBeUndefined();
   });
 });

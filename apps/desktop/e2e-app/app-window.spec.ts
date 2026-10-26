@@ -7,13 +7,19 @@ import { MeroJs } from "@calimero-network/mero-js";
 import type { LiveState } from "../e2e-live/global-setup";
 import { appLabel } from "../e2e-live/frontend";
 import { ADMIN_PASSWORD, ADMIN_USER, mintTokens } from "../e2e-live/nodes";
+import { startRecorder } from "./recorder";
 import { Session, startDriver, until } from "./webdriver";
 
 /**
  * The built desktop on a real node: Open on an app whose bundle ships its
- * frontend opens an app window on `calimero-app://{label}/{version}/`, and
- * that page gets a session, writes, survives a reload and follows the node's
- * redirect from the bare origin.
+ * frontend opens an app window on `calimero-app://{label}/{version}/`.
+ *
+ * tauri-driver reaches only the main window: an app window has a web context of
+ * its own, which WebKitWebDriver does not list. So the window is observed from
+ * outside. The node sits behind a recording proxy, and the test asserts what the
+ * shell asked for: the landing URL its Rust probe derives, the document and assets
+ * fetched under the app's Host, and the page's API calls carrying a token.
+ * Not covered here: the page's DOM, a write, a reload and the bare-origin redirect.
  */
 
 const state = (): LiveState => JSON.parse(process.env["LIVE_STATE"] ?? "null") as LiveState;
@@ -29,11 +35,11 @@ test("Open shows a bundled app in its own window on calimero-app://", async () =
   await admin.authenticate();
   const { applicationId } = await admin.admin.installApplication(live.frontend);
   const { namespaceId } = await admin.admin.createNamespace({ applicationId, name: "App window" });
-  const { contextId } = await admin.admin.createContext({ applicationId, groupId: namespaceId, name: "general" });
+  await admin.admin.createContext({ applicationId, groupId: namespaceId, name: "general" });
   const label = appLabel(applicationId);
-  const origin = `calimero-app://${label}`;
-  const landing = `${origin}/${live.frontend.version}/`;
+  const landing = `calimero-app://${label}/${live.frontend.version}/`;
 
+  const recorder = await startRecorder(node.url);
   const home = mkdtempSync(path.join(os.tmpdir(), "desktop-app-e2e-"));
   const driver = await startDriver({
     ...process.env,
@@ -56,9 +62,8 @@ test("Open shows a bundled app in its own window on calimero-app://", async () =
        localStorage.setItem("calimero_token_expires_at", String(Date.now() + 3600000));
        localStorage.setItem("calimero-autostart-default-applied", "1");
        location.reload();`,
-      [node.url, live.registryUrl, tokens],
+      [recorder.url, live.registryUrl, tokens],
     );
-    const main = await session.handle();
     const nav = "aside.sidebar [title='Applications']";
     await until("the sidebar", () => session.find({ css: nav }));
     await session.clickIn(nav);
@@ -66,43 +71,33 @@ test("Open shows a bundled app in its own window on calimero-app://", async () =
     await until("Open on the app's card", () => session.find({ css: open }));
     await session.clickIn(open);
 
-    // The app window opens on the app's origin, at the version the node redirects to.
-    const appWindow = await until("the app window", async () =>
-      (await session.handles()).find((h) => h !== main),
+    // The window exists, and the shell's own probe lands where the node's redirect does.
+    await until("the app window", async () => {
+      const x = spawnSync("xwininfo", ["-root", "-tree"], { encoding: "utf8" }).stdout ?? "";
+      return x.includes('"KV Store"');
+    });
+    const probed = await session.run<string | null>(
+      `return window.__TAURI_INTERNALS__.invoke("app_bundled_frontend", { appId: arguments[0], nodeUrl: arguments[1] })`,
+      [applicationId, recorder.url],
     );
-    await session.switchTo(appWindow);
-    await until("the app window on its version path", async () => (await session.url()).startsWith(landing));
+    expect(probed).toBe(landing);
 
-    // The session arrived through the hand-off: the app lists its context, not the login.
-    await until("the context picker", async () => (await session.text()).includes("Choose a context"));
-    const text = await session.text();
-    expect(text).not.toContain("Connect a node");
-    expect(text).not.toContain("No application id");
-    expect(text).toContain(contextId);
-    await session.click((await session.find({ xpath: "//button[text()='Open']" }))!);
-
-    // A write through the UI shows in the list.
-    await until("the write form", () => session.find({ css: "input[aria-label='key']" }));
-    await session.type((await session.find({ css: "input[aria-label='key']" }))!, "greeting");
-    await session.type((await session.find({ css: "input[aria-label='value']" }))!, "hello from the desktop");
-    await session.click((await session.find({ xpath: "//button[text()='set']" }))!);
-    await until("the entry in the list", async () => {
-      const t = await session.text();
-      return t.includes("greeting") && t.includes("hello from the desktop");
+    // The page came from the node through the scheme handler, under the app's Host.
+    const own = (r: { host: string }) => r.host.startsWith(`${label}.localhost`);
+    await until("the document and its script", async () => {
+      const mine = recorder.seen.filter(own);
+      return (
+        mine.some((r) => r.path === `/${live.frontend!.version}/` && r.status === 200) &&
+        mine.some((r) => r.path.endsWith(".js") && r.status === 200)
+      );
     });
 
-    // A reload of a deep link keeps the session and its data.
-    await session.navigate(`${landing}some/deep/route?x=1`);
-    await until("the entry after a reload", async () => {
-      const t = await session.text();
-      return t.includes("hello from the desktop") && !t.includes("Connect a node");
-    });
-    expect(await session.url()).toBe(`${landing}some/deep/route?x=1`);
-
-    // The bare origin lands on the version path, through the node's redirect.
-    await session.navigate(`${origin}/`);
-    await until("the bare origin to land on the version path", async () => (await session.url()) === landing);
-    await until("the app after the redirect", async () => (await session.text()).includes("KV Store"));
+    // The page got a session: it calls the node with a token of its own, not the desktop's.
+    await until("an authenticated call from the page", async () =>
+      recorder.seen.some(
+        (r) => own(r) && !r.path.startsWith(`/${live.frontend!.version}/`) && r.authorization && r.authorization !== `Bearer ${tokens.access_token}`,
+      ),
+    );
   } catch (e) {
     const where = await session.url().catch(() => "?");
     const seen = await session.text().catch(() => "?");
@@ -112,5 +107,6 @@ test("Open shows a bundled app in its own window on calimero-app://", async () =
   } finally {
     await session.end().catch(() => undefined);
     driver.kill();
+    recorder.close();
   }
 });

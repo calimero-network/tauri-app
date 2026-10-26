@@ -8,6 +8,7 @@ const openAppFrontend = vi.fn();
 const installApplication = vi.fn();
 const fetchAppsFromRegistry = vi.fn();
 const redeemInvitation = vi.fn();
+const bundledFrontendFor = vi.fn();
 
 vi.mock("../utils/installedAppsCache", () => ({
   listInstalledApps: (...a: unknown[]) => listInstalledApps(...a),
@@ -24,9 +25,10 @@ vi.mock("../lib/mero-client", () => ({
 }));
 vi.mock("../utils/appUtils", () => ({
   openAppFrontend: (...a: unknown[]) => openAppFrontend(...a),
+  bundledFrontendFor: (...a: unknown[]) => bundledFrontendFor(...a),
   decodeMetadata: (m: unknown) => m,
   sleep: () => Promise.resolve(),
-  isAllowedAppFrontendUrl: (url: string) => url.startsWith("https://"),
+  isAllowedAppFrontendUrl: (url: string) => url.startsWith("https://") || url.startsWith("calimero-app://"),
 }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
@@ -74,6 +76,7 @@ const INSTALLED = {
 beforeEach(() => {
   vi.clearAllMocks();
   openAppFrontend.mockResolvedValue(undefined);
+  bundledFrontendFor.mockResolvedValue(null);
   agree.mockImplementation(async () => true);
 });
 
@@ -166,7 +169,7 @@ describe("a deep link always tells the user what happened", () => {
     expect(r.failures[0]).toContain("bundle rejected: minRuntimeVersion");
   });
 
-  it("says so when the app declares no frontend", async () => {
+  it("says so when the app declares no frontend and the node serves none", async () => {
     listInstalledApps.mockResolvedValue({
       data: [{ id: "app-1", package: "com.calimero.drive", metadata: { name: "Mero Drive" } }],
     });
@@ -232,6 +235,38 @@ describe("a deep link always tells the user what happened", () => {
 
 // A deep-link is attacker input: any web page can send the user to
 // calimero://<package>/<action>, and any app window can emit `app-deep-link`.
+describe("a deep link opens the frontend the node bundles", () => {
+  const BUNDLED = "calimero-app://abcdefghijklmnopqrstuvwxyz234567abcdefghijklmnopqrsa/0.0.80/";
+  const OPENED = [BUNDLED, "Mero Drive", expect.any(Function), expect.objectContaining({ applicationId: "app-1" })];
+
+  it("opens the bundled app for a bundle that declares no link, and asks about its origin", async () => {
+    listInstalledApps.mockResolvedValue({ data: [{ ...INSTALLED, metadata: { name: "Mero Drive" } }] });
+    bundledFrontendFor.mockResolvedValue(BUNDLED);
+
+    expect(await resolveAndOpen(LINK, recorder().report, agree)).toBe("opened");
+    expect(bundledFrontendFor).toHaveBeenCalledWith("app-1");
+    expect(agree).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "open", frontendOrigin: "calimero-app://abcdefghijklmnopqrstuvwxyz234567abcdefghijklmnopqrsa" }),
+    );
+    expect(openAppFrontend).toHaveBeenCalledWith(...OPENED);
+  });
+
+  it("prefers the bundled frontend over the hosted one", async () => {
+    listInstalledApps.mockResolvedValue({ data: [INSTALLED] });
+    bundledFrontendFor.mockResolvedValue(BUNDLED);
+
+    expect(await resolveAndOpen(LINK, recorder().report, agree)).toBe("opened");
+    expect(openAppFrontend).toHaveBeenCalledWith(...OPENED);
+  });
+
+  it("falls back to the hosted frontend when the node serves none", async () => {
+    listInstalledApps.mockResolvedValue({ data: [INSTALLED] });
+
+    expect(await resolveAndOpen(LINK, recorder().report, agree)).toBe("opened");
+    expect(openAppFrontend).toHaveBeenCalledWith("https://drive.example", "Mero Drive", expect.any(Function), expect.anything());
+  });
+});
+
 describe("a deep link never acts without the user's consent", () => {
   const PUBLISHED = {
     id: "com.calimero.drive",

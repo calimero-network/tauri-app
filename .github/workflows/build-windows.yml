@@ -86,6 +86,13 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: pnpm merod:prepare
 
+      # The cfg(windows) unit tests (the calimero-app http form) no other runner compiles;
+      # --lib because the integration and binary tests still drive Unix-only helpers.
+      - name: Run desktop library tests
+        working-directory: apps/desktop/src-tauri
+        shell: bash
+        run: cargo test --lib
+
       - name: Build Tauri app for Windows (release)
         if: steps.build-mode.outputs.mode == 'release'
         working-directory: apps/desktop

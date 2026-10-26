@@ -26,6 +26,7 @@ commands.allow = [
   "create_desktop_shortcut",
   "open_app_launcher",
   "create_app_window",
+  "app_bundled_frontend",
   "webview_isolation_supported",
   "proxy_http_request",
   "proxy_sse_stream",

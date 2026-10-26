@@ -2,7 +2,7 @@ import React from "react";
 import { MoreHorizontal } from "lucide-react";
 import AppIcon from "./AppIcon";
 import { formatBytes } from "../utils/appCards";
-import { decodeMetadata } from "../utils/appUtils";
+import { decodeMetadata, frontendSlot } from "../utils/appUtils";
 import "./AppCard.css";
 import "./InstalledAppCard.css";
 
@@ -45,6 +45,8 @@ export default function InstalledAppCard({
   onToggleMenu,
   onContextMenu,
   onOpen,
+  bundledUrl,
+  probing,
   nodeSelect,
 }: {
   app: InstalledApplicationRow;
@@ -53,12 +55,16 @@ export default function InstalledAppCard({
   onToggleMenu?: (e: React.MouseEvent) => void;
   onContextMenu?: (e: React.MouseEvent) => void;
   onOpen: (frontendUrl: string) => void;
+  /** The node-bundled frontend, opened when the bundle declares no link. */
+  bundledUrl?: string;
+  /** The bundled-frontend probe is still out, so a missing frontend is not yet known. */
+  probing?: boolean;
   /** The developer-mode "which node does this run against" picker, when shown. */
   nodeSelect?: React.ReactNode;
 }) {
   const metadata = decodeMetadata(app.metadata);
   const name = metadata?.name || app.name || app.id;
-  const frontendUrl = metadata?.links?.frontend;
+  const slot = frontendSlot(metadata?.links?.frontend, bundledUrl, probing ?? false);
   const version = metadata?.version ?? app.version ?? null;
   const size = formatBytes(app.size);
   // The bundle's own package id when it has one; the node's application id is a
@@ -115,18 +121,20 @@ export default function InstalledAppCard({
       <div className="installed-app-actions">
         <div className="installed-app-actions-left">
           {nodeSelect}
-          {frontendUrl ? (
+          {slot.kind === 'open' ? (
             <button
               className="button installed-app-open"
               data-testid="open-app"
               title={`Open ${name}`}
               onClick={(e) => {
                 e.stopPropagation();
-                onOpen(frontendUrl);
+                onOpen(slot.url);
               }}
             >
               Open
             </button>
+          ) : slot.kind === 'pending' ? (
+            <span className="installed-app-no-frontend" aria-busy="true">Checking...</span>
           ) : (
             // A bundle with no declared frontend is normal, not broken — the
             // slot is held so the More button does not jump left.

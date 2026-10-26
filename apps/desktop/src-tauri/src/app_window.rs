@@ -25,6 +25,8 @@ use crate::LockUnpoisoned;
 #[derive(Clone, Debug)]
 pub struct AppWindowBinding {
     origin: url::Origin,
+    /// The app label when the window shows a `calimero-app` origin.
+    pub label: Option<String>,
     /// The only node this window's proxy requests may reach.
     pub node_url: String,
     generation: u64,
@@ -46,7 +48,8 @@ impl AppWindowBindings {
         self.windows.lock_unpoisoned().insert(
             label.to_string(),
             AppWindowBinding {
-                origin: frontend.origin(),
+                origin: crate::app_scheme::canonical_origin(frontend),
+                label: crate::app_scheme::label_from_url(frontend),
                 node_url: node_url.to_string(),
                 generation,
             },
@@ -79,10 +82,10 @@ impl AppWindowBindings {
             .cloned()
             .ok_or_else(|| format!("Window '{label}' was not opened for an app"))?;
         let current = current.ok_or_else(|| format!("Window '{label}' has no page loaded"))?;
-        if current.origin() != binding.origin {
+        if crate::app_scheme::canonical_origin(current) != binding.origin {
             return Err(format!(
                 "This page ({}) is not the app this window was opened for ({})",
-                current.origin().ascii_serialization(),
+                crate::app_scheme::canonical_origin(current).ascii_serialization(),
                 binding.origin.ascii_serialization()
             ));
         }
@@ -184,5 +187,34 @@ mod tests {
         assert!(bindings
             .authorize("app-1", Some(&url("https://drive.example/")))
             .is_err());
+    }
+
+    #[test]
+    fn binds_a_calimero_app_origin_and_the_http_form_only_on_windows() {
+        let label = "a".repeat(52);
+        let bindings = AppWindowBindings::default();
+        bindings.bind(
+            "app-1",
+            &url(&format!("calimero-app://{label}/#access_token=x")),
+            "http://localhost:2528",
+        );
+
+        let own = format!("calimero-app://{label}/v1/index.html");
+        let b = bindings.authorize("app-1", Some(&url(&own))).unwrap();
+        assert_eq!(b.label.as_deref(), Some(label.as_str()));
+        let http_form = url(&format!("http://calimero-app.{label}/v1/"));
+        assert_eq!(
+            bindings.authorize("app-1", Some(&http_form)).is_ok(),
+            cfg!(windows)
+        );
+        for other in [
+            format!("calimero-app://{}a/", "b".repeat(51)),
+            "https://drive.example/".to_string(),
+        ] {
+            assert!(
+                bindings.authorize("app-1", Some(&url(&other))).is_err(),
+                "{other}"
+            );
+        }
     }
 }

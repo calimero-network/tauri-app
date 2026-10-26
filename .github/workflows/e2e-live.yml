@@ -6,6 +6,10 @@ name: Desktop E2E (live nodes)
 # either, because both cross nodes and governance ops.
 # The uninstall specs run on three more nodes per test.
 #
+# A kv-store bundle that ships its frontend is built from the apps repo (the
+# bundles job) for the bundled-frontend specs. The app job runs the built
+# desktop under tauri-driver (e2e-app) against the same node and bundles.
+#
 # merod is the version merod-config.json pins, checked against its sha256 pin,
 # so this tests what the desktop ships. The two releases are the two newest
 # kv-store releases that merod can run, from the public registry, served to
@@ -19,6 +23,10 @@ on:
     paths:
       - "apps/desktop/src/**"
       - "apps/desktop/e2e-live/**"
+      - "apps/desktop/e2e-app/**"
+      - "apps/desktop/playwright.app.config.ts"
+      - "apps/desktop/src-tauri/**"
+      - ".github/actions/fetch-merod/**"
       - "apps/desktop/playwright.live.config.ts"
       - "apps/desktop/package.json"
       - "merod-config.json"
@@ -33,9 +41,83 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  # The apps checkout the kv-store bundles are built from, and the core tag
+  # whose cargo-mero bundles it (the tag the apps pin their SDK to).
+  APPS_REF: 982395ce1657f76f84a47db35d9e613a053890cb
+  CARGO_MERO_TAG: 0.12.0-rc.1
+  CARGO_MERO_SHA256: 15412682b93c52e7364963fcbee9fafe9c192c520d95612687b5b70bfae478f1
+
 jobs:
+  bundles:
+    name: kv-store bundles
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Checkout the apps
+        uses: actions/checkout@v4
+        with:
+          repository: calimero-network/apps
+          ref: ${{ env.APPS_REF }}
+          path: apps-src
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          package_json_file: apps-src/package.json
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps-src
+
+      - name: Install cargo-mero
+        run: |
+          asset=cargo-mero_x86_64-unknown-linux-gnu.tar.gz
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/$asset" \
+            "https://github.com/calimero-network/core/releases/download/$CARGO_MERO_TAG/$asset"
+          echo "$CARGO_MERO_SHA256  $RUNNER_TEMP/$asset" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$asset" -C ~/.cargo/bin
+
+      - name: Build kv-store's frontend
+        working-directory: apps-src
+        run: |
+          pnpm install --frozen-lockfile --filter 'kv-store...'
+          pnpm -F kv-store build
+
+      - name: Fetch the pinned merod version
+        run: echo "MEROD_VERSION=$(jq -r .version merod-config.json)" >> "$GITHUB_ENV"
+
+      - name: Bundle kv-store with and without its frontend
+        env:
+          APPS_DIR: ${{ github.workspace }}/apps-src
+          OUT_DIR: ${{ runner.temp }}/bundles
+        run: apps/desktop/e2e-live/build-bundles.sh
+
+      - name: Upload the bundles
+        uses: actions/upload-artifact@v4
+        with:
+          name: kv-store-bundles
+          path: ${{ runner.temp }}/bundles/*.mpk
+          retention-days: 7
+
   live:
     name: Playwright (live nodes)
+    needs: bundles
     # merod's linux release links glibc 2.38 and GLIBCXX_3.4.31, newer than
     # 22.04 ships, so the binary the desktop pins cannot start there.
     runs-on: ubuntu-24.04
@@ -62,17 +144,7 @@ jobs:
         run: pnpm exec playwright install chromium --with-deps
 
       - name: Fetch the pinned merod
-        run: |
-          version=$(jq -r .version merod-config.json)
-          asset=merod_x86_64-unknown-linux-gnu.tar.gz
-          want=$(jq -r --arg a "$asset" '.sha256[$a]' merod-config.json)
-          curl -fsSL --retry 3 -o "$RUNNER_TEMP/$asset" \
-            "https://github.com/calimero-network/core/releases/download/$version/$asset"
-          echo "$want  $RUNNER_TEMP/$asset" | sha256sum -c -
-          mkdir -p "$RUNNER_TEMP/merod"
-          tar -xzf "$RUNNER_TEMP/$asset" -C "$RUNNER_TEMP/merod"
-          echo "MEROD_BINARY=$RUNNER_TEMP/merod/merod" >> "$GITHUB_ENV"
-          echo "MEROD_VERSION=$version" >> "$GITHUB_ENV"
+        uses: ./.github/actions/fetch-merod
 
       - name: Fetch two releases to upgrade between
         working-directory: apps/desktop
@@ -82,10 +154,18 @@ jobs:
           node e2e-live/fetch-releases.mjs
           echo "LIVE_BUNDLE_DIR=$OUT_DIR" >> "$GITHUB_ENV"
 
+      - name: Download the kv-store bundles
+        uses: actions/download-artifact@v4
+        with:
+          name: kv-store-bundles
+          path: ${{ runner.temp }}/bundles
+
       - name: Run the live suite
         working-directory: apps/desktop
         env:
           CI: true
+          LIVE_FRONTEND_BUNDLE: ${{ runner.temp }}/bundles/frontend.mpk
+          LIVE_PLAIN_BUNDLE: ${{ runner.temp }}/bundles/plain.mpk
           LIVE_DATA_DIR: ${{ runner.temp }}/live-data
         run: pnpm test:e2e:live
 
@@ -94,6 +174,80 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: playwright-live-report
+          path: |
+            apps/desktop/playwright-report/
+            apps/desktop/test-results/
+            ${{ runner.temp }}/live-data/**/*.log
+          retention-days: 7
+
+  app:
+    name: tauri-driver (built desktop)
+    needs: bundles
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup build environment
+        uses: ./.github/actions/setup-build
+        with:
+          cache-suffix: e2e-app
+          linux-deps: "true"
+
+      - name: Install the WebDriver tooling
+        run: sudo apt-get install -y webkit2gtk-driver xvfb x11-utils
+
+      - name: Cache tauri-driver
+        id: tauri-driver
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/tauri-driver
+          key: tauri-driver-${{ runner.os }}-2
+
+      - name: Install tauri-driver
+        if: steps.tauri-driver.outputs.cache-hit != 'true'
+        run: cargo install tauri-driver --locked
+
+      - name: Fetch the pinned merod
+        uses: ./.github/actions/fetch-merod
+
+      - name: Build the desktop
+        working-directory: apps/desktop
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: pnpm exec tauri build --debug --no-bundle --config '{"bundle":{"createUpdaterArtifacts":false}}'
+
+      - name: Fetch two releases to upgrade between
+        working-directory: apps/desktop
+        env:
+          OUT_DIR: ${{ runner.temp }}/releases
+        run: |
+          node e2e-live/fetch-releases.mjs
+          echo "LIVE_BUNDLE_DIR=$OUT_DIR" >> "$GITHUB_ENV"
+
+      - name: Download the kv-store bundles
+        uses: actions/download-artifact@v4
+        with:
+          name: kv-store-bundles
+          path: ${{ runner.temp }}/bundles
+
+      - name: Run the app suite
+        working-directory: apps/desktop
+        env:
+          CI: true
+          DESKTOP_BINARY: ${{ github.workspace }}/apps/desktop/src-tauri/target/debug/calimero-desktop
+          LIVE_DATA_DIR: ${{ runner.temp }}/live-data
+          LIVE_FRONTEND_BUNDLE: ${{ runner.temp }}/bundles/frontend.mpk
+          LIVE_PLAIN_BUNDLE: ${{ runner.temp }}/bundles/plain.mpk
+        run: xvfb-run -a pnpm test:e2e:app
+
+      - name: Upload report and logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-app-report
           path: |
             apps/desktop/playwright-report/
             apps/desktop/test-results/

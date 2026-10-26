@@ -14,14 +14,25 @@ import { recordedPids, resolveMerod, startNodes, stopNodes, type LiveNode } from
  * published releases of kv-store. The older is what the namespace starts on;
  * the newer is what it upgrades to.
  *
+ * `LIVE_FRONTEND_BUNDLE` and `LIVE_PLAIN_BUNDLE` are single releases of two more
+ * packages (the app with its frontend in the bundle, and without) for the
+ * bundled-frontend spec; the registry serves them like the others.
+ *
  * What the spec needs is handed over in `process.env`, which Playwright passes
  * to its workers: `LIVE_STATE` is the JSON of `LiveState`.
  */
+export interface AppRelease {
+  package: string;
+  version: string;
+}
+
 export interface LiveState {
   registryUrl: string;
   package: string;
   older: string;
   newer: string;
+  frontend?: AppRelease;
+  plain?: AppRelease;
   merod: string;
   nodes: LiveNode[];
 }
@@ -47,7 +58,14 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   const older = releases[releases.length - 1]!;
   if (newer.version === older.version) throw new Error(`both bundles are ${older.version}`);
 
-  const registry = await startRegistry([older, newer]);
+  const extra = (name: string): Release | undefined => {
+    const file = process.env[name];
+    return file ? readRelease(file) : undefined;
+  };
+  const frontend = extra("LIVE_FRONTEND_BUNDLE");
+  const plain = extra("LIVE_PLAIN_BUNDLE");
+
+  const registry = await startRegistry([older, newer, ...(frontend ? [frontend] : []), ...(plain ? [plain] : [])]);
   const dataDir = process.env["LIVE_DATA_DIR"] ?? mkdtempSync(path.join(os.tmpdir(), "desktop-live-e2e-"));
   const merod = resolveMerod();
   const nodes = await startNodes({
@@ -63,6 +81,8 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     package: newer.package,
     older: older.version,
     newer: newer.version,
+    frontend: frontend && { package: frontend.package, version: frontend.version },
+    plain: plain && { package: plain.package, version: plain.version },
     merod,
     nodes,
   };

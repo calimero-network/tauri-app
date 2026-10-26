@@ -1,0 +1,18 @@
+name: Fetch the pinned merod
+description: Downloads the merod version merod-config.json pins, checks its sha256, and exports MEROD_BINARY and MEROD_VERSION.
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        version=$(jq -r .version merod-config.json)
+        asset=merod_x86_64-unknown-linux-gnu.tar.gz
+        want=$(jq -r --arg a "$asset" '.sha256[$a]' merod-config.json)
+        curl -fsSL --retry 3 -o "$RUNNER_TEMP/$asset" \
+          "https://github.com/calimero-network/core/releases/download/$version/$asset"
+        echo "$want  $RUNNER_TEMP/$asset" | sha256sum -c -
+        mkdir -p "$RUNNER_TEMP/merod"
+        tar -xzf "$RUNNER_TEMP/$asset" -C "$RUNNER_TEMP/merod"
+        echo "MEROD_BINARY=$RUNNER_TEMP/merod/merod" >> "$GITHUB_ENV"
+        echo "MEROD_VERSION=$version" >> "$GITHUB_ENV"

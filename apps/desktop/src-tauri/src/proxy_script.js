@@ -72,8 +72,33 @@
     // real refresh token. MUST match BROKERED_REFRESH_TOKEN in src/lib/token-broker.ts.
     const BROKERED_REFRESH_TOKEN = 'calimero-desktop-brokered-refresh-token';
 
+    // The app label of a `calimero-app://{label}` page, or its Windows form
+    // `http(s)://calimero-app.{label}`; null on any other page or URL.
+    function appLabel(urlStr) {
+        try {
+            const m = /^(?:calimero-app:\/\/|https?:\/\/calimero-app\.)([a-z2-7]{51}[aq])(?:[\/:?#]|$)/.exec(
+                new URL(urlStr, window.location.href).href);
+            return m ? m[1] : null;
+        } catch (e) {
+            return null;
+        }
+    }
+    const pageLabel = (function () {
+        try { return appLabel(window.location.href); } catch (e) { return null; }
+    })();
+
+    // Requests to the page's own app origin: Rust aims them at the node as this app.
+    function isOwnAppOrigin(urlStr) {
+        return pageLabel !== null && appLabel(urlStr) === pageLabel;
+    }
+
+    function absolutizeOwn(urlStr) {
+        return isOwnAppOrigin(urlStr) ? new URL(urlStr, window.location.href).href : urlStr;
+    }
+
     // Check if a URL is an HTTP localhost request that needs proxying
     function isHttpLocalhost(urlStr) {
+        if (isOwnAppOrigin(urlStr)) return true;
         try {
             const u = new URL(urlStr);
             return u.protocol === 'http:' && (u.hostname === 'localhost' || u.hostname === '127.0.0.1');
@@ -92,7 +117,7 @@
     // "Scope not defined for URL". Never proxy from non-HTTPS pages.
     function pageNeedsProxy() {
         try {
-            return window.location.protocol === 'https:';
+            return window.location.protocol === 'https:' || pageLabel !== null;
         } catch (e) {
             // No usable location (shouldn't happen in a real webview) —
             // keep the historical always-proxy behavior.
@@ -159,7 +184,7 @@
 
     // Normalize the first fetch() argument: string | URL | Request → string URL
     function normalizeUrl(urlArg) {
-        if (typeof urlArg === 'string') return urlArg;
+        if (typeof urlArg === 'string') return absolutizeOwn(urlArg);
         if (urlArg instanceof URL) return urlArg.href;
         if (typeof Request !== 'undefined' && urlArg instanceof Request) return urlArg.url;
         return String(urlArg);
@@ -547,7 +572,7 @@
 
         xhr.open = function(method, url) {
             xhrMethod = method || 'GET';
-            xhrUrl = typeof url === 'string' ? url : url.toString();
+            xhrUrl = absolutizeOwn(typeof url === 'string' ? url : url.toString());
             xhrHeaders = {};
             return originalOpen.apply(this, arguments);
         };

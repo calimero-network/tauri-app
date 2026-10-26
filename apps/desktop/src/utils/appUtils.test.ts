@@ -35,7 +35,14 @@ vi.mock('../lib/app-tokens', () => ({
   expiresAtFromJwt: () => 1_700_000_000_000,
 }));
 
-import { appInstalled, isAllowedAppFrontendUrl, openAppFrontend, normalizeNodeUrl } from './appUtils';
+import {
+  appInstalled,
+  findBundledFrontends,
+  isAllowedAppFrontendUrl,
+  openAppFrontend,
+  frontendSlot,
+  normalizeNodeUrl,
+} from './appUtils';
 import { BROKERED_REFRESH_TOKEN } from '../lib/token-broker';
 
 /** Args of the `create_app_window` invoke (may not be the first call — the app
@@ -375,6 +382,7 @@ describe('app frontends that may receive the node session', () => {
       'http://localhost:5173/',
       'http://127.0.0.1:3000/',
       'http://[::1]:3000/',
+      `calimero-app://${'a'.repeat(51)}q/`,
     ]) {
       expect(isAllowedAppFrontendUrl(url), url).toBe(true);
     }
@@ -389,6 +397,10 @@ describe('app frontends that may receive the node session', () => {
       'javascript:alert(1)',
       'data:text/html,<script>alert(1)</script>',
       'calimero://com.evil.app/join',
+      'calimero-app://short/',
+      `calimero-app://${'A'.repeat(51)}Q/`,
+      `calimero-app://${'a'.repeat(51)}b/`,
+      `calimero-app://${'a'.repeat(52)}.evil.example/`,
       'not a url',
     ]) {
       expect(isAllowedAppFrontendUrl(url), url).toBe(false);
@@ -489,5 +501,124 @@ describe('openAppFrontend with a deep link', () => {
     await openAppFrontend('https://drive.example/', 'Drive', undefined, { applicationId: 'app-1' });
 
     expect(invoke).not.toHaveBeenCalledWith('deliver_app_deep_link', expect.anything());
+  });
+});
+
+describe('node-bundled app frontends', () => {
+  const BUNDLED = `calimero-app://${'a'.repeat(51)}q/`;
+  const probeAnswers = (answer: () => Promise<unknown>) =>
+    invoke.mockImplementation((cmd: string) => {
+      if (cmd === 'app_bundled_frontend') return answer();
+      if (cmd === 'open_app_launcher') return Promise.reject(new Error('no launcher in test env'));
+      return Promise.resolve(undefined);
+    });
+
+  it('opens the bundled origin in place of the registry link, with the origin as node_url', async () => {
+    probeAnswers(async () => BUNDLED);
+    await openAppFrontend('https://app.example.com/', 'Example', undefined, { applicationId: 'app-1' });
+
+    expect(openedUrl().startsWith(BUNDLED)).toBe(true);
+    expect(openedHash().get('node_url')).toBe(BUNDLED.replace(/\/$/, ''));
+    expect(invoke.mock.calls.some((c) => c[0] === 'open_app_launcher')).toBe(false);
+  });
+
+  it('names the application to a bundled page, which has no registry link to learn it from', async () => {
+    probeAnswers(async () => BUNDLED);
+    await openAppFrontend('https://app.example.com/', 'Example', undefined, { applicationId: 'app-1' });
+
+    expect(openedHash().get('application_id')).toBe('app-1');
+  });
+
+  it('does not add an application id to a page served elsewhere', async () => {
+    probeAnswers(async () => null);
+    await openAppFrontend('https://app.example.com/', 'Example', undefined, { applicationId: 'app-1' });
+
+    expect(openedHash().has('application_id')).toBe(false);
+  });
+
+  it('keeps the link and the launcher when the node bundles nothing', async () => {
+    probeAnswers(async () => null);
+    await openAppFrontend('https://app.example.com/', 'Example', undefined, { applicationId: 'app-1' });
+
+    expect(openedUrl().startsWith('https://app.example.com/')).toBe(true);
+    expect(openedHash().get('node_url')).toBe('http://localhost:2528');
+    expect(invoke.mock.calls.some((c) => c[0] === 'open_app_launcher')).toBe(true);
+  });
+
+  it('keeps the link when the probe itself fails', async () => {
+    probeAnswers(() => Promise.reject(new Error('node down')));
+    await openAppFrontend('https://app.example.com/', 'Example', undefined, { applicationId: 'app-1' });
+
+    expect(openedUrl().startsWith('https://app.example.com/')).toBe(true);
+  });
+
+  it('does not probe without an application id', async () => {
+    await openAppFrontend('https://app.example.com/', 'Example');
+
+    expect(invoke.mock.calls.some((c) => c[0] === 'app_bundled_frontend')).toBe(false);
+  });
+
+  it('probes the targeted node, without a trailing slash', async () => {
+    probeAnswers(async () => null);
+    await openAppFrontend('https://app.example.com/', 'Example', undefined, {
+      applicationId: 'app-1',
+      targetNodeUrl: 'http://127.0.0.1:2600/',
+    });
+
+    expect(invoke).toHaveBeenCalledWith('app_bundled_frontend', {
+      appId: 'app-1',
+      nodeUrl: 'http://127.0.0.1:2600',
+    });
+  });
+
+  it('refuses a bundled url the fresh probe no longer confirms, rather than hand it to the launcher', async () => {
+    probeAnswers(async () => null);
+    const onError = vi.fn();
+    await openAppFrontend(BUNDLED, 'Example', onError, { applicationId: 'app-1' });
+
+    expect(onError).toHaveBeenCalled();
+    expect(invoke.mock.calls.some((c) => c[0] === 'open_app_launcher')).toBe(false);
+    expect(invoke.mock.calls.some((c) => c[0] === 'create_app_window')).toBe(false);
+  });
+
+  it('refuses a probe answer that is not an allowed frontend', async () => {
+    probeAnswers(async () => 'calimero-app://short/');
+    const onError = vi.fn();
+    await openAppFrontend('https://app.example.com/', 'Example', onError, { applicationId: 'app-1' });
+
+    expect(onError).toHaveBeenCalled();
+    expect(invoke.mock.calls.some((c) => c[0] === 'create_app_window')).toBe(false);
+  });
+
+  it('lists the apps the node bundles a frontend for, skipping those with a link', async () => {
+    invoke.mockImplementation((_cmd: string, args: { appId: string }) =>
+      Promise.resolve(args.appId === 'bundled' ? BUNDLED : null),
+    );
+    const found = await findBundledFrontends([
+      { id: 'bundled', metadata: {} },
+      { id: 'plain', metadata: {} },
+      { id: 'linked', metadata: { links: { frontend: 'https://x.example/' } } },
+    ]);
+
+    expect(found).toEqual({ bundled: BUNDLED });
+    expect(invoke.mock.calls.map((c) => c[1].appId).sort()).toEqual(['bundled', 'plain']);
+  });
+});
+
+describe('frontendSlot', () => {
+  it('opens the declared link without waiting for the probe', () => {
+    expect(frontendSlot('https://a.example/', undefined, true)).toEqual({ kind: 'open', url: 'https://a.example/' });
+  });
+
+  it('is pending, not absent, while the bundled probe is out', () => {
+    expect(frontendSlot(undefined, undefined, true)).toEqual({ kind: 'pending' });
+  });
+
+  it('opens the bundled url once the probe found one', () => {
+    expect(frontendSlot(undefined, 'calimero-app://x/', false)).toEqual({ kind: 'open', url: 'calimero-app://x/' });
+  });
+
+  it('reports no frontend only after the probe settled empty', () => {
+    expect(frontendSlot(undefined, undefined, false)).toEqual({ kind: 'none' });
   });
 });

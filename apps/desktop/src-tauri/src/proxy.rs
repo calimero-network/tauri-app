@@ -148,7 +148,10 @@ pub fn validate_allowed_url(url: &str, configured_node_url: Option<&str>) -> Res
                     _ => None,
                 });
 
-                if node_host.as_ref().map(|h| h == &host_lower).unwrap_or(false)
+                if node_host
+                    .as_ref()
+                    .map(|h| h == &host_lower)
+                    .unwrap_or(false)
                     && node_port.map(|p| p == port).unwrap_or(false)
                     && node_parsed.scheme() == scheme
                 {
@@ -186,13 +189,61 @@ pub fn validate_allowed_url(url: &str, configured_node_url: Option<&str>) -> Res
     }
 }
 
-/// The node an app window may proxy to: the one it was opened for, and only
-/// while it still shows the app's own page. A caller-supplied node URL is never
-/// trusted, or any page could aim the proxy at any host.
-pub fn node_url_for<R: tauri::Runtime>(webview: &tauri::Webview<R>) -> Result<String, TauriError> {
-    crate::app_window::authorize_webview(webview)
-        .map(|binding| binding.node_url)
-        .map_err(|reason| TauriError::new(TauriErrorCode::UrlNotAllowed, reason))
+/// Aims a request for the window's own `calimero-app` origin at the node, as
+/// that app's host. Any other URL is left alone; another app's origin is refused.
+pub fn retarget_own_origin(
+    url: &str,
+    binding: &crate::app_window::AppWindowBinding,
+) -> Result<Option<crate::app_scheme::NodeTarget>, String> {
+    let Some(parsed) = url::Url::parse(url)
+        .ok()
+        .filter(|u| crate::app_scheme::label_from_url(u).is_some())
+    else {
+        return Ok(None);
+    };
+    if crate::app_scheme::label_from_url(&parsed) != binding.label {
+        return Err(format!("{url} is not this window's app"));
+    }
+    let label = binding.label.as_deref().unwrap_or_default();
+    let path_and_query = match parsed.query() {
+        Some(q) => format!("{}?{q}", parsed.path()),
+        None => parsed.path().to_string(),
+    };
+    crate::app_scheme::node_target(label, &binding.node_url, &path_and_query).map(Some)
+}
+
+/// The window's node and `request` aimed at it. A caller-supplied node URL is
+/// never trusted, or any page could aim the proxy at any host; the node is the
+/// one the window was opened for, and only while it shows the app's own page.
+pub fn authorize_request<R: tauri::Runtime>(
+    webview: &tauri::Webview<R>,
+    request: HttpRequest,
+) -> Result<(HttpRequest, String), TauriError> {
+    let denied = |reason| TauriError::new(TauriErrorCode::UrlNotAllowed, reason);
+    let binding = crate::app_window::authorize_webview(webview).map_err(denied)?;
+    let request = aim_at_node(request, &binding)?;
+    Ok((request, binding.node_url))
+}
+
+/// `request` with its own-origin URL retargeted at the node. The page's `Host`
+/// is dropped: only the node address may choose which app's host is served.
+fn aim_at_node(
+    mut request: HttpRequest,
+    binding: &crate::app_window::AppWindowBinding,
+) -> Result<HttpRequest, TauriError> {
+    let denied = |reason| TauriError::new(TauriErrorCode::UrlNotAllowed, reason);
+    let target = retarget_own_origin(&request.url, binding).map_err(denied)?;
+    if let Some(headers) = request.headers.as_mut() {
+        headers.retain(|name, _| !name.eq_ignore_ascii_case("host"));
+    }
+    if let Some(target) = target {
+        request.url = target.url;
+        request
+            .headers
+            .get_or_insert_with(Default::default)
+            .insert("Host".to_string(), target.host);
+    }
+    Ok(request)
 }
 
 #[tauri::command]
@@ -200,7 +251,7 @@ pub async fn proxy_http_request(
     webview: tauri::Webview,
     request: HttpRequest,
 ) -> Result<HttpResponse, TauriError> {
-    let node_url = node_url_for(&webview)?;
+    let (request, node_url) = authorize_request(&webview, request)?;
     proxy_http_request_inner(request, Some(node_url)).await
 }
 
@@ -410,21 +461,31 @@ pub async fn proxy_sse_stream(
     let chunk_event = format!("sse-chunk-{}", stream_id);
     let end_event = format!("sse-end-{}", stream_id);
 
-    let allowed = node_url_for(&webview)
-        .map_err(|e| e.message)
-        .and_then(|node_url| validate_allowed_url(&url, Some(&node_url)));
-    if let Err(reason) = allowed {
-        cancel_registry
-            .lock_unpoisoned()
-            .remove(&stream_id);
-        let _ = window.emit(&end_event, "");
-        return Err(TauriError::new(TauriErrorCode::UrlNotAllowed, reason));
-    }
+    let allowed = crate::app_window::authorize_webview(&webview).and_then(|binding| {
+        let target = retarget_own_origin(&url, &binding)?;
+        let (url, host) = match target {
+            Some(t) => (t.url, Some(t.host)),
+            None => (url.clone(), None),
+        };
+        validate_allowed_url(&url, Some(&binding.node_url))?;
+        Ok((url, host))
+    });
+    let (url, host) = match allowed {
+        Ok(target) => target,
+        Err(reason) => {
+            cancel_registry.lock_unpoisoned().remove(&stream_id);
+            let _ = window.emit(&end_event, "");
+            return Err(TauriError::new(TauriErrorCode::UrlNotAllowed, reason));
+        }
+    };
 
     let mut request = sse_client()
         .get(&url)
         .header("Accept", "text/event-stream")
         .header("Cache-Control", "no-cache");
+    if let Some(host) = host {
+        request = request.header("Host", host);
+    }
     if !auth_header.is_empty() {
         request = request.header("Authorization", &auth_header);
     }
@@ -433,9 +494,7 @@ pub async fn proxy_sse_stream(
     let response = match result {
         Ok(r) => r,
         Err(e) => {
-            cancel_registry
-                .lock_unpoisoned()
-                .remove(&stream_id);
+            cancel_registry.lock_unpoisoned().remove(&stream_id);
             let _ = window.emit(&end_event, "");
             return Err(TauriError::with_details(
                 TauriErrorCode::HttpRequestFailed,
@@ -463,9 +522,7 @@ pub async fn proxy_sse_stream(
         }
     }
 
-    cancel_registry
-        .lock_unpoisoned()
-        .remove(&stream_id);
+    cancel_registry.lock_unpoisoned().remove(&stream_id);
     let _ = window.emit(&end_event, "");
     Ok(())
 }
@@ -482,7 +539,11 @@ pub fn cancel_sse_stream(stream_id: String, cancel_registry: tauri::State<'_, Ss
 
 #[cfg(test)]
 mod tests {
-    use super::{is_textual_content_type, validate_allowed_url};
+    use super::{
+        aim_at_node, is_textual_content_type, retarget_own_origin, validate_allowed_url,
+        HttpRequest,
+    };
+    use crate::app_window::AppWindowBindings;
 
     #[test]
     fn test_is_textual_content_type() {
@@ -497,8 +558,8 @@ mod tests {
             "application/x-www-form-urlencoded",
             "text/csv",
             "multipart/form-data; boundary=xyz",
-            "image/svg+xml",              // +xml suffix
-            "application/problem+json",   // +json suffix
+            "image/svg+xml",            // +xml suffix
+            "application/problem+json", // +json suffix
             "text/xml",
         ] {
             assert!(is_textual_content_type(ct), "should be textual: {ct}");
@@ -629,6 +690,124 @@ mod tests {
     // SSE streaming tests - spin up a real TCP listener and drive reqwest's
     // bytes_stream() + tokio::select! cancellation, verifying the mechanism
     // used by proxy_sse_stream without needing a live tauri::Window.
+
+    const LABEL: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaq";
+
+    fn app_binding() -> crate::app_window::AppWindowBinding {
+        let bindings = AppWindowBindings::default();
+        let page: url::Url = format!("calimero-app://{LABEL}/").parse().unwrap();
+        bindings.bind("app-1", &page, "http://127.0.0.1:2528");
+        bindings.authorize("app-1", Some(&page)).unwrap()
+    }
+
+    #[test]
+    fn own_origin_api_calls_go_to_the_node_as_the_app() {
+        let binding = app_binding();
+        let t = retarget_own_origin(&format!("calimero-app://{LABEL}/jsonrpc"), &binding)
+            .unwrap()
+            .unwrap();
+        assert_eq!(t.url, "http://127.0.0.1:2528/jsonrpc");
+        assert_eq!(t.host, format!("{LABEL}.localhost:2528"));
+        assert!(validate_allowed_url(&t.url, Some(&binding.node_url)).is_ok());
+    }
+
+    #[test]
+    fn the_http_form_is_retargeted_only_on_windows() {
+        let url = format!("http://calimero-app.{LABEL}/jsonrpc");
+        let retargeted = retarget_own_origin(&url, &app_binding()).unwrap().is_some();
+        assert_eq!(retargeted, cfg!(windows));
+    }
+
+    fn request_with(url: String, headers: &[(&str, &str)]) -> HttpRequest {
+        HttpRequest {
+            url,
+            method: "GET".into(),
+            headers: Some(
+                headers
+                    .iter()
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+                    .collect(),
+            ),
+            body: None,
+            body_base64: None,
+        }
+    }
+
+    #[test]
+    fn a_page_cannot_choose_the_host_it_is_served_from() {
+        let other = format!("{}.localhost:2528", "b".repeat(51) + "a");
+        for url in [
+            format!("calimero-app://{LABEL}/x"),
+            "http://127.0.0.1:2528/x".to_string(),
+        ] {
+            let req = request_with(
+                url,
+                &[("host", &other), ("HOST", &other), ("accept", "*/*")],
+            );
+            let headers = aim_at_node(req, &app_binding()).unwrap().headers.unwrap();
+            let hosts: Vec<_> = headers
+                .iter()
+                .filter(|(k, _)| k.eq_ignore_ascii_case("host"))
+                .collect();
+            assert!(hosts.iter().all(|(_, v)| **v != other), "{hosts:?}");
+            assert_eq!(headers.get("accept").map(String::as_str), Some("*/*"));
+        }
+    }
+
+    #[test]
+    fn an_own_origin_call_carries_the_apps_host_alone() {
+        let req = request_with(
+            format!("calimero-app://{LABEL}/x"),
+            &[("hOsT", "evil.example")],
+        );
+        let headers = aim_at_node(req, &app_binding()).unwrap().headers.unwrap();
+        assert_eq!(headers.len(), 1);
+        assert_eq!(headers["Host"], format!("{LABEL}.localhost:2528"));
+    }
+
+    #[test]
+    fn own_origin_query_reaches_the_node() {
+        let t = retarget_own_origin(&format!("calimero-app://{LABEL}/sse?id=7"), &app_binding())
+            .unwrap()
+            .unwrap();
+        assert_eq!(t.url, "http://127.0.0.1:2528/sse?id=7");
+    }
+
+    #[test]
+    fn other_apps_are_refused_and_plain_urls_untouched() {
+        let binding = app_binding();
+        let other = format!("calimero-app://{}/jsonrpc", "b".repeat(51) + "a");
+        assert!(retarget_own_origin(&other, &binding).is_err());
+        assert_eq!(
+            retarget_own_origin("http://127.0.0.1:2528/jsonrpc", &binding),
+            Ok(None)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_custom_host_header_reaches_the_node() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 2048];
+            let n = sock.read(&mut buf).await.unwrap();
+            sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+                .await
+                .unwrap();
+            String::from_utf8_lossy(&buf[..n]).to_string()
+        });
+        let host = format!("{LABEL}.localhost:{port}");
+        super::http_client()
+            .get(format!("http://127.0.0.1:{port}/jsonrpc"))
+            .header("Host", &host)
+            .send()
+            .await
+            .unwrap();
+        let seen = server.await.unwrap().to_lowercase();
+        assert!(seen.contains(&format!("host: {host}")), "{seen}");
+    }
 
     #[tokio::test]
     async fn test_sse_stream_delivers_chunks() {

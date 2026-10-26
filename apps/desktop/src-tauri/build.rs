@@ -14,15 +14,17 @@ fn main() {
     if !merod.exists() {
         std::fs::create_dir_all(merod).ok();
     }
-    let shell = std::path::Path::new("shell/calimero-shell");
-    if !shell.exists() {
-        std::fs::create_dir_all("shell").ok();
-        std::fs::write(shell, "").ok();
-    }
-    let trampoline = std::path::Path::new("shell/launcher-trampoline");
-    if !trampoline.exists() {
-        std::fs::create_dir_all("shell").ok();
-        std::fs::write(trampoline, "").ok();
+    let exe = if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        ".exe"
+    } else {
+        ""
+    };
+    for name in ["calimero-shell", "launcher-trampoline"] {
+        let stub = std::path::PathBuf::from(format!("shell/{name}{exe}"));
+        if !stub.exists() {
+            std::fs::create_dir_all("shell").ok();
+            std::fs::write(stub, "").ok();
+        }
     }
 
     println!("cargo:rerun-if-changed=build.rs");

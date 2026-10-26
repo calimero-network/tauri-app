@@ -74,6 +74,9 @@ pub fn validate_app_frontend_url(url: &str) -> Result<url::Url, String> {
         || matches!(parsed.host(), Some(url::Host::Ipv4(ip)) if ip.is_loopback())
         || matches!(parsed.host(), Some(url::Host::Ipv6(ip)) if ip.is_loopback());
     match parsed.scheme() {
+        crate::app_scheme::SCHEME if crate::app_scheme::label_from_url(&parsed).is_some() => {
+            Ok(parsed)
+        }
         "https" if parsed.host().is_some() => Ok(parsed),
         "http" if loopback => Ok(parsed),
         _ => Err(format!(
@@ -309,6 +312,7 @@ mod tests {
             "http://localhost:5173/",
             "http://127.0.0.1:3000/",
             "http://[::1]:3000/",
+            "calimero-app://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaq/#access_token=x",
         ] {
             assert!(validate_app_frontend_url(url).is_ok(), "should allow {url}");
         }
@@ -325,6 +329,9 @@ mod tests {
             "data:text/html,<script>alert(1)</script>",
             "calimero://com.evil.app/join",
             "ftp://localhost/",
+            "calimero-app://short/",
+            "calimero-app://AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQ/",
+            "calimero-app:///",
             "not a url",
         ] {
             assert!(

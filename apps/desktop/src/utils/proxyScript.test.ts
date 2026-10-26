@@ -593,3 +593,57 @@ describe("proxy_script launcher bridge", () => {
     expect(win.__calimero_platform__).toBe(bridge);
   });
 });
+
+describe("proxy_script app origin", () => {
+  const LABEL = "a".repeat(51) + "q";
+  const OTHER = "b".repeat(51) + "a";
+
+  function appWindow(href: string) {
+    const win = makeMockWindow("calimero-app:");
+    win.location = { protocol: "calimero-app:", href };
+    win.__TAURI_INVOKE__ = vi.fn(async () => ({ status: 200, headers: {}, body: "{}" }));
+    win.__originalFetch = win.fetch;
+    injectProxy(win);
+    return win;
+  }
+
+  it.each([
+    [`calimero-app://${LABEL}/`, `calimero-app://${LABEL}/jsonrpc`],
+    [`http://calimero-app.${LABEL}/`, `calimero-app://${LABEL}/jsonrpc`],
+    [`calimero-app://${LABEL}/v1/`, "/jsonrpc"],
+  ])("proxies own-origin calls from %s to %s", async (page, target) => {
+    const win = appWindow(page);
+    await win.fetch(target, { method: "POST", body: "{}" });
+    const [command, args] = win.__TAURI_INVOKE__.mock.calls[0];
+    expect(command).toBe("proxy_http_request");
+    expect(new URL(args.request.url).pathname).toBe("/jsonrpc");
+  });
+
+  it("proxies a relative XHR as the app's absolute origin", async () => {
+    const win = appWindow(`calimero-app://${LABEL}/v1/`);
+    const xhr = new win.XMLHttpRequest();
+    xhr.open("POST", "/jsonrpc");
+    const done = new Promise<void>((resolve) => { xhr.onload = () => resolve(); });
+    xhr.send("{}");
+    await done;
+    const [command, args] = win.__TAURI_INVOKE__.mock.calls[0];
+    expect(command).toBe("proxy_http_request");
+    expect(args.request.url).toBe(`calimero-app://${LABEL}/jsonrpc`);
+  });
+
+  it.each([
+    ["a label with padding bits set", `calimero-app://${"a".repeat(51)}b/`, "/jsonrpc"],
+    ["a host that only starts with the label", `calimero-app://${LABEL}/`, `calimero-app://${LABEL}.evil.example/jsonrpc`],
+  ])("leaves %s alone", async (_name, page, target) => {
+    const win = appWindow(page);
+    await win.fetch(target);
+    expect(win.__TAURI_INVOKE__).not.toHaveBeenCalled();
+    expect(win.__originalFetch).toHaveBeenCalled();
+  });
+
+  it("does not proxy another app's origin", async () => {
+    const win = appWindow(`calimero-app://${LABEL}/`);
+    await win.fetch(`calimero-app://${OTHER}/jsonrpc`);
+    expect(win.__TAURI_INVOKE__).not.toHaveBeenCalled();
+  });
+});

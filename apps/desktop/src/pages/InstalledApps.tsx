@@ -13,6 +13,7 @@ import { detectRunningMerodNodes, type RunningMerodNode } from "../utils/merod";
 import { formatVersionLabel, BUNDLED_VERSION_ID } from "../utils/merodVersions";
 import { useNodeVersions } from "../contexts/NodeVersionsContext";
 import { useMerodStatusChanged } from "../hooks/useMerodStatusChanged";
+import { useBundledFrontends } from "../hooks/useBundledFrontends";
 import { useVisiblePoll } from "../hooks/useVisiblePoll";
 import { invoke } from "@tauri-apps/api/core";
 import { RefreshCw, Trash2, Copy, Rocket } from "lucide-react";
@@ -43,6 +44,7 @@ const SKELETON_MIN_MS = 1000;
 const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirmUninstall, clientReady = true, onNavigate }) => {
   const toast = useToast();
   const [apps, setApps] = useState<InstalledApplication[]>([]);
+  const { frontends: bundledFrontends, probing: probingFrontends } = useBundledFrontends(apps);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; app: InstalledApplication } | null>(null);
@@ -235,9 +237,12 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
           const metadata = decodeMetadata(contextMenu.app.metadata);
           const appName = metadata?.name || contextMenu.app.name || contextMenu.app.id;
           const frontendUrl = metadata?.links?.frontend;
+          const openUrl = frontendUrl ?? bundledFrontends[contextMenu.app.id];
           const items: { label: string; onClick: () => void; danger?: boolean }[] = [];
+          if (openUrl) {
+            items.push({ label: 'Open', onClick: () => handleOpenFrontend(openUrl, appName, contextMenu.app.id, metadata?.icon) });
+          }
           if (frontendUrl) {
-            items.push({ label: 'Open', onClick: () => handleOpenFrontend(frontendUrl, appName, contextMenu.app.id, metadata?.icon) });
             items.push({ label: 'Create launcher', onClick: () => handleCreateLauncher(frontendUrl, appName, contextMenu.app.id, metadata?.icon) });
           }
           items.push({ label: 'Uninstall', onClick: () => handleUninstall(contextMenu.app.id, appName), danger: true });
@@ -281,11 +286,13 @@ const InstalledApps: React.FC<InstalledAppsProps> = ({ onAuthRequired, onConfirm
             {apps.map((app, index) => {
               const metadata = decodeMetadata(app.metadata);
               const appName = metadata?.name || app.name || app.id;
-              const frontendUrl = metadata?.links?.frontend;
+              const frontendUrl = metadata?.links?.frontend ?? bundledFrontends[app.id];
               return (
                 <InstalledAppCard
                   key={app.id || app.name || app.source || `installed-${index}`}
                   app={app}
+                  bundledUrl={bundledFrontends[app.id]}
+                  probing={probingFrontends}
                   menuOpen={openMenuAppId === app.id}
                   onContextMenu={(e: React.MouseEvent) => handleRowContextMenu(e, app)}
                   onToggleMenu={(e: React.MouseEvent) => {

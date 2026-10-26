@@ -1,0 +1,26 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "remote-app-windows-scheme",
+  "description": "The http form of the calimero-app scheme, which WebView2 serves as http://calimero-app.{label}. Windows only: elsewhere that host is a real network name.",
+  "windows": [
+    "app-*"
+  ],
+  "platforms": [
+    "windows"
+  ],
+  "remote": {
+    "urls": [
+      "http://calimero-app.*"
+    ]
+  },
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:window:allow-show",
+    "core:window:allow-hide",
+    "core:window:allow-close",
+    "core:window:allow-set-focus",
+    "core:window:allow-set-fullscreen",
+    "allow-remote-proxy"
+  ]
+}

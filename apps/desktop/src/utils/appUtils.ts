@@ -99,6 +99,11 @@ export function appendParamsToUrl(baseUrl: string, params: string): string {
   }
 }
 
+const APP_SCHEME = 'calimero-app';
+
+/** A canonical app label: 52 lowercase base32 characters, the last without padding bits. */
+const isAppLabel = (label: string): boolean => /^[a-z2-7]{51}[aq]$/.test(label);
+
 /**
  * Whether `url` may be opened as an app frontend.
  *
@@ -106,7 +111,8 @@ export function appendParamsToUrl(baseUrl: string, params: string): string {
  * frontend must be a web origin that can hold a session: HTTPS, or plain HTTP
  * on this machine's loopback (a locally served dev frontend). Plain HTTP to
  * anywhere else would put the token on the network in the clear, and `file:`,
- * `data:`, `javascript:` or a custom scheme is never an app frontend. The Rust
+ * `data:` or `javascript:` is never an app frontend. The one custom scheme is
+ * `calimero-app://{label}`, an app the node bundles the frontend of. The Rust
  * side enforces the same rule (`validate_app_frontend_url`).
  */
 export function isAllowedAppFrontendUrl(url: string): boolean {
@@ -116,6 +122,7 @@ export function isAllowedAppFrontendUrl(url: string): boolean {
   } catch {
     return false;
   }
+  if (u.protocol === `${APP_SCHEME}:`) return isAppLabel(u.hostname);
   if (u.protocol === 'https:') return u.hostname !== '';
   const loopback =
     u.hostname === 'localhost' || u.hostname === '127.0.0.1' || u.hostname === '[::1]';
@@ -179,6 +186,37 @@ function nodeKey(nodeUrl: string): string {
 // Guards against two concurrent openAppFrontend calls racing to create the same window.
 const pendingWindowCreations = new Set<string>();
 
+async function bundledFrontendUrl(context: OpenAppFrontendContext): Promise<string | null> {
+  const nodeUrl = (context.targetNodeUrl ?? getSettings().nodeUrl ?? '').replace(/\/+$/, '');
+  try {
+    return await invoke<string | null>('app_bundled_frontend', { appId: context.applicationId, nodeUrl });
+  } catch {
+    return null;
+  }
+}
+
+/** The `calimero-app://` URL of the frontend the node bundles for an app, when it serves one. */
+export const bundledFrontendFor = (applicationId: string): Promise<string | null> =>
+  bundledFrontendUrl({ applicationId });
+
+/** The `calimero-app://` URL of each app the node bundles a frontend for, by app id. Apps with a link are skipped. */
+export async function findBundledFrontends(
+  apps: { id: string; metadata?: unknown }[],
+): Promise<Record<string, string>> {
+  const unlinked = apps.filter((app) => !decodeMetadata(app.metadata)?.links?.frontend);
+  const urls = await Promise.all(unlinked.map((app) => bundledFrontendUrl({ applicationId: app.id })));
+  return Object.fromEntries(unlinked.flatMap((app, i) => (urls[i] ? [[app.id, urls[i]]] : [])));
+}
+
+export type FrontendSlot = { kind: 'open'; url: string } | { kind: 'pending' } | { kind: 'none' };
+
+/** What a card offers: the link, else the bundled frontend, else pending while the probe is out. */
+export function frontendSlot(link: string | undefined, bundled: string | undefined, probing: boolean): FrontendSlot {
+  const url = link ?? bundled;
+  if (url) return { kind: 'open', url };
+  return { kind: probing ? 'pending' : 'none' };
+}
+
 export async function openAppFrontend(
   frontendUrl: string,
   appName?: string,
@@ -186,6 +224,15 @@ export async function openAppFrontend(
   context?: OpenAppFrontendContext,
 ): Promise<string | void> {
   try {
+    // A frontend the node bundles is opened on its own origin in place of the link.
+    const probed = context?.applicationId && (await bundledFrontendUrl(context));
+    if (probed) frontendUrl = probed;
+    // A scheme URL only a fresh probe vouches for: it may be stale, or for another node.
+    const bundled = frontendUrl.startsWith(`${APP_SCHEME}:`);
+    if (bundled && !probed) {
+      throw new Error('This app\'s bundled frontend is not available on the node right now.');
+    }
+
     // Checked before either path below, both of which hand the page a session.
     if (!isAllowedAppFrontendUrl(frontendUrl)) {
       throw new Error(
@@ -209,7 +256,8 @@ export async function openAppFrontend(
     // cannot serve a second node; cross-node opens take the in-process path.
     const isCrossNode = normalizeNodeUrl(nodeUrl) !== normalizeNodeUrl(activeNodeUrl);
 
-    if (context?.applicationId && !isCrossNode) {
+    // The launcher is a separate process that does not serve the app scheme.
+    if (context?.applicationId && !isCrossNode && !bundled) {
       try {
         await invoke('open_app_launcher', {
           appName: appName ?? 'Application',
@@ -269,7 +317,8 @@ export async function openAppFrontend(
     // a client key minted for its slot (its label) with app-level grants only,
     // and the broker keeps rotating THAT key. See src/lib/app-tokens.ts.
     const hashParams = new URLSearchParams();
-    hashParams.set('node_url', nodeUrl);
+    // A bundled app reaches its node through its own origin, which the desktop proxies.
+    hashParams.set('node_url', bundled ? `${urlObj.protocol}//${urlObj.host}` : nodeUrl);
     // Our session belongs to the active node, so a cross-node window gets no
     // credentials: it logs in for itself inside its own isolated store.
     if (!isCrossNode && getAccessToken() && getRefreshToken()) {
@@ -284,6 +333,8 @@ export async function openAppFrontend(
       }
     }
     if (context?.applicationId) hashParams.set('app-id', context.applicationId);
+    // mero-js reads this name; a bundled page has no registry link to learn its app from.
+    if (bundled && context?.applicationId) hashParams.set('application_id', context.applicationId);
     if (context?.contextId) hashParams.set('context_id', context.contextId);
     if (context?.executorPublicKey) hashParams.set('executor_public_key', context.executorPublicKey);
     // Propagate the desktop's developer-mode setting so apps can surface

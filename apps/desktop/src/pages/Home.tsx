@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, memo } from "react";
 import { decodeMetadata, openAppFrontend } from "../utils/appUtils";
 import InstalledAppCard from "../components/InstalledAppCard";
+import { useBundledFrontends } from "../hooks/useBundledFrontends";
 import { listInstalledApps } from "../utils/installedAppsCache";
 import { Settings as SettingsIcon, ArrowRight, Package, ShoppingCart } from "lucide-react";
 
@@ -42,6 +43,8 @@ function Home({ connected, error, clientReady, onReconnect, onNavigate, onOpenSe
       .catch((err) => console.error('Failed to load apps:', err))
       .finally(() => setLoadingApps(false));
   }, [clientReady, onAuthRequired]);
+
+  const { frontends: bundledFrontends, probing: probingFrontends } = useBundledFrontends(installedApps);
 
   const handleOpenAppFrontend = useCallback(async (frontendUrl: string, appName?: string, applicationId?: string, iconData?: string) => {
     try {
@@ -104,6 +107,8 @@ function Home({ connected, error, clientReady, onReconnect, onNavigate, onOpenSe
                 <InstalledAppCard
                   key={app.id || app.name || app.source || `home-app-${index}`}
                   app={app}
+                  bundledUrl={bundledFrontends[app.id]}
+                  probing={probingFrontends}
                   onOpen={(url: string) => handleOpenAppFrontend(url, appName, app.id, metadata?.icon)}
                 />
               );

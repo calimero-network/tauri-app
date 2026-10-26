@@ -7,9 +7,25 @@ export async function openDesktop(
   nodeUrl: string,
   registryUrl: string,
   tokens?: TokenPair,
+  /** Answers the shell's `app_bundled_frontend`; without it the browser has no shell and every probe fails. */
+  probe?: (appId: string, nodeUrl: string) => Promise<string | null>,
 ): Promise<Page> {
   tokens ??= await mintTokens(nodeUrl);
   const context = await browser.newContext();
+  if (probe) {
+    await context.exposeBinding("__bundledFrontend", (_source, appId: string, url: string) => probe(appId, url));
+    await context.addInitScript(() => {
+      const bundled = (window as unknown as { __bundledFrontend: (a: string, n: string) => Promise<string | null> })
+        .__bundledFrontend;
+      (window as unknown as { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ = {
+        transformCallback: (cb: unknown) => cb,
+        invoke: (cmd: string, args: { appId: string; nodeUrl: string }) => {
+          if (cmd !== "app_bundled_frontend") throw new Error(`${cmd} is not available in the browser`);
+          return bundled(args.appId, args.nodeUrl);
+        },
+      };
+    });
+  }
   const page = await context.newPage();
   await page.goto("/");
   await page.evaluate(

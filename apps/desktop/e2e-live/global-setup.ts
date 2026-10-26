@@ -3,10 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { compareSemverDesc } from "../src/utils/registry";
 import { readRelease, startRegistry, type Release } from "./registry";
-import { resolveMerod, startNodes, stopNodes } from "./nodes";
+import { recordedPids, resolveMerod, startNodes, stopNodes, type LiveNode } from "./nodes";
 
 /**
- * Two releases of one application, a registry serving them, and two nodes.
+ * Two releases of one application, a registry serving them, and three nodes.
  *
  * Bundles come from `LIVE_BUNDLES` (comma-separated `.mpk` paths) or every
  * `.mpk` in `LIVE_BUNDLE_DIR`. They must be two releases of one package from
@@ -33,7 +33,8 @@ export interface LiveState {
   newer: string;
   frontend?: AppRelease;
   plain?: AppRelease;
-  nodes: { name: string; url: string; log: string }[];
+  merod: string;
+  nodes: LiveNode[];
 }
 
 function bundlePaths(): string[] {
@@ -66,10 +67,12 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
 
   const registry = await startRegistry([older, newer, ...(frontend ? [frontend] : []), ...(plain ? [plain] : [])]);
   const dataDir = process.env["LIVE_DATA_DIR"] ?? mkdtempSync(path.join(os.tmpdir(), "desktop-live-e2e-"));
+  const merod = resolveMerod();
   const nodes = await startNodes({
-    merod: resolveMerod(),
+    merod,
     dataDir,
-    count: 2,
+    // An admin, a member, and a third that only replicates: a high-availability node.
+    count: 3,
     registryUrl: registry.url,
   });
 
@@ -80,12 +83,13 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     newer: newer.version,
     frontend: frontend && { package: frontend.package, version: frontend.version },
     plain: plain && { package: plain.package, version: plain.version },
-    nodes: nodes.map((n) => ({ name: n.name, url: n.url, log: n.log })),
+    merod,
+    nodes,
   };
   process.env["LIVE_STATE"] = JSON.stringify(state);
 
   return async () => {
-    await stopNodes(nodes.map((n) => n.pid));
+    await stopNodes(recordedPids(dataDir));
     await registry.close();
   };
 }

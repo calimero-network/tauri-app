@@ -1,5 +1,12 @@
 import { expect, type Browser, type Page } from "@playwright/test";
-import { mintTokens, type TokenPair } from "./nodes";
+import { MeroJs } from "@calimero-network/mero-js";
+import { ADMIN_PASSWORD, ADMIN_USER, mintTokens, type TokenPair } from "./nodes";
+
+export async function admin(url: string): Promise<MeroJs> {
+  const mero = new MeroJs({ baseUrl: url, credentials: { username: ADMIN_USER, password: ADMIN_PASSWORD } });
+  await mero.authenticate();
+  return mero;
+}
 
 /** A desktop session on `nodeUrl`: what onboarding plus login leave behind. */
 export async function openDesktop(
@@ -50,4 +57,11 @@ export async function openDesktop(
   await page.reload();
   await expect(page.locator("aside.sidebar")).toBeVisible();
   return page;
+}
+
+export async function openNamespace(page: Page, applicationId: string, name: string) {
+  await page.locator("aside.sidebar").getByTitle("Namespaces").click();
+  await page.locator(`.ns-app-card[data-application-id="${applicationId}"]`).click();
+  await page.locator(".ns-card", { hasText: name }).click();
+  await expect(page.getByTestId("ns-upgrade-card")).toBeVisible();
 }

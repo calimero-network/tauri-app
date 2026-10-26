@@ -12,7 +12,7 @@ name: Desktop E2E (live nodes)
 # merod is the version merod-config.json pins, checked against its sha256 pin,
 # so this tests what the desktop ships. The two releases are the two newest
 # kv-store releases that merod can run, from the public registry, served to
-# both nodes by a registry the suite starts locally.
+# every node by a registry the suite starts locally.
 
 on:
   push:

@@ -105,7 +105,8 @@ test("Open shows a bundled app in its own window on calimero-app://", async () =
   } catch (e) {
     const where = await session.url().catch(() => "?");
     const seen = await session.text().catch(() => "?");
-    throw new Error(`${String(e)}\nat ${where}\n${seen.slice(0, 1500)}`);
+    const handles = await session.handles().catch(() => []);
+    throw new Error(`${String(e)}\nat ${where}, windows ${JSON.stringify(handles)}\n${seen.slice(0, 1500)}`);
   } finally {
     await session.end().catch(() => undefined);
     driver.kill();

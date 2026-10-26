@@ -58,12 +58,12 @@ test("Open shows a bundled app in its own window on calimero-app://", async () =
       [node.url, live.registryUrl, tokens],
     );
     const main = await session.handle();
-    const sidebar = await until("the sidebar", () => session.find({ css: "aside.sidebar [title='Applications']" }));
-    await session.click(sidebar);
-    const open = await until("Open on the app's card", () =>
-      session.find({ css: `[data-app-id="${applicationId}"] [data-testid="open-app"]` }),
-    );
-    await session.click(open);
+    const nav = "aside.sidebar [title='Applications']";
+    await until("the sidebar", () => session.find({ css: nav }));
+    await session.clickIn(nav);
+    const open = `[data-app-id="${applicationId}"] [data-testid="open-app"]`;
+    await until("Open on the app's card", () => session.find({ css: open }));
+    await session.clickIn(open);
 
     // The app window opens on the app's origin, at the version the node redirects to.
     const appWindow = await until("the app window", async () =>
@@ -102,6 +102,10 @@ test("Open shows a bundled app in its own window on calimero-app://", async () =
     await session.navigate(`${origin}/`);
     await until("the bare origin to land on the version path", async () => (await session.url()) === landing);
     await until("the app after the redirect", async () => (await session.text()).includes("KV Store"));
+  } catch (e) {
+    const where = await session.url().catch(() => "?");
+    const seen = await session.text().catch(() => "?");
+    throw new Error(`${String(e)}\nat ${where}\n${seen.slice(0, 1500)}`);
   } finally {
     await session.end().catch(() => undefined);
     driver.kill();

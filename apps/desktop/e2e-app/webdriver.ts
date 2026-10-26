@@ -47,6 +47,8 @@ export class Session {
     return found[0] && Object.values(found[0])[0];
   }
 
+  /** Clicks from the page: the shell's own chrome can report an element as not interactable under a headless display. */
+  clickIn = (css: string) => this.run(`document.querySelector(arguments[0]).click()`, [css]);
   click = (element: string) => this.cmd("POST", `/element/${element}/click`, {});
   type = (element: string, text: string) => this.cmd("POST", `/element/${element}/value`, { text });
 }

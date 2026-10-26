@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import { listInstalledMerodVersions } from "../utils/merodVersions";
+import { listInstalledMerodVersions, runtimeVersion, BUNDLED_VERSION_ID } from "../utils/merodVersions";
 import { getMerodBinaryVersion } from "../utils/merod";
 import { getSettings } from "../utils/settings";
 import { useMerodStatusChanged } from "../hooks/useMerodStatusChanged";
@@ -87,4 +87,13 @@ export function useNodeVersions(): NodeVersions {
     throw new Error("useNodeVersions must be used within a NodeVersionsProvider");
   }
   return context;
+}
+
+/** The merod version of the desktop's own node, or '' for a remote node or one that cannot be read. */
+export function useNodeRuntime(): string {
+  const { byNode, measured, bundled } = useNodeVersions();
+  const { useEmbeddedNode, embeddedNodeName } = getSettings();
+  if (!useEmbeddedNode) return "";
+  const id = byNode[embeddedNodeName ?? ""] ?? BUNDLED_VERSION_ID;
+  return runtimeVersion(id, bundled, measured[id]);
 }

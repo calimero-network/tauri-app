@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatVersionLabel, BUNDLED_VERSION_ID } from "./merodVersions";
+import { formatVersionLabel, runtimeVersion, BUNDLED_VERSION_ID } from "./merodVersions";
 
 describe("formatVersionLabel", () => {
   it("calls the shipped binary the default, and drops build metadata", () => {
@@ -48,5 +48,21 @@ describe("formatVersionLabel", () => {
     expect(
       formatVersionLabel("local:/Users/dev/core/target/release/merod", "merod 0.11.0-rc.19", null)
     ).toBe("local build");
+  });
+});
+
+describe("runtimeVersion", () => {
+  it("reads the bundled binary's tag", () => {
+    expect(runtimeVersion(BUNDLED_VERSION_ID, "merod 0.11.0 (build 055b157)")).toBe("0.11.0");
+    expect(runtimeVersion(BUNDLED_VERSION_ID, "unknown")).toBe("");
+  });
+
+  it("takes a release id as the version it names", () => {
+    expect(runtimeVersion("0.12.0-rc.1", "merod 0.11.0")).toBe("0.12.0-rc.1");
+  });
+
+  it("reads a local build from what it measured, or not at all", () => {
+    expect(runtimeVersion("local:/core/target/release/merod", "merod 0.11.0", "merod 0.12.0-rc.3")).toBe("0.12.0-rc.3");
+    expect(runtimeVersion("local:/core/target/release/merod", "merod 0.11.0")).toBe("");
   });
 });

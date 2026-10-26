@@ -18,7 +18,7 @@ export async function openDesktop(
   probe?: (appId: string, nodeUrl: string) => Promise<string | null>,
 ): Promise<Page> {
   tokens ??= await mintTokens(nodeUrl);
-  const context = await browser.newContext();
+  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
   if (probe) {
     await context.exposeBinding("__bundledFrontend", (_source, appId: string, url: string) => probe(appId, url));
     await context.addInitScript(() => {

@@ -1,0 +1,287 @@
+.confirm-action-page {
+  padding: 40px 24px;
+  max-width: 600px;
+  margin: 0 auto;
+  animation: fadeUp var(--dur-enter) var(--ease-out) both;
+}
+
+.breadcrumbs {
+  margin-bottom: 24px;
+  font-size: 14px;
+  color: var(--text-secondary);
+}
+
+.breadcrumb-link {
+  background: none;
+  border: none;
+  color: var(--accent-primary);
+  cursor: pointer;
+  padding: 0;
+  text-decoration: none;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
+}
+
+.breadcrumb-link:hover {
+  color: var(--accent-hover);
+}
+
+.breadcrumb-separator {
+  margin: 0 8px;
+  color: var(--text-tertiary);
+}
+
+.breadcrumb-current {
+  color: var(--text-primary);
+  font-weight: 700;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
+}
+
+.confirm-action-content {
+  background: var(--surface-glass);
+  border: 1px solid var(--border-color);
+  border-radius: 0;
+  padding: 32px;
+  box-shadow: var(--shadow-md);
+}
+
+.confirm-action-content h1 {
+  margin: 0 0 12px 0;
+  font-size: 28px;
+  color: var(--text-primary);
+  font-weight: 950;
+  text-transform: uppercase;
+  letter-spacing: 0.01em;
+  line-height: 1.05;
+  overflow-wrap: anywhere;
+}
+
+.item-name {
+  margin: 0 0 28px 0;
+  font-weight: 700;
+  color: var(--text-primary);
+  font-size: 16px;
+}
+
+.uninstall-section {
+  margin-bottom: 28px;
+}
+
+.uninstall-section-title {
+  margin: 0 0 10px 0;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
+  color: var(--text-tertiary);
+}
+
+.uninstall-empty {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.uninstall-namespaces {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--border-color);
+}
+
+.uninstall-namespaces li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 14px;
+}
+
+.uninstall-namespaces li + li {
+  border-top: 1px solid var(--border-color);
+}
+
+.uninstall-ns-name {
+  color: var(--text-primary);
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.uninstall-ns-meta {
+  flex: none;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.uninstall-options {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-bottom: 28px;
+}
+
+.confirm-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  cursor: pointer;
+}
+
+.confirm-option input {
+  margin: 3px 0 0 0;
+  accent-color: var(--error);
+  cursor: pointer;
+}
+
+.confirm-option-nested {
+  margin-left: 26px;
+}
+
+.confirm-option.is-disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.confirm-option.is-disabled input {
+  cursor: default;
+}
+
+.confirm-option-label {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-primary);
+  font-weight: 700;
+}
+
+.confirm-option-hint {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.uninstall-tag {
+  padding: 1px 6px;
+  font-size: 11px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.uninstall-outcomes {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.uninstall-outcomes li + li {
+  margin-top: 6px;
+}
+
+.uninstall-outcomes li.is-blocked {
+  color: var(--error);
+}
+
+.uninstall-summary {
+  margin: 10px 0 0 0;
+  color: var(--error);
+  font-size: 13px;
+}
+
+.uninstall-summary:empty {
+  margin: 0;
+}
+
+.uninstall-block {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.uninstall-block-hint {
+  margin: 4px 0 0 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.uninstall-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent-primary);
+  font: inherit;
+  font-weight: 700;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.uninstall-typed {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 0;
+  background: var(--surface-glass-soft);
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.confirm-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+}
+
+.confirm-actions .button {
+  padding: 12px 22px;
+  border-radius: 0;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  transition: all var(--dur-color) ease-out;
+}
+
+.confirm-actions .button-secondary {
+  background: transparent;
+  color: var(--text-secondary);
+  border-color: var(--border-color);
+}
+
+.confirm-actions .button-secondary:hover {
+  background: rgb(var(--ink-rgb) / 0.04);
+  border-color: var(--text-secondary);
+  color: var(--text-primary);
+}
+
+.confirm-actions .button-danger {
+  background: transparent;
+  color: var(--error);
+  border-color: var(--error);
+}
+
+.confirm-actions .button-danger:hover {
+  background: var(--error);
+  border-color: var(--error);
+  color: var(--on-error);
+  box-shadow: 0 0 20px 0 rgb(var(--error-rgb) / 0.35);
+}
+
+.confirm-actions .button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.confirm-actions .button-danger:disabled:hover {
+  background: transparent;
+  color: var(--error);
+  box-shadow: none;
+}

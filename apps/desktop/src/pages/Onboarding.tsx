@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useMemo, memo } from "react";
 import { authFailedOn, checkOnboardingState, getOnboardingMessage, type OnboardingState } from "../utils/onboarding";
 import { apiClient, createClientAsync } from "../lib/mero-client";
+import { restoreSummary } from "../lib/account";
 import { LoginView } from "../components/LoginView";
 import { initMerodNode, startMerod, listMerodNodes, detectRunningMerodNodes, waitForNodeHealthy } from "../utils/merod";
 import { invoke } from "@tauri-apps/api/core";
@@ -524,7 +525,9 @@ function Onboarding({ onComplete, onSettings }: OnboardingProps) {
       }
 
       invalidateInstalledApps();
-      toast.success(`Successfully installed ${app.name}!`);
+      const { restored, restoreFailed } = installResponse.data!;
+      toast.success(restoreSummary(`Successfully installed ${app.name}!`, restored));
+      if (restoreFailed.length) toast.warning(`Could not restore: ${restoreFailed.join("; ")}`);
       setInstalledAppIds(new Set([...installedAppIds, app.id]));
 
       // Record download with registry (fire-and-forget)

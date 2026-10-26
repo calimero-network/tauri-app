@@ -15,6 +15,7 @@ import {
   type TokenStore,
   type TokenData,
   type Application,
+  type Namespace,
 } from '@calimero-network/mero-js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -77,7 +78,7 @@ export function nodeErrorMessage(error: unknown, action?: string): string {
  * one place turns a rejection into the shape a caller reads. `code` is what
  * distinguishes "sign in again" from any other failure.
  */
-async function wrap<T>(label: string, call: () => Promise<T>): Promise<ApiResponse<T>> {
+export async function wrap<T>(label: string, call: () => Promise<T>): Promise<ApiResponse<T>> {
   try {
     return { data: await call() };
   } catch (e) {
@@ -226,62 +227,16 @@ class NodeApi {
   }
 
   /** By coordinates: the node resolves them against its own registry and takes
-   *  no URL, so a body carrying one is refused outright. */
+   *  no URL, so a body carrying one is refused outright. A reinstall also
+   *  rejoins the namespaces this device was removed from; that never fails the install. */
   installApplication(request: {
     package: string;
     version: string;
-  }): Promise<ApiResponse<{ applicationId: string }>> {
-    return wrap('Failed to install application', async () => ({
-      applicationId: (await this.meroJs.admin.installApplication(request)).applicationId,
-    }));
-  }
-
-  /**
-   * Remove every context this node holds for the application, ahead of an
-   * uninstall that should take the app's data with it.
-   *
-   * Delete tears a context down for its group and is gated on admin-ship of
-   * the owning group, so a context this node is only a member of is left
-   * instead: that is node-local and still drops it from this node.
-   */
-  deleteApplicationData(applicationId: string): Promise<ApiResponse<{ removed: number; failed: number }>> {
-    return wrap('Failed to delete application data', async () => {
-      let removed = 0;
-      let failed = 0;
-      // The namespaces first. Deleting only the contexts left every namespace
-      // behind, with its groups, members and stored state, listed under an
-      // "Unknown application" once the app itself was gone. Deleting one takes
-      // its contexts with it; one we do not administer can only be left.
-      const namespaces = await this.meroJs.admin.listNamespacesForApplication(applicationId);
-      for (const ns of namespaces ?? []) {
-        try {
-          await this.meroJs.admin.deleteNamespace(ns.namespaceId);
-          removed++;
-        } catch {
-          try {
-            await this.meroJs.admin.leaveNamespace(ns.namespaceId);
-            removed++;
-          } catch {
-            failed++;
-          }
-        }
-      }
-      // Then whatever context of the app no namespace took with it.
-      const { contexts } = await this.meroJs.admin.getContextsForApplication(applicationId);
-      for (const ctx of contexts ?? []) {
-        try {
-          await this.meroJs.admin.deleteContext(ctx.id);
-          removed++;
-        } catch {
-          try {
-            await this.meroJs.admin.leaveContext(ctx.id);
-            removed++;
-          } catch {
-            failed++;
-          }
-        }
-      }
-      return { removed, failed };
+  }): Promise<ApiResponse<{ applicationId: string; restored: string[]; restoreFailed: string[] }>> {
+    return wrap('Failed to install application', async () => {
+      const { applicationId } = await this.meroJs.admin.installApplication(request);
+      const { restored, failed } = await restoreForgottenNamespaces(this.meroJs, applicationId);
+      return { applicationId, restored, restoreFailed: failed };
     });
   }
 
@@ -328,6 +283,64 @@ export async function transferNamespaceOwnership(
   } catch (e) {
     return { promoted, error: nodeErrorMessage(e) };
   }
+}
+
+// ─── Namespace membership on this device ────────────────────────────────────
+// mero-js does not wrap these route shapes yet; switch each to its SDK method
+// once one ships. They go through the SDK's own client, so auth and refresh apply.
+
+interface AdminHttp {
+  post<T>(path: string, body?: unknown): Promise<T>;
+}
+
+const adminHttp = (meroJs: MeroJs) => (meroJs.admin as unknown as { httpClient: AdminHttp }).httpClient;
+
+/** Leave as an account: every device of it purges the namespace when it applies the leave.
+ *  Core reads `purge` from the query string and ignores it in the body. */
+export async function leaveNamespacePurging(meroJs: MeroJs, namespaceId: string): Promise<void> {
+  await adminHttp(meroJs).post(`/admin-api/namespaces/${encodeURIComponent(namespaceId)}/leave?purge=true`, {});
+}
+
+/** Follow again a namespace this device was removed from; the account is still a member. */
+export async function rejoinNamespace(meroJs: MeroJs, namespaceId: string): Promise<void> {
+  await adminHttp(meroJs).post(`/admin-api/namespaces/${encodeURIComponent(namespaceId)}/join`, {});
+}
+
+/** Removed from this device while the account stayed a member, so a reinstall can restore it. */
+export const isForgotten = (ns: Namespace) => (ns as Namespace & { forgotten?: boolean }).forgotten === true;
+
+export async function listForgottenNamespaces(meroJs: MeroJs, applicationId: string): Promise<Namespace[]> {
+  return ((await meroJs.admin.listNamespacesForApplication(applicationId)) ?? []).filter(isForgotten);
+}
+
+/** How a namespace is named to the user; short enough to type when it has no name. */
+export const namespaceLabel = (ns: Namespace) => ns.name || ns.namespaceId.slice(0, 8);
+
+/**
+ * Rejoin every namespace of the app this device was removed from. Never throws:
+ * `restored` holds the names that came back (empty when unnamed); `failed` the errors.
+ */
+export async function restoreForgottenNamespaces(
+  meroJs: MeroJs,
+  applicationId: string,
+): Promise<{ restored: string[]; failed: string[] }> {
+  const restored: string[] = [];
+  const failed: string[] = [];
+  let forgotten: Namespace[];
+  try {
+    forgotten = await listForgottenNamespaces(meroJs, applicationId);
+  } catch (e) {
+    return { restored, failed: [nodeErrorMessage(e)] };
+  }
+  for (const ns of forgotten) {
+    try {
+      await rejoinNamespace(meroJs, ns.namespaceId);
+      restored.push(ns.name ?? "");
+    } catch (e) {
+      failed.push(nodeErrorMessage(e, namespaceLabel(ns)));
+    }
+  }
+  return { restored, failed };
 }
 
 // ─── Client + singleton ─────────────────────────────────────────────────────

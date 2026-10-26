@@ -19,7 +19,8 @@
     "test:unit:watch": "vitest",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
-    "test:e2e:live": "playwright test -c playwright.live.config.ts"
+    "test:e2e:live": "playwright test -c playwright.live.config.ts",
+    "test:e2e:app": "playwright test -c playwright.app.config.ts"
   },
   "dependencies": {
     "@calimero-network/mero-js": "^26.7.0",

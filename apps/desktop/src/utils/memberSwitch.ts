@@ -12,7 +12,7 @@ export type SwitchTarget = Pick<
   Namespace,
   'namespaceId' | 'name' | 'targetApplicationId' | 'appVersion' | 'appPackage'
 >;
-type SwitchClient = { admin: Pick<AdminApiClient, 'installApplication' | 'activateGroupUpgrade'> };
+type SwitchClient = { admin: Pick<AdminApiClient, 'installApplication' | 'activateGroupUpgrade' | 'getGroupMissingReleases'> };
 
 export type SwitchResult =
   | { kind: 'switched'; failed: FailedContext[] }
@@ -69,10 +69,16 @@ export function behindPhrase(
   return `${behind} of ${held} ${subject} on this node ${behind === 1 ? 'still runs' : 'still run'} an older release.`;
 }
 
+// A bundle signed by another key derives another id, so it is not this namespace's app.
+const differentApplication = (pkg: string, version: string, applicationId: string) =>
+  new Error(
+    `${pkg} ${version} installed as a different application (${applicationId.slice(0, 8)}...), ` +
+      'probably signed by another key, so this namespace cannot switch to it.',
+  );
+
 /**
- * Moves this node's contexts of the namespace onto the release it names:
- * installs it first when this node lacks it, then activates it, guarded so the
- * node refuses (409) if the admin moved the namespace on meanwhile.
+ * Moves this node's contexts of the namespace onto the release it names: installs
+ * the releases this node lacks, oldest first, then activates, refused (409) if the admin moved on.
  */
 export async function switchNamespace(
   mero: SwitchClient,
@@ -82,16 +88,18 @@ export async function switchNamespace(
 ): Promise<SwitchResult> {
   const version = ns.appVersion;
   try {
-    if (!installed) {
+    const missing = await mero.admin.getGroupMissingReleases(ns.namespaceId);
+    if (missing.length > 0) onStep?.('installing');
+    for (const r of missing) {
+      const { applicationId } = await mero.admin.installApplication({ package: r.package, version: r.version });
+      if (applicationId && applicationId !== r.applicationId) throw differentApplication(r.package, r.version, applicationId);
+    }
+    if (!installed && missing.length === 0) {
       if (!ns.appPackage || !version) throw new Error('the namespace names no release to install');
       onStep?.('installing');
       const { applicationId } = await mero.admin.installApplication({ package: ns.appPackage, version });
-      // A bundle signed by another key derives another id, so it is not this namespace's app.
       if (applicationId && applicationId !== ns.targetApplicationId) {
-        throw new Error(
-          `${ns.appPackage} ${version} installed as a different application (${applicationId.slice(0, 8)}...), ` +
-            'probably signed by another key, so this namespace cannot switch to it.',
-        );
+        throw differentApplication(ns.appPackage, version, applicationId);
       }
     }
     onStep?.('switching');

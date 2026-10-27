@@ -22,6 +22,8 @@ export interface MemberNode {
   /** What the next activate does. */
   activate: Activate;
   held: Record<string, { groupId: string; version: string }>;
+  /** Releases this node must install before it can activate, oldest first. */
+  missing: { package: string; version: string; applicationId: string }[];
   /** What an admin's Upgrade moves the namespace to. */
   upgradeTo: string;
   installs: unknown[];
@@ -51,6 +53,7 @@ export async function mockMemberNode(
       "ctx-3": { groupId: SUB_ID, version: "2.0.0" },
     },
     upgradeTo: "2.0.0",
+    missing: [],
     installs: [],
     upgrades: [],
     activations: [],
@@ -108,6 +111,7 @@ export async function mockMemberNode(
     const body = JSON.parse(route.request().postData() ?? "{}");
     node.installs.push(body);
     node.installed = body.version;
+    node.missing = node.missing.filter((r) => r.version !== body.version);
     return route.fulfill(json({ data: { applicationId: APP.id } }));
   });
   await page.route(
@@ -128,6 +132,9 @@ export async function mockMemberNode(
         }),
       );
     },
+  );
+  await page.route(`**/admin-api/groups/${NS_ID}/upgrade/status`, (route) =>
+    route.fulfill(json({ data: null, missingReleases: node.missing })),
   );
   await page.route(`**/admin-api/groups/${NS_ID}/upgrade/activate`, (route) => {
     node.activations.push(JSON.parse(route.request().postData() ?? "{}"));

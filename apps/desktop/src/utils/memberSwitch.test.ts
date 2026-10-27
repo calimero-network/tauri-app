@@ -87,11 +87,19 @@ describe('behindPhrase', () => {
 describe('switchNamespace', () => {
   const activated = { targetApplicationId: 'app-1', switchedContexts: 2, replayedDeltas: 0, failedContexts: [] };
 
-  function mero(over: { install?: () => unknown; activate?: () => unknown } = {}) {
+  function mero(over: { install?: (a: { version: string }) => unknown; activate?: () => unknown; missing?: unknown[] } = {}) {
     const installApplication = vi.fn(over.install ?? (async () => ({ applicationId: 'app-1' })));
     const activateGroupUpgrade = vi.fn(over.activate ?? (async () => activated));
-    return { mero: { admin: { installApplication, activateGroupUpgrade } } as any, installApplication, activateGroupUpgrade };
+    const getGroupMissingReleases = vi.fn(async () => over.missing ?? []);
+    return {
+      mero: { admin: { installApplication, activateGroupUpgrade, getGroupMissingReleases } } as any,
+      installApplication,
+      activateGroupUpgrade,
+      getGroupMissingReleases,
+    };
   }
+
+  const release = (version: string, applicationId = 'app-1') => ({ package: 'chat', version, applicationId });
 
   it('installs the release first when this node does not hold it, then activates against it', async () => {
     const m = mero();
@@ -153,5 +161,37 @@ describe('switchNamespace', () => {
     const out = await switchNamespace(m.mero, { ...NS, appPackage: undefined }, false);
     expect(out.kind).toBe('error');
     expect(m.installApplication).not.toHaveBeenCalled();
+  });
+
+  it('installs every missing release oldest first, then activates', async () => {
+    const m = mero({ missing: [release('2.0.0'), release('3.0.0')] });
+    const steps: string[] = [];
+    const out = await switchNamespace(m.mero, { ...NS, appVersion: '3.0.0' }, true, (s) => steps.push(s));
+    expect(out).toEqual({ kind: 'switched', failed: [] });
+    expect(m.getGroupMissingReleases).toHaveBeenCalledWith('ns-1');
+    expect(m.installApplication.mock.calls.map(([a]) => a)).toEqual([
+      { package: 'chat', version: '2.0.0' },
+      { package: 'chat', version: '3.0.0' },
+    ]);
+    expect(m.installApplication.mock.invocationCallOrder[1]).toBeLessThan(m.activateGroupUpgrade.mock.invocationCallOrder[0]!);
+    expect(steps).toEqual(['installing', 'switching']);
+  });
+
+  it('keeps the target install when the node lists no missing releases', async () => {
+    const m = mero({ missing: [] });
+    await switchNamespace(m.mero, NS, false);
+    expect(m.installApplication).toHaveBeenCalledTimes(1);
+    expect(m.installApplication).toHaveBeenCalledWith({ package: 'chat', version: '2.0.0' });
+  });
+
+  it('stops before activating when a missing release installs as another application', async () => {
+    const m = mero({
+      missing: [release('2.0.0'), release('3.0.0')],
+      install: async ({ version }) => ({ applicationId: version === '2.0.0' ? 'someone-elses-build' : 'app-1' }),
+    });
+    const out = await switchNamespace(m.mero, NS, true);
+    expect(out).toMatchObject({ kind: 'error', message: expect.stringContaining('different application') });
+    expect(m.installApplication).toHaveBeenCalledTimes(1);
+    expect(m.activateGroupUpgrade).not.toHaveBeenCalled();
   });
 });

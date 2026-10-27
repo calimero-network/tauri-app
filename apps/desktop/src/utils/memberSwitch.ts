@@ -78,7 +78,7 @@ const differentApplication = (pkg: string, version: string, applicationId: strin
 
 /**
  * Moves this node's contexts of the namespace onto the release it names: installs
- * the releases this node lacks, oldest first, then activates, refused (409) if the admin moved on.
+ * the releases this node lacks, oldest first and the target last, then activates, refused (409) if the admin moved on.
  */
 export async function switchNamespace(
   mero: SwitchClient,
@@ -94,7 +94,8 @@ export async function switchNamespace(
       const { applicationId } = await mero.admin.installApplication({ package: r.package, version: r.version });
       if (applicationId && applicationId !== r.applicationId) throw differentApplication(r.package, r.version, applicationId);
     }
-    if (!installed && missing.length === 0) {
+    // The last install names the application's current release, so the target must come last.
+    if (missing.length > 0 ? missing[missing.length - 1]!.version !== version : !installed) {
       if (!ns.appPackage || !version) throw new Error('the namespace names no release to install');
       onStep?.('installing');
       const { applicationId } = await mero.admin.installApplication({ package: ns.appPackage, version });

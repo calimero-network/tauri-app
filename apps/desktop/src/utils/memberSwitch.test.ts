@@ -177,6 +177,15 @@ describe('switchNamespace', () => {
     expect(steps).toEqual(['installing', 'switching']);
   });
 
+  it('installs the target last when the node already holds it but misses an earlier release', async () => {
+    const m = mero({ missing: [release('2.0.0')] });
+    await switchNamespace(m.mero, { ...NS, appVersion: '3.0.0' }, true);
+    expect(m.installApplication.mock.calls.map(([a]) => a)).toEqual([
+      { package: 'chat', version: '2.0.0' },
+      { package: 'chat', version: '3.0.0' },
+    ]);
+  });
+
   it('keeps the target install when the node lists no missing releases', async () => {
     const m = mero({ missing: [] });
     await switchNamespace(m.mero, NS, false);

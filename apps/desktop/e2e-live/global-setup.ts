@@ -6,13 +6,14 @@ import { readRelease, startRegistry, type Release } from "./registry";
 import { recordedPids, resolveMerod, startNodes, stopNodes, type LiveNode } from "./nodes";
 
 /**
- * Two releases of one application, a registry serving them, and three nodes.
+ * Three releases of one application, a registry serving them, and three nodes.
  *
  * Bundles come from `LIVE_BUNDLES` (comma-separated `.mpk` paths) or every
- * `.mpk` in `LIVE_BUNDLE_DIR`. They must be two releases of one package from
- * one signer, so they share an application id: CI downloads the two newest
+ * `.mpk` in `LIVE_BUNDLE_DIR`. They must be releases of one package from
+ * one signer, so they share an application id: CI downloads the three newest
  * published releases of kv-store. The older is what the namespace starts on;
- * the newer is what it upgrades to.
+ * the newer is what it upgrades to, and the middle one lies between for a
+ * spec that upgrades in two steps.
  *
  * `LIVE_FRONTEND_BUNDLE` and `LIVE_PLAIN_BUNDLE` are single releases of two more
  * packages (the app with its frontend in the bundle, and without) for the
@@ -30,6 +31,7 @@ export interface LiveState {
   registryUrl: string;
   package: string;
   older: string;
+  middle?: string;
   newer: string;
   frontend?: AppRelease;
   plain?: AppRelease;
@@ -42,7 +44,7 @@ function bundlePaths(): string[] {
   if (list) return list.split(",").map((p) => p.trim()).filter(Boolean);
   const dir = process.env["LIVE_BUNDLE_DIR"];
   if (dir) return readdirSync(dir).filter((f) => f.endsWith(".mpk")).map((f) => path.join(dir, f));
-  throw new Error("set LIVE_BUNDLES or LIVE_BUNDLE_DIR to two releases of one application");
+  throw new Error("set LIVE_BUNDLES or LIVE_BUNDLE_DIR to releases of one application");
 }
 
 export default async function globalSetup(): Promise<() => Promise<void>> {
@@ -65,7 +67,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   const frontend = extra("LIVE_FRONTEND_BUNDLE");
   const plain = extra("LIVE_PLAIN_BUNDLE");
 
-  const registry = await startRegistry([older, newer, ...(frontend ? [frontend] : []), ...(plain ? [plain] : [])]);
+  const registry = await startRegistry([...releases, ...(frontend ? [frontend] : []), ...(plain ? [plain] : [])]);
   const dataDir = process.env["LIVE_DATA_DIR"] ?? mkdtempSync(path.join(os.tmpdir(), "desktop-live-e2e-"));
   const merod = resolveMerod();
   const nodes = await startNodes({
@@ -80,6 +82,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     registryUrl: registry.url,
     package: newer.package,
     older: older.version,
+    middle: releases.length > 2 ? releases[1]!.version : undefined,
     newer: newer.version,
     frontend: frontend && { package: frontend.package, version: frontend.version },
     plain: plain && { package: plain.package, version: plain.version },

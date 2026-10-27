@@ -1,12 +1,12 @@
 #!/usr/bin/env node
-// Downloads the two newest releases of PACKAGE that MEROD_VERSION can run, for
+// Downloads the three newest releases of PACKAGE that MEROD_VERSION can run, for
 // the live upgrade suite (LIVE_BUNDLE_DIR). Two releases of one package from
 // one publisher share an application id, which is what an upgrade needs.
 //
 //   REGISTRY_URL   default https://apps.calimero.network
 //   PACKAGE        default com.calimero.kv-store
 //   MEROD_VERSION  required: releases whose minRuntimeVersion is above it are skipped
-//   OUT_DIR        required: where the two .mpk files go
+//   OUT_DIR        required: where the three .mpk files go
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
@@ -57,12 +57,12 @@ const runnable = [
   ),
 ].sort((a, b) => cmp(b, a));
 
-if (runnable.length < 2) {
-  throw new Error(`${pkg}: need two releases merod ${merod} can run, the registry lists ${runnable.join(", ") || "none"}`);
+if (runnable.length < 3) {
+  throw new Error(`${pkg}: need three releases merod ${merod} can run, the registry lists ${runnable.join(", ") || "none"}`);
 }
 
 mkdirSync(out, { recursive: true });
-for (const version of runnable.slice(0, 2)) {
+for (const version of runnable.slice(0, 3)) {
   const url = `${registry}/artifacts/${pkg}/${version}/${pkg}-${version}.mpk`;
   const r = await fetch(url);
   if (!r.ok) throw new Error(`GET ${url} -> ${r.status}`);

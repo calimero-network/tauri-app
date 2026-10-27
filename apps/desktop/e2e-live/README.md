@@ -11,6 +11,11 @@ sessions (one browser context per node) through flows that cross nodes.
 3. The member switches from the namespace page: the release is installed, the contexts move, and the admin's write made meanwhile arrives.
 4. The member's write on the new release reaches the admin's node.
 
+`upgrade-missed.spec.ts` covers a member that missed two upgrades:
+
+1. The admin upgrades the namespace from the oldest release to the middle one and then to the newest; the member installs nothing.
+2. The member switches from the namespace card: both missed releases are installed, oldest first, the context moves to the newest and the admin's write arrives.
+
 `upgrade-ha.spec.ts` covers what the high-availability node is for, a third node that only replicates:
 
 1. The member goes offline; the admin upgrades from the desktop and writes.
@@ -41,7 +46,7 @@ It skips on a merod that does not keep a restorable marker for a namespace remov
 ```sh
 cd apps/desktop
 MEROD_BINARY=/path/to/merod \
-LIVE_BUNDLE_DIR=/dir/with/two/releases \
+LIVE_BUNDLE_DIR=/dir/with/three/releases \
 pnpm test:e2e:live
 ```
 
@@ -51,20 +56,23 @@ Use the version `merod-config.json` pins, since that is what the desktop ships.
 
 ### `LIVE_BUNDLE_DIR`
 
-Put exactly two `.mpk` releases of **one** package from **one** signer in this directory, so they share an application id. Either of these works:
+Put three `.mpk` releases of **one** package from **one** signer in this directory, so they share an application id. Either of these works:
 
-- Fetch the two newest that your merod can run:
+- Fetch the three newest that your merod can run:
 
   ```sh
   MEROD_VERSION=0.11.0-rc.86 OUT_DIR=/tmp/releases node e2e-live/fetch-releases.mjs
   ```
 
-- Build two versions of an app with the dev key, from a checkout of calimero-network/apps:
+- Build three versions of an app with the dev key, from a checkout of calimero-network/apps:
 
   ```sh
   cargo mero bundle --dev --app-version 1.0.0 ...
   cargo mero bundle --dev --app-version 1.0.1 ...
+  cargo mero bundle --dev --app-version 1.0.2 ...
   ```
+
+With only two, the missed-upgrades spec skips.
 
 The `LIVE_BUNDLES` variable takes comma-separated paths instead of a directory.
 

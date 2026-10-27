@@ -58,6 +58,25 @@ test.describe("Member switch", () => {
     expect(node.activations).toHaveLength(1);
   });
 
+  test("installs every release the node missed, oldest first, before activating", async ({ page }) => {
+    await setupDeveloperPage(page);
+    const node = await mockMemberNode(page, {
+      target: "3.0.0",
+      installed: "1.0.0",
+      missing: ["2.0.0", "3.0.0"].map((version) => ({ package: "only-peers-chat", version, applicationId: APP.id })),
+    });
+    await openNamespace(page);
+
+    await page.getByTestId("ns-upgrade-switch").click();
+    await expect(page.getByTestId("ns-upgrade-current")).toBeVisible();
+    expect(node.installs).toEqual([
+      { package: "only-peers-chat", version: "2.0.0" },
+      { package: "only-peers-chat", version: "3.0.0" },
+    ]);
+    expect(node.activations).toEqual([{ expectedApplicationId: APP.id, expectedVersion: "3.0.0" }]);
+    await expect(page.getByTestId("ns-upgrade-running")).toHaveText("3.0.0");
+  });
+
   test("shows the migration note and a busy button while switching", async ({ page }) => {
     await setupDeveloperPage(page);
     await mockMemberNode(page);

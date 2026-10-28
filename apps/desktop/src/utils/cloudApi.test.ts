@@ -31,6 +31,8 @@ import {
   requestNamespaceOwnershipProof,
   enableHaForNamespace,
   getCloudNamespaces,
+  getReplicaRelease,
+  updateReplicas,
   ensureTeeAdmissionPolicy,
   fleetNamesItsRelease,
   CLOUD_BASE_URL,
@@ -368,6 +370,85 @@ describe('getCloudNamespaces', () => {
     await expect(getCloudNamespaces(makeJwt({ iss: 'mdma' }))).resolves.toEqual(
       [],
     );
+  });
+});
+
+const RELEASE = {
+  target_version: '2.0.0',
+  replicas: [{ peer_id: 'p1', running_version: '1.0.0', state: 'behind' }],
+  on_target: 0,
+  total: 1,
+  intent: null,
+};
+
+describe('getReplicaRelease', () => {
+  let restore: () => void;
+  afterEach(() => restore?.());
+
+  it('GETs the namespace release status with a bearer token', async () => {
+    const { calls, restore: r } = installFetch(() => jsonResponse(RELEASE));
+    restore = r;
+
+    const out = await getReplicaRelease(makeJwt({ iss: 'mdma' }), 'ns/1');
+
+    expect(calls[0].url).toBe(
+      `${CLOUD_BASE_URL}/api/cloud/me/namespaces/ns%2F1/replica-release`,
+    );
+    expect(calls[0].init?.method ?? 'GET').toBe('GET');
+    expect(
+      (calls[0].init?.headers as Record<string, string>).Authorization,
+    ).toMatch(/^Bearer /);
+    expect(out).toEqual(RELEASE);
+  });
+
+  it('returns null on a non-ok response (404 for a non-owner)', async () => {
+    const { restore: r } = installFetch(() => jsonResponse({}, 404));
+    restore = r;
+    await expect(
+      getReplicaRelease(makeJwt({ iss: 'mdma' }), 'ns-1'),
+    ).resolves.toBeNull();
+  });
+});
+
+describe('updateReplicas', () => {
+  let restore: () => void;
+  afterEach(() => restore?.());
+
+  it('POSTs update-replicas and returns the new status', async () => {
+    const intent = { id: 'i1', target_version: '2.0.0', state: 'active' };
+    const { calls, restore: r } = installFetch(() =>
+      jsonResponse({ ...RELEASE, intent }),
+    );
+    restore = r;
+
+    const out = await updateReplicas(makeJwt({ iss: 'mdma' }), 'ns-1');
+
+    expect(calls[0].url).toBe(
+      `${CLOUD_BASE_URL}/api/cloud/me/namespaces/ns-1/update-replicas`,
+    );
+    expect(calls[0].init?.method).toBe('POST');
+    expect(out.intent).toEqual(intent);
+  });
+
+  it('throws the 409 detail message', async () => {
+    const { restore: r } = installFetch(() =>
+      jsonResponse(
+        { detail: { error: 'nothing_behind', message: 'Every replica is current' } },
+        409,
+      ),
+    );
+    restore = r;
+    await expect(
+      updateReplicas(makeJwt({ iss: 'mdma' }), 'ns-1'),
+    ).rejects.toThrow('Every replica is current');
+  });
+
+  it('falls back to a generic message when the body has no detail', async () => {
+    const { restore: r } = installFetch(() => jsonResponse({}, 500));
+    restore = r;
+    await expect(
+      updateReplicas(makeJwt({ iss: 'mdma' }), 'ns-1'),
+    ).rejects.toThrow('Failed to update replicas');
   });
 });
 

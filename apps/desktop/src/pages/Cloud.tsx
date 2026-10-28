@@ -7,7 +7,13 @@ import { useToast } from "../contexts/ToastContext";
 import { useCloudSession } from "../hooks/useCloudSession";
 import { useHaStatus } from "../hooks/useHaStatus";
 import { useVisiblePoll } from "../hooks/useVisiblePoll";
-import { CloudSessionExpiredError, getCloudSubscription } from "../utils/cloudApi";
+import {
+  CloudSessionExpiredError,
+  getCloudSubscription,
+  getReplicaRelease,
+  updateReplicas,
+  type ReplicaRelease,
+} from "../utils/cloudApi";
 import { disconnectCloud, getCloudIdToken, startCloudLogin } from "../utils/cloudAuth";
 import {
   desiredState,
@@ -22,6 +28,7 @@ import {
 } from "../utils/cloudHa";
 import { formatBytes, parseUsage, sumUsage, usageFor, type NamespaceBytes } from "../utils/diskUsage";
 import { fetchGroupMembers, roleOf } from "../utils/groupRoles";
+import { isUpdating, replicaReleaseRow } from "../utils/replicaRelease";
 import { readInstalledApps, type InstalledApp } from "../utils/namespaceApps";
 import { getSettings } from "../utils/settings";
 import "./Cloud.css";
@@ -33,6 +40,9 @@ const FILTERS: { id: HaFilter; label: string }[] = [
   { id: "off", label: "Not always on" },
   { id: "shared", label: "Shared with me" },
 ];
+
+const RELEASE_POLL_MS = 30000;
+const RELEASE_POLL_UPDATING_MS = 5000; // while a rollout is moving replicas
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
@@ -169,6 +179,60 @@ export default function Cloud() {
     }
   };
 
+  // Replica release of every namespace this node administers with HA on.
+  // `null` is "nothing to show": a 404 for a non-owner, or before the cloud has it.
+  const [releases, setReleases] = useState<Record<string, ReplicaRelease | null>>({});
+  const [updatingIds, setUpdatingIds] = useState<Set<string>>(new Set());
+  const releaseIds = groups
+    .flatMap((g) => g.rows)
+    .filter((r) => r.haOn && r.canManage === true)
+    .map((r) => r.namespaceId);
+  const releaseKey = releaseIds.join(",");
+  const rolloutActive = releaseIds.some((id) => isUpdating(releases[id] ?? null));
+  const refreshReleases = useCallback(async () => {
+    const token = getCloudIdToken();
+    const ids = releaseKey ? releaseKey.split(",") : [];
+    if (!token || ids.length === 0) return;
+    try {
+      const entries = await Promise.all(
+        ids.map(async (id) => [id, await getReplicaRelease(token, id)] as const),
+      );
+      setReleases(Object.fromEntries(entries));
+    } catch (err) {
+      if (!(err instanceof CloudSessionExpiredError)) return;
+      disconnectCloud();
+      toast.error("Cloud session expired — sign in again");
+    }
+  }, [releaseKey, toast]);
+  useVisiblePoll(
+    () => { void refreshReleases(); },
+    rolloutActive ? RELEASE_POLL_UPDATING_MS : RELEASE_POLL_MS,
+    connected && releaseIds.length > 0,
+  );
+  const startUpdate = async (namespaceId: string) => {
+    const token = getCloudIdToken();
+    if (!token) return;
+    setUpdatingIds((prev) => new Set(prev).add(namespaceId));
+    try {
+      const next = await updateReplicas(token, namespaceId);
+      setReleases((prev) => ({ ...prev, [namespaceId]: next }));
+    } catch (err) {
+      if (err instanceof CloudSessionExpiredError) {
+        disconnectCloud();
+        toast.error("Cloud session expired — sign in again");
+      } else {
+        toast.error(err instanceof Error ? err.message : "Failed to update replicas");
+        void refreshReleases();
+      }
+    } finally {
+      setUpdatingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(namespaceId);
+        return next;
+      });
+    }
+  };
+
   const manageable = groups.reduce((n, g) => n + g.manageable, 0);
   const manageableOn = groups.reduce((n, g) => n + g.manageableOn, 0);
   const onIds = groups.flatMap((g) => g.rows.filter((r) => r.haOn).map((r) => r.namespaceId));
@@ -191,12 +255,16 @@ export default function Cloud() {
     else if (changed) status = { label: want ? "Will turn on" : "Will turn off", tone: "pending" };
     else if (row.haOn) status = { label: "Always on", tone: "on" };
     else status = { label: "Off", tone: "off" };
+    const release = row.haOn && row.canManage === true && connected
+      ? replicaReleaseRow(releases[row.namespaceId] ?? null)
+      : null;
+    const updatingNow = updatingIds.has(row.namespaceId);
     const showFleet = fleet && row.haOn && !busy && !changed && fleet.assigned > 0;
 
     return (
       <div
         key={row.namespaceId}
-        className={`cloud-ns-row${changed ? " pending" : ""}`}
+        className={`cloud-ns-row${changed ? " pending" : ""}${release ? " has-release" : ""}`}
         data-testid="cloud-ns-row"
         data-namespace-id={row.namespaceId}
       >
@@ -240,6 +308,21 @@ export default function Cloud() {
           >
             {row.canManage === null ? "…" : <Lock size={14} />}
           </span>
+        )}
+        {release && (
+          <div className={`cloud-ns-release ${release.tone}`} data-testid="replica-release">
+            <span>{release.text}</span>
+            {release.action && (
+              <button
+                type="button"
+                className="button button-small button-secondary"
+                disabled={updatingNow}
+                onClick={() => void startUpdate(row.namespaceId)}
+              >
+                {updatingNow ? "Updating…" : release.action}
+              </button>
+            )}
+          </div>
         )}
       </div>
     );

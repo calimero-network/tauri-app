@@ -159,6 +159,58 @@ export async function getNamespaceFleetStatus(
   return parseFleetRelays(await res.json());
 }
 
+export type ReplicaState =
+  | 'on_target'
+  | 'behind'
+  | 'queued'
+  | 'switching'
+  | 'failed'
+  | 'unknown';
+
+/** Where an owned namespace's replicas stand against its target release. */
+export interface ReplicaRelease {
+  target_version: string | null;
+  replicas: {
+    peer_id: string;
+    /** Comma-joined when one replica's contexts run different versions. */
+    running_version: string | null;
+    state: ReplicaState;
+  }[];
+  on_target: number;
+  total: number;
+  intent: { id: string; target_version: string; state: string } | null;
+}
+
+/** `null` when the cloud cannot say, including a 404 for a non-owner. */
+export async function getReplicaRelease(
+  idToken: string,
+  namespaceId: string,
+): Promise<ReplicaRelease | null> {
+  const res = await cloudFetch(
+    `/api/cloud/me/namespaces/${encodeURIComponent(namespaceId)}/replica-release`,
+    idToken,
+  );
+  if (!res.ok) return null;
+  return res.json();
+}
+
+/** Queue the replicas that are behind onto the target, one at a time. */
+export async function updateReplicas(
+  idToken: string,
+  namespaceId: string,
+): Promise<ReplicaRelease> {
+  const res = await cloudFetch(
+    `/api/cloud/me/namespaces/${encodeURIComponent(namespaceId)}/update-replicas`,
+    idToken,
+    { method: 'POST' },
+  );
+  if (!res.ok) {
+    const error = await res.json().catch(() => null);
+    throw new Error(error?.detail?.message || 'Failed to update replicas');
+  }
+  return res.json();
+}
+
 // ── HA (High Availability) via TEE Fleet Nodes ──
 
 export interface FleetMeasurements {
